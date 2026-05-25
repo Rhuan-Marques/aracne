@@ -8,9 +8,9 @@
 
 ```powershell
 go build -o ltp.exe .
-.\ltp scan                              # scan current dir → topology.db
+.\ltp scan                              # scan current dir → .ltp/topology.db
 .\ltp scan -root <path> -output out.db
-.\ltp mermaid                           # default: topology.db → topology.mermaid
+.\ltp mermaid                           # default: .ltp/topology.db → .ltp/topology.mermaid
 .\ltp mermaid --filter "Function, Struct"
 .\ltp agent                             # AI agent mode (REPL, requires DEEPSEEK_API_KEY)
 .\ltp agent "list all structs"          # single-prompt agent mode
@@ -25,7 +25,7 @@ go build -o ltp.exe .
 |---------|-------------|
 | `go build -o ltp.exe .` | Build binary |
 | `go run . scan -root <path>` | Run topology scan |
-| `go run . mermaid -input topology.db` | Generate Mermaid diagram |
+| `go run . mermaid -input .ltp/topology.db` | Generate Mermaid diagram |
 | `go run . agent` | Run AI agent (requires DEEPSEEK_API_KEY) |
 | `go run . serve` | Start MCP server (stdio transport) |
 | `go run . install` | Configure OpenCode MCP in opencode.json |
@@ -185,7 +185,7 @@ This inserts into opencode.json:
 }
 ```
 
-The MCP server auto-scans the project if `topology.db` is missing on first connect. Tool output matches the same format as the internal agent mode — a code block followed by a `# CONTEXT:` section with hierarchical interface/struct/function/var descriptions.
+The MCP server auto-scans the project if `.ltp/topology.db` is missing on first connect. Tool output matches the same format as the internal agent mode — a code block followed by a `# CONTEXT:` section with hierarchical interface/struct/function/var descriptions.
 
 ## Notes
 

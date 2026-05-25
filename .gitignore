@@ -28,6 +28,9 @@ go.work.sum
 .env
 *.db
 
+# ltp artifacts
+.ltp/
+
 # Editor/IDE
 # .idea/
 # .vscode/

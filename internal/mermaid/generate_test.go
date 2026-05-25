@@ -10,7 +10,7 @@ import (
 )
 
 func TestGenerate(t *testing.T) {
-	topoPath := "../../topology.db"
+	topoPath := "../../.ltp/topology.db"
 	if _, err := os.Stat(topoPath); os.IsNotExist(err) {
 		t.Skip("test database not found at", topoPath)
 	}
@@ -40,7 +40,7 @@ func TestGenerate(t *testing.T) {
 }
 
 func TestGenerateFiltered(t *testing.T) {
-	topoPath := "../../topology.db"
+	topoPath := "../../.ltp/topology.db"
 	if _, err := os.Stat(topoPath); os.IsNotExist(err) {
 		t.Skip("test database not found at", topoPath)
 	}

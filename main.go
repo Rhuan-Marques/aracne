@@ -54,11 +54,11 @@ Usage:
 
 Flags for "scan":
   -root <path>    Root folder of the Go project (default ".")
-  -output <file>  Output SQLite database path (default "topology.db")
+  -output <file>  Output SQLite database path (default ".ltp/topology.db")
 
 Flags for "mermaid":
-  -input <file>   Input topology database (default "topology.db")
-  -output <file>  Output .mermaid file path (default "topology.mermaid")
+  -input <file>   Input topology database (default ".ltp/topology.db")
+  -output <file>  Output .mermaid file path (default ".ltp/topology.mermaid")
   --filter <csv>  Comma-separated resource types to include:
                   Package, File, Function, Struct, Interface, ExternalVar, Dependency
 
@@ -76,11 +76,12 @@ Flags for "install":
 func runScan(args []string) {
 	fs := flag.NewFlagSet("scan", flag.ExitOnError)
 	root := fs.String("root", ".", "Root folder of the Go project to analyze")
-	output := fs.String("output", "topology.db", "Output SQLite database path")
+	output := fs.String("output", ".ltp/topology.db", "Output SQLite database path")
 	fs.Parse(args)
 
 	manager := topology.New()
 	manager.Load(*output)
+	os.MkdirAll(filepath.Dir(*output), 0755)
 
 	fmt.Printf("Analyzing Go project at: %s\n", *root)
 
@@ -130,8 +131,8 @@ func parseResourceFilter(csv string) []domain.ResourceName {
 
 func runMermaid(args []string) {
 	fs := flag.NewFlagSet("mermaid", flag.ExitOnError)
-	input := fs.String("input", "topology.db", "Input topology database path")
-	output := fs.String("output", "topology.mermaid", "Output .mermaid file path")
+	input := fs.String("input", ".ltp/topology.db", "Input topology database path")
+	output := fs.String("output", ".ltp/topology.mermaid", "Output .mermaid file path")
 	filter := fs.String("filter", "", "Comma-separated resource types to include")
 	fs.Parse(args)
 
@@ -142,6 +143,7 @@ func runMermaid(args []string) {
 	}
 
 	resourceFilter := parseResourceFilter(*filter)
+	os.MkdirAll(filepath.Dir(*output), 0755)
 	if err := mermaid.GenerateToFile(*output, topo, resourceFilter...); err != nil {
 		fmt.Fprintf(os.Stderr, "Error generating mermaid: %v\n", err)
 		os.Exit(1)
@@ -155,7 +157,7 @@ func runMermaid(args []string) {
 
 func runAgent() {
 	manager := topology.New()
-	dbPath := "topology.db"
+	dbPath := ".ltp/topology.db"
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
 		manager.Load(dbPath)
 		fmt.Printf("No topology found. Scanning project...\n")
@@ -216,6 +218,7 @@ func runAgent() {
 
 func initManager(dbPath string) *topology.TopologyManager {
 	mgr := topology.New()
+	os.MkdirAll(filepath.Dir(dbPath), 0755)
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
 		mgr.Load(dbPath)
 		fmt.Fprintf(os.Stderr, "No topology found. Scanning project...\n")
@@ -232,7 +235,7 @@ func initManager(dbPath string) *topology.TopologyManager {
 }
 
 func runServe() {
-	manager := initManager("topology.db")
+	manager := initManager(".ltp/topology.db")
 
 	server := mcp.NewServer(manager)
 	if err := server.Serve(); err != nil {
