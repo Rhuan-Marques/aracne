@@ -4,6 +4,7 @@ import "llm-topology/internal/topology/domain"
 
 type TopologyOptions struct {
 	resourceFilter map[domain.ResourceName]bool
+	hasDescription *bool
 }
 
 type TopologyOption func(*TopologyOptions)
@@ -14,6 +15,12 @@ func WithResourceFilter(resources ...domain.ResourceName) TopologyOption {
 		for _, r := range resources {
 			opts.resourceFilter[r] = true
 		}
+	}
+}
+
+func WithHasDescription(has bool) TopologyOption {
+	return func(opts *TopologyOptions) {
+		opts.hasDescription = &has
 	}
 }
 

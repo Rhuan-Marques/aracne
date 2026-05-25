@@ -76,6 +76,51 @@ func (m *TopologyManager) ReadAll(opts ...TopologyOption) (*domain.Topology, err
 			topo.Packages = nil
 		}
 	}
+	if opt.hasDescription != nil {
+		wantDesc := *opt.hasDescription
+		if topo.Functions != nil {
+			for id, fn := range topo.Functions {
+				if (fn.Description != "") != wantDesc {
+					delete(topo.Functions, id)
+				}
+			}
+		}
+		if topo.Struct != nil {
+			for id, s := range topo.Struct {
+				if (s.Description != "") != wantDesc {
+					delete(topo.Struct, id)
+				}
+			}
+		}
+		if topo.Interfaces != nil {
+			for id, iface := range topo.Interfaces {
+				if (iface.Description != "") != wantDesc {
+					delete(topo.Interfaces, id)
+				}
+			}
+		}
+		if topo.ExternalVars != nil {
+			for id, v := range topo.ExternalVars {
+				if (v.Description != "") != wantDesc {
+					delete(topo.ExternalVars, id)
+				}
+			}
+		}
+		if topo.Files != nil {
+			for id, f := range topo.Files {
+				if (f.Description != "") != wantDesc {
+					delete(topo.Files, id)
+				}
+			}
+		}
+		if topo.Packages != nil {
+			for id, pkg := range topo.Packages {
+				if (pkg.Description != "") != wantDesc {
+					delete(topo.Packages, id)
+				}
+			}
+		}
+	}
 	return topo, nil
 }
 
@@ -337,13 +382,13 @@ func (m *TopologyManager) ReadFunction(id string, opts ...TopologyOption) (*doma
 	var blocks []domain.ContextBlock
 
 	blocks = append(blocks, domain.ContextBlock{
-		Kind: "function", FilePath: fn.Loc.Path, Line: fn.Loc.StartsAt,
+		Kind: "function", FileID: fn.Loc.Path, Line: fn.Loc.StartsAt,
 		Title: fmt.Sprintf("func %s", fn.Name), Cut: funcCut.Cut,
 	})
 
 	if ctx.ParentStruct != nil {
 		blocks = append(blocks, domain.ContextBlock{
-			Kind: "parent_struct", FilePath: ctx.ParentStruct.Loc.Path,
+			Kind: "parent_struct", FileID: ctx.ParentStruct.Loc.Path,
 			Line:  ctx.ParentStruct.Loc.StartsAt,
 			Title: fmt.Sprintf("struct %s", ctx.ParentStruct.Name),
 			Cut:   ctx.ParentStruct.Cut,
@@ -352,19 +397,19 @@ func (m *TopologyManager) ReadFunction(id string, opts ...TopologyOption) (*doma
 
 	for _, cf := range ctx.CalledFunctions {
 		blocks = append(blocks, domain.ContextBlock{
-			Kind: "called_func", FilePath: cf.Location.Path,
+			Kind: "called_func", FileID: cf.Location.Path,
 			Line: cf.Location.StartsAt, Title: fmt.Sprintf("func %s", cf.Name),
 		})
 	}
 
 	for _, su := range ctx.StructsUsed {
 		blocks = append(blocks, domain.ContextBlock{
-			Kind: "struct", FilePath: su.Location.Path,
+			Kind: "struct", FileID: su.Location.Path,
 			Line: su.Location.StartsAt, Title: fmt.Sprintf("struct %s", su.Name),
 		})
 		for _, sm := range su.Methods {
 			blocks = append(blocks, domain.ContextBlock{
-				Kind: "struct_method", FilePath: sm.Location.Path,
+				Kind: "struct_method", FileID: sm.Location.Path,
 				Line: sm.Location.StartsAt, Title: fmt.Sprintf("%s.%s", su.Name, sm.Name),
 			})
 		}
@@ -372,17 +417,17 @@ func (m *TopologyManager) ReadFunction(id string, opts ...TopologyOption) (*doma
 
 	for _, iu := range ctx.InterfacesUsed {
 		blocks = append(blocks, domain.ContextBlock{
-			Kind: "interface", FilePath: iu.Location.Path,
+			Kind: "interface", FileID: iu.Location.Path,
 			Line: iu.Location.StartsAt, Title: fmt.Sprintf("interface %s", iu.Name),
 		})
 		for _, impl := range iu.Implementations {
 			blocks = append(blocks, domain.ContextBlock{
-				Kind: "interface_impl", FilePath: impl.Location.Path,
+				Kind: "interface_impl", FileID: impl.Location.Path,
 				Line: impl.Location.StartsAt, Title: fmt.Sprintf("struct %s", impl.Name),
 			})
 			for _, m := range impl.Methods {
 				blocks = append(blocks, domain.ContextBlock{
-					Kind: "impl_method", FilePath: m.Location.Path,
+					Kind: "impl_method", FileID: m.Location.Path,
 					Line: m.Location.StartsAt, Title: fmt.Sprintf("%s.%s", impl.Name, m.Name),
 				})
 			}
@@ -391,14 +436,14 @@ func (m *TopologyManager) ReadFunction(id string, opts ...TopologyOption) (*doma
 
 	for _, ev := range ctx.ExtVarsUsed {
 		blocks = append(blocks, domain.ContextBlock{
-			Kind: "extvar", FilePath: ev.Location.Path,
+			Kind: "extvar", FileID: ev.Location.Path,
 			Line: ev.Location.StartsAt, Title: fmt.Sprintf("var %s", ev.Name),
 		})
 	}
 
 	sort.SliceStable(blocks, func(i, j int) bool {
-		if blocks[i].FilePath != blocks[j].FilePath {
-			return blocks[i].FilePath < blocks[j].FilePath
+		if blocks[i].FileID != blocks[j].FileID {
+			return blocks[i].FileID < blocks[j].FileID
 		}
 		return blocks[i].Line < blocks[j].Line
 	})
@@ -669,13 +714,13 @@ func (m *TopologyManager) ReadStruct(id string, opts ...TopologyOption) (*domain
 	var blocks []domain.ContextBlock
 
 	blocks = append(blocks, domain.ContextBlock{
-		Kind: "struct", FilePath: s.Loc.Path, Line: s.Loc.StartsAt,
+		Kind: "struct", FileID: s.Loc.Path, Line: s.Loc.StartsAt,
 		Title: fmt.Sprintf("struct %s", s.Name), Cut: structCut.Cut,
 	})
 
 	if ctx.Constructor != nil {
 		blocks = append(blocks, domain.ContextBlock{
-			Kind: "constructor", FilePath: ctx.Constructor.Loc.Path,
+			Kind: "constructor", FileID: ctx.Constructor.Loc.Path,
 			Line:  ctx.Constructor.Loc.StartsAt,
 			Title: fmt.Sprintf("func %s", ctx.Constructor.Name),
 			Cut:   ctx.Constructor.Cut,
@@ -684,26 +729,26 @@ func (m *TopologyManager) ReadStruct(id string, opts ...TopologyOption) (*domain
 
 	for _, iface := range ctx.Interfaces {
 		blocks = append(blocks, domain.ContextBlock{
-			Kind: "interface", FilePath: iface.Location.Path,
+			Kind: "interface", FileID: iface.Location.Path,
 			Line: iface.Location.StartsAt, Title: fmt.Sprintf("interface %s", iface.Name),
 		})
 	}
 
 	for _, m := range ctx.Methods {
 		blocks = append(blocks, domain.ContextBlock{
-			Kind: "method", FilePath: m.Location.Path,
+			Kind: "method", FileID: m.Location.Path,
 			Line: m.Location.StartsAt, Title: fmt.Sprintf("%s.%s", s.Name, m.Name),
 		})
 	}
 
 	for _, su := range ctx.StructsUsed {
 		blocks = append(blocks, domain.ContextBlock{
-			Kind: "struct", FilePath: su.Location.Path,
+			Kind: "struct", FileID: su.Location.Path,
 			Line: su.Location.StartsAt, Title: fmt.Sprintf("struct %s", su.Name),
 		})
 		for _, sm := range su.Methods {
 			blocks = append(blocks, domain.ContextBlock{
-				Kind: "struct_method", FilePath: sm.Location.Path,
+				Kind: "struct_method", FileID: sm.Location.Path,
 				Line: sm.Location.StartsAt, Title: fmt.Sprintf("%s.%s", su.Name, sm.Name),
 			})
 		}
@@ -711,17 +756,17 @@ func (m *TopologyManager) ReadStruct(id string, opts ...TopologyOption) (*domain
 
 	for _, iu := range ctx.InterfacesUsed {
 		blocks = append(blocks, domain.ContextBlock{
-			Kind: "interface", FilePath: iu.Location.Path,
+			Kind: "interface", FileID: iu.Location.Path,
 			Line: iu.Location.StartsAt, Title: fmt.Sprintf("interface %s", iu.Name),
 		})
 		for _, impl := range iu.Implementations {
 			blocks = append(blocks, domain.ContextBlock{
-				Kind: "interface_impl", FilePath: impl.Location.Path,
+				Kind: "interface_impl", FileID: impl.Location.Path,
 				Line: impl.Location.StartsAt, Title: fmt.Sprintf("struct %s", impl.Name),
 			})
 			for _, m := range impl.Methods {
 				blocks = append(blocks, domain.ContextBlock{
-					Kind: "impl_method", FilePath: m.Location.Path,
+					Kind: "impl_method", FileID: m.Location.Path,
 					Line: m.Location.StartsAt, Title: fmt.Sprintf("%s.%s", impl.Name, m.Name),
 				})
 			}
@@ -730,14 +775,14 @@ func (m *TopologyManager) ReadStruct(id string, opts ...TopologyOption) (*domain
 
 	for _, ev := range ctx.ExtVarsUsed {
 		blocks = append(blocks, domain.ContextBlock{
-			Kind: "extvar", FilePath: ev.Location.Path,
+			Kind: "extvar", FileID: ev.Location.Path,
 			Line: ev.Location.StartsAt, Title: fmt.Sprintf("var %s", ev.Name),
 		})
 	}
 
 	sort.SliceStable(blocks, func(i, j int) bool {
-		if blocks[i].FilePath != blocks[j].FilePath {
-			return blocks[i].FilePath < blocks[j].FilePath
+		if blocks[i].FileID != blocks[j].FileID {
+			return blocks[i].FileID < blocks[j].FileID
 		}
 		return blocks[i].Line < blocks[j].Line
 	})
@@ -783,4 +828,46 @@ func (m *TopologyManager) FindStructsByName(name string) ([]domain.StructID, err
 		}
 	}
 	return results, nil
+}
+
+func (m *TopologyManager) UpdateDescription(id string, resourceName domain.ResourceName, description string) error {
+	return helper.UpdateDescription(m.dbPath, resourceName, id, description)
+}
+
+func (m *TopologyManager) ReadResourceAndCut(id string, resourceName domain.ResourceName) (*domain.CodeEntry, error) {
+	topo, err := helper.ReadDb(m.dbPath)
+	if err != nil {
+		return nil, err
+	}
+
+	switch resourceName {
+	case domain.FUNCTION_RESOURCE:
+		fn, ok := topo.Functions[domain.FunctionID(id)]
+		if !ok {
+			return nil, fmt.Errorf("function not found: %s", id)
+		}
+		return m.Cut(fn.Loc)
+	case domain.STRUCT_RESOURCE:
+		s, ok := topo.Struct[domain.StructID(id)]
+		if !ok {
+			return nil, fmt.Errorf("struct not found: %s", id)
+		}
+		return m.Cut(s.Loc)
+	case domain.INTERFACE_RESOURCE:
+		iface, ok := topo.Interfaces[domain.InterfaceID(id)]
+		if !ok {
+			return nil, fmt.Errorf("interface not found: %s", id)
+		}
+		return m.Cut(iface.Loc)
+	case domain.EXTERNAL_VAR_RESOURCE:
+		v, ok := topo.ExternalVars[domain.ExternalVarID(id)]
+		if !ok {
+			return nil, fmt.Errorf("external var not found: %s", id)
+		}
+		return m.Cut(v.Location)
+	case domain.FILE_RESOURCE:
+		return nil, fmt.Errorf("ReadResourceAndCut not supported for File")
+	default:
+		return nil, fmt.Errorf("unknown resource: %s", resourceName)
+	}
 }

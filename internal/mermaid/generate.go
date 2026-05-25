@@ -245,7 +245,7 @@ func (g *gen) visibleFileChildren(f domain.File) []string {
 	return ids
 }
 
-func (g *gen) buildFile(fileID domain.FilePath, f domain.File) {
+func (g *gen) buildFile(fileID domain.FileID, f domain.File) {
 	showFile := g.filter[domain.FILE_RESOURCE]
 
 	if !showFile && len(g.visibleFileChildren(f)) == 0 {

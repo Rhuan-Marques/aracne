@@ -138,11 +138,14 @@ func (s *Server) handleCallTool(id *int, params json.RawMessage) *Response {
 
 func (s *Server) buildTools() map[string]tools.Tool {
 	return map[string]tools.Tool{
-		"ls":             &tools.Ls{},
-		"read":           &tools.Read{},
-		"read_function":  tools.NewReadFunction(s.mgr),
-		"read_struct":    tools.NewReadStruct(s.mgr),
-		"edit":           tools.NewEdit(s.mgr),
+		"ls":                      &tools.Ls{},
+		"read":                    &tools.Read{},
+		"read_function":           tools.NewReadFunction(s.mgr),
+		"read_struct":             tools.NewReadStruct(s.mgr),
+		"edit":                    tools.NewEdit(s.mgr),
+		"generate_descriptions":   tools.NewGenerateDescriptions(s.mgr),
+		"read_resource_and_cut":   tools.NewReadResourceAndCut(s.mgr),
+		"update_description":      tools.NewUpdateDescriptionTool(s.mgr),
 	}
 }
 

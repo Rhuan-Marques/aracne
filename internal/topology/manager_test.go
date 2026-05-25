@@ -73,8 +73,8 @@ func TestReadFunction(t *testing.T) {
 		}
 
 		for _, b := range ctx.Blocks {
-			if b.FilePath == "" {
-				t.Errorf("block %q has empty FilePath", b.Title)
+			if b.FileID == "" {
+				t.Errorf("block %q has empty FileID", b.Title)
 			}
 			if b.Line < 1 {
 				t.Errorf("block %q has invalid Line %d", b.Title, b.Line)
@@ -165,8 +165,8 @@ func TestReadStruct(t *testing.T) {
 		}
 
 		for _, b := range ctx.Blocks {
-			if b.FilePath == "" {
-				t.Errorf("block %q has empty FilePath", b.Title)
+			if b.FileID == "" {
+				t.Errorf("block %q has empty FileID", b.Title)
 			}
 			if b.Line < 1 {
 				t.Errorf("block %q has invalid Line %d", b.Title, b.Line)

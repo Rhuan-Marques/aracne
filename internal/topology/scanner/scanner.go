@@ -44,12 +44,12 @@ func Scan(root string) (*domain.Topology, error) {
 	topo := &domain.Topology{
 		Root:         absRoot,
 		Packages:     make(map[domain.PackagePath]domain.Package),
-		Files:        make(map[domain.FilePath]domain.File),
+		Files:        make(map[domain.FileID]domain.File),
 		Struct:       make(map[domain.StructID]domain.Struct),
 		Interfaces:   make(map[domain.InterfaceID]domain.Interface),
 		Functions:    make(map[domain.FunctionID]domain.Function),
 		ExternalVars: make(map[domain.ExternalVarID]domain.ExternalVar),
-		Errors:       make(map[domain.FilePath]string),
+		Errors:       make(map[domain.FileID]string),
 	}
 
 	goFiles := collectGoFiles(absRoot)
@@ -79,21 +79,21 @@ func Scan(root string) (*domain.Topology, error) {
 		for _, filePath := range files {
 			pr, err := ParseFile(filePath, pkgPath, modulePath, absRoot)
 			if err != nil {
-				topo.Errors[domain.FilePath(filePath)] = err.Error()
+				topo.Errors[domain.FileID(filePath)] = err.Error()
 				continue
 			}
 
 			parseResults = append(parseResults, fileParse{filePath: filePath, result: pr})
 
 			file := domain.File{
-				Path:                 domain.FilePath(filePath),
+				Path:                 domain.FileID(filePath),
 				Name:                 filepath.Base(filePath),
 				Description:          pr.FileDescription,
 				PackagesImported:     pr.InternalImports,
 				DependanciesImported: pr.ExternalImports,
 			}
-			topo.Files[domain.FilePath(filePath)] = file
-			pkg.Files = append(pkg.Files, domain.FilePath(filePath))
+			topo.Files[domain.FileID(filePath)] = file
+			pkg.Files = append(pkg.Files, domain.FileID(filePath))
 		}
 
 		topo.Packages[pkgPath] = pkg
@@ -103,7 +103,7 @@ func Scan(root string) (*domain.Topology, error) {
 		if fp.err != nil || fp.result == nil {
 			continue
 		}
-		filePath := domain.FilePath(fp.filePath)
+		filePath := domain.FileID(fp.filePath)
 		file := topo.Files[filePath]
 
 		for _, s := range fp.result.Structs {
@@ -344,7 +344,7 @@ func UpdateFileInTopology(topo *domain.Topology, filePath, rootPath string) []do
 		return warnings
 	}
 
-	oldFile, hasFile := topo.Files[domain.FilePath(absPath)]
+	oldFile, hasFile := topo.Files[domain.FileID(absPath)]
 	if !hasFile {
 		return warnings
 	}
@@ -379,7 +379,7 @@ func UpdateFileInTopology(topo *domain.Topology, filePath, rootPath string) []do
 
 	pr, err := ParseFile(absPath, pkgPath, modulePath, rootPath)
 	if err != nil {
-		topo.Errors[domain.FilePath(absPath)] = err.Error()
+		topo.Errors[domain.FileID(absPath)] = err.Error()
 		return warnings
 	}
 
@@ -454,7 +454,7 @@ func UpdateFileInTopology(topo *domain.Topology, filePath, rootPath string) []do
 	delete(topo.Files, oldFile.Path)
 
 	newFile := domain.File{
-		Path:                 domain.FilePath(absPath),
+		Path:                 domain.FileID(absPath),
 		Name:                 filepath.Base(absPath),
 		Description:          pr.FileDescription,
 		FromPackage:          pkgPath,
@@ -477,10 +477,10 @@ func UpdateFileInTopology(topo *domain.Topology, filePath, rootPath string) []do
 		topo.ExternalVars[v.ID] = v
 		newFile.ExternalVars = append(newFile.ExternalVars, v.ID)
 	}
-	topo.Files[domain.FilePath(absPath)] = newFile
+	topo.Files[domain.FileID(absPath)] = newFile
 
 	pkg = topo.Packages[pkgPath]
-	pkg.Files = append(pkg.Files, domain.FilePath(absPath))
+	pkg.Files = append(pkg.Files, domain.FileID(absPath))
 	pkg.Functions = append(pkg.Functions, newFile.Functions...)
 	pkg.Structs = append(pkg.Structs, newFile.Structs...)
 	pkg.Interfaces = append(pkg.Interfaces, newFile.Interfaces...)
@@ -507,7 +507,7 @@ func UpdateFileInTopology(topo *domain.Topology, filePath, rootPath string) []do
 
 	matchStructsToInterfaces(topo)
 	collectDependencies(topo)
-	delete(topo.Errors, domain.FilePath(absPath))
+	delete(topo.Errors, domain.FileID(absPath))
 
 	return warnings
 }

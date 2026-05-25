@@ -3,6 +3,7 @@ package helper
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 
 	_ "modernc.org/sqlite"
 	"llm-topology/internal/topology/domain"
@@ -78,7 +79,7 @@ func createSchema(db *sql.DB) error {
 
 	CREATE TABLE IF NOT EXISTS info (key TEXT PRIMARY KEY, value TEXT);
 
-	CREATE TABLE IF NOT EXISTS packages (id TEXT PRIMARY KEY);
+	CREATE TABLE IF NOT EXISTS packages (id TEXT PRIMARY KEY, description TEXT);
 	CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT, from_package TEXT NOT NULL);
 	CREATE TABLE IF NOT EXISTS structs (id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT, params_json TEXT, starts_at INT NOT NULL, ends_at INT NOT NULL, loc_path TEXT);
 	CREATE TABLE IF NOT EXISTS interfaces (id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT, methods_json TEXT, starts_at INT NOT NULL, ends_at INT NOT NULL, loc_path TEXT);
@@ -162,8 +163,8 @@ func writeEntities(tx *sql.Tx, topo *domain.Topology) error {
 		return err
 	}
 
-	for id := range topo.Packages {
-		if _, err := tx.Exec("INSERT INTO packages VALUES (?)", string(id)); err != nil {
+	for id, pkg := range topo.Packages {
+		if _, err := tx.Exec("INSERT INTO packages VALUES (?, ?)", string(id), pkg.Description); err != nil {
 			return err
 		}
 	}
@@ -400,13 +401,13 @@ func ReadDb(path string) (*domain.Topology, error) {
 
 	topo := &domain.Topology{
 		Packages:     make(map[domain.PackagePath]domain.Package),
-		Files:        make(map[domain.FilePath]domain.File),
+		Files:        make(map[domain.FileID]domain.File),
 		Struct:       make(map[domain.StructID]domain.Struct),
 		Interfaces:   make(map[domain.InterfaceID]domain.Interface),
 		Functions:    make(map[domain.FunctionID]domain.Function),
 		ExternalVars: make(map[domain.ExternalVarID]domain.ExternalVar),
 		Dependancies: make([]domain.Dependancy, 0),
-		Errors:       make(map[domain.FilePath]string),
+		Errors:       make(map[domain.FileID]string),
 	}
 
 	// Entity tables
@@ -453,17 +454,21 @@ func readInfo(db *sql.DB, topo *domain.Topology) error {
 }
 
 func readPackageIds(db *sql.DB, topo *domain.Topology) error {
-	rows, err := db.Query("SELECT id FROM packages")
+	rows, err := db.Query("SELECT id, description FROM packages")
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err != nil {
+		var desc sql.NullString
+		if err := rows.Scan(&id, &desc); err != nil {
 			return err
 		}
-		topo.Packages[domain.PackagePath(id)] = domain.Package{Path: domain.PackagePath(id)}
+		topo.Packages[domain.PackagePath(id)] = domain.Package{
+			Path:        domain.PackagePath(id),
+			Description: desc.String,
+		}
 	}
 	return rows.Err()
 }
@@ -480,8 +485,8 @@ func readFiles(db *sql.DB, topo *domain.Topology) error {
 		if err := rows.Scan(&id, &name, &desc, &fromPkg); err != nil {
 			return err
 		}
-		topo.Files[domain.FilePath(id)] = domain.File{
-			Path:        domain.FilePath(id),
+		topo.Files[domain.FileID(id)] = domain.File{
+			Path:        domain.FileID(id),
 			Name:        name,
 			Description: desc.String,
 			FromPackage: domain.PackagePath(fromPkg),
@@ -511,7 +516,7 @@ func readStructEntities(db *sql.DB, topo *domain.Topology) error {
 			Loc: domain.Location{
 				StartsAt: startsAt,
 				EndsAt:   endsAt,
-				Path:     domain.FilePath(locPath),
+				Path:     domain.FileID(locPath),
 			},
 		}
 	}
@@ -539,7 +544,7 @@ func readInterfaceEntities(db *sql.DB, topo *domain.Topology) error {
 			Loc: domain.Location{
 				StartsAt: startsAt,
 				EndsAt:   endsAt,
-				Path:     domain.FilePath(locPath),
+				Path:     domain.FileID(locPath),
 			},
 		}
 	}
@@ -568,7 +573,7 @@ func readFunctionEntities(db *sql.DB, topo *domain.Topology) error {
 			Loc: domain.Location{
 				StartsAt: startsAt,
 				EndsAt:   endsAt,
-				Path:     domain.FilePath(locPath),
+				Path:     domain.FileID(locPath),
 			},
 		}
 	}
@@ -596,7 +601,7 @@ func readExtVarEntities(db *sql.DB, topo *domain.Topology) error {
 			Location: domain.Location{
 				StartsAt: startsAt,
 				EndsAt:   endsAt,
-				Path:     domain.FilePath(locPath),
+				Path:     domain.FileID(locPath),
 			},
 		}
 		if valJSON.Valid && valJSON.String != "" {
@@ -638,7 +643,7 @@ func readErrors(db *sql.DB, topo *domain.Topology) error {
 		if err := rows.Scan(&path, &msg); err != nil {
 			return err
 		}
-		topo.Errors[domain.FilePath(path)] = msg
+		topo.Errors[domain.FileID(path)] = msg
 	}
 	return rows.Err()
 }
@@ -790,9 +795,9 @@ func assembleRelations(topo *domain.Topology, r *relationMap) {
 	for pkgID, pkg := range topo.Packages {
 		spid := string(pkgID)
 
-		var files []domain.FilePath
+		var files []domain.FileID
 		for _, f := range r.pkgFiles[spid] {
-			files = append(files, domain.FilePath(f))
+			files = append(files, domain.FileID(f))
 		}
 		var structs []domain.StructID
 		for _, s := range r.pkgStructs[spid] {
@@ -994,4 +999,39 @@ func fromJSON[T any](s string) T {
 		json.Unmarshal([]byte(s), &v)
 	}
 	return v
+}
+
+func UpdateDescription(dbPath string, resourceName domain.ResourceName, id string, description string) error {
+	db, err := sql.Open("sqlite", dbPath+"?cache=shared&_journal_mode=WAL")
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	tableName := tableForResource(resourceName)
+	if tableName == "" {
+		return fmt.Errorf("unsupported resource for description update: %s", resourceName)
+	}
+
+	_, err = db.Exec("UPDATE "+tableName+" SET description = ? WHERE id = ?", description, id)
+	return err
+}
+
+func tableForResource(r domain.ResourceName) string {
+	switch r {
+	case domain.FUNCTION_RESOURCE:
+		return "functions"
+	case domain.STRUCT_RESOURCE:
+		return "structs"
+	case domain.INTERFACE_RESOURCE:
+		return "interfaces"
+	case domain.EXTERNAL_VAR_RESOURCE:
+		return "external_vars"
+	case domain.FILE_RESOURCE:
+		return "files"
+	case domain.PACKAGE_RESOURCE:
+		return "packages"
+	default:
+		return ""
+	}
 }

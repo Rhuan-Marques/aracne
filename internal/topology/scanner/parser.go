@@ -16,7 +16,7 @@ import (
 // the file's package membership. This intermediate representation is consumed
 // by the analyzer orchestration layer to populate the final Topology.
 type ParseResult struct {
-	FilePath        string
+	FileID        string
 	FileDescription string
 	PkgPath         domain.PackagePath
 	ModulePath      string
@@ -59,7 +59,7 @@ func ParseFile(filePath string, pkgPath domain.PackagePath, modulePath, rootPath
 	}
 
 	pr := &ParseResult{
-		FilePath:        filePath,
+		FileID:        filePath,
 		FileDescription: commentText(astFile.Doc),
 		PkgPath:         pkgPath,
 		ModulePath:      modulePath,
@@ -117,7 +117,7 @@ func (pr *ParseResult) processGenDecl(genDecl *ast.GenDecl, fset *token.FileSet)
 					}
 
 					id := domain.ExternalVarID(string(pr.PkgPath) + "." + name.Name)
-					loc := locationFromNode(fset, genDecl, pr.FilePath)
+					loc := locationFromNode(fset, genDecl, pr.FileID)
 
 					pr.ExternalVars = append(pr.ExternalVars, domain.ExternalVar{
 						ID:          id,
@@ -158,7 +158,7 @@ func (pr *ParseResult) processTypeSpec(typeSpec *ast.TypeSpec, fset *token.FileS
 // comment from either the TypeSpec or the enclosing GenDecl for the Description.
 func (pr *ParseResult) processStruct(typeSpec *ast.TypeSpec, st *ast.StructType, fset *token.FileSet, genDecl *ast.GenDecl) error {
 	id := domain.StructID(string(pr.PkgPath) + "." + typeSpec.Name.Name)
-	loc := locationFromNode(fset, typeSpec, pr.FilePath)
+	loc := locationFromNode(fset, typeSpec, pr.FileID)
 
 	var params []domain.VariableDefinition
 	var pkgRefs []domain.PackagePath
@@ -204,7 +204,7 @@ func (pr *ParseResult) processStruct(typeSpec *ast.TypeSpec, st *ast.StructType,
 // with only the embedded interface name populated.
 func (pr *ParseResult) processInterface(typeSpec *ast.TypeSpec, it *ast.InterfaceType, fset *token.FileSet, genDecl *ast.GenDecl) error {
 	id := domain.InterfaceID(string(pr.PkgPath) + "." + typeSpec.Name.Name)
-	loc := locationFromNode(fset, typeSpec, pr.FilePath)
+	loc := locationFromNode(fset, typeSpec, pr.FileID)
 
 	var methods []domain.FunctionDefinition
 	var pkgRefs []domain.PackagePath
@@ -255,7 +255,7 @@ func (pr *ParseResult) processInterface(typeSpec *ast.TypeSpec, it *ast.Interfac
 // ID and use a parenthesized receiver notation in their FunctionID, while plain
 // functions store only the package-qualified name.
 func (pr *ParseResult) processFuncDecl(funcDecl *ast.FuncDecl, fset *token.FileSet) {
-	loc := locationFromNode(fset, funcDecl, pr.FilePath)
+	loc := locationFromNode(fset, funcDecl, pr.FileID)
 	params := parseFieldList(funcDecl.Type.Params)
 	results := parseFieldList(funcDecl.Type.Results)
 
@@ -458,13 +458,13 @@ func rootIdent(expr ast.Expr) string {
 // elements that don't correspond to actual source positions.
 func locationFromNode(fset *token.FileSet, node ast.Node, filePath string) domain.Location {
 	if node == nil {
-		return domain.Location{Path: domain.FilePath(filePath)}
+		return domain.Location{Path: domain.FileID(filePath)}
 	}
 	start := fset.Position(node.Pos())
 	end := fset.Position(node.End())
 	return domain.Location{
 		StartsAt: start.Line,
 		EndsAt:   end.Line,
-		Path:     domain.FilePath(filePath),
+		Path:     domain.FileID(filePath),
 	}
 }

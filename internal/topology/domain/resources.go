@@ -7,8 +7,8 @@ package domain
 // ExternalVarID uniquely identifies a package-level variable or constant in the topology graph.
 type ExternalVarID string
 
-// FilePath is an absolute filesystem path to a Go source file.
-type FilePath string
+// FileID is an absolute filesystem path to a Go source file.
+type FileID string
 
 // PackagePath is the Go import path of a package belonging to the analyzed repository.
 type PackagePath string
@@ -105,11 +105,11 @@ type SimplifiedExtVar struct {
 }
 
 // ContextBlock is a flat, ordered entry in the FunctionContext block list.
-// Blocks are sorted by (FilePath, Line) for proximity-based rendering so
+// Blocks are sorted by (FileID, Line) for proximity-based rendering so
 // that elements from the same source file appear adjacent in source order.
 type ContextBlock struct {
 	Kind     string   // e.g. "function", "parent_struct", "called_func", "struct", "struct_method", "interface", "interface_impl", "impl_method", "extvar"
-	FilePath FilePath
+	FileID FileID
 	Line     int
 	Title    string
 	Cut      string   // populated only for full-cut blocks (function, parent_struct)
@@ -158,7 +158,7 @@ type FunctionContext struct {
 type Location struct {
 	StartsAt int
 	EndsAt   int
-	Path     FilePath
+	Path     FileID
 }
 
 // VariableDefinition describes a typed variable parameter or struct field.
@@ -266,7 +266,7 @@ func (*Interface) ResourceName() ResourceName {
 
 // File represents a single Go source file discovered during directory walking.
 type File struct {
-	Path                 FilePath
+	Path                 FileID
 	Name                 string
 	Description          string
 	Functions            []FunctionID
@@ -285,11 +285,12 @@ func (*File) ResourceName() ResourceName {
 // Package groups all files and topology elements that belong to the same Go package.
 type Package struct {
 	Path         PackagePath
+	Description  string
 	Functions    []FunctionID
 	Structs      []StructID
 	Interfaces   []InterfaceID
 	ExternalVars []ExternalVarID
-	Files        []FilePath
+	Files        []FileID
 }
 
 func (*Package) ResourceName() ResourceName {
@@ -300,11 +301,11 @@ func (*Package) ResourceName() ResourceName {
 type Topology struct {
 	Root         string
 	Packages     map[PackagePath]Package
-	Files        map[FilePath]File
+	Files        map[FileID]File
 	Struct       map[StructID]Struct
 	Interfaces   map[InterfaceID]Interface
 	Functions    map[FunctionID]Function
 	ExternalVars map[ExternalVarID]ExternalVar
 	Dependancies []Dependancy
-	Errors       map[FilePath]string
+	Errors       map[FileID]string
 }

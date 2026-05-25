@@ -8,9 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"llm-topology/internal/helper"
+	"llm-topology/internal/llm"
 	"llm-topology/internal/llm/agent"
 	"llm-topology/internal/llm/providers"
 	"llm-topology/internal/llm/tools"
@@ -37,6 +39,8 @@ func main() {
 		runServe()
 	case "install":
 		runInstall(os.Args[2:])
+	case "generate-descriptions":
+		runGenerateDescriptions(os.Args[2:])
 	default:
 		printUsage()
 	}
@@ -51,6 +55,7 @@ Usage:
   ltp agent   [prompt]   Run the AI coding agent
   ltp serve              Start MCP server (for OpenCode plugin integration)
   ltp install [flags]    Configure OpenCode to use llm-topology as a plugin
+  ltp generate-descriptions [flags]  Generate descriptions for all undocumented resources
 
 Flags for "scan":
   -root <path>    Root folder of the Go project (default ".")
@@ -65,12 +70,16 @@ Flags for "mermaid":
 Flags for "install":
   --global        Install globally (~/.config/opencode/opencode.json)
 
+Flags for "generate-descriptions":
+  --concurrency N  Max concurrent LLM calls (default 5)
+
   Examples:
     ltp scan -root ./myproject -output myproject.db
     ltp mermaid -input myproject.db -output diagram.mermaid --filter "Function, Struct"
     ltp agent "list all structs"
     ltp install               # add MCP config to opencode.json
-    ltp serve                 # start MCP server (used by OpenCode)`)
+    ltp serve                 # start MCP server (used by OpenCode)
+    ltp generate-descriptions # generate descriptions for all resources`)
 }
 
 func runScan(args []string) {
@@ -185,6 +194,9 @@ func runAgent() {
 	reg.Register(tools.NewReadFunction(manager))
 	reg.Register(tools.NewReadStruct(manager))
 	reg.Register(tools.NewEdit(manager))
+	reg.Register(tools.NewGenerateDescriptions(manager))
+	reg.Register(tools.NewReadResourceAndCut(manager))
+	reg.Register(tools.NewUpdateDescriptionTool(manager))
 
 	a := agent.New(provider, reg)
 
@@ -305,4 +317,154 @@ func runInstall(args []string) {
 
 	fmt.Printf("llm-topology MCP server configured in %s\n", configPath)
 	fmt.Println("Restart OpenCode to activate the topology tools.")
+}
+
+func runGenerateDescriptions(args []string) {
+	fs := flag.NewFlagSet("generate-descriptions", flag.ExitOnError)
+	concurrency := fs.Int("concurrency", 5, "Max concurrent LLM calls")
+	fs.Parse(args)
+
+	apiKey := os.Getenv("DEEPSEEK_API_KEY")
+	if apiKey == "" {
+		fmt.Fprintln(os.Stderr, "Error: DEEPSEEK_API_KEY environment variable is not set")
+		os.Exit(1)
+	}
+
+	manager := initManager(".ltp/topology.db")
+	provider := providers.NewDeepSeek()
+
+	topo, err := manager.ReadAll(topology.WithHasDescription(false))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading topology: %v\n", err)
+		os.Exit(1)
+	}
+
+	type descTask struct {
+		id           string
+		name         string
+		resourceName domain.ResourceName
+		cut          *domain.CodeEntry
+	}
+
+	var tasks []descTask
+
+	for id, fn := range topo.Functions {
+		cut, err := manager.Cut(fn.Loc)
+		if err != nil {
+			continue
+		}
+		tasks = append(tasks, descTask{string(id), fn.Name, domain.FUNCTION_RESOURCE, cut})
+	}
+	for id, s := range topo.Struct {
+		cut, err := manager.Cut(s.Loc)
+		if err != nil {
+			continue
+		}
+		tasks = append(tasks, descTask{string(id), s.Name, domain.STRUCT_RESOURCE, cut})
+	}
+	for id, iface := range topo.Interfaces {
+		cut, err := manager.Cut(iface.Loc)
+		if err != nil {
+			continue
+		}
+		tasks = append(tasks, descTask{string(id), iface.Name, domain.INTERFACE_RESOURCE, cut})
+	}
+	for id, v := range topo.ExternalVars {
+		cut, err := manager.Cut(v.Location)
+		if err != nil {
+			continue
+		}
+		tasks = append(tasks, descTask{string(id), v.Name, domain.EXTERNAL_VAR_RESOURCE, cut})
+	}
+
+	for id, f := range topo.Files {
+		tasks = append(tasks, descTask{string(id), f.Name, domain.FILE_RESOURCE, nil})
+	}
+	for id := range topo.Packages {
+		tasks = append(tasks, descTask{string(id), string(id), domain.PACKAGE_RESOURCE, nil})
+	}
+
+	fmt.Printf("Generating descriptions for %d resources (concurrency: %d)...\n", len(tasks), *concurrency)
+
+	sem := make(chan struct{}, *concurrency)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	generated := 0
+	failed := 0
+
+	for _, t := range tasks {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(t descTask) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			cutText := ""
+			if t.cut != nil {
+				cutText = t.cut.Cut
+			}
+
+			prompt := buildDescriptionPrompt(t.resourceName, cutText)
+			messages := []llm.Message{
+				{Role: "system", Content: "You are a code description generator. Generate ONLY the description text, nothing else."},
+				{Role: "user", Content: prompt},
+			}
+			resp, err := provider.Chat(messages, nil)
+			if err != nil {
+				mu.Lock()
+				failed++
+				mu.Unlock()
+				return
+			}
+
+			desc := strings.TrimSpace(resp.Content)
+			if desc == "" {
+				mu.Lock()
+				failed++
+				mu.Unlock()
+				return
+			}
+
+			if err := manager.UpdateDescription(t.id, t.resourceName, desc); err != nil {
+				mu.Lock()
+				failed++
+				mu.Unlock()
+				return
+			}
+
+			mu.Lock()
+			generated++
+			fmt.Printf("  [%d/%d] %s %s\n", generated+failed, len(tasks), t.resourceName, t.name)
+			mu.Unlock()
+		}(t)
+	}
+
+	wg.Wait()
+
+	fmt.Printf("\nDone: %d descriptions generated, %d failed\n", generated, failed)
+}
+
+func buildDescriptionPrompt(rn domain.ResourceName, cut string) string {
+	var instructions string
+	switch rn {
+	case domain.FUNCTION_RESOURCE:
+		instructions = "Generate a concise description (1-3 lines) for this Go function. Include its main purpose, what parameters it takes, what it returns, and any notable behavior or side effects."
+	case domain.STRUCT_RESOURCE:
+		instructions = "Generate a concise description (1-3 lines) for this Go struct. Include what it represents, its key fields and their purpose, and how it is typically used."
+	case domain.INTERFACE_RESOURCE:
+		instructions = "Generate a concise description (1-3 lines) for this Go interface. Include what contract it defines, what behavior it abstracts, and the key methods it requires."
+	case domain.EXTERNAL_VAR_RESOURCE:
+		instructions = "Generate a concise description (1 line) for this Go external variable. Include what it stores and its purpose in the codebase."
+	case domain.FILE_RESOURCE:
+		instructions = "Generate a concise description (1 line) for this Go source file. What does it contain and what is its role within its package? The file name is all the context available."
+	case domain.PACKAGE_RESOURCE:
+		instructions = "Generate a concise description (1-2 lines) for this Go package. Include its overall purpose and what functionality it provides."
+	default:
+		instructions = "Generate a concise description for this resource."
+	}
+
+	if cut != "" {
+		return fmt.Sprintf("%s\n\n```go\n%s\n```\n\nWrite ONLY the description text, nothing else.", instructions, cut)
+	}
+	return fmt.Sprintf("%s\n\nWrite ONLY the description text, nothing else.", instructions)
 }
