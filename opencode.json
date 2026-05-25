@@ -1,0 +1,11 @@
+{
+  "mcp": {
+    "llm-topology": {
+      "args": [
+        "serve"
+      ],
+      "command": "ltp",
+      "type": "local"
+    }
+  }
+}

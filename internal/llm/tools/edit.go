@@ -1,0 +1,80 @@
+package tools
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"strings"
+
+	"llm-topology/internal/topology"
+)
+
+type Edit struct {
+	mgr *topology.TopologyManager
+}
+
+func NewEdit(mgr *topology.TopologyManager) *Edit {
+	return &Edit{mgr: mgr}
+}
+
+func (e *Edit) Name() string {
+	return "edit"
+}
+
+func (e *Edit) Description() string {
+	return "Edit a file by replacing exact text with new text. Provide the file path, the exact string to find, and the replacement. The project topology is automatically updated."
+}
+
+func (e *Edit) Parameters() []Parameter {
+	return []Parameter{
+		{Name: "file_path", Type: "string", Description: "The absolute path to the file to edit", Required: true},
+		{Name: "old_string", Type: "string", Description: "The exact text to search for and replace", Required: true},
+		{Name: "new_string", Type: "string", Description: "The replacement text", Required: true},
+	}
+}
+
+func (e *Edit) Run(args json.RawMessage) (string, error) {
+	var params struct {
+		FilePath  string `json:"file_path"`
+		OldString string `json:"old_string"`
+		NewString string `json:"new_string"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+
+	if params.FilePath == "" || params.OldString == "" || params.NewString == "" {
+		return "", fmt.Errorf("missing required arguments: file_path, old_string, new_string")
+	}
+
+	data, err := os.ReadFile(params.FilePath)
+	if err != nil {
+		return "", fmt.Errorf("read file: %w", err)
+	}
+
+	content := string(data)
+	if !strings.Contains(content, params.OldString) {
+		return "", fmt.Errorf("old_string not found in %s", params.FilePath)
+	}
+
+	newContent := strings.Replace(content, params.OldString, params.NewString, 1)
+	if err := os.WriteFile(params.FilePath, []byte(newContent), 0644); err != nil {
+		return "", fmt.Errorf("write file: %w", err)
+	}
+
+	if e.mgr != nil {
+		warnings := e.mgr.UpdateFile(params.FilePath)
+		if len(warnings) > 0 {
+			var msgs []string
+			for _, w := range warnings {
+				var affected []string
+				for _, af := range w.AffectedFunctions {
+					affected = append(affected, string(af))
+				}
+				msgs = append(msgs, fmt.Sprintf("  - %s: %s (affects: %s)", w.Resource, w.Message, strings.Join(affected, ", ")))
+			}
+			return "edit succeeded\n\nTopology warnings (functions that may need manual review):\n" + strings.Join(msgs, "\n"), nil
+		}
+	}
+	return "edit succeeded", nil
+}
