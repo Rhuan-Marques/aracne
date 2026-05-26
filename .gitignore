@@ -31,6 +31,10 @@ go.work.sum
 # ltp artifacts
 .ltp/
 
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
 # Editor/IDE
 # .idea/
 # .vscode/

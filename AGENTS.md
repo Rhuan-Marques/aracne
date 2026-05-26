@@ -17,29 +17,38 @@ go build -o ltp.exe .
 .\ltp serve                             # Start MCP server (for OpenCode plugin)
 .\ltp install                           # Configure OpenCode to use llm-topology
 .\ltp install --global                  # Configure globally
+.\ltp viz                               # Launch interactive topology visualizer
+.\ltp generate-descriptions              # Auto-generate descriptions via LLM
+.\ltp generate-descriptions --concurrency 5
 ```
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `go build -o ltp.exe .` | Build binary |
+| `go build -o ltp.exe .` | Build binary (requires `cd frontend && npm run build` first) |
 | `go run . scan -root <path>` | Run topology scan |
 | `go run . mermaid -input .ltp/topology.db` | Generate Mermaid diagram |
 | `go run . agent` | Run AI agent (requires DEEPSEEK_API_KEY) |
 | `go run . serve` | Start MCP server (stdio transport) |
 | `go run . install` | Configure OpenCode MCP in opencode.json |
+| `go run . viz` | Start interactive topology visualizer (opens browser) |
 | `go test ./internal/topology/` | Run topology tests |
 | `go test ./internal/mermaid/` | Run mermaid tests |
 | `go vet ./...` | Check for suspicious constructs |
 | `gofmt -l -w .` | Format code |
 | `go mod tidy` | Tidy dependencies |
 | `go mod verify` | Verify checksums |
+| `cd frontend && npm run build` | Build React frontend |
+| `cd frontend && npm run dev` | Start Vite dev server |
 
 ## Project Structure
 
 ```
-main.go                         # CLI entry point (scan / mermaid / agent / serve / install subcommands)
+main.go                         # CLI entry point (scan / mermaid / agent / serve / install / viz subcommands)
+gen.go                          # go:embed (frontend) + go:generate directives
+viz/
+  server.go                     # HTTP server for interactive topology visualizer
 internal/
   helper/
     db.go                       # SQLite persistence layer (schema, write, read)
@@ -76,6 +85,23 @@ internal/
   mermaid/
     generate.go                 # Mermaid diagram generator (Generate, GenerateToFile)
     generate_test.go            # Tests for diagram generation
+frontend/                       # React frontend (Vite + TypeScript + React Flow)
+  src/
+    components/
+      nodes/
+        StructNode.tsx          # Purple rectangle node
+        FunctionNode.tsx        # Blue oval node
+        FileNode.tsx            # Translucent gray area node
+        PackageNode.tsx         # Orange outline node
+        InterfaceMethodNode.tsx # Pink circle node
+      HoverPopover.tsx          # Rich hover tooltip with @mentions
+      Hyperlink.tsx             # Clickable @mention → navigate to node
+      GraphCanvas.tsx           # Main React Flow canvas
+      SearchBar.tsx             # Jump-to search input
+    layout/
+      layoutEngine.ts           # Custom layout algorithm (structs center, methods orbit, files/packages as areas)
+    utils/
+      graphHelpers.ts           # Build React Flow nodes/edges from topology
 ```
 
 ## Code Conventions
@@ -191,3 +217,42 @@ The MCP server auto-scans the project if `.ltp/topology.db` is missing on first 
 
 - AI agent mode requires `DEEPSEEK_API_KEY` environment variable.
 - MCP server mode does not require an API key (the external LLM platform provides its own).
+
+## Interactive Topology Visualizer
+
+`ltp viz` starts an HTTP server serving an interactive React-based graph visualization at `http://localhost:<port>`. The browser auto-opens.
+
+### Node types
+
+| Type | Shape | Color | Connections |
+|------|-------|-------|-------------|
+| Struct | Rectangle | Light purple | Lines to its methods |
+| Function | Oval | Light blue | Line to parent struct, arrows to called functions |
+| File | Rectangle | Light gray (50% transparent) | None (area container) |
+| Package | Rectangle (outline) | Light orange outline | None (area container) |
+| Interface Method | Circle | Light pink | Connected from calling functions |
+
+### Features
+
+- Free-form workspace (pan/zoom/drag like Figma)
+- Rich hover tooltips with descriptions, code snippets, and usage info
+- `@mention` hyperlinks — click to navigate to the referenced node
+- Jump-to search bar for quick node lookup
+- MiniMap and controls for navigation
+
+### API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/topology` | Full topology JSON |
+| GET | `/api/function/{id}` | Function detail + source cut + context |
+| GET | `/api/struct/{id}` | Struct detail + source cut + context |
+
+### Build
+
+The React frontend is embedded in the Go binary via `//go:embed`. Build order:
+
+1. `cd frontend && npm run build` — builds React app to `frontend/dist/`
+2. `go build -o ltp.exe .` — embeds dist/ into the binary
+
+`go generate` automates step 1 via `//go:generate` directives in `gen.go`.

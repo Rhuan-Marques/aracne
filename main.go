@@ -20,6 +20,7 @@ import (
 	"llm-topology/internal/mermaid"
 	"llm-topology/internal/topology"
 	"llm-topology/internal/topology/domain"
+	"llm-topology/viz"
 )
 
 func main() {
@@ -41,6 +42,8 @@ func main() {
 		runInstall(os.Args[2:])
 	case "generate-descriptions":
 		runGenerateDescriptions(os.Args[2:])
+	case "viz":
+		runViz()
 	default:
 		printUsage()
 	}
@@ -56,6 +59,7 @@ Usage:
   ltp serve              Start MCP server (for OpenCode plugin integration)
   ltp install [flags]    Configure OpenCode to use llm-topology as a plugin
   ltp generate-descriptions [flags]  Generate descriptions for all undocumented resources
+  ltp viz                           Launch interactive topology visualizer in browser
 
 Flags for "scan":
   -root <path>    Root folder of the Go project (default ".")
@@ -79,7 +83,8 @@ Flags for "generate-descriptions":
     ltp agent "list all structs"
     ltp install               # add MCP config to opencode.json
     ltp serve                 # start MCP server (used by OpenCode)
-    ltp generate-descriptions # generate descriptions for all resources`)
+    ltp generate-descriptions # generate descriptions for all resources
+    ltp viz                   # open interactive topology visualization in browser`)
 }
 
 func runScan(args []string) {
@@ -467,4 +472,14 @@ func buildDescriptionPrompt(rn domain.ResourceName, cut string) string {
 		return fmt.Sprintf("%s\n\n```go\n%s\n```\n\nWrite ONLY the description text, nothing else.", instructions, cut)
 	}
 	return fmt.Sprintf("%s\n\nWrite ONLY the description text, nothing else.", instructions)
+}
+
+func runViz() {
+	manager := initManager(".ltp/topology.db")
+
+	fmt.Fprintf(os.Stderr, "Starting topology visualizer...\n")
+	if err := viz.Serve(manager, frontendDist); err != nil {
+		fmt.Fprintf(os.Stderr, "Error starting visualizer: %v\n", err)
+		os.Exit(1)
+	}
 }
