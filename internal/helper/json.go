@@ -1,6 +1,3 @@
-// Package serializer handles JSON persistence for Topology objects, providing
-// read and write operations that bridge the in-memory topology graph with its
-// on-disk JSON representation.
 package helper
 
 import (
@@ -10,7 +7,6 @@ import (
 	"llm-topology/internal/topology/domain"
 )
 
-// Write marshals a Topology to indented JSON and writes it to the given path.
 func WriteJson(topo *domain.Topology, path string) error {
 	data, err := json.MarshalIndent(topo, "", "  ")
 	if err != nil {
@@ -19,7 +15,6 @@ func WriteJson(topo *domain.Topology, path string) error {
 	return os.WriteFile(path, data, 0644)
 }
 
-// Read loads a JSON file and unmarshals it into a Topology pointer.
 func ReadJson(path string) (*domain.Topology, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

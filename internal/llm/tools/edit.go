@@ -7,14 +7,16 @@ import (
 	"strings"
 
 	"llm-topology/internal/topology"
+	"llm-topology/internal/topology/scanner"
 )
 
 type Edit struct {
 	mgr *topology.TopologyManager
+	reg *scanner.Registry
 }
 
-func NewEdit(mgr *topology.TopologyManager) *Edit {
-	return &Edit{mgr: mgr}
+func NewEdit(mgr *topology.TopologyManager, reg *scanner.Registry) *Edit {
+	return &Edit{mgr: mgr, reg: reg}
 }
 
 func (e *Edit) Name() string {
@@ -63,15 +65,11 @@ func (e *Edit) Run(args json.RawMessage) (string, error) {
 	}
 
 	if e.mgr != nil {
-		warnings := e.mgr.UpdateFile(params.FilePath)
+		warnings := e.mgr.UpdateFile(params.FilePath, e.reg)
 		if len(warnings) > 0 {
 			var msgs []string
 			for _, w := range warnings {
-				var affected []string
-				for _, af := range w.AffectedFunctions {
-					affected = append(affected, string(af))
-				}
-				msgs = append(msgs, fmt.Sprintf("  - %s: %s (affects: %s)", w.Resource, w.Message, strings.Join(affected, ", ")))
+				msgs = append(msgs, fmt.Sprintf("  - %s: %s (affects: %s)", w.Resource, w.Message, strings.Join(w.AffectedResources, ", ")))
 			}
 			return "edit succeeded\n\nTopology warnings (functions that may need manual review):\n" + strings.Join(msgs, "\n"), nil
 		}

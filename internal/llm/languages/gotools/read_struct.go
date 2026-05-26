@@ -1,4 +1,4 @@
-package tools
+package gotools
 
 import (
 	"encoding/json"
@@ -6,14 +6,14 @@ import (
 	"sort"
 	"strings"
 
-	"llm-topology/internal/topology"
+	"llm-topology/internal/topology/golang"
 )
 
 type ReadStruct struct {
-	mgr *topology.TopologyManager
+	mgr *golang.GoManager
 }
 
-func NewReadStruct(mgr *topology.TopologyManager) *ReadStruct {
+func NewReadStruct(mgr *golang.GoManager) *ReadStruct {
 	return &ReadStruct{mgr: mgr}
 }
 
@@ -22,7 +22,7 @@ func (r *ReadStruct) Name() string {
 }
 
 func (r *ReadStruct) Description() string {
-	return "Read a struct's full source code and its interconnected context (interfaces, methods, constructor, used types) from the project topology. Prefer this over 'read' when investigating a specific struct."
+	return "Read a Go struct's full source code and its interconnected context (interfaces, methods, constructor, used types) from the project topology. Prefer this over 'read' when investigating a specific struct."
 }
 
 func (r *ReadStruct) Parameters() []Parameter {
@@ -44,7 +44,7 @@ func (r *ReadStruct) Run(args json.RawMessage) (string, error) {
 
 	ctx, err := r.mgr.ReadStruct(params.Name)
 	if err == nil {
-		return formatStructContext(ctx), nil
+		return formatGoStructContext(ctx), nil
 	}
 
 	ids, err := r.mgr.FindStructsByName(params.Name)
@@ -69,5 +69,5 @@ func (r *ReadStruct) Run(args json.RawMessage) (string, error) {
 		return "", fmt.Errorf("read struct: %w", err)
 	}
 
-	return formatStructContext(ctx), nil
+	return formatGoStructContext(ctx), nil
 }

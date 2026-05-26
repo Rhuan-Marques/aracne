@@ -1,4 +1,4 @@
-package topology
+package topology_test
 
 import (
 	"encoding/json"
@@ -6,15 +6,26 @@ import (
 	"testing"
 
 	"llm-topology/internal/helper"
+	"llm-topology/internal/topology"
+	"llm-topology/internal/topology/golang"
+	"llm-topology/internal/topology/scanner"
+	"llm-topology/internal/topology/scanner/goscanner"
 )
+
+func newTestRegistry() *scanner.Registry {
+	reg := scanner.NewRegistry()
+	reg.Register(goscanner.NewGoScanner())
+	return reg
+}
 
 func TestCut(t *testing.T) {
 	dbPath := "../test_cut.db"
 	defer os.Remove(dbPath)
 
-	mgr := New()
+	reg := newTestRegistry()
+	mgr := topology.New()
 	mgr.Load(dbPath)
-	if err := mgr.FullScan("../.."); err != nil {
+	if err := mgr.FullScan("../..", reg); err != nil {
 		t.Fatal(err)
 	}
 
@@ -23,7 +34,8 @@ func TestCut(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for id, fn := range topo.Functions {
+	gt := golang.FromGeneric(topo)
+	for id, fn := range gt.Functions {
 		entry, err := mgr.Cut(fn.Loc)
 		if err != nil {
 			t.Fatalf("Cut(%s): %v", id, err)
@@ -34,7 +46,7 @@ func TestCut(t *testing.T) {
 		if entry.Location.Path != fn.Loc.Path {
 			t.Fatalf("Cut(%s): path mismatch", id)
 		}
-		break // just test one
+		break
 	}
 }
 
@@ -42,19 +54,22 @@ func TestReadFunction(t *testing.T) {
 	dbPath := "../test_readfn.db"
 	defer os.Remove(dbPath)
 
-	mgr := New()
+	reg := newTestRegistry()
+	mgr := topology.New()
 	mgr.Load(dbPath)
-	if err := mgr.FullScan("../.."); err != nil {
+	if err := mgr.FullScan("../..", reg); err != nil {
 		t.Fatal(err)
 	}
 
+	gm := golang.NewGoManager(mgr)
 	topo, err := helper.ReadDb(dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	for id := range topo.Functions {
-		ctx, err := mgr.ReadFunction(string(id))
+	gt := golang.FromGeneric(topo)
+	for id := range gt.Functions {
+		ctx, err := gm.ReadFunction(string(id))
 		if err != nil {
 			t.Fatalf("ReadFunction(%s): %v", id, err)
 		}
@@ -92,22 +107,25 @@ func TestReadFunctionCalledFuncs(t *testing.T) {
 	dbPath := "../test_readfn2.db"
 	defer os.Remove(dbPath)
 
-	mgr := New()
+	reg := newTestRegistry()
+	mgr := topology.New()
 	mgr.Load(dbPath)
-	if err := mgr.FullScan("../.."); err != nil {
+	if err := mgr.FullScan("../..", reg); err != nil {
 		t.Fatal(err)
 	}
 
+	gm := golang.NewGoManager(mgr)
 	topo, err := helper.ReadDb(dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	for id, fn := range topo.Functions {
-		if len(fn.FunctionsUsed) == 0 {
+	gt := golang.FromGeneric(topo)
+	for id, fn := range gt.Functions {
+		if len(fn.Calls()) == 0 {
 			continue
 		}
-		ctx, err := mgr.ReadFunction(string(id))
+		ctx, err := gm.ReadFunction(string(id))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -137,19 +155,22 @@ func TestReadStruct(t *testing.T) {
 	dbPath := "../test_readstruct.db"
 	defer os.Remove(dbPath)
 
-	mgr := New()
+	reg := newTestRegistry()
+	mgr := topology.New()
 	mgr.Load(dbPath)
-	if err := mgr.FullScan("../.."); err != nil {
+	if err := mgr.FullScan("../..", reg); err != nil {
 		t.Fatal(err)
 	}
 
+	gm := golang.NewGoManager(mgr)
 	topo, err := helper.ReadDb(dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	for id := range topo.Struct {
-		ctx, err := mgr.ReadStruct(string(id))
+	gt := golang.FromGeneric(topo)
+	for id := range gt.Structs {
+		ctx, err := gm.ReadStruct(string(id))
 		if err != nil {
 			t.Fatalf("ReadStruct(%s): %v", id, err)
 		}

@@ -7,15 +7,14 @@ import (
 	"os"
 
 	"llm-topology/internal/llm/tools"
-	"llm-topology/internal/topology"
 )
 
 type Server struct {
-	mgr *topology.TopologyManager
+	registry *tools.Registry
 }
 
-func NewServer(mgr *topology.TopologyManager) *Server {
-	return &Server{mgr: mgr}
+func NewServer(registry *tools.Registry) *Server {
+	return &Server{registry: registry}
 }
 
 func (s *Server) Serve() error {
@@ -75,7 +74,7 @@ func (s *Server) handleInitialize(id *int) *Response {
 }
 
 func (s *Server) handleListTools(id *int) *Response {
-	allTools := s.buildTools()
+	allTools := s.registry.List()
 	list := make([]Tool, 0, len(allTools))
 	for _, t := range allTools {
 		props := make(map[string]Property)
@@ -109,8 +108,7 @@ func (s *Server) handleCallTool(id *int, params json.RawMessage) *Response {
 		return s.errorResponse(id, -32602, "Invalid params")
 	}
 
-	allTools := s.buildTools()
-	t, ok := allTools[call.Name]
+	t, ok := s.registry.Get(call.Name)
 	if !ok {
 		return s.errorResponse(id, -32601, fmt.Sprintf("Tool not found: %s", call.Name))
 	}
@@ -133,19 +131,6 @@ func (s *Server) handleCallTool(id *int, params json.RawMessage) *Response {
 		Result: CallToolResult{
 			Content: []ContentBlock{{Type: "text", Text: result}},
 		},
-	}
-}
-
-func (s *Server) buildTools() map[string]tools.Tool {
-	return map[string]tools.Tool{
-		"ls":                      &tools.Ls{},
-		"read":                    &tools.Read{},
-		"read_function":           tools.NewReadFunction(s.mgr),
-		"read_struct":             tools.NewReadStruct(s.mgr),
-		"edit":                    tools.NewEdit(s.mgr),
-		"generate_descriptions":   tools.NewGenerateDescriptions(s.mgr),
-		"read_resource_and_cut":   tools.NewReadResourceAndCut(s.mgr),
-		"update_description":      tools.NewUpdateDescriptionTool(s.mgr),
 	}
 }
 

@@ -10,7 +10,7 @@ import (
 
 type gen struct {
 	topo    *domain.Topology
-	filter  map[domain.ResourceName]bool
+	filter  map[domain.ResourceKind]bool
 	nodeID  map[string]string
 	counter int
 	b       strings.Builder
@@ -21,28 +21,41 @@ func (g *gen) nextID(prefix string) string {
 	return fmt.Sprintf("%s%d", prefix, g.counter)
 }
 
-var resourceColor = map[domain.ResourceName]string{
-	domain.PACKAGE_RESOURCE:    "#1565C0",
-	domain.FILE_RESOURCE:       "#2E7D32",
-	domain.FUNCTION_RESOURCE:   "#E65100",
-	domain.STRUCT_RESOURCE:     "#6A1B9A",
-	domain.INTERFACE_RESOURCE:  "#AD1457",
-	domain.EXTERNAL_VAR_RESOURCE: "#424242",
-	domain.DEPENDENCY_RESOURCE: "#F9A825",
+var resourceColor = map[domain.ResourceKind]string{
+	domain.ResourcePackage:    "#1565C0",
+	domain.ResourceFile:       "#2E7D32",
+	domain.ResourceFunction:   "#E65100",
+	domain.ResourceMethod:     "#E65100",
+	domain.ResourceType:       "#6A1B9A",
+	domain.ResourceInterface:  "#AD1457",
+	domain.ResourceVariable:   "#424242",
+	domain.ResourceDependency: "#F9A825",
 }
 
-var resourceFill = map[domain.ResourceName]string{
-	domain.PACKAGE_RESOURCE:    "#E3F2FD",
-	domain.FILE_RESOURCE:       "#E8F5E9",
-	domain.FUNCTION_RESOURCE:   "#FFF3E0",
-	domain.STRUCT_RESOURCE:     "#F3E5F5",
-	domain.INTERFACE_RESOURCE:  "#FCE4EC",
-	domain.EXTERNAL_VAR_RESOURCE: "#F5F5F5",
-	domain.DEPENDENCY_RESOURCE: "#FFFDE7",
+var resourceFill = map[domain.ResourceKind]string{
+	domain.ResourcePackage:    "#E3F2FD",
+	domain.ResourceFile:       "#E8F5E9",
+	domain.ResourceFunction:   "#FFF3E0",
+	domain.ResourceMethod:     "#FFF3E0",
+	domain.ResourceType:       "#F3E5F5",
+	domain.ResourceInterface:  "#FCE4EC",
+	domain.ResourceVariable:   "#F5F5F5",
+	domain.ResourceDependency: "#FFFDE7",
 }
 
-func (g *gen) resourceKey(rtype domain.ResourceName, id string) string {
-	return string(rtype) + ":" + id
+var resourceLabels = map[domain.ResourceKind]string{
+	domain.ResourcePackage:    "Package",
+	domain.ResourceFile:       "File",
+	domain.ResourceFunction:   "Function",
+	domain.ResourceMethod:     "Method",
+	domain.ResourceType:       "Struct",
+	domain.ResourceInterface:  "Interface",
+	domain.ResourceVariable:   "Var",
+	domain.ResourceDependency: "Dep",
+}
+
+func (g *gen) resourceKey(kind domain.ResourceKind, id string) string {
+	return string(kind) + ":" + id
 }
 
 func safeID(s string) string {
@@ -82,36 +95,24 @@ func shortDesc(desc string) string {
 
 func nodeLabel(name, desc string) string {
 	if desc == "" {
-		return fmt.Sprintf("%s", name)
+		return name
 	}
 	return fmt.Sprintf("%s: %s", name, shortDesc(desc))
 }
 
-func hasAny(m map[domain.ResourceName]bool, rs ...domain.ResourceName) bool {
-	if len(m) == 0 {
-		return true
-	}
-	for _, r := range rs {
-		if m[r] {
-			return true
-		}
-	}
-	return false
-}
-
-func Generate(topo *domain.Topology, resourceFilter ...domain.ResourceName) string {
+func Generate(topo *domain.Topology, resourceFilter ...domain.ResourceKind) string {
 	g := &gen{
 		topo:   topo,
-		filter: make(map[domain.ResourceName]bool),
+		filter: make(map[domain.ResourceKind]bool),
 		nodeID: make(map[string]string),
 	}
 
 	if len(resourceFilter) == 0 {
-		for _, r := range []domain.ResourceName{
-			domain.PACKAGE_RESOURCE, domain.FILE_RESOURCE,
-			domain.FUNCTION_RESOURCE, domain.STRUCT_RESOURCE,
-			domain.INTERFACE_RESOURCE, domain.EXTERNAL_VAR_RESOURCE,
-			domain.DEPENDENCY_RESOURCE,
+		for _, r := range []domain.ResourceKind{
+			domain.ResourcePackage, domain.ResourceFile,
+			domain.ResourceFunction, domain.ResourceType,
+			domain.ResourceInterface, domain.ResourceVariable,
+			domain.ResourceDependency,
 		} {
 			g.filter[r] = true
 		}
@@ -123,12 +124,11 @@ func Generate(topo *domain.Topology, resourceFilter ...domain.ResourceName) stri
 
 	g.b.WriteString("flowchart TD\n")
 
-	// Class definitions
-	for _, r := range []domain.ResourceName{
-		domain.PACKAGE_RESOURCE, domain.FILE_RESOURCE,
-		domain.FUNCTION_RESOURCE, domain.STRUCT_RESOURCE,
-		domain.INTERFACE_RESOURCE, domain.EXTERNAL_VAR_RESOURCE,
-		domain.DEPENDENCY_RESOURCE,
+	for _, r := range []domain.ResourceKind{
+		domain.ResourcePackage, domain.ResourceFile,
+		domain.ResourceFunction, domain.ResourceType,
+		domain.ResourceInterface, domain.ResourceVariable,
+		domain.ResourceDependency,
 	} {
 		if g.filter[r] {
 			fill := resourceFill[r]
@@ -137,60 +137,27 @@ func Generate(topo *domain.Topology, resourceFilter ...domain.ResourceName) stri
 		}
 	}
 
-	// ── Build subgraph hierarchy: Package > File > elements ──
-	//
-	// For each package, create a subgraph containing its files.
-	// Within each file subgraph, place nodes for the file's elements
-	// (functions, structs, interfaces, external vars).
+	pkgIDs := g.byKind(domain.ResourcePackage)
+	fileIndex := g.byContaining("has_file")
 
-	var pkgNames []domain.PackagePath
-	// Sort by path for deterministic output
-	for p := range topo.Packages {
-		pkgNames = append(pkgNames, p)
-	}
-	// Simple string sort
-	for i := 0; i < len(pkgNames); i++ {
-		for j := i + 1; j < len(pkgNames); j++ {
-			if string(pkgNames[i]) > string(pkgNames[j]) {
-				pkgNames[i], pkgNames[j] = pkgNames[j], pkgNames[i]
-			}
-		}
-	}
+	for _, pkgID := range g.sortedIDs(pkgIDs) {
+		pkg := topo.Resources[pkgID]
+		showPkg := g.filter[domain.ResourcePackage]
+		showFile := g.filter[domain.ResourceFile]
 
-	for _, pkgPath := range pkgNames {
-		pkg := topo.Packages[pkgPath]
-
-		showPkg := g.filter[domain.PACKAGE_RESOURCE]
-
-		hasVisible := false
-		for _, fileID := range pkg.Files {
-			if f, ok := topo.Files[fileID]; ok {
-				if len(g.visibleFileChildren(f)) > 0 {
-					hasVisible = true
-					break
-				}
-			}
-		}
-		if string(pkgPath) == "" {
-			continue
-		}
+		hasVisible := g.hasVisibleChildren(fileIndex[pkgID])
 		if !hasVisible && !showPkg {
 			continue
 		}
 
 		if showPkg {
 			nid := g.nextID("pkg")
-			g.nodeID[g.resourceKey(domain.PACKAGE_RESOURCE, string(pkgPath))] = nid
-			g.b.WriteString(fmt.Sprintf("    subgraph %s[%s]\n", nid, quote(string(pkgPath))))
+			g.nodeID[g.resourceKey(domain.ResourcePackage, pkgID)] = nid
+			g.b.WriteString(fmt.Sprintf("    subgraph %s[%s]\n", nid, quote(pkg.Name)))
 		}
 
-		// Files inside package
-		for _, fileID := range pkg.Files {
-			f, ok := topo.Files[fileID]
-			if !ok {
-				continue
-			}
-			g.buildFile(fileID, f)
+		for _, fileID := range g.sortedIDs(fileIndex[pkgID]) {
+			g.renderFile(fileID, showFile)
 		}
 
 		if showPkg {
@@ -198,244 +165,242 @@ func Generate(topo *domain.Topology, resourceFilter ...domain.ResourceName) stri
 		}
 	}
 
-	// ── Top-level elements not owned by any package ──
-	// (unlikely but handle gracefully)
-
-	// ── Arrow relationships ──
 	g.writeArrows()
-
 	return g.b.String()
 }
 
-func GenerateToFile(path string, topo *domain.Topology, resourceFilter ...domain.ResourceName) error {
+func GenerateToFile(path string, topo *domain.Topology, resourceFilter ...domain.ResourceKind) error {
 	out := Generate(topo, resourceFilter...)
 	return os.WriteFile(path, []byte(out), 0666)
 }
 
-func (g *gen) visibleFileChildren(f domain.File) []string {
+func (g *gen) byKind(kind domain.ResourceKind) []string {
 	var ids []string
-	if g.filter[domain.FUNCTION_RESOURCE] {
-		for _, fnID := range f.Functions {
-			if _, ok := g.topo.Functions[fnID]; ok {
-				ids = append(ids, string(fnID))
-			}
-		}
-	}
-	if g.filter[domain.STRUCT_RESOURCE] {
-		for _, sID := range f.Structs {
-			if _, ok := g.topo.Struct[sID]; ok {
-				ids = append(ids, string(sID))
-			}
-		}
-	}
-	if g.filter[domain.INTERFACE_RESOURCE] {
-		for _, iID := range f.Interfaces {
-			if _, ok := g.topo.Interfaces[iID]; ok {
-				ids = append(ids, string(iID))
-			}
-		}
-	}
-	if g.filter[domain.EXTERNAL_VAR_RESOURCE] {
-		for _, evID := range f.ExternalVars {
-			if _, ok := g.topo.ExternalVars[evID]; ok {
-				ids = append(ids, string(evID))
-			}
+	for id, res := range g.topo.Resources {
+		if res.Kind == kind {
+			ids = append(ids, id)
 		}
 	}
 	return ids
 }
 
-func (g *gen) buildFile(fileID domain.FileID, f domain.File) {
-	showFile := g.filter[domain.FILE_RESOURCE]
+func (g *gen) byContaining(kind string) map[string][]string {
+	result := make(map[string][]string)
+	for id, res := range g.topo.Resources {
+		if targets, ok := res.Connections[kind]; ok {
+			for _, t := range targets {
+				result[id] = append(result[id], t)
+			}
+		}
+	}
+	return result
+}
 
-	if !showFile && len(g.visibleFileChildren(f)) == 0 {
+func (g *gen) sortedIDs(ids []string) []string {
+	sorted := make([]string, len(ids))
+	copy(sorted, ids)
+	for i := 0; i < len(sorted); i++ {
+		for j := i + 1; j < len(sorted); j++ {
+			if sorted[i] > sorted[j] {
+				sorted[i], sorted[j] = sorted[j], sorted[i]
+			}
+		}
+	}
+	return sorted
+}
+
+func (g *gen) hasVisibleChildren(fileIDs []string) bool {
+	for _, fid := range fileIDs {
+		res, ok := g.topo.Resources[fid]
+		if !ok {
+			continue
+		}
+		if g.filter[domain.ResourceFunction] {
+			if funcIDs := res.Connections["has_function"]; len(funcIDs) > 0 {
+				return true
+			}
+		}
+		if g.filter[domain.ResourceType] {
+			if ids := res.Connections["has_struct"]; len(ids) > 0 {
+				return true
+			}
+		}
+		if g.filter[domain.ResourceInterface] {
+			if ids := res.Connections["has_interface"]; len(ids) > 0 {
+				return true
+			}
+		}
+		if g.filter[domain.ResourceVariable] {
+			if ids := res.Connections["has_extvar"]; len(ids) > 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (g *gen) renderFile(fileID string, showFile bool) {
+	res, ok := g.topo.Resources[fileID]
+	if !ok {
 		return
 	}
 
-	fileLabel := f.Name
+	if !showFile && !g.hasVisibleChildren([]string{fileID}) {
+		return
+	}
+
+	fileLabel := res.Name
 	if fileLabel == "" {
-		fileLabel = string(fileID)
+		fileLabel = fileID
 	}
 
 	var fid string
 	if showFile {
 		fid = g.nextID("f")
-		g.nodeID[g.resourceKey(domain.FILE_RESOURCE, string(fileID))] = fid
+		g.nodeID[g.resourceKey(domain.ResourceFile, fileID)] = fid
 		g.b.WriteString(fmt.Sprintf("    subgraph %s[%s]\n", fid, quote(fileLabel)))
 	}
 
-	g.renderFileElements(f)
+	g.renderElements(res)
 
 	if showFile {
 		g.b.WriteString("    end\n")
 	}
 }
 
-func (g *gen) renderFileElements(f domain.File) {
-	if g.filter[domain.FUNCTION_RESOURCE] {
-		for _, fnID := range f.Functions {
-			fn, ok := g.topo.Functions[fnID]
+func (g *gen) renderElements(fileRes domain.Resource) {
+	if g.filter[domain.ResourceFunction] {
+		for _, fnID := range fileRes.Connections["has_function"] {
+			fn, ok := g.topo.Resources[fnID]
 			if !ok {
 				continue
 			}
 			nid := g.nextID("fn")
-			g.nodeID[g.resourceKey(domain.FUNCTION_RESOURCE, string(fnID))] = nid
-			g.b.WriteString(fmt.Sprintf("    %s[%s]:::%s\n", nid, quote(nodeLabel(fn.Name, fn.Description)), domain.FUNCTION_RESOURCE))
+			g.nodeID[g.resourceKey(domain.ResourceFunction, fnID)] = nid
+			kind := domain.ResourceFunction
+			if fn.Kind == domain.ResourceMethod {
+				kind = domain.ResourceMethod
+			}
+			g.b.WriteString(fmt.Sprintf("    %s[%s]:::%s\n", nid, quote(nodeLabel(fn.Name, fn.Description)), kind))
 		}
 	}
 
-	if g.filter[domain.STRUCT_RESOURCE] {
-		for _, sID := range f.Structs {
-			s, ok := g.topo.Struct[sID]
+	if g.filter[domain.ResourceType] {
+		for _, sID := range fileRes.Connections["has_struct"] {
+			s, ok := g.topo.Resources[sID]
 			if !ok {
 				continue
 			}
 			nid := g.nextID("s")
-			g.nodeID[g.resourceKey(domain.STRUCT_RESOURCE, string(sID))] = nid
-			g.b.WriteString(fmt.Sprintf("    %s[%s]:::%s\n", nid, quote(nodeLabel(s.Name, s.Description)), domain.STRUCT_RESOURCE))
+			g.nodeID[g.resourceKey(domain.ResourceType, sID)] = nid
+			g.b.WriteString(fmt.Sprintf("    %s[%s]:::%s\n", nid, quote(nodeLabel(s.Name, s.Description)), domain.ResourceType))
 		}
 	}
 
-	if g.filter[domain.INTERFACE_RESOURCE] {
-		for _, iID := range f.Interfaces {
-			iface, ok := g.topo.Interfaces[iID]
+	if g.filter[domain.ResourceInterface] {
+		for _, iID := range fileRes.Connections["has_interface"] {
+			iface, ok := g.topo.Resources[iID]
 			if !ok {
 				continue
 			}
 			nid := g.nextID("i")
-			g.nodeID[g.resourceKey(domain.INTERFACE_RESOURCE, string(iID))] = nid
-			g.b.WriteString(fmt.Sprintf("    %s[%s]:::%s\n", nid, quote(nodeLabel(iface.Name, iface.Description)), domain.INTERFACE_RESOURCE))
+			g.nodeID[g.resourceKey(domain.ResourceInterface, iID)] = nid
+			g.b.WriteString(fmt.Sprintf("    %s[%s]:::%s\n", nid, quote(nodeLabel(iface.Name, iface.Description)), domain.ResourceInterface))
 		}
 	}
 
-	if g.filter[domain.EXTERNAL_VAR_RESOURCE] {
-		for _, evID := range f.ExternalVars {
-			ev, ok := g.topo.ExternalVars[evID]
+	if g.filter[domain.ResourceVariable] {
+		for _, evID := range fileRes.Connections["has_extvar"] {
+			ev, ok := g.topo.Resources[evID]
 			if !ok {
 				continue
 			}
 			nid := g.nextID("ev")
-			g.nodeID[g.resourceKey(domain.EXTERNAL_VAR_RESOURCE, string(evID))] = nid
-			g.b.WriteString(fmt.Sprintf("    %s[%s]:::%s\n", nid, quote(nodeLabel(ev.Name, ev.Description)), domain.EXTERNAL_VAR_RESOURCE))
+			g.nodeID[g.resourceKey(domain.ResourceVariable, evID)] = nid
+			g.b.WriteString(fmt.Sprintf("    %s[%s]:::%s\n", nid, quote(nodeLabel(ev.Name, ev.Description)), domain.ResourceVariable))
 		}
 	}
 }
 
 func (g *gen) writeArrows() {
-	// File → Package imports (from file_imports_pkg)
-	if g.filter[domain.FILE_RESOURCE] && g.filter[domain.PACKAGE_RESOURCE] {
-		for fileID, f := range g.topo.Files {
-			srcID, ok := g.nodeID[g.resourceKey(domain.FILE_RESOURCE, string(fileID))]
-			if !ok {
+	for srcID, res := range g.topo.Resources {
+		for connType, targets := range res.Connections {
+			var arrow, label string
+
+			switch connType {
+			case "calls":
+				arrow, label = "-->", "Calls"
+			case "uses_struct":
+				arrow, label = "-->", "Uses"
+			case "uses_interface":
+				arrow, label = "-->", "Uses"
+			case "uses_extvar":
+				arrow, label = "-->", "Uses"
+			case "uses_package":
+				arrow, label = "-->", "Uses"
+			case "uses_dependency":
+				arrow, label = "-->", "Uses"
+			case "imports_package":
+				arrow, label = "-->", "Imports"
+			case "imports_dependency":
+				arrow, label = "-->", "Imports"
+			case "implements":
+				arrow, label = "-.->", "Implements"
+			case "constructor":
+				arrow, label = "-->", "Constructs"
+			default:
 				continue
 			}
-			for _, pkg := range f.PackagesImported {
-				dstID, ok := g.nodeID[g.resourceKey(domain.PACKAGE_RESOURCE, string(pkg))]
-				if !ok {
+
+			srcNode, ok := g.nodeID[g.resourceKey(res.Kind, srcID)]
+			if !ok {
+				targetCheck := false
+				for _, t := range targets {
+					if node, _ := g.findTargetNode(t); node != "" {
+						targetCheck = true
+						break
+					}
+				}
+				if !targetCheck {
 					continue
 				}
-				g.b.WriteString(fmt.Sprintf("    %s -->|\"Imports\"| %s\n", srcID, dstID))
 			}
-		}
-	}
 
-	// File → Dependency imports (from file_imports_dep)
-	if g.filter[domain.FILE_RESOURCE] && g.filter[domain.DEPENDENCY_RESOURCE] {
-		for fileID, f := range g.topo.Files {
-			srcID, ok := g.nodeID[g.resourceKey(domain.FILE_RESOURCE, string(fileID))]
-			if !ok {
-				continue
-			}
-			for _, dep := range f.DependanciesImported {
-				depID := g.nextID("dep")
-				g.b.WriteString(fmt.Sprintf("    %s[%s]:::%s\n", depID, quote(string(dep.PackagePath)), domain.DEPENDENCY_RESOURCE))
-				g.b.WriteString(fmt.Sprintf("    %s -->|\"Imports\"| %s\n", srcID, depID))
-			}
-		}
-	}
-
-	// Function → Function calls
-	if g.filter[domain.FUNCTION_RESOURCE] {
-		for fnID, fn := range g.topo.Functions {
-			srcID, ok := g.nodeID[g.resourceKey(domain.FUNCTION_RESOURCE, string(fnID))]
-			if !ok {
-				continue
-			}
-			for _, calledID := range fn.FunctionsUsed {
-				dstID, ok := g.nodeID[g.resourceKey(domain.FUNCTION_RESOURCE, string(calledID))]
-				if !ok {
-					continue
+			for _, targetID := range targets {
+				dstNode, _ := g.findTargetNode(targetID)
+				if dstNode == "" {
+					if connType == "imports_dependency" && g.filter[domain.ResourceDependency] {
+						depID := g.nextID("dep")
+						g.b.WriteString(fmt.Sprintf("    %s[%s]:::%s\n", depID, quote(targetID), domain.ResourceDependency))
+						dstNode = depID
+						g.nodeID[g.resourceKey(domain.ResourceDependency, targetID)] = depID
+					} else {
+						continue
+					}
 				}
-				g.b.WriteString(fmt.Sprintf("    %s -->|\"Calls\"| %s\n", srcID, dstID))
-			}
-		}
-	}
 
-	// Function → Struct uses
-	if g.filter[domain.FUNCTION_RESOURCE] && g.filter[domain.STRUCT_RESOURCE] {
-		for fnID, fn := range g.topo.Functions {
-			srcID, ok := g.nodeID[g.resourceKey(domain.FUNCTION_RESOURCE, string(fnID))]
-			if !ok {
-				continue
-			}
-			for _, sID := range fn.StructsUsed {
-				dstID, ok := g.nodeID[g.resourceKey(domain.STRUCT_RESOURCE, string(sID))]
-				if !ok {
-					continue
+				if srcNode != "" {
+					g.b.WriteString(fmt.Sprintf("    %s %s|\"%s\"| %s\n", srcNode, arrow, label, dstNode))
 				}
-				g.b.WriteString(fmt.Sprintf("    %s -->|\"Uses\"| %s\n", srcID, dstID))
 			}
 		}
 	}
+}
 
-	// Function → Interface uses
-	if g.filter[domain.FUNCTION_RESOURCE] && g.filter[domain.INTERFACE_RESOURCE] {
-		for fnID, fn := range g.topo.Functions {
-			srcID, ok := g.nodeID[g.resourceKey(domain.FUNCTION_RESOURCE, string(fnID))]
-			if !ok {
-				continue
-			}
-			for _, iID := range fn.InterfacesUsed {
-				dstID, ok := g.nodeID[g.resourceKey(domain.INTERFACE_RESOURCE, string(iID))]
-				if !ok {
-					continue
-				}
-				g.b.WriteString(fmt.Sprintf("    %s -->|\"Uses\"| %s\n", srcID, dstID))
-			}
-		}
+func (g *gen) findTargetNode(targetID string) (string, domain.ResourceKind) {
+	target, ok := g.topo.Resources[targetID]
+	if !ok {
+		return "", ""
 	}
-
-	// Function → ExtVar uses
-	if g.filter[domain.FUNCTION_RESOURCE] && g.filter[domain.EXTERNAL_VAR_RESOURCE] {
-		for fnID, fn := range g.topo.Functions {
-			srcID, ok := g.nodeID[g.resourceKey(domain.FUNCTION_RESOURCE, string(fnID))]
-			if !ok {
-				continue
-			}
-			for _, evID := range fn.ExternalVarsUsed {
-				dstID, ok := g.nodeID[g.resourceKey(domain.EXTERNAL_VAR_RESOURCE, string(evID))]
-				if !ok {
-					continue
-				}
-				g.b.WriteString(fmt.Sprintf("    %s -->|\"Uses\"| %s\n", srcID, dstID))
-			}
-		}
+	kind := target.Kind
+	if kind == domain.ResourceMethod {
+		kind = domain.ResourceFunction
 	}
-
-	// Struct → Interface implements
-	if g.filter[domain.STRUCT_RESOURCE] && g.filter[domain.INTERFACE_RESOURCE] {
-		for _, iface := range g.topo.Interfaces {
-			dstID, ok := g.nodeID[g.resourceKey(domain.INTERFACE_RESOURCE, string(iface.ID))]
-			if !ok {
-				continue
-			}
-			for _, sID := range iface.ImplementedBy {
-				srcID, ok := g.nodeID[g.resourceKey(domain.STRUCT_RESOURCE, string(sID))]
-				if !ok {
-					continue
-				}
-				g.b.WriteString(fmt.Sprintf("    %s -.->|\"Implements\"| %s\n", srcID, dstID))
-			}
-		}
+	if node, ok := g.nodeID[g.resourceKey(kind, targetID)]; ok {
+		return node, kind
 	}
+	if node, ok := g.nodeID[g.resourceKey(target.Kind, targetID)]; ok {
+		return node, target.Kind
+	}
+	return "", kind
 }

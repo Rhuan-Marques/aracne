@@ -1,13 +1,13 @@
-package tools
+package gotools
 
 import (
 	"fmt"
 	"strings"
 
-	"llm-topology/internal/topology/domain"
+	"llm-topology/internal/topology/golang"
 )
 
-func formatFunctionContext(ctx *domain.FunctionContext) string {
+func formatGoFunctionContext(ctx *golang.GoFunctionContext) string {
 	var b strings.Builder
 
 	b.WriteString("```go\n")
@@ -71,7 +71,7 @@ func formatFunctionContext(ctx *domain.FunctionContext) string {
 	return b.String()
 }
 
-func formatStructContext(ctx *domain.StructContext) string {
+func formatGoStructContext(ctx *golang.GoStructContext) string {
 	var b strings.Builder
 
 	b.WriteString("```go\n")

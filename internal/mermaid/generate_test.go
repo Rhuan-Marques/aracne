@@ -6,16 +6,30 @@ import (
 	"testing"
 
 	"llm-topology/internal/helper"
+	"llm-topology/internal/topology"
 	"llm-topology/internal/topology/domain"
+	"llm-topology/internal/topology/scanner"
+	"llm-topology/internal/topology/scanner/goscanner"
 )
 
-func TestGenerate(t *testing.T) {
-	topoPath := "../../.ltp/topology.db"
-	if _, err := os.Stat(topoPath); os.IsNotExist(err) {
-		t.Skip("test database not found at", topoPath)
+func buildTestDb(t *testing.T, dbPath string) {
+	t.Helper()
+	reg := scanner.NewRegistry()
+	reg.Register(goscanner.NewGoScanner())
+	mgr := topology.New()
+	mgr.Load(dbPath)
+	if err := mgr.FullScan("../../", reg); err != nil {
+		t.Fatalf("scan failed: %v", err)
 	}
+}
 
-	topo, err := helper.ReadDb(topoPath)
+func TestGenerate(t *testing.T) {
+	dbPath := "../../.ltp/mermaid_test.db"
+	os.MkdirAll("../../.ltp", 0755)
+	defer os.Remove(dbPath)
+	buildTestDb(t, dbPath)
+
+	topo, err := helper.ReadDb(dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,31 +54,31 @@ func TestGenerate(t *testing.T) {
 }
 
 func TestGenerateFiltered(t *testing.T) {
-	topoPath := "../../.ltp/topology.db"
-	if _, err := os.Stat(topoPath); os.IsNotExist(err) {
-		t.Skip("test database not found at", topoPath)
-	}
+	dbPath := "../../.ltp/mermaid_filter_test.db"
+	os.MkdirAll("../../.ltp", 0755)
+	defer os.Remove(dbPath)
+	buildTestDb(t, dbPath)
 
-	topo, err := helper.ReadDb(topoPath)
+	topo, err := helper.ReadDb(dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	out := Generate(topo, domain.FUNCTION_RESOURCE, domain.STRUCT_RESOURCE, domain.INTERFACE_RESOURCE)
+	out := Generate(topo, domain.ResourceFunction, domain.ResourceType, domain.ResourceInterface)
 	if out == "" {
 		t.Fatal("expected non-empty output")
 	}
 
-	if strings.Contains(out, "classDef Package") {
+	if strings.Contains(out, "classDef package") {
 		t.Log("Package classDef not present (filtered out)")
 	}
-	if !strings.Contains(out, "classDef Function") {
+	if !strings.Contains(out, "classDef function") && !strings.Contains(out, "classDef method") {
 		t.Fatal("expected Function classDef")
 	}
-	if !strings.Contains(out, "classDef Struct") {
-		t.Fatal("expected Struct classDef")
+	if !strings.Contains(out, "classDef type") {
+		t.Fatal("expected Type classDef")
 	}
-	if !strings.Contains(out, "classDef Interface") {
+	if !strings.Contains(out, "classDef interface") {
 		t.Fatal("expected Interface classDef")
 	}
 }

@@ -1,4 +1,4 @@
-package tools
+package gotools
 
 import (
 	"encoding/json"
@@ -6,14 +6,14 @@ import (
 	"sort"
 	"strings"
 
-	"llm-topology/internal/topology"
+	"llm-topology/internal/topology/golang"
 )
 
 type ReadFunction struct {
-	mgr *topology.TopologyManager
+	mgr *golang.GoManager
 }
 
-func NewReadFunction(mgr *topology.TopologyManager) *ReadFunction {
+func NewReadFunction(mgr *golang.GoManager) *ReadFunction {
 	return &ReadFunction{mgr: mgr}
 }
 
@@ -22,7 +22,7 @@ func (r *ReadFunction) Name() string {
 }
 
 func (r *ReadFunction) Description() string {
-	return "Read a function's full source code and its interconnected context (called functions, structs, interfaces, external variables) from the project topology. Prefer this over 'read' when investigating a specific function."
+	return "Read a Go function's full source code and its interconnected context (called functions, structs, interfaces, external variables) from the project topology. Prefer this over 'read' when investigating a specific function."
 }
 
 func (r *ReadFunction) Parameters() []Parameter {
@@ -44,7 +44,7 @@ func (r *ReadFunction) Run(args json.RawMessage) (string, error) {
 
 	ctx, err := r.mgr.ReadFunction(params.Name)
 	if err == nil {
-		return formatFunctionContext(ctx), nil
+		return formatGoFunctionContext(ctx), nil
 	}
 
 	ids, err := r.mgr.FindFunctionsByName(params.Name)
@@ -69,5 +69,5 @@ func (r *ReadFunction) Run(args json.RawMessage) (string, error) {
 		return "", fmt.Errorf("read function: %w", err)
 	}
 
-	return formatFunctionContext(ctx), nil
+	return formatGoFunctionContext(ctx), nil
 }

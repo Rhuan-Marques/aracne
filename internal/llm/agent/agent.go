@@ -16,14 +16,14 @@ type Agent struct {
 	messages []llm.Message
 }
 
-func New(provider llm.Provider, registry *tools.Registry) *Agent {
+func New(provider llm.Provider, registry *tools.Registry, language string) *Agent {
 	return &Agent{
 		provider: provider,
 		registry: registry,
 		messages: []llm.Message{
 			{
 				Role:    "system",
-				Content: systemPrompt,
+				Content: BuildPrompt(language),
 			},
 		},
 	}
