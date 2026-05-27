@@ -7,7 +7,7 @@ import (
 	"llm-topology/internal/topology/golang"
 )
 
-func formatGoFunctionContext(ctx *golang.GoFunctionContext) string {
+func FormatGoFunctionContext(ctx *golang.GoFunctionContext) string {
 	var b strings.Builder
 
 	b.WriteString("```go\n")
@@ -71,7 +71,7 @@ func formatGoFunctionContext(ctx *golang.GoFunctionContext) string {
 	return b.String()
 }
 
-func formatGoStructContext(ctx *golang.GoStructContext) string {
+func FormatGoStructContext(ctx *golang.GoStructContext) string {
 	var b strings.Builder
 
 	b.WriteString("```go\n")

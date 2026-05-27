@@ -44,7 +44,7 @@ func (r *ReadStruct) Run(args json.RawMessage) (string, error) {
 
 	ctx, err := r.mgr.ReadStruct(params.Name)
 	if err == nil {
-		return formatGoStructContext(ctx), nil
+		return FormatGoStructContext(ctx), nil
 	}
 
 	ids, err := r.mgr.FindStructsByName(params.Name)
@@ -69,5 +69,5 @@ func (r *ReadStruct) Run(args json.RawMessage) (string, error) {
 		return "", fmt.Errorf("read struct: %w", err)
 	}
 
-	return formatGoStructContext(ctx), nil
+	return FormatGoStructContext(ctx), nil
 }

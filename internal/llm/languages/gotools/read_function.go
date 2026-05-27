@@ -44,7 +44,7 @@ func (r *ReadFunction) Run(args json.RawMessage) (string, error) {
 
 	ctx, err := r.mgr.ReadFunction(params.Name)
 	if err == nil {
-		return formatGoFunctionContext(ctx), nil
+		return FormatGoFunctionContext(ctx), nil
 	}
 
 	ids, err := r.mgr.FindFunctionsByName(params.Name)
@@ -69,5 +69,5 @@ func (r *ReadFunction) Run(args json.RawMessage) (string, error) {
 		return "", fmt.Errorf("read function: %w", err)
 	}
 
-	return formatGoFunctionContext(ctx), nil
+	return FormatGoFunctionContext(ctx), nil
 }

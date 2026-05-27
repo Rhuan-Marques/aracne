@@ -42,6 +42,12 @@ func main() {
 		runInstall(os.Args[2:])
 	case "generate-descriptions":
 		runGenerateDescriptions(os.Args[2:])
+	case "update-file":
+		runUpdateFile(os.Args[2:])
+	case "read_function":
+		runReadFunction()
+	case "read_struct":
+		runReadStruct()
 	default:
 		printUsage()
 	}
@@ -56,6 +62,9 @@ Usage:
   ltp serve              Start MCP server (for OpenCode plugin integration)
   ltp install [flags]    Configure OpenCode to use llm-topology as a plugin
   ltp generate-descriptions [flags]  Generate descriptions for all undocumented resources
+  ltp read_function <name>  Show a function's source code and its interconnected context
+  ltp read_struct <name>    Show a struct's source code and its interconnected context
+  ltp update-file <path>    Re-parse a file and update the topology database
 
 Flags for "scan":
   -root <path>    Root folder of the Go project (default ".")
@@ -72,7 +81,9 @@ Flags for "generate-descriptions":
     ltp agent "list all structs"
     ltp install               # add MCP config to opencode.json
     ltp serve                 # start MCP server (used by OpenCode)
-    ltp generate-descriptions # generate descriptions for all resources`)
+    ltp generate-descriptions # generate descriptions for all resources
+    ltp read_function ReadFunction
+    ltp read_struct TopologyManager`)
 }
 
 func newScannerRegistry() *scanner.Registry {
@@ -265,31 +276,95 @@ func runInstall(args []string) {
 		mcpMap = make(map[string]interface{})
 	}
 
-	if _, exists := mcpMap["llm-topology"]; exists {
+	if _, exists := mcpMap["llm-topology"]; !exists {
+		mcpMap["llm-topology"] = map[string]interface{}{
+			"type":    "local",
+			"command": "ltp",
+			"args":    []string{"serve"},
+		}
+		config["mcp"] = mcpMap
+
+		out, err := json.MarshalIndent(config, "", "  ")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error encoding config: %v\n", err)
+			os.Exit(1)
+		}
+		out = append(out, '\n')
+
+		if err := os.WriteFile(configPath, out, 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing %s: %v\n", configPath, err)
+			os.Exit(1)
+		}
+		fmt.Printf("llm-topology MCP server configured in %s\n", configPath)
+	} else {
 		fmt.Printf("llm-topology MCP config already present in %s\n", configPath)
-		return
 	}
 
-	mcpMap["llm-topology"] = map[string]interface{}{
-		"type":    "local",
-		"command": "ltp",
-		"args":    []string{"serve"},
+	var toolsDir string
+	if *global {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error finding home dir: %v\n", err)
+			os.Exit(1)
+		}
+		toolsDir = filepath.Join(home, ".config", "opencode", "tools")
+	} else {
+		toolsDir = filepath.Join(filepath.Dir(configPath), ".opencode", "tools")
 	}
-	config["mcp"] = mcpMap
+	os.MkdirAll(toolsDir, 0755)
 
-	out, err := json.MarshalIndent(config, "", "  ")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error encoding config: %v\n", err)
-		os.Exit(1)
+	toolPath := filepath.Join(toolsDir, "edit.ts")
+	if _, err := os.Stat(toolPath); err == nil {
+		fmt.Printf("Custom edit tool already present at %s\n", toolPath)
+	} else {
+		toolContent := []byte(`import { tool } from "@opencode-ai/plugin"
+import path from "path"
+
+export default tool({
+  description: "Edit a file by replacing exact text with new text. The project topology is automatically updated.",
+  args: {
+    file_path: tool.schema.string().describe("The absolute path to the file to edit"),
+    old_string: tool.schema.string().describe("The exact text to search for and replace"),
+    new_string: tool.schema.string().describe("The replacement text"),
+  },
+  async execute(args, context) {
+    const filePath = args.file_path
+    const oldStr = args.old_string
+    const newStr = args.new_string
+
+    const file = Bun.file(filePath)
+    const content = await file.text()
+
+    if (!content.includes(oldStr)) {
+      return "old_string not found in " + filePath
+    }
+
+    const newContent = content.replace(oldStr, newStr)
+    await Bun.write(filePath, newContent)
+
+    const ltpPath = path.join(
+      context.worktree,
+      "ltp" + (process.platform === "win32" ? ".exe" : ""),
+    )
+    const proc = Bun.spawnSync([ltpPath, "update-file", filePath])
+    if (proc.exitCode === 0) {
+      const out = proc.stdout.toString().trim()
+      if (out) {
+        return "edit succeeded\n\nTopology warnings:\n" + out
+      }
+    }
+    // topology DB missing or file not tracked -- edit still succeeded
+    return "edit succeeded"
+  },
+})
+`)
+		if err := os.WriteFile(toolPath, []byte(toolContent), 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing custom edit tool: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Custom edit tool written to %s\n", toolPath)
 	}
-	out = append(out, '\n')
 
-	if err := os.WriteFile(configPath, out, 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "Error writing %s: %v\n", configPath, err)
-		os.Exit(1)
-	}
-
-	fmt.Printf("llm-topology MCP server configured in %s\n", configPath)
 	fmt.Println("Restart OpenCode to activate the topology tools.")
 }
 
@@ -343,7 +418,6 @@ func runGenerateDescriptions(args []string) {
 	var mu sync.Mutex
 	generated := 0
 	failed := 0
-
 	for _, t := range tasks {
 		wg.Add(1)
 		sem <- struct{}{}
@@ -394,6 +468,107 @@ func runGenerateDescriptions(args []string) {
 	wg.Wait()
 
 	fmt.Printf("\nDone: %d descriptions generated, %d failed\n", generated, failed)
+}
+
+func runReadFunction() {
+	args := os.Args[2:]
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "Usage: ltp read_function <name>")
+		fmt.Fprintln(os.Stderr, "Example: ltp read_function ReadFunction")
+		os.Exit(1)
+	}
+	name := args[0]
+
+	manager, _ := initRegistry(".ltp/topology.db")
+	goManager := golang.NewGoManager(manager)
+
+	ctx, err := goManager.ReadFunction(name)
+	if err == nil {
+		fmt.Print(gotools.FormatGoFunctionContext(ctx))
+		return
+	}
+
+	ids, err := goManager.FindFunctionsByName(name)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	if len(ids) == 0 {
+		fmt.Fprintf(os.Stderr, "Function %q not found in topology\n", name)
+		os.Exit(1)
+	}
+	if len(ids) > 1 {
+		fmt.Printf("Multiple functions named %q found:\n", name)
+		for _, id := range ids {
+			fmt.Printf("  - %s\n", id)
+		}
+		return
+	}
+
+	ctx, err = goManager.ReadFunction(string(ids[0]))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Print(gotools.FormatGoFunctionContext(ctx))
+}
+
+func runReadStruct() {
+	args := os.Args[2:]
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "Usage: ltp read_struct <name>")
+		fmt.Fprintln(os.Stderr, "Example: ltp read_struct TopologyManager")
+		os.Exit(1)
+	}
+	name := args[0]
+
+	manager, _ := initRegistry(".ltp/topology.db")
+	goManager := golang.NewGoManager(manager)
+
+	ctx, err := goManager.ReadStruct(name)
+	if err == nil {
+		fmt.Print(gotools.FormatGoStructContext(ctx))
+		return
+	}
+
+	ids, err := goManager.FindStructsByName(name)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	if len(ids) == 0 {
+		fmt.Fprintf(os.Stderr, "Struct %q not found in topology\n", name)
+		os.Exit(1)
+	}
+	if len(ids) > 1 {
+		fmt.Printf("Multiple structs named %q found:\n", name)
+		for _, id := range ids {
+			fmt.Printf("  - %s\n", id)
+		}
+		return
+	}
+
+	ctx, err = goManager.ReadStruct(string(ids[0]))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Print(gotools.FormatGoStructContext(ctx))
+}
+
+func runUpdateFile(args []string) {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "Usage: ltp update-file <path>")
+		os.Exit(1)
+	}
+	path := args[0]
+	manager, reg := initRegistry(".ltp/topology.db")
+	warnings := manager.UpdateFile(path, reg)
+	if len(warnings) > 0 {
+		for _, w := range warnings {
+			fmt.Printf("Warning: %s: %s (affects: %s)\n", w.Resource, w.Message, strings.Join(w.AffectedResources, ", "))
+		}
+	}
 }
 
 func buildDescriptionPrompt(kind domain.ResourceKind, cut string) string {

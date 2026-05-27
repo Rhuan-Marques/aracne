@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-`llm-topology` is a Go static analysis tool that recursively scans Go source trees, parses `.go` files using `go/ast`/`go/parser`, and builds a comprehensive graph model ("topology") of the project's structure: packages, files, structs, interfaces, functions (with call graphs), external variables, and dependencies. Output is stored in an SQLite database. It includes an AI coding agent powered by DeepSeek and an MCP server for integration with OpenCode and other LLM platforms.
+`llm-topology` is a Go static analysis tool that recursively scans Go source trees, parses `.go` files using `go/ast`/`go/parser`, and builds a comprehensive graph model ("topology") of the project's structure: packages, files, structs, interfaces, functions (with call graphs), external variables, and dependencies. Output is stored in an SQLite database. It includes an AI coding agent powered by DeepSeek and an MCP server for integration with OpenCode and other LLM platforms. A React + Vite + TailwindCSS frontend (`frontend/`) uses @xyflow/react for graph visualization.
 
 ## Build & Run
 
@@ -15,6 +15,7 @@ go build -o ltp.exe .
 .\ltp serve                             # Start MCP server (for OpenCode plugin)
 .\ltp install                           # Configure OpenCode to use llm-topology
 .\ltp install --global                  # Configure globally
+.\ltp generate-descriptions [--concurrency N]  # Generate descriptions for undocumented resources
 ```
 
 ## Commands
@@ -26,6 +27,7 @@ go build -o ltp.exe .
 | `go run . agent` | Run AI agent (requires DEEPSEEK_API_KEY) |
 | `go run . serve` | Start MCP server (stdio transport) |
 | `go run . install` | Configure OpenCode MCP in opencode.json |
+| `go run . generate-descriptions --concurrency 5` | Auto-generate descriptions via LLM |
 | `go test ./internal/topology/` | Run topology tests |
 | `go vet ./...` | Check for suspicious constructs |
 | `gofmt -l -w .` | Format code |
@@ -35,7 +37,9 @@ go build -o ltp.exe .
 ## Project Structure
 
 ```
-main.go                         # CLI entry point (scan / agent / serve / install subcommands)
+main.go                         # CLI entry point (scan / agent / serve / install / generate-descriptions)
+opencode.json                   # MCP plugin configuration
+frontend/                       # React + Vite + TailwindCSS + @xyflow/react graph viz
 internal/
   helper/
     db.go                       # SQLite persistence layer (schema, write, read)
@@ -44,16 +48,28 @@ internal/
     protocol.go                 # JSON-RPC 2.0 + MCP protocol types
     server.go                   # MCP server (stdio loop, delegates to tool instances)
   topology/
-    manager.go                  # TopologyManager orchestrator (FullScan, Write, Load, UpdateFile, Cut, ReadFunction, ReadStruct, ReadAll, FindFunctionsByName, FindStructsByName)
+    manager.go                  # TopologyManager (FullScan, Load, Write, ReadAll, Cut, UpdateFile, FindResourcesByName, UpdateDescription)
     manager_test.go             # Tests for Cut, ReadFunction, ReadStruct
-    options.go                  # TopologyOption, WithResourceFilter
-    scanner/
-      scanner.go                # Core scanning pipeline + UpdateFileInTopology
-      parser.go                 # Go source AST parser (struct, interface, func extraction)
-      resolver.go               # Function body reference resolution (call graphs)
-      matcher.go                # Struct-to-interface matching
+    options.go                  # TopologyOption, WithResourceFilter, WithHasDescription
     domain/
-      resources.go              # Domain types / data model
+      resource.go               # Generic domain types: ResourceKind, Resource
+      topology.go               # Topology, Resource, TopologyWarning
+      location.go               # Location (StartsAt, EndsAt, Path)
+      cut.go                    # CodeEntry (Location + Cut string)
+    scanner/
+      scanner.go                # LanguageScanner interface
+      registry.go               # Scanner Registry (multi-language support)
+      goscanner/
+        scanner.go              # Go Scanner implementation (Scan, UpdateFile, helpers)
+        parser.go               # Go source AST parser (struct, interface, func extraction)
+        resolver.go             # Function body reference resolution (call graphs)
+        matcher.go              # Struct-to-interface matching
+    golang/
+      resources.go              # Go-specific types: GolangFunction, GolangStruct, GolangInterface, GolangExternalVar, GolangFile, GolangPackage
+      types.go                  # Output types: FunctionCut, StructCut, SimplifiedFunction, GoFunctionContext, GoStructContext, etc.
+      connections.go            # ConnectionKind constants + typed accessor methods
+      mapper.go                 # FromGeneric / ToGeneric (domain <-> golang)
+      manager.go                # GoManager wrapping TopologyManager (ReadFunction, ReadStruct, FindFunctionsByName, FindStructsByName, ReadResourceAndCut, UpdateDescription)
   llm/
     provider.go                 # LLM Provider interface + Message/Tool types
     providers/
@@ -66,17 +82,24 @@ internal/
       read.go                   # "read" tool (raw file read)
       edit.go                   # "edit" tool (replace text, auto-updates topology)
       ls.go                     # "ls" tool (list files/directories)
-      read_function.go          # "read_function" tool (name-based lookup → rich context)
-      read_struct.go            # "read_struct" tool (name-based lookup → rich context)
-      format.go                 # formatFunctionContext, formatStructContext formatters
+    languages/
+      gotools/
+        register.go             # Register Go-specific tools in tool registry
+        read_function.go        # "read_function" tool (name-based lookup → rich context)
+        read_struct.go          # "read_struct" tool (name-based lookup → rich context)
+        read_resource_and_cut.go # "read_resource_and_cut" tool (source cut + description instructions)
+        update_description.go   # "update_description" tool
+        format.go               # FormatGoFunctionContext, FormatGoStructContext formatters
+        prompt.go               # GoSystemPrompt for agent
 ```
 
 ## Code Conventions
 
 - **Module name:** `llm-topology` (imports use `llm-topology/...`)
-- **ID types:** String aliases (`FunctionID`, `StructID`, `InterfaceID`, etc.)
-- **Resource interface:** All entity types implement `Resource` with `ResourceName() ResourceName`
-- **Generics:** `unique[T]()`, `contains[T]()`, `removeFromSlice[T]()` helpers in `scanner.go`
+- **ID types:** String type aliases (`FunctionID`, `StructID`, etc. in `golang/resources.go`)
+- **ResourceKind:** Categorized via `domain.ResourceKind` constants (`ResourceFunction`, `ResourceMethod`, `ResourceType`, `ResourceInterface`, `ResourceVariable`, `ResourceFile`, `ResourcePackage`, `ResourceDependency`)
+- **Dual domain model:** Generic `domain.Resource` is stored in SQLite; Go-specific types in `golang/` with `FromGeneric`/`ToGeneric` mappers
+- **Connections:** Typed via `golang.ConnectionKind` constants with typed accessor methods (`.Calls()`, `.UsesStruct()`, etc.)
 - **No comments on trivial code** — keep it that way
 - **Pure Go standard library** for AST analysis; only external dep is `modernc.org/sqlite`
 - **Errors:** Accumulated in `Topology.Errors` map (per-file), never fatal to the scan
@@ -84,27 +107,39 @@ internal/
 ## TopologyManager
 
 - **SQLite-driven:** No in-memory topology field. All data read/written via `.db` file.
-- `FullScan(root)` — scans project, writes result to configured dbPath
+- `FullScan(root, reg)` — scans project via scanner registry, writes result to configured dbPath
 - `Load(path)` — sets dbPath for subsequent operations
 - `Write(path)` — file-level copy of the database
 - `ReadAll(opts ...TopologyOption)` — returns entire topology, optionally filtered
-- `UpdateFile(path) []TopologyWarning` — re-parses a file, updates topology DB in-place, returns warnings for removed/changed functions
+- `UpdateFile(path, reg) []TopologyWarning` — re-parses a file via registry, updates topology DB in-place, returns warnings
 - `Cut(loc Location) *CodeEntry` — reads source file and returns lines between StartsAt and EndsAt
-- `ReadFunction(id string, opts ...TopologyOption) *FunctionContext` — full function context
-- `ReadStruct(id string, opts ...TopologyOption) *StructContext` — full struct context
+- `FindResourcesByName(name, kinds...)` — find resource IDs by name and optional kind filter
+- `UpdateDescription(id, kind, description)` — update a resource's description in the DB
+- `DbPath() string` — returns the current database path
+
+## GoManager
+
+Wraps `TopologyManager` with Go-specific context enrichment:
+
+- `ReadFunction(id, opts...)` — returns `GoFunctionContext` with function cut, parent struct, called funcs, struct/interface usage, ext vars, deps, packages, sorted blocks
+- `ReadStruct(id, opts...)` — returns `GoStructContext` with struct cut, constructor, interfaces (with NeedToImplement), methods, refs, sorted blocks
+- `FindFunctionsByName(name) []FunctionID` — search by name
+- `FindStructsByName(name) []StructID` — search by name
+- `ReadResourceAndCut(id, kind) *CodeEntry` — source cut for any resource kind
+- `UpdateDescription(id, kind, desc)` — delegates to manager
 
 ## TopologyWarning
 
 Emitted during `UpdateFile` for removed functions or signature changes. Contains:
-- `Resource ResourceName` — type of affected element
-- `AffectedFunctions []FunctionID` — functions needing manual review
+- `Resource ResourceKind` — type of affected element
+- `AffectedResources []string` — resource IDs needing manual review
 - `Message string` — description of the change
 
 Description preservation: if the old topology had a non-empty description and the new source omits the doc comment, the old description is kept.
 
-## ReadFunction Output
+## GoFunctionContext Output
 
-`ReadFunction` returns a `FunctionContext` with:
+`ReadFunction` returns a `GoFunctionContext` with:
 - `Function *FunctionCut` — full function data + source code cut
 - `ParentStruct *StructCut` — full parent struct data + cut (if method)
 - `CalledFunctions []SimplifiedFunction` — ID, signature, description only (no methods)
@@ -115,9 +150,9 @@ Description preservation: if the old topology had a non-empty description and th
 - `PackagesUsed []PackagePath` — union of function + parent struct
 - `Blocks []ContextBlock` — flat ordered list sorted by (FilePath, Line) for proximity rendering
 
-## ReadStruct Output
+## GoStructContext Output
 
-`ReadStruct` returns a `StructContext` with:
+`ReadStruct` returns a `GoStructContext` with:
 - `Struct *StructCut` — full struct data + source cut
 - `Constructor *FunctionCut` — constructor function + cut (if exists)
 - `Interfaces []SimplifiedInterface` — interfaces implemented, with NeedToImplement flag
@@ -125,15 +160,15 @@ Description preservation: if the old topology had a non-empty description and th
 - `StructsUsed, InterfacesUsed, ExtVarsUsed, Dependencies, PackagesUsed` — union of struct + constructor references
 - `Blocks` — flat sorted block list
 
-## TopologyOption / WithResourceFilter
+## TopologyOption / WithResourceFilter / WithHasDescription
 
-All Read methods accept optional `TopologyOption` arguments. `WithResourceFilter(ResourceName...)` limits which resource categories are populated. When no filter is passed, all data is returned (backward compatible).
+All Read methods accept optional `TopologyOption` arguments. `WithResourceFilter(ResourceKind...)` limits which resource categories are populated. `WithHasDescription(bool)` filters resources with/without descriptions. When no filter is passed, all data is returned (backward compatible).
 
 ## Testing
 
-- `internal/topology/manager_test.go` — Cut, ReadFunction, ReadStruct
+- `internal/topology/manager_test.go` — Cut, ReadFunction (raw + called funcs), ReadStruct
 - Tests use `go test -v ./internal/topology/`
-- Test databases are built in-package via `FullScan`
+- Test databases are built in-package via `FullScan` using `goscanner.NewGoScanner()`
 
 ## MCP Server & OpenCode Plugin
 
@@ -147,6 +182,8 @@ The MCP server exposes the topology tools over stdio (JSON-RPC 2.0), allowing Op
 | `read` | Read raw file contents |
 | `read_function` | Function source + interconnected context |
 | `read_struct` | Struct source + interconnected context |
+| `read_resource_and_cut` | Source cut + description instructions for any resource |
+| `update_description` | Update a resource's description in the topology DB |
 | `edit` | Edit file (topology auto-updated, warnings surfaced) |
 
 ### Setup
@@ -162,8 +199,8 @@ This inserts into opencode.json:
   "mcp": {
     "llm-topology": {
       "type": "local",
-      "command": "ltp",
-      "args": ["serve"]
+      "command": ["ltp", "serve"],
+      "enabled": true
     }
   }
 }
@@ -175,3 +212,5 @@ The MCP server auto-scans the project if `.ltp/topology.db` is missing on first 
 
 - AI agent mode requires `DEEPSEEK_API_KEY` environment variable.
 - MCP server mode does not require an API key (the external LLM platform provides its own).
+- The scanner architecture supports multiple languages via `LanguageScanner` interface and `Registry`; currently only Go is implemented.
+- `generate-descriptions` subcommand uses the LLM to auto-generate descriptions for all undocumented resources.
