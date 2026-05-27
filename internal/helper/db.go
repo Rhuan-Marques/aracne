@@ -8,6 +8,7 @@ import (
 	"llm-topology/internal/topology/domain"
 )
 
+// Serializes a Topology to an SQLite database at the given path. Creates the schema if needed, then writes all resources, connections, and errors inside a transaction.
 func WriteDb(topo *domain.Topology, path string) error {
 	db, err := sql.Open("sqlite", path+"?cache=shared&_journal_mode=WAL")
 	if err != nil {
@@ -79,6 +80,7 @@ func WriteDb(topo *domain.Topology, path string) error {
 	return tx.Commit()
 }
 
+// Creates the SQLite database schema (resources and connections tables with indexes) if they do not already exist, enabling WAL mode for performance.
 func createSchema(db *sql.DB) error {
 	ddl := `
 	PRAGMA journal_mode=WAL;
@@ -109,6 +111,7 @@ func createSchema(db *sql.DB) error {
 	return err
 }
 
+// Reads a complete topology from an SQLite database at the given path. Opens the database, loads info entries (root, language, errors), all resources with their locations and properties, and all connections between resources. Returns the reconstructed Topology or an error.
 func ReadDb(path string) (*domain.Topology, error) {
 	db, err := sql.Open("sqlite", path+"?cache=shared&_journal_mode=WAL")
 	if err != nil {
@@ -191,6 +194,7 @@ func ReadDb(path string) (*domain.Topology, error) {
 	return topo, nil
 }
 
+// Directly updates a resource description in the SQLite database by executing an UPDATE on the resources table.
 func UpdateDescription(dbPath string, kind domain.ResourceKind, id string, description string) error {
 	db, err := sql.Open("sqlite", dbPath+"?cache=shared&_journal_mode=WAL")
 	if err != nil {
@@ -202,6 +206,7 @@ func UpdateDescription(dbPath string, kind domain.ResourceKind, id string, descr
 	return err
 }
 
+// Marshals an interface value to a JSON string. Returns "{}" for nil inputs or if marshaling fails.
 func toJSON(v interface{}) string {
 	if v == nil {
 		return "{}"
@@ -213,6 +218,7 @@ func toJSON(v interface{}) string {
 	return string(b)
 }
 
+// Parses a JSON string into a generic map[string]any, returning an empty map if the input is empty or parsing fails.
 func fromJSONMap(s string) map[string]any {
 	var v map[string]any
 	if s != "" {

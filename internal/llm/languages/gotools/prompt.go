@@ -6,11 +6,14 @@ import (
 	"sync"
 )
 
+// Cached content of the LLM_INTEGRATION_CHARTER.md file loaded once via sync.Once.
+// sync.Once guard ensuring the LLM integration charter is loaded only once.
 var (
 	llmCharterOnce sync.Once
 	llmCharter     string
 )
 
+// Loads the LLM_INTEGRATION_CHARTER.md file from the project root or .ltp/ subdirectory into a global variable for inclusion in the system prompt. Silently falls back if the file is not found.
 func loadLLMCharter() {
 	// Look for LLM_INTEGRATION_CHARTER.md relative to the working directory
 	// (project root), which is where ltp scan / agent / serve are invoked.
@@ -28,6 +31,7 @@ func loadLLMCharter() {
 	// Fallback: the file is missing — the prompt will just omit the charter.
 }
 
+// Builds the Go-specific system prompt for the AI agent by loading the LLM integration charter once (via sync.Once) and combining it with Go-specific tool definitions and guidelines.
 func BuildGoSystemPrompt() string {
 	llmCharterOnce.Do(loadLLMCharter)
 	if llmCharter != "" {
@@ -36,6 +40,7 @@ func BuildGoSystemPrompt() string {
 	return goSpecificPrompt
 }
 
+// Stores the Go-specific system prompt injected into the AI agent, instructing it on topology-aware tools, descriptor sub-agent workflows, and project navigation conventions.
 const goSpecificPrompt = `You are an AI coding assistant working with a pre-analyzed Go project topology — a graph model of all packages, files, functions, structs, interfaces, and their relationships.
 
 ## Available Tools

@@ -10,23 +10,28 @@ import (
 	"llm-topology/internal/topology/scanner"
 )
 
+// Tool implementation for the "edit" command. Wraps a TopologyManager and scanner Registry to perform file edits and auto-update the topology database in response.
 type Edit struct {
 	mgr *topology.TopologyManager
 	reg *scanner.Registry
 }
 
+// Creates a new Edit tool instance with the given topology manager and scanner registry. Returns a pointer to the initialized Edit struct.
 func NewEdit(mgr *topology.TopologyManager, reg *scanner.Registry) *Edit {
 	return &Edit{mgr: mgr, reg: reg}
 }
 
+// Returns the tool name "edit" used to register the Edit tool in the MCP tool registry.
 func (e *Edit) Name() string {
 	return "edit"
 }
 
+// Returns the description string for the Edit tool, explaining it replaces exact text in a file with automatic topology updates.
 func (e *Edit) Description() string {
 	return "Edit a file by replacing exact text with new text. Provide the file path, the exact string to find, and the replacement. The project topology is automatically updated."
 }
 
+// Returns the parameter schema for the Edit tool, defining file_path, old_string, and new_string as required string parameters.
 func (e *Edit) Parameters() []Parameter {
 	return []Parameter{
 		{Name: "file_path", Type: "string", Description: "The absolute path to the file to edit", Required: true},
@@ -35,6 +40,7 @@ func (e *Edit) Parameters() []Parameter {
 	}
 }
 
+// Executes the edit tool: reads a file, replaces the first occurrence of old_string with new_string, writes it back, and if a topology manager is available, triggers an update-file to refresh the topology with any resulting warnings.
 func (e *Edit) Run(args json.RawMessage) (string, error) {
 	var params struct {
 		FilePath  string `json:"file_path"`

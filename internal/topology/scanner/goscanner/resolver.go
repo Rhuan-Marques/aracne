@@ -7,6 +7,7 @@ import (
 	"llm-topology/internal/topology/golang"
 )
 
+// Walks Go AST nodes within function bodies to resolve call graphs, struct usage, interface references, and external variable references, building connection maps for the topology.
 type bodyAnalyzer struct {
 	pr         *ParseResult
 	gt         *golang.GolangTopology
@@ -14,6 +15,7 @@ type bodyAnalyzer struct {
 	varTypeMap map[string]golang.StructID
 }
 
+// Creates and initializes a bodyAnalyzer for function body analysis, setting up connection maps and resolving parameter and receiver variable types to their corresponding struct IDs for call graph resolution.
 func newBodyAnalyzer(pr *ParseResult, gt *golang.GolangTopology, funcInput []golang.VariableDefinition, receiverName string, receiverStruct *golang.StructID) *bodyAnalyzer {
 	ba := &bodyAnalyzer{
 		pr:         pr,
@@ -39,6 +41,7 @@ func newBodyAnalyzer(pr *ParseResult, gt *golang.GolangTopology, funcInput []gol
 	return ba
 }
 
+// Converts a type expression string to a StructID by resolving package aliases via the import map, trimming pointer prefixes, and only returning IDs for types within the module.
 func paramTypeNameToStruct(typing string, pkgPath golang.PackagePath, importMap map[string]string, modulePath string) *golang.StructID {
 	t := strings.TrimPrefix(typing, "*")
 
@@ -56,6 +59,7 @@ func paramTypeNameToStruct(typing string, pkgPath golang.PackagePath, importMap 
 	return &sid
 }
 
+// Adds a connection of the given kind and ID to the bodyAnalyzer's connection map, preventing duplicates via containsString check. Takes kind ConnectionKind and id string, returns nothing.
 func (ba *bodyAnalyzer) add(kind golang.ConnectionKind, id string) {
 	ids := ba.conn[kind]
 	if !containsString(ids, id) {
@@ -63,6 +67,7 @@ func (ba *bodyAnalyzer) add(kind golang.ConnectionKind, id string) {
 	}
 }
 
+// Walks the AST of a function body to resolve call expressions, composite literals, and identifier references, returning collected connection data (calls, struct usage, variable usage).
 func analyzeFunctionBody(body *ast.BlockStmt, pr *ParseResult, gt *golang.GolangTopology, funcInput []golang.VariableDefinition, receiverName string, receiverStruct *golang.StructID) map[golang.ConnectionKind][]string {
 	ba := newBodyAnalyzer(pr, gt, funcInput, receiverName, receiverStruct)
 
@@ -81,6 +86,7 @@ func analyzeFunctionBody(body *ast.BlockStmt, pr *ParseResult, gt *golang.Golang
 	return ba.conn
 }
 
+// Resolves a function call expression by dispatching to the appropriate handler: direct identifier calls are matched to package-level functions, and selector expressions (x.Func) are delegated to resolveQualifiedCall.
 func (ba *bodyAnalyzer) resolveCallExpr(call *ast.CallExpr) {
 	switch fun := call.Fun.(type) {
 	case *ast.Ident:
@@ -99,6 +105,7 @@ func (ba *bodyAnalyzer) resolveCallExpr(call *ast.CallExpr) {
 	}
 }
 
+// Resolves a qualified call expression (e.g. pkg.Func or struct.Method). Checks import maps for internal package calls, falls back to checking struct methods via varTypeMap or direct struct type lookup, and records call and usage connections.
 func (ba *bodyAnalyzer) resolveQualifiedCall(xName, selName string) {
 	if impPath, ok := ba.pr.ImportMap[xName]; ok {
 		if strings.HasPrefix(impPath, ba.pr.ModulePath) {
@@ -142,6 +149,7 @@ func (ba *bodyAnalyzer) resolveQualifiedCall(xName, selName string) {
 	}
 }
 
+// Resolves composite literal expressions (e.g., MyStruct{...}) by identifying the struct type and recording struct usage and package references in the topology.
 func (ba *bodyAnalyzer) resolveCompositeLit(lit *ast.CompositeLit) {
 	switch t := lit.Type.(type) {
 	case *ast.Ident:
@@ -163,6 +171,7 @@ func (ba *bodyAnalyzer) resolveCompositeLit(lit *ast.CompositeLit) {
 	}
 }
 
+// Resolves an ast.Ident reference by checking if the identifier matches an external variable or struct in the parsed topology, and records the appropriate connection (ConnUsesExtVar or ConnUsesStruct). Takes *ast.Ident, returns nothing.
 func (ba *bodyAnalyzer) resolveIdentRef(ident *ast.Ident) {
 	varID := golang.ExternalVarID(string(ba.pr.PkgPath) + "." + ident.Name)
 	if _, exists := ba.gt.ExternalVars[varID]; exists {
@@ -175,6 +184,7 @@ func (ba *bodyAnalyzer) resolveIdentRef(ident *ast.Ident) {
 	}
 }
 
+// Checks whether a given string item exists in a string slice by linear search. Returns true if found, false otherwise.
 func containsString(slice []string, item string) bool {
 	for _, s := range slice {
 		if s == item {

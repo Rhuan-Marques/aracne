@@ -10,18 +10,22 @@ import (
 	"llm-topology/internal/topology/domain"
 )
 
+// GoManager wraps TopologyManager with Go-specific context enrichment. It exposes ReadFunction/ReadStruct for retrieving functions and structs with interconnected context (called funcs, implemented interfaces, constructor, etc.) and delegates UpdateDescription to the generic manager.
 type GoManager struct {
 	generic *topology.TopologyManager
 }
 
+// Creates a new GoManager wrapping a generic TopologyManager for Go-specific context enrichment operations.
 func NewGoManager(mgr *topology.TopologyManager) *GoManager {
 	return &GoManager{generic: mgr}
 }
 
+// Returns the underlying generic TopologyManager that this GoManager wraps for low-level topology operations.
 func (m *GoManager) Generic() *topology.TopologyManager {
 	return m.generic
 }
 
+// Retrieves a function's full context from the topology by ID, including source cut, parent struct, called functions, struct/interface usage, external variables, dependencies, and packages. Accepts optional TopologyOption filters to limit which resource categories are populated. Returns a GoFunctionContext or an error if the function is not found.
 func (m *GoManager) ReadFunction(id string, opts ...topology.TopologyOption) (*GoFunctionContext, error) {
 	opt := &topology.TopologyOptions{}
 	for _, o := range opts {
@@ -285,6 +289,7 @@ func (m *GoManager) ReadFunction(id string, opts ...topology.TopologyOption) (*G
 	return ctx, nil
 }
 
+// Reads a struct from the topology by ID, returning a GoStructContext with its source cut, constructor function, implemented interfaces, methods, and all referenced resources (structs, interfaces, vars, packages, deps) sorted into context blocks.
 func (m *GoManager) ReadStruct(id string, opts ...topology.TopologyOption) (*GoStructContext, error) {
 	opt := &topology.TopologyOptions{}
 	for _, o := range opts {
@@ -610,6 +615,7 @@ func (m *GoManager) ReadStruct(id string, opts ...topology.TopologyOption) (*GoS
 	return ctx, nil
 }
 
+// Searches all functions in the topology by name. Returns a slice of matching FunctionIDs, or an error if reading the topology fails.
 func (m *GoManager) FindFunctionsByName(name string) ([]FunctionID, error) {
 	topo, err := m.generic.ReadAll()
 	if err != nil {
@@ -625,6 +631,7 @@ func (m *GoManager) FindFunctionsByName(name string) ([]FunctionID, error) {
 	return results, nil
 }
 
+// Searches all structs in the topology by name. Returns a slice of matching StructIDs, or an error if reading the topology fails.
 func (m *GoManager) FindStructsByName(name string) ([]StructID, error) {
 	topo, err := m.generic.ReadAll()
 	if err != nil {
@@ -640,10 +647,12 @@ func (m *GoManager) FindStructsByName(name string) ([]StructID, error) {
 	return results, nil
 }
 
+// Updates the description of a resource identified by its ID and kind in the underlying topology database.
 func (m *GoManager) UpdateDescription(id string, kind domain.ResourceKind, description string) error {
 	return helper.UpdateDescription(m.generic.DbPath(), kind, id, description)
 }
 
+// Reads the source code cut for any resource by its ID and kind (function, method, type, interface, or variable). Returns a CodeEntry containing the source lines and location, or an error if the kind is not supported or the resource is not found.
 func (m *GoManager) ReadResourceAndCut(id string, kind domain.ResourceKind) (*domain.CodeEntry, error) {
 	topo, err := m.generic.ReadAll()
 	if err != nil {
@@ -712,6 +721,7 @@ func (m *GoManager) ReadResourceAndCut(id string, kind domain.ResourceKind) (*do
 	return m.generic.Cut(loc)
 }
 
+// Collects all function IDs that are methods of the given struct by iterating the topology's function map. Takes a GolangTopology and a StructID, returns a slice of FunctionIDs belonging to that struct.
 func collectMethodIDs(gt *GolangTopology, structID StructID) []FunctionID {
 	var ids []FunctionID
 	for id, f := range gt.Functions {

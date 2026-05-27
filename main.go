@@ -23,6 +23,7 @@ import (
 	"llm-topology/internal/topology/scanner/goscanner"
 )
 
+// Entry point of the ltp CLI. Parses os.Args to dispatch to subcommands: scan, agent, serve, install, descriptions (generate/apply), update-file, read_function, read_struct, or printUsage. Takes no parameters and returns nothing.
 func main() {
 	if len(os.Args) < 2 {
 		printUsage()
@@ -57,6 +58,7 @@ func main() {
 		runReadFunction()
 	case "read_struct":
 		runReadStruct()
+// Prints the ltp CLI usage information to stdout, documenting all subcommands (scan, agent, serve, install, descriptions, read_function, read_struct, etc.) and their flags. No parameters, no return value.
 	case "read-resource-and-cut":
 		runReadResourceAndCut(os.Args[2:])
 	case "update-description":
@@ -93,12 +95,14 @@ Flags for "scan":
 Flags for "install":
   --global        Install globally (~/.config/opencode/opencode.json)
 
+// Creates and initializes the scanner registry with Go language support, performs a full project topology scan, writes results to the database, and returns the TopologyManager for further operations.
 Flags for "descriptions generate":
   (no flags required — uses agent loop to process all undocumented resources)
 
   Examples:
     ltp scan -root ./myproject -output myproject.db
     ltp agent "list all structs"
+// Parses CLI flags for the "scan" command (root, output, hard), creates a scanner registry, and runs either a FullScan or IncrementalScan on the project. Reports timing statistics and resource counts after completion.
     ltp install               # add MCP config to opencode.json
     ltp serve                 # start MCP server (used by OpenCode)
     ltp descriptions generate # generate descriptions for all resources
@@ -158,6 +162,7 @@ func runScan(args []string) {
 	depCount := 0
 
 	for _, res := range topo.Resources {
+// Initializes the scanner registry and performs a full project topology scan, categorizing resources by kind (package, file, function, type, interface, variable, dependency) and displaying summary statistics.
 		switch res.Kind {
 		case domain.ResourcePackage:
 			pkgCount++
@@ -177,6 +182,7 @@ func runScan(args []string) {
 	}
 
 	fmt.Printf("Topology written to: %s\n", *output)
+// CLI handler for the "agent" command. Initializes the topology database and tool registry, creates the DeepSeek provider and agent, then runs either a single-prompt session (from CLI args) or a REPL loop reading stdin prompts.
 	fmt.Printf("Analyzed in %s\n", elapsed.Round(time.Millisecond))
 	fmt.Printf("-%d packages\n-%d files\n-%d functions\n-%d types\n-%d interfaces\n-%d variables\n-%d dependencies\n-%d errors\n",
 		pkgCount, fileCount, funcCount, typeCount, ifaceCount, varCount, depCount, len(topo.Errors))
@@ -231,6 +237,7 @@ func runAgent() {
 	input := strings.Join(args, " ")
 	if input != "" {
 		if err := a.Run(input); err != nil {
+// Initializes the topology database and scanner registry, then starts the MCP server on stdio to handle JSON-RPC tool requests from OpenCode or other MCP clients.
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
@@ -248,6 +255,7 @@ func runAgent() {
 		if input == "exit" || input == "quit" {
 			break
 		}
+// Configures the MCP server entry in opencode.json and installs the custom edit.ts tool. Supports --global flag for user-wide installation.
 		if err := a.Run(input); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		}
@@ -375,6 +383,7 @@ export default tool({
 
     const ltpPath = path.join(
       context.worktree,
+// CLI handler for the generate-descriptions subcommand. Scans all undocumented resources, dispatches an LLM sub-agent for each, and applies the generated descriptions to the topology database.
       "ltp" + (process.platform === "win32" ? ".exe" : ""),
     )
     const proc = Bun.spawnSync([ltpPath, "update-file", filePath])
@@ -421,6 +430,7 @@ export default tool({
 			os.Exit(1)
 		}
 		fmt.Printf("Command %s written to %s\n", name, cmdPath)
+// CLI handler for the "read_function" command. Looks up a function by name via GoManager (exact match first, then fallback to FindFunctionsByName), prints the formatted Go function context, or exits with an error if not found.
 	}
 
 	writeCommand(
@@ -464,6 +474,7 @@ func runGenerateDescriptions(args []string) {
 	manager, reg := initRegistry(".ltp/topology.db")
 	provider := providers.NewDeepSeek()
 	goManager := golang.NewGoManager(manager)
+// CLI handler for the read_struct command: resolves struct by name and prints its context via GoManager.ReadStruct.
 
 	toolReg := tools.NewRegistry()
 	toolReg.Register(&tools.Ls{})
@@ -507,6 +518,7 @@ func runDescriptionApply(args []string) {
 	}
 
 	count := 0
+// CLI handler for the update-file subcommand. Re-parses a single Go file, updates the topology database in-place via TopologyManager.UpdateFile, and prints any topology warnings.
 	for _, res := range topo.Resources {
 		if res.Description != "" {
 			count++
@@ -522,6 +534,7 @@ func runDescriptionApply(args []string) {
 	fmt.Println("done")
 }
 
+// CLI handler for the read_resource_and_cut command: initializes the topology database, creates a GoManager, and looks up a resource by ID and kind, displaying its source code cut and generating description instructions.
 func runReadFunction() {
 	args := os.Args[2:]
 	if len(args) < 1 {
@@ -557,6 +570,7 @@ func runReadFunction() {
 		return
 	}
 
+// Parses CLI arguments for `ltp read_function` command, looks up the function by name via GoManager.ReadFunction, and prints the formatted function context to stdout. Exits with code 1 if no name is provided or lookup fails.
 	ctx, err = goManager.ReadFunction(string(ids[0]))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -581,6 +595,7 @@ func runReadStruct() {
 	if err == nil {
 		fmt.Print(gotools.FormatGoStructContext(ctx))
 		return
+// CLI handler for the list-undocumented command: reads topology from the database and prints all resources missing descriptions.
 	}
 
 	ids, err := goManager.FindStructsByName(name)
@@ -616,6 +631,7 @@ func runUpdateFile(args []string) {
 	path := args[0]
 	manager, reg := initRegistry(".ltp/topology.db")
 	warnings := manager.UpdateFile(path, reg)
+// CLI helper that maps resource kind strings (Function, Struct, etc.) to their domain.ResourceKind constant.
 	if len(warnings) > 0 {
 		for _, w := range warnings {
 			fmt.Printf("Warning: %s: %s (affects: %s)\n", w.Resource, w.Message, strings.Join(w.AffectedResources, ", "))

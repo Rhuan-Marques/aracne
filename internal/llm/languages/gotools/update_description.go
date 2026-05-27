@@ -9,22 +9,27 @@ import (
 	"llm-topology/internal/topology/golang"
 )
 
+// MCP/agent tool that updates a resource's description in the topology database. Wraps GoManager.UpdateDescription with JSON argument parsing.
 type UpdateDescriptionTool struct {
 	mgr *golang.GoManager
 }
 
+// Constructs a new UpdateDescriptionTool instance with the given GoManager.
 func NewUpdateDescriptionTool(mgr *golang.GoManager) *UpdateDescriptionTool {
 	return &UpdateDescriptionTool{mgr: mgr}
 }
 
+// Returns the tool name "update_description" for the UpdateDescriptionTool registration.
 func (u *UpdateDescriptionTool) Name() string {
 	return "update_description"
 }
 
+// Returns the description string for the update_description tool, explaining its purpose to the LLM.
 func (u *UpdateDescriptionTool) Description() string {
 	return "Update the description of a resource in the topology database"
 }
 
+// Returns the parameter definitions for the update_description tool: id (Resource ID), resource_name (resource kind), and description (new description text), all required.
 func (u *UpdateDescriptionTool) Parameters() []Parameter {
 	return []Parameter{
 		{Name: "id", Type: "string", Description: "Resource ID", Required: true},
@@ -33,6 +38,7 @@ func (u *UpdateDescriptionTool) Parameters() []Parameter {
 	}
 }
 
+// Executes the "update_description" tool. Unmarshals JSON arguments (id, resource_name, description), maps the resource_name string to the appropriate domain.ResourceKind, and delegates to GoManager.UpdateDescription. Returns "description updated" on success or an error.
 func (u *UpdateDescriptionTool) Run(args json.RawMessage) (string, error) {
 	var params struct {
 		ID           string `json:"id"`

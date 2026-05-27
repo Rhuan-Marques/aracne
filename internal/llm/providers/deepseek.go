@@ -11,18 +11,21 @@ import (
 	"llm-topology/internal/llm"
 )
 
+// DeepSeek is the LLM provider implementation for DeepSeek's API. It holds the API key, model name, and base URL for making chat completion requests.
 type DeepSeek struct {
 	apiKey  string
 	model   string
 	baseURL string
 }
 
+// Represents a request payload sent to the DeepSeek API. Contains the model name, conversation messages, and optional tool definitions for function calling.
 type deepSeekRequest struct {
 	Model    string               `json:"model"`
 	Messages []llm.Message        `json:"messages"`
 	Tools    []llm.ToolDefinition `json:"tools,omitempty"`
 }
 
+// Represents the API response from DeepSeek's chat completions endpoint, wrapping an array of Choices each containing a Message with role, content, and optional tool_calls for function-calling workflows.
 type deepSeekResponse struct {
 	Choices []struct {
 		Message struct {
@@ -33,6 +36,7 @@ type deepSeekResponse struct {
 	} `json:"choices"`
 }
 
+// Represents a tool call in DeepSeek API responses containing the call ID, type, and function details (name and JSON arguments). Used to parse and dispatch tool calls from the LLM.
 type deepSeekToolCall struct {
 	ID   string `json:"id"`
 	Type string `json:"type"`
@@ -42,6 +46,7 @@ type deepSeekToolCall struct {
 	} `json:"function"`
 }
 
+// Creates a new DeepSeek LLM provider instance configured with the DEEPSEEK_API_KEY environment variable, model name, and base URL.
 func NewDeepSeek() *DeepSeek {
 	return &DeepSeek{
 		apiKey:  os.Getenv("DEEPSEEK_API_KEY"),
@@ -50,6 +55,7 @@ func NewDeepSeek() *DeepSeek {
 	}
 }
 
+// Sends a chat completion request to the DeepSeek API with the given messages and tool definitions. Returns the response content and any tool calls, or an error on failure.
 func (d *DeepSeek) Chat(messages []llm.Message, tools []llm.ToolDefinition) (*llm.ChatResponse, error) {
 	reqBody := deepSeekRequest{
 		Model:    d.model,

@@ -7,6 +7,7 @@ import (
 	"llm-topology/internal/topology/golang"
 )
 
+// Formats a GoFunctionContext into a human-readable string with code blocks, import statements, parent struct, function cut, and a hierarchical CONTEXT section listing interfaces, structs, called functions, and external variables.
 func FormatGoFunctionContext(ctx *golang.GoFunctionContext) string {
 	var b strings.Builder
 
@@ -71,6 +72,7 @@ func FormatGoFunctionContext(ctx *golang.GoFunctionContext) string {
 	return b.String()
 }
 
+// Formats a GoStructContext into a human-readable string with a code block (imports, struct cut, constructor) and a CONTEXT section listing interfaces, methods, structs used, and external variables with their descriptions.
 func FormatGoStructContext(ctx *golang.GoStructContext) string {
 	var b strings.Builder
 

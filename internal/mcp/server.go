@@ -9,14 +9,17 @@ import (
 	"llm-topology/internal/llm/tools"
 )
 
+// MCP JSON-RPC server that listens on stdin/stdout and dispatches requests to the registered tool handlers.
 type Server struct {
 	registry *tools.Registry
 }
 
+// Creates a new MCP Server instance with the given tool registry, used to handle JSON-RPC requests over stdio.
 func NewServer(registry *tools.Registry) *Server {
 	return &Server{registry: registry}
 }
 
+// Starts the MCP server's stdio event loop. Reads JSON-RPC 2.0 messages line by line from stdin, dispatches them to the appropriate handler, and writes responses to stdout. Returns any scanner error encountered.
 func (s *Server) Serve() error {
 	sc := bufio.NewScanner(os.Stdin)
 	sc.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024)
@@ -42,6 +45,7 @@ func (s *Server) Serve() error {
 	return sc.Err()
 }
 
+// Routes incoming MCP JSON-RPC requests to the appropriate handler based on method name (initialize, tools/list, tools/call).
 func (s *Server) dispatch(req *Request) *Response {
 	switch req.Method {
 	case "initialize":
@@ -58,6 +62,7 @@ func (s *Server) dispatch(req *Request) *Response {
 	}
 }
 
+// Handles the MCP initialize request by returning protocol version "2024-11-05", server capabilities (tools supported), and server info (name and version). Returns nil if the request ID is nil.
 func (s *Server) handleInitialize(id *int) *Response {
 	if id == nil {
 		return nil
@@ -73,6 +78,7 @@ func (s *Server) handleInitialize(id *int) *Response {
 	}
 }
 
+// Handles the MCP tools/list request: enumerates all registered tools, builds their JSON Schema parameter definitions, and returns the tool list.
 func (s *Server) handleListTools(id *int) *Response {
 	allTools := s.registry.List()
 	list := make([]Tool, 0, len(allTools))
@@ -102,6 +108,7 @@ func (s *Server) handleListTools(id *int) *Response {
 	}
 }
 
+// Handles the MCP tools/call request: looks up the tool by name in the registry, executes it with the provided arguments, and returns the result or an error response.
 func (s *Server) handleCallTool(id *int, params json.RawMessage) *Response {
 	var call CallToolParams
 	if err := json.Unmarshal(params, &call); err != nil {
@@ -134,12 +141,14 @@ func (s *Server) handleCallTool(id *int, params json.RawMessage) *Response {
 	}
 }
 
+// Writes a JSON-RPC error response to stdout. Constructs the error response from the request ID, error code, and message, then marshals and prints it.
 func (s *Server) writeError(id *int, code int, message string) {
 	resp := s.errorResponse(id, code, message)
 	b, _ := json.Marshal(resp)
 	fmt.Println(string(b))
 }
 
+// Constructs a JSON-RPC 2.0 error response with the given request ID, error code, and message. Returns a Response pointer containing the error payload.
 func (s *Server) errorResponse(id *int, code int, message string) *Response {
 	return &Response{
 		JSONRPC: "2.0",

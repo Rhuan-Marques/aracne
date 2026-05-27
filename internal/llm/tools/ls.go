@@ -9,14 +9,18 @@ import (
 	"strings"
 )
 
+// Implements the Tool interface for listing files and directories, exposing a "ls" tool to the LLM agent.
 type Ls struct{}
 
+// Returns the tool name string "ls" for the Ls tool.
 func (l *Ls) Name() string { return "ls" }
 
+// Returns the description string for the Ls tool, indicating it lists files and directories at a given path for exploring the project structure.
 func (l *Ls) Description() string {
 	return "List files and directories at the given path. Use this to explore the project structure."
 }
 
+// Returns the parameter definitions for the ls tool: path (optional directory) and recursive (optional boolean flag).
 func (l *Ls) Parameters() []Parameter {
 	return []Parameter{
 		{Name: "path", Type: "string", Description: "Directory path to list (default '.')", Required: false},
@@ -24,6 +28,7 @@ func (l *Ls) Parameters() []Parameter {
 	}
 }
 
+// Executes the ls tool: takes a path and recursive flag, lists files/directories (with trailing slash for dirs), skips hidden directories when recursive, and returns the sorted results joined by newlines.
 func (l *Ls) Run(args json.RawMessage) (string, error) {
 	var params struct {
 		Path      string `json:"path"`

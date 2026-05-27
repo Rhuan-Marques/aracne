@@ -9,28 +9,34 @@ import (
 	"llm-topology/internal/topology/golang"
 )
 
+// Tool implementation wrapping GoManager to expose the "read_struct" MCP/agent tool. Holds a reference to GoManager for looking up struct context by name.
 type ReadStruct struct {
 	mgr *golang.GoManager
 }
 
+// Creates a new ReadStruct tool instance. Takes a *GoManager as parameter. Returns a *ReadStruct initialized with the given manager for looking up struct context from the topology.
 func NewReadStruct(mgr *golang.GoManager) *ReadStruct {
 	return &ReadStruct{mgr: mgr}
 }
 
+// Returns the tool name "read_struct" for MCP/agent registration.
 func (r *ReadStruct) Name() string {
 	return "read_struct"
 }
 
+// Returns the description string for the read_struct MCP/agent tool.
 func (r *ReadStruct) Description() string {
 	return "Read a Go struct's full source code and its interconnected context (interfaces, methods, constructor, used types) from the project topology. Prefer this over 'read' when investigating a specific struct."
 }
 
+// Returns the parameter definition for read_struct (a single "name" parameter).
 func (r *ReadStruct) Parameters() []Parameter {
 	return []Parameter{
 		{Name: "name", Type: "string", Description: "The struct name (e.g. 'TopologyManager', 'ReadFunction')", Required: true},
 	}
 }
 
+// Executes the read_struct tool: unmarshals a JSON name argument, looks up the struct via GoManager, and returns a formatted context with source cut and all relationships. Supports disambiguation when multiple structs share the same name.
 func (r *ReadStruct) Run(args json.RawMessage) (string, error) {
 	var params struct {
 		Name string `json:"name"`

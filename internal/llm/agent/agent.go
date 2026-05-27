@@ -8,8 +8,10 @@ import (
 	"llm-topology/internal/llm/tools"
 )
 
+// Default maximum number of tool-calling iterations (20) the agent loop can execute before returning.
 const defaultMaxIterations = 20
 
+// Represents the AI agent loop that manages LLM interactions, tool execution, and conversation history. Key fields: provider (LLM API client), registry (available tools), messages (conversation history), and maxIterations (tool-call loop limit).
 type Agent struct {
 	provider      llm.Provider
 	registry      *tools.Registry
@@ -17,6 +19,7 @@ type Agent struct {
 	maxIterations int
 }
 
+// Creates a new Agent with the given LLM provider, tool registry, and language. Initializes the system prompt and sets the default max iterations (20).
 func New(provider llm.Provider, registry *tools.Registry, language string) *Agent {
 	return &Agent{
 		provider:      provider,
@@ -26,10 +29,12 @@ func New(provider llm.Provider, registry *tools.Registry, language string) *Agen
 	}
 }
 
+// Sets the maximum number of tool-call iterations allowed in the agent loop before returning control.
 func (a *Agent) SetMaxIterations(n int) {
 	a.maxIterations = n
 }
 
+// Main agent loop: sends messages to the LLM provider, processes tool calls, and appends results to the conversation until a final response without tool calls is received or max iterations are exceeded.
 func (a *Agent) Run(input string) error {
 	a.messages = append(a.messages, llm.Message{Role: "user", Content: input})
 
@@ -85,6 +90,7 @@ func (a *Agent) Run(input string) error {
 	return fmt.Errorf("exceeded max iterations (%d)", a.maxIterations)
 }
 
+// Runs a sub-agent loop with a separate tool set and system prompt. Delegates to the LLM provider, processes tool calls, and returns the final response or an error if max iterations are exceeded.
 func (a *Agent) RunSubAgent(systemPrompt, input string, toolMap map[string]tools.Tool) (string, error) {
 	subRegistry := tools.NewRegistry()
 	for _, t := range toolMap {
@@ -145,6 +151,7 @@ func (a *Agent) RunSubAgent(systemPrompt, input string, toolMap map[string]tools
 	return "", fmt.Errorf("sub-agent exceeded max iterations (%d)", a.maxIterations)
 }
 
+// Converts a slice of Tool instances into LLM ToolDefinition objects by extracting each tool's name, description, and typed parameter schema with required flags. Returns the definitions slice.
 func toToolDefinitions(toolList []tools.Tool) []llm.ToolDefinition {
 	defs := make([]llm.ToolDefinition, 0, len(toolList))
 	for _, t := range toolList {

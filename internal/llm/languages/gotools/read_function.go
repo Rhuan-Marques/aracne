@@ -9,28 +9,34 @@ import (
 	"llm-topology/internal/topology/golang"
 )
 
+// A tool struct wrapping GoManager that provides the read_function tool for MCP/agent integration, enabling function source lookup with interconnected context.
 type ReadFunction struct {
 	mgr *golang.GoManager
 }
 
+// Creates a new ReadFunction tool instance. Takes a *GoManager as parameter. Returns a *ReadFunction initialized with the given manager for looking up function context from the topology.
 func NewReadFunction(mgr *golang.GoManager) *ReadFunction {
 	return &ReadFunction{mgr: mgr}
 }
 
+// Returns the tool name "read_function" used to register the ReadFunction tool in the tool registry.
 func (r *ReadFunction) Name() string {
 	return "read_function"
 }
 
+// Returns the help text describing the ReadFunction tool, explaining it reads a Go function's source code with interconnected context.
 func (r *ReadFunction) Description() string {
 	return "Read a Go function's full source code and its interconnected context (called functions, structs, interfaces, external variables) from the project topology. Prefer this over 'read' when investigating a specific function."
 }
 
+// Returns the parameter definitions for the ReadFunction tool, accepting a required "name" string for the function to look up.
 func (r *ReadFunction) Parameters() []Parameter {
 	return []Parameter{
 		{Name: "name", Type: "string", Description: "The function name (e.g. 'ReadFunction', 'New', 'Scan')", Required: true},
 	}
 }
 
+// Executes the read_function MCP tool: looks up a function by name via GoManager, returns a formatted GoFunctionContext on single match, lists ambiguous matches if multiple are found, or returns an error if not found.
 func (r *ReadFunction) Run(args json.RawMessage) (string, error) {
 	var params struct {
 		Name string `json:"name"`

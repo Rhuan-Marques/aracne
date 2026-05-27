@@ -7,6 +7,7 @@ import (
 
 type Parameter = tools.Parameter
 
+// Registers all Go-specific topology tools (read_function, read_struct, read_resource_and_cut, update_description, list_undocumented) into the given tool registry.
 func RegisterGoTools(registry *tools.Registry, mgr *golang.GoManager) {
 	registry.Register(NewReadFunction(mgr))
 	registry.Register(NewReadStruct(mgr))

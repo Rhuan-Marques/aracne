@@ -9,22 +9,27 @@ import (
 	"llm-topology/internal/topology/golang"
 )
 
+// MCP/agent tool that retrieves a resource's source code cut and type-specific instructions for generating its description.
 type ReadResourceAndCut struct {
 	mgr *golang.GoManager
 }
 
+// Constructs a new ReadResourceAndCut tool instance with the given GoManager.
 func NewReadResourceAndCut(mgr *golang.GoManager) *ReadResourceAndCut {
 	return &ReadResourceAndCut{mgr: mgr}
 }
 
+// Returns the tool name "read_resource_and_cut" for MCP/agent tool registration. No parameters. Returns the string constant identifying this tool.
 func (r *ReadResourceAndCut) Name() string {
 	return "read_resource_and_cut"
 }
 
+// Returns the description string for the ReadResourceAndCut MCP/agent tool.
 func (r *ReadResourceAndCut) Description() string {
 	return "Get a resource's source code cut and specific instructions for generating its description"
 }
 
+// Returns the parameter definitions for read_resource_and_cut (id and resource_name).
 func (r *ReadResourceAndCut) Parameters() []Parameter {
 	return []Parameter{
 		{Name: "id", Type: "string", Description: "Resource ID", Required: true},
@@ -32,6 +37,7 @@ func (r *ReadResourceAndCut) Parameters() []Parameter {
 	}
 }
 
+// Executes the ReadResourceAndCut tool: unmarshals JSON args (id, resource_name), reads the resource source cut from the GoManager, and returns it with type-specific description instructions.
 func (r *ReadResourceAndCut) Run(args json.RawMessage) (string, error) {
 	var params struct {
 		ID           string `json:"id"`
