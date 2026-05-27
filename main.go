@@ -8,11 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"llm-topology/internal/helper"
-	"llm-topology/internal/llm"
 	"llm-topology/internal/llm/agent"
 	"llm-topology/internal/llm/languages/gotools"
 	"llm-topology/internal/llm/providers"
@@ -40,14 +38,31 @@ func main() {
 		runServe()
 	case "install":
 		runInstall(os.Args[2:])
-	case "generate-descriptions":
-		runGenerateDescriptions(os.Args[2:])
+	case "descriptions":
+		if len(os.Args) < 3 {
+			printUsage()
+			return
+		}
+		switch os.Args[2] {
+		case "generate":
+			runGenerateDescriptions(os.Args[3:])
+		case "apply":
+			runDescriptionApply(os.Args[3:])
+		default:
+			printUsage()
+		}
 	case "update-file":
 		runUpdateFile(os.Args[2:])
 	case "read_function":
 		runReadFunction()
 	case "read_struct":
 		runReadStruct()
+	case "read-resource-and-cut":
+		runReadResourceAndCut(os.Args[2:])
+	case "update-description":
+		runUpdateDescription(os.Args[2:])
+	case "list-undocumented":
+		runListUndocumented()
 	default:
 		printUsage()
 	}
@@ -61,27 +76,33 @@ Usage:
   ltp agent   [prompt]   Run the AI coding agent
   ltp serve              Start MCP server (for OpenCode plugin integration)
   ltp install [flags]    Configure OpenCode to use llm-topology as a plugin
-  ltp generate-descriptions [flags]  Generate descriptions for all undocumented resources
+  ltp descriptions generate [flags]  Generate descriptions for all undocumented resources
+  ltp descriptions apply            Write topology descriptions back into source as doc comments
   ltp read_function <name>  Show a function's source code and its interconnected context
   ltp read_struct <name>    Show a struct's source code and its interconnected context
   ltp update-file <path>    Re-parse a file and update the topology database
+  ltp read-resource-and-cut <id> <kind>  Get a resource's source code cut (kind: Function, Struct, Interface, ExternalVar, File, Package)
+  ltp update-description <id> <kind> <desc>  Update a resource's description in the topology DB
+  ltp list-undocumented     List all resources without descriptions
 
 Flags for "scan":
   -root <path>    Root folder of the Go project (default ".")
   -output <file>  Output SQLite database path (default ".ltp/topology.db")
+  --hard          Force full rebuild instead of incremental update
 
 Flags for "install":
   --global        Install globally (~/.config/opencode/opencode.json)
 
-Flags for "generate-descriptions":
-  --concurrency N  Max concurrent LLM calls (default 5)
+Flags for "descriptions generate":
+  (no flags required — uses agent loop to process all undocumented resources)
 
   Examples:
     ltp scan -root ./myproject -output myproject.db
     ltp agent "list all structs"
     ltp install               # add MCP config to opencode.json
     ltp serve                 # start MCP server (used by OpenCode)
-    ltp generate-descriptions # generate descriptions for all resources
+    ltp descriptions generate # generate descriptions for all resources
+    ltp descriptions apply    # write descriptions into source as doc comments
     ltp read_function ReadFunction
     ltp read_struct TopologyManager`)
 }
@@ -96,6 +117,7 @@ func runScan(args []string) {
 	fs := flag.NewFlagSet("scan", flag.ExitOnError)
 	root := fs.String("root", ".", "Root folder of the Go project to analyze")
 	output := fs.String("output", ".ltp/topology.db", "Output SQLite database path")
+	hard := fs.Bool("hard", false, "Force full rebuild (clears all existing descriptions)")
 	fs.Parse(args)
 
 	manager := topology.New()
@@ -106,9 +128,18 @@ func runScan(args []string) {
 
 	start := time.Now()
 	reg := newScannerRegistry()
-	if err := manager.FullScan(*root, reg); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+	if *hard {
+		fmt.Println("Hard scan: rebuilding topology from scratch")
+		if err := manager.FullScan(*root, reg); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	} else {
+		fmt.Println("Incremental scan: preserving existing descriptions")
+		if err := manager.IncrementalScan(*root, reg); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 	}
 	elapsed := time.Since(start)
 
@@ -159,7 +190,7 @@ func initRegistry(dbPath string) (*topology.TopologyManager, *scanner.Registry) 
 		mgr.Load(dbPath)
 		fmt.Fprintf(os.Stderr, "No topology found. Scanning project...\n")
 		start := time.Now()
-		if err := mgr.FullScan(".", reg); err != nil {
+		if err := mgr.IncrementalScan(".", reg); err != nil {
 			fmt.Fprintf(os.Stderr, "Error scanning project: %v\n", err)
 			os.Exit(1)
 		}
@@ -256,7 +287,7 @@ func runInstall(args []string) {
 		configPath = filepath.Join(home, ".config", "opencode", "opencode.json")
 		os.MkdirAll(filepath.Dir(configPath), 0755)
 	} else {
-		configPath = "opencode.json"
+		configPath = filepath.Join(filepath.Dir(configPath), ".opencode", "opencode.json")
 	}
 
 	var config map[string]interface{}
@@ -279,8 +310,8 @@ func runInstall(args []string) {
 	if _, exists := mcpMap["llm-topology"]; !exists {
 		mcpMap["llm-topology"] = map[string]interface{}{
 			"type":    "local",
-			"command": "ltp",
-			"args":    []string{"serve"},
+			"command": []string{"ltp", "serve"},
+			"enabled": true,
 		}
 		config["mcp"] = mcpMap
 
@@ -365,12 +396,63 @@ export default tool({
 		fmt.Printf("Custom edit tool written to %s\n", toolPath)
 	}
 
+	var commandsDir string
+	if *global {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error finding home dir: %v\n", err)
+			os.Exit(1)
+		}
+		commandsDir = filepath.Join(home, ".config", "opencode", "commands")
+	} else {
+		commandsDir = filepath.Join(filepath.Dir(configPath), ".opencode", "commands")
+	}
+	os.MkdirAll(commandsDir, 0755)
+
+	writeCommand := func(name, description, template string) {
+		cmdPath := filepath.Join(commandsDir, name+".md")
+		if _, err := os.Stat(cmdPath); err == nil {
+			fmt.Printf("Command %s already present at %s\n", name, cmdPath)
+			return
+		}
+		content := fmt.Sprintf("---\ndescription: %s\n---\n\n%s\n", description, template)
+		if err := os.WriteFile(cmdPath, []byte(content), 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing command %s: %v\n", name, err)
+			os.Exit(1)
+		}
+		fmt.Printf("Command %s written to %s\n", name, cmdPath)
+	}
+
+	writeCommand(
+		"descriptions-generate",
+		"Generate descriptions for undocumented resources in the topology",
+		`The following resources are missing descriptions and need them:
+
+!`+"`ltp list-undocumented`"+`
+
+For each resource listed above, call **read_resource_and_cut** with its `+"`id`"+` and `+"`resource_name`"+`, then call **update_description** to write a concise description. Follow these guidelines:
+
+- Functions: 1-3 lines covering purpose, parameters, return values, side effects
+- Structs: 1-3 lines covering what it represents, key fields, usage
+- Interfaces: 1-3 lines covering the contract and key methods
+- Variables: 1 line covering what it stores and purpose
+- Files: 1 line covering the file's role in its package
+- Packages: 1-2 lines covering overall purpose
+
+Process ALL resources listed above. Report how many descriptions were generated.`,
+	)
+
+	writeCommand(
+		"descriptions-apply",
+		"Write topology descriptions back into source files as doc comments",
+		`Run `+"`ltp descriptions apply`"+` to write all topology descriptions back into the source files as Go doc comments. Report any files that were modified.`,
+	)
+
 	fmt.Println("Restart OpenCode to activate the topology tools.")
 }
 
 func runGenerateDescriptions(args []string) {
 	fs := flag.NewFlagSet("generate-descriptions", flag.ExitOnError)
-	concurrency := fs.Int("concurrency", 5, "Max concurrent LLM calls")
 	fs.Parse(args)
 
 	apiKey := os.Getenv("DEEPSEEK_API_KEY")
@@ -379,95 +461,65 @@ func runGenerateDescriptions(args []string) {
 		os.Exit(1)
 	}
 
-	manager, _ := initRegistry(".ltp/topology.db")
+	manager, reg := initRegistry(".ltp/topology.db")
 	provider := providers.NewDeepSeek()
+	goManager := golang.NewGoManager(manager)
+
+	toolReg := tools.NewRegistry()
+	toolReg.Register(&tools.Ls{})
+	toolReg.Register(&tools.Read{})
+	toolReg.Register(tools.NewEdit(manager, reg))
+	gotools.RegisterGoTools(toolReg, goManager)
+
+	topo, _ := manager.ReadAll()
+	lang := "go"
+	if topo != nil {
+		lang = topo.Language
+	}
+
+	count := 0
+	if topo != nil {
+		for _, res := range topo.Resources {
+			if res.Description == "" {
+				count++
+			}
+		}
+	}
+	fmt.Printf("Generating descriptions for %d resources...\n", count)
+
+	a := agent.New(provider, toolReg, lang)
+	a.SetMaxIterations(200)
+
+	err := a.Run("Generate descriptions for all undocumented resources. Use list_undocumented_resources first, then dispatch descriptor sub-agents for each resource. Process ALL of them.")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "\nError: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func runDescriptionApply(args []string) {
+	manager, _ := initRegistry(".ltp/topology.db")
 
 	topo, err := manager.ReadAll()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading topology: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 
-	type descTask struct {
-		id   string
-		name string
-		kind domain.ResourceKind
-		cut  *domain.CodeEntry
-	}
-
-	var tasks []descTask
-
-	for id, res := range topo.Resources {
+	count := 0
+	for _, res := range topo.Resources {
 		if res.Description != "" {
-			continue
+			count++
 		}
-		task := descTask{id: id, name: res.Name, kind: res.Kind}
-		if res.Location.Path != "" {
-			cut, err := manager.Cut(res.Location)
-			if err == nil {
-				task.cut = cut
-			}
-		}
-		tasks = append(tasks, task)
+	}
+	fmt.Printf("Applying %d descriptions to source files...\n", count)
+
+	if err := helper.ApplyDescriptions(topo); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
 	}
 
-	fmt.Printf("Generating descriptions for %d resources (concurrency: %d)...\n", len(tasks), *concurrency)
-
-	sem := make(chan struct{}, *concurrency)
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	generated := 0
-	failed := 0
-	for _, t := range tasks {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(t descTask) {
-			defer wg.Done()
-			defer func() { <-sem }()
-
-			cutText := ""
-			if t.cut != nil {
-				cutText = t.cut.Cut
-			}
-
-			prompt := buildDescriptionPrompt(t.kind, cutText)
-			messages := []llm.Message{
-				{Role: "system", Content: "You are a code description generator. Generate ONLY the description text, nothing else."},
-				{Role: "user", Content: prompt},
-			}
-			resp, err := provider.Chat(messages, nil)
-			if err != nil {
-				mu.Lock()
-				failed++
-				mu.Unlock()
-				return
-			}
-
-			desc := strings.TrimSpace(resp.Content)
-			if desc == "" {
-				mu.Lock()
-				failed++
-				mu.Unlock()
-				return
-			}
-
-			if err := manager.UpdateDescription(t.id, t.kind, desc); err != nil {
-				mu.Lock()
-				failed++
-				mu.Unlock()
-				return
-			}
-
-			mu.Lock()
-			generated++
-			fmt.Printf("  [%d/%d] %s %s\n", generated+failed, len(tasks), t.kind, t.name)
-			mu.Unlock()
-		}(t)
-	}
-
-	wg.Wait()
-
-	fmt.Printf("\nDone: %d descriptions generated, %d failed\n", generated, failed)
+	fmt.Println("done")
 }
 
 func runReadFunction() {
@@ -571,27 +623,114 @@ func runUpdateFile(args []string) {
 	}
 }
 
-func buildDescriptionPrompt(kind domain.ResourceKind, cut string) string {
-	var instructions string
-	switch kind {
-	case domain.ResourceFunction, domain.ResourceMethod:
-		instructions = "Generate a concise description (1-3 lines) for this Go function. Include its main purpose, what parameters it takes, what it returns, and any notable behavior or side effects."
-	case domain.ResourceType:
-		instructions = "Generate a concise description (1-3 lines) for this Go struct. Include what it represents, its key fields and their purpose, and how it is typically used."
-	case domain.ResourceInterface:
-		instructions = "Generate a concise description (1-3 lines) for this Go interface. Include what contract it defines, what behavior it abstracts, and the key methods it requires."
-	case domain.ResourceVariable:
-		instructions = "Generate a concise description (1 line) for this Go variable. Include what it stores and its purpose in the codebase."
-	case domain.ResourceFile:
-		instructions = "Generate a concise description (1 line) for this Go source file. The file name is all the context available."
-	case domain.ResourcePackage:
-		instructions = "Generate a concise description (1-2 lines) for this Go package. Include its overall purpose and what functionality it provides."
-	default:
-		instructions = "Generate a concise description for this resource."
+func runReadResourceAndCut(args []string) {
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "Usage: ltp read-resource-and-cut <id> <kind>")
+		fmt.Fprintln(os.Stderr, "Kind: Function, Struct, Interface, ExternalVar, File, Package")
+		os.Exit(1)
+	}
+	id, resourceName := args[0], args[1]
+
+	manager, _ := initRegistry(".ltp/topology.db")
+	goManager := golang.NewGoManager(manager)
+
+	kind := mapResourceKind(resourceName)
+	if kind == "" {
+		fmt.Fprintf(os.Stderr, "Error: unknown resource kind %q\n", resourceName)
+		os.Exit(1)
 	}
 
-	if cut != "" {
-		return fmt.Sprintf("%s\n\n```go\n%s\n```\n\nWrite ONLY the description text, nothing else.", instructions, cut)
+	if kind == domain.ResourceFile {
+		fmt.Printf("File: %s\n", id)
+		return
 	}
-	return fmt.Sprintf("%s\n\nWrite ONLY the description text, nothing else.", instructions)
+	if kind == domain.ResourcePackage {
+		fmt.Printf("Package: %s\n", id)
+		return
+	}
+
+	entry, err := goManager.ReadResourceAndCut(id, kind)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Print(entry.Cut)
+}
+
+func runUpdateDescription(args []string) {
+	if len(args) < 3 {
+		fmt.Fprintln(os.Stderr, "Usage: ltp update-description <id> <kind> <description>")
+		os.Exit(1)
+	}
+	id, resourceName := args[0], args[1]
+	description := strings.Join(args[2:], " ")
+
+	manager, _ := initRegistry(".ltp/topology.db")
+	goManager := golang.NewGoManager(manager)
+
+	kind := mapResourceKind(resourceName)
+	if kind == "" {
+		fmt.Fprintf(os.Stderr, "Error: unknown resource kind %q\n", resourceName)
+		os.Exit(1)
+	}
+
+	if err := goManager.UpdateDescription(id, kind, description); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("description updated")
+}
+
+func runListUndocumented() {
+	manager, _ := initRegistry(".ltp/topology.db")
+
+	topo, err := manager.ReadAll()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	var entries []struct {
+		ID   string
+		Name string
+		Kind domain.ResourceKind
+	}
+	for id, res := range topo.Resources {
+		if res.Description == "" {
+			entries = append(entries, struct {
+				ID   string
+				Name string
+				Kind domain.ResourceKind
+			}{ID: id, Name: res.Name, Kind: res.Kind})
+		}
+	}
+
+	if len(entries) == 0 {
+		fmt.Println("All resources already have descriptions.")
+		return
+	}
+
+	fmt.Printf("Found %d undocumented resources.\n\n", len(entries))
+	for _, e := range entries {
+		fmt.Printf("  ID: %s\n    Name: %s\n    Kind: %s\n\n", e.ID, e.Name, strings.ToUpper(string(e.Kind)))
+	}
+}
+
+func mapResourceKind(name string) domain.ResourceKind {
+	switch name {
+	case "Function":
+		return domain.ResourceFunction
+	case "Struct", "Type":
+		return domain.ResourceType
+	case "Interface":
+		return domain.ResourceInterface
+	case "ExternalVar", "Variable":
+		return domain.ResourceVariable
+	case "File":
+		return domain.ResourceFile
+	case "Package":
+		return domain.ResourcePackage
+	}
+	return ""
 }

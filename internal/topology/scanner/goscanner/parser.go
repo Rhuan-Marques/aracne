@@ -27,8 +27,9 @@ type ParseResult struct {
 }
 
 type FunctionParse struct {
-	Function golang.GolangFunction
-	Body     *ast.BlockStmt
+	Function     golang.GolangFunction
+	Body         *ast.BlockStmt
+	ReceiverName string
 }
 
 func ParseFile(filePath string, pkgPath golang.PackagePath, modulePath, rootPath string) (*ParseResult, error) {
@@ -235,17 +236,21 @@ func (pr *ParseResult) processFuncDecl(funcDecl *ast.FuncDecl, fset *token.FileS
 		Connections: make(map[golang.ConnectionKind][]string),
 	}
 
+	var receiverName string
 	if funcDecl.Recv != nil {
 		recvType := exprToString(funcDecl.Recv.List[0].Type)
 		structName := strings.TrimPrefix(recvType, "*")
 		structID := golang.StructID(string(pr.PkgPath) + "." + structName)
 		f.MethodFrom = &structID
 		f.ID = golang.FunctionID(string(pr.PkgPath) + ".(" + structName + ")." + funcDecl.Name.Name)
+		if len(funcDecl.Recv.List[0].Names) > 0 {
+			receiverName = funcDecl.Recv.List[0].Names[0].Name
+		}
 	} else {
 		f.ID = golang.FunctionID(string(pr.PkgPath) + "." + funcDecl.Name.Name)
 	}
 
-	fi := FunctionParse{Function: f}
+	fi := FunctionParse{Function: f, ReceiverName: receiverName}
 	if funcDecl.Body != nil {
 		fi.Body = funcDecl.Body
 	}

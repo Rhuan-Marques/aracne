@@ -18,6 +18,10 @@ func NewGoManager(mgr *topology.TopologyManager) *GoManager {
 	return &GoManager{generic: mgr}
 }
 
+func (m *GoManager) Generic() *topology.TopologyManager {
+	return m.generic
+}
+
 func (m *GoManager) ReadFunction(id string, opts ...topology.TopologyOption) (*GoFunctionContext, error) {
 	opt := &topology.TopologyOptions{}
 	for _, o := range opts {

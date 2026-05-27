@@ -157,7 +157,7 @@ func (s *GoScanner) Scan(root string) (*domain.Topology, error) {
 		}
 		for _, fi := range fp.result.Functions {
 			if fi.Body != nil {
-				conns := analyzeFunctionBody(fi.Body, fp.result, gt)
+				conns := analyzeFunctionBody(fi.Body, fp.result, gt, fi.Function.Input, fi.ReceiverName, fi.Function.MethodFrom)
 				f := gt.Functions[fi.Function.ID]
 				if f.Connections == nil {
 					f.Connections = make(map[golang.ConnectionKind][]string)
@@ -357,7 +357,7 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) []domain.Topo
 
 	for _, fi := range pr.Functions {
 		if fi.Body != nil {
-			conns := analyzeFunctionBody(fi.Body, pr, gt)
+			conns := analyzeFunctionBody(fi.Body, pr, gt, fi.Function.Input, fi.ReceiverName, fi.Function.MethodFrom)
 			f := gt.Functions[fi.Function.ID]
 			if f.Connections == nil {
 				f.Connections = make(map[golang.ConnectionKind][]string)

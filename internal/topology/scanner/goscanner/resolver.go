@@ -8,17 +8,52 @@ import (
 )
 
 type bodyAnalyzer struct {
-	pr   *ParseResult
-	gt   *golang.GolangTopology
-	conn map[golang.ConnectionKind][]string
+	pr         *ParseResult
+	gt         *golang.GolangTopology
+	conn       map[golang.ConnectionKind][]string
+	varTypeMap map[string]golang.StructID
 }
 
-func newBodyAnalyzer(pr *ParseResult, gt *golang.GolangTopology) *bodyAnalyzer {
-	return &bodyAnalyzer{
-		pr:   pr,
-		gt:   gt,
-		conn: make(map[golang.ConnectionKind][]string),
+func newBodyAnalyzer(pr *ParseResult, gt *golang.GolangTopology, funcInput []golang.VariableDefinition, receiverName string, receiverStruct *golang.StructID) *bodyAnalyzer {
+	ba := &bodyAnalyzer{
+		pr:         pr,
+		gt:         gt,
+		conn:       make(map[golang.ConnectionKind][]string),
+		varTypeMap: make(map[string]golang.StructID),
 	}
+
+	for _, param := range funcInput {
+		if sid := paramTypeNameToStruct(param.Typing, pr.PkgPath, pr.ImportMap, pr.ModulePath); sid != nil {
+			if _, ok := gt.Structs[*sid]; ok {
+				ba.varTypeMap[param.Name] = *sid
+			}
+		}
+	}
+
+	if receiverName != "" && receiverStruct != nil {
+		if _, ok := gt.Structs[*receiverStruct]; ok {
+			ba.varTypeMap[receiverName] = *receiverStruct
+		}
+	}
+
+	return ba
+}
+
+func paramTypeNameToStruct(typing string, pkgPath golang.PackagePath, importMap map[string]string, modulePath string) *golang.StructID {
+	t := strings.TrimPrefix(typing, "*")
+
+	if idx := strings.Index(t, "."); idx > 0 {
+		alias := t[:idx]
+		typeName := t[idx+1:]
+		if impPath, ok := importMap[alias]; ok && strings.HasPrefix(impPath, modulePath) {
+			sid := golang.StructID(impPath + "." + typeName)
+			return &sid
+		}
+		return nil
+	}
+
+	sid := golang.StructID(string(pkgPath) + "." + t)
+	return &sid
 }
 
 func (ba *bodyAnalyzer) add(kind golang.ConnectionKind, id string) {
@@ -28,8 +63,8 @@ func (ba *bodyAnalyzer) add(kind golang.ConnectionKind, id string) {
 	}
 }
 
-func analyzeFunctionBody(body *ast.BlockStmt, pr *ParseResult, gt *golang.GolangTopology) map[golang.ConnectionKind][]string {
-	ba := newBodyAnalyzer(pr, gt)
+func analyzeFunctionBody(body *ast.BlockStmt, pr *ParseResult, gt *golang.GolangTopology, funcInput []golang.VariableDefinition, receiverName string, receiverStruct *golang.StructID) map[golang.ConnectionKind][]string {
+	ba := newBodyAnalyzer(pr, gt, funcInput, receiverName, receiverStruct)
 
 	ast.Inspect(body, func(n ast.Node) bool {
 		switch node := n.(type) {
@@ -80,6 +115,20 @@ func (ba *bodyAnalyzer) resolveQualifiedCall(xName, selName string) {
 		}
 	}
 
+	if structID, ok := ba.varTypeMap[xName]; ok {
+		if str, ok := ba.gt.Structs[structID]; ok {
+			for _, mid := range str.Methods() {
+				m, ok := ba.gt.Functions[mid]
+				if ok && m.Name == selName {
+					ba.add(golang.ConnCalls, string(mid))
+					ba.add(golang.ConnUsesStruct, string(structID))
+					return
+				}
+			}
+		}
+		return
+	}
+
 	structID := golang.StructID(string(ba.pr.PkgPath) + "." + xName)
 	if str, ok := ba.gt.Structs[structID]; ok {
 		for _, mid := range str.Methods() {
@@ -87,17 +136,6 @@ func (ba *bodyAnalyzer) resolveQualifiedCall(xName, selName string) {
 			if ok && m.Name == selName {
 				ba.add(golang.ConnCalls, string(mid))
 				ba.add(golang.ConnUsesStruct, string(structID))
-				return
-			}
-		}
-	}
-
-	for _, str := range ba.gt.Structs {
-		for _, mid := range str.Methods() {
-			m := ba.gt.Functions[mid]
-			if m.Name == selName {
-				ba.add(golang.ConnCalls, string(mid))
-				ba.add(golang.ConnUsesStruct, string(str.ID))
 				return
 			}
 		}

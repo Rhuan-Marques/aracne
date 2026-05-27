@@ -1,5 +1,120 @@
 # AGENTS.md
 
+# === LLM Topology (LTP) Integration ===
+This repository supports `ltp`. This means you should navigate by the repository in a clean way by focusing on reading `functions` and `structs` when possible.
+These are the supported Languages for `ltp` integration:
+- Golang
+
+## How to read:
+When acting within these languages you should cleverly use `read_function`, `read_struct` or `read` (files) when most relevant.
+
+`read_function` - Will give you the function and also short descriptions of the resources it uses
+`read_struct` - Will give you the struct, its field, constructor, and also short descriptions of resources it uses
+`read` - The entire file, but no information on external resources
+
+Here is some examples:
+| Objective | Use | Why |
+| --- | --- | --- |
+| "I need to check how UpdatePlayer works" | read_function | Most relevant |
+| "What is the AvgRating do in Player" | read_struct | Most relevant |
+| "I need to check how UpdatePlayer works" | read_function | Most relevant |
+| "I need to check the Makefile" | read | (not golang) |
+
+## When to read:
+You should call the `read`, `read_function` and `read_struct` functions only when necessary for your main objective. *Most of the time, the descriptions are enough*, but if you need to *look at the implementation* or *edit* something, you will need to *read* it.
+
+# === Three Integration Modes ===
+
+`llm-topology` supports three distinct integration modes. All three share the same underlying topology engine and must maintain **full feature parity** — any capability added to one must be available in all three.
+
+## 1. Full CLI Integration (Terminal)
+
+Direct command-line usage without any intermediate LLM. All topology operations available via `ltp` subcommands:
+
+| CLI Command | Purpose |
+|-------------|---------|
+| `ltp scan` | Incremental update (preserves descriptions) |
+| `ltp scan --hard` | Full rebuild from scratch |
+| `ltp read_function <name>` | Function source + context |
+| `ltp read_struct <name>` | Struct source + context |
+| `ltp read-resource-and-cut <id> <kind>` | Source cut for any resource |
+| `ltp update-description <id> <kind> <desc>` | Update a description |
+| `ltp list-undocumented` | List all resources missing descriptions |
+| `ltp update-file <path>` | Re-parse a file, update topology in-place |
+| `ltp generate-descriptions` | Bulk auto-generate descriptions via LLM |
+| `ltp edit` (via tooling) | File editing with topology auto-update |
+
+**Use case:** Power users, CI/CD pipelines, scripting, batch operations, and when no LLM integration is needed.
+
+## 2. MCP OpenCode Integration
+
+The `ltp serve` command exposes all topology tools as MCP (Model Context Protocol) tools over stdio. OpenCode and other MCP-compatible platforms consume these as native tools.
+
+**Available MCP tools:**
+
+| Tool | Source | Description |
+|------|--------|-------------|
+| `ls` | `internal/llm/tools/ls.go` | List files and directories |
+| `read` | `internal/llm/tools/read.go` | Read raw file contents |
+| `read_function` | `internal/llm/tools/languages/gotools/read_function.go` | Function source + context |
+| `read_struct` | `internal/llm/tools/languages/gotools/read_struct.go` | Struct source + context |
+| `read_resource_and_cut` | `internal/llm/tools/languages/gotools/read_resource_and_cut.go` | Source cut + description instructions |
+| `update_description` | `internal/llm/tools/languages/gotools/update_description.go` | Update a resource description |
+| `edit` | Custom tool via `ltp install` (`edit.ts`) | Edit file, topology auto-updates |
+
+**Setup:** `ltp install` generates two artifacts:
+- `opencode.json` — MCP server config pointing to `ltp serve`
+- `.opencode/tools/edit.ts` — custom OpenCode tool that wraps file editing with `ltp update-file` for topology auto-update
+
+**Use case:** Full-featured AI-assisted development inside OpenCode with topology-aware tools.
+
+## 3. Internal Agent (`ltp agent`)
+
+A self-contained REPL agent that connects directly to DeepSeek API with the full topology-aware system prompt. No external platform required.
+
+**Architecture:**
+- `internal/llm/agent/agent.go` — Agent loop (max 20 iterations, tool-call loop)
+- `internal/llm/agent/prompt.go` — `BuildPrompt()` constructs system prompt from `LLM_INTEGRATION_CHARTER.md` + language-specific prompt
+- `internal/llm/languages/gotools/prompt.go` — Go-specific tool definitions and guidelines
+- `internal/llm/providers/deepseek.go` — DeepSeek API provider
+
+**Available tools (same as MCP, registered in `main.go`):**
+
+| Tool | Purpose |
+|------|---------|
+| `ls` | List files and directories |
+| `read` | Read raw file contents |
+| `read_function` | Function source + context |
+| `read_struct` | Struct source + context |
+| `read_resource_and_cut` | Source cut + description instructions |
+| `update_description` | Update a resource description |
+| `edit` | Edit file (auto-updates topology via `TopologyManager.UpdateFile`) |
+
+Additionally supports the descriptor sub-agent workflow:
+1. `list_undocumented_resources` — get all undocumented resource IDs
+2. Dispatch sub-agents that call `read_resource_and_cut` + `update_description`
+3. All processed in a single session
+
+**Use case:** Standalone AI coding assistant without OpenCode, direct DeepSeek integration, single-prompt or REPL mode.
+
+## Feature Parity Matrix
+
+Every feature must be available in all three modes:
+
+| Feature | CLI | MCP | Agent |
+|---------|:---:|:---:|:-----:|
+| Topology scan (`scan`) | ✓ | auto on connect | auto on start |
+| Read function (`read_function`) | ✓ | ✓ | ✓ |
+| Read struct (`read_struct`) | ✓ | ✓ | ✓ |
+| Read resource + cut (`read_resource_and_cut`) | ✓ | ✓ | ✓ |
+| Update description (`update_description`) | ✓ | ✓ | ✓ |
+| List undocumented (`list-undocumented`) | ✓ | ✓ | ✓ |
+| Update file / topology (`update-file`) | ✓ | via edit tool | via edit tool |
+| Generate descriptions (`generate-descriptions`) | ✓ | via agent prompt | via agent prompt |
+| LLM system prompt integration | — | n/a (external LLM) | prepends LLM_INTEGRATION_CHARTER.md |
+
+# === Repository Description ===
+
 ## Project Overview
 
 `llm-topology` is a Go static analysis tool that recursively scans Go source trees, parses `.go` files using `go/ast`/`go/parser`, and builds a comprehensive graph model ("topology") of the project's structure: packages, files, structs, interfaces, functions (with call graphs), external variables, and dependencies. Output is stored in an SQLite database. It includes an AI coding agent powered by DeepSeek and an MCP server for integration with OpenCode and other LLM platforms. A React + Vite + TailwindCSS frontend (`frontend/`) uses @xyflow/react for graph visualization.
@@ -90,7 +205,7 @@ internal/
         read_resource_and_cut.go # "read_resource_and_cut" tool (source cut + description instructions)
         update_description.go   # "update_description" tool
         format.go               # FormatGoFunctionContext, FormatGoStructContext formatters
-        prompt.go               # GoSystemPrompt for agent
+        prompt.go               # BuildGoSystemPrompt for agent
 ```
 
 ## Code Conventions

@@ -36,6 +36,34 @@ func (m *TopologyManager) FullScan(root string, reg *scanner.Registry) error {
 	return helper.WriteDb(topo, m.dbPath)
 }
 
+func (m *TopologyManager) IncrementalScan(root string, reg *scanner.Registry) error {
+	langScanner := reg.Detect(root)
+	if langScanner == nil {
+		return fmt.Errorf("no language scanner detected for %s", root)
+	}
+
+	newTopo, err := langScanner.Scan(root)
+	if err != nil {
+		return err
+	}
+
+	oldTopo, readErr := helper.ReadDb(m.dbPath)
+	if readErr == nil && oldTopo != nil {
+		for id, oldRes := range oldTopo.Resources {
+			newRes, exists := newTopo.Resources[id]
+			if !exists {
+				continue
+			}
+			if newRes.Description == "" && oldRes.Description != "" {
+				newRes.Description = oldRes.Description
+				newTopo.Resources[id] = newRes
+			}
+		}
+	}
+
+	return helper.WriteDb(newTopo, m.dbPath)
+}
+
 func (m *TopologyManager) Load(path string) error {
 	m.dbPath = path
 	return nil

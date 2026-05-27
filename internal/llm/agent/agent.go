@@ -8,31 +8,32 @@ import (
 	"llm-topology/internal/llm/tools"
 )
 
-const maxIterations = 20
+const defaultMaxIterations = 20
 
 type Agent struct {
-	provider llm.Provider
-	registry *tools.Registry
-	messages []llm.Message
+	provider      llm.Provider
+	registry      *tools.Registry
+	messages      []llm.Message
+	maxIterations int
 }
 
 func New(provider llm.Provider, registry *tools.Registry, language string) *Agent {
 	return &Agent{
-		provider: provider,
-		registry: registry,
-		messages: []llm.Message{
-			{
-				Role:    "system",
-				Content: BuildPrompt(language),
-			},
-		},
+		provider:      provider,
+		registry:      registry,
+		messages:      []llm.Message{{Role: "system", Content: BuildPrompt(language)}},
+		maxIterations: defaultMaxIterations,
 	}
+}
+
+func (a *Agent) SetMaxIterations(n int) {
+	a.maxIterations = n
 }
 
 func (a *Agent) Run(input string) error {
 	a.messages = append(a.messages, llm.Message{Role: "user", Content: input})
 
-	for i := 0; i < maxIterations; i++ {
+	for i := 0; i < a.maxIterations; i++ {
 		toolDefs := toToolDefinitions(a.registry.List())
 
 		resp, err := a.provider.Chat(a.messages, toolDefs)
@@ -81,7 +82,7 @@ func (a *Agent) Run(input string) error {
 		}
 	}
 
-	return fmt.Errorf("exceeded max iterations (%d)", maxIterations)
+	return fmt.Errorf("exceeded max iterations (%d)", a.maxIterations)
 }
 
 func (a *Agent) RunSubAgent(systemPrompt, input string, toolMap map[string]tools.Tool) (string, error) {
@@ -95,7 +96,7 @@ func (a *Agent) RunSubAgent(systemPrompt, input string, toolMap map[string]tools
 		{Role: "user", Content: input},
 	}
 
-	for i := 0; i < maxIterations; i++ {
+	for i := 0; i < a.maxIterations; i++ {
 		toolDefs := toToolDefinitions(subRegistry.List())
 
 		resp, err := a.provider.Chat(messages, toolDefs)
@@ -141,7 +142,7 @@ func (a *Agent) RunSubAgent(systemPrompt, input string, toolMap map[string]tools
 		}
 	}
 
-	return "", fmt.Errorf("sub-agent exceeded max iterations (%d)", maxIterations)
+	return "", fmt.Errorf("sub-agent exceeded max iterations (%d)", a.maxIterations)
 }
 
 func toToolDefinitions(toolList []tools.Tool) []llm.ToolDefinition {
