@@ -18,7 +18,6 @@ import (
 	"llm-topology/internal/llm/providers"
 	"llm-topology/internal/llm/tools"
 	"llm-topology/internal/mcp"
-	"llm-topology/internal/mermaid"
 	"llm-topology/internal/topology"
 	"llm-topology/internal/topology/domain"
 	"llm-topology/internal/topology/golang"
@@ -35,8 +34,6 @@ func main() {
 	switch os.Args[1] {
 	case "scan":
 		runScan(os.Args[2:])
-	case "mermaid":
-		runMermaid(os.Args[2:])
 	case "agent":
 		runAgent()
 	case "serve":
@@ -55,7 +52,6 @@ func printUsage() {
 
 Usage:
   ltp scan    [flags]    Scan a Go project and build topology database
-  ltp mermaid [flags]    Generate a Mermaid diagram from topology database
   ltp agent   [prompt]   Run the AI coding agent
   ltp serve              Start MCP server (for OpenCode plugin integration)
   ltp install [flags]    Configure OpenCode to use llm-topology as a plugin
@@ -65,12 +61,6 @@ Flags for "scan":
   -root <path>    Root folder of the Go project (default ".")
   -output <file>  Output SQLite database path (default ".ltp/topology.db")
 
-Flags for "mermaid":
-  -input <file>   Input topology database (default ".ltp/topology.db")
-  -output <file>  Output .mermaid file path (default ".ltp/topology.mermaid")
-  --filter <csv>  Comma-separated resource types to include:
-                  Function, Type, Interface, Variable, Package, File, Dependency
-
 Flags for "install":
   --global        Install globally (~/.config/opencode/opencode.json)
 
@@ -79,7 +69,6 @@ Flags for "generate-descriptions":
 
   Examples:
     ltp scan -root ./myproject -output myproject.db
-    ltp mermaid -input myproject.db -output diagram.mermaid --filter "Function, Type"
     ltp agent "list all structs"
     ltp install               # add MCP config to opencode.json
     ltp serve                 # start MCP server (used by OpenCode)
@@ -149,58 +138,6 @@ func runScan(args []string) {
 	fmt.Printf("Analyzed in %s\n", elapsed.Round(time.Millisecond))
 	fmt.Printf("-%d packages\n-%d files\n-%d functions\n-%d types\n-%d interfaces\n-%d variables\n-%d dependencies\n-%d errors\n",
 		pkgCount, fileCount, funcCount, typeCount, ifaceCount, varCount, depCount, len(topo.Errors))
-}
-
-var filterNames = map[string]domain.ResourceKind{
-	"Package":    domain.ResourcePackage,
-	"File":       domain.ResourceFile,
-	"Function":   domain.ResourceFunction,
-	"Type":       domain.ResourceType,
-	"Struct":     domain.ResourceType,
-	"Interface":  domain.ResourceInterface,
-	"Variable":   domain.ResourceVariable,
-	"Dependency": domain.ResourceDependency,
-	"Var":        domain.ResourceVariable,
-}
-
-func parseFilterCSV(csv string) []domain.ResourceKind {
-	if csv == "" {
-		return nil
-	}
-	var result []domain.ResourceKind
-	for _, s := range strings.Split(csv, ",") {
-		s = strings.TrimSpace(s)
-		if r, ok := filterNames[s]; ok {
-			result = append(result, r)
-		}
-	}
-	return result
-}
-
-func runMermaid(args []string) {
-	fs := flag.NewFlagSet("mermaid", flag.ExitOnError)
-	input := fs.String("input", ".ltp/topology.db", "Input topology database path")
-	output := fs.String("output", ".ltp/topology.mermaid", "Output .mermaid file path")
-	filter := fs.String("filter", "", "Comma-separated resource types to include")
-	fs.Parse(args)
-
-	topo, err := helper.ReadDb(*input)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading %s: %v\n", *input, err)
-		os.Exit(1)
-	}
-
-	filterKinds := parseFilterCSV(*filter)
-	os.MkdirAll(filepath.Dir(*output), 0755)
-	if err := mermaid.GenerateToFile(*output, topo, filterKinds...); err != nil {
-		fmt.Fprintf(os.Stderr, "Error generating mermaid: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Printf("Mermaid diagram written to %s\n", *output)
-	if *filter != "" {
-		fmt.Printf("Filter: %s\n", *filter)
-	}
 }
 
 func initRegistry(dbPath string) (*topology.TopologyManager, *scanner.Registry) {

@@ -10,8 +10,6 @@
 go build -o ltp.exe .
 .\ltp scan                              # scan current dir → .ltp/topology.db
 .\ltp scan -root <path> -output out.db
-.\ltp mermaid                           # default: .ltp/topology.db → .ltp/topology.mermaid
-.\ltp mermaid --filter "Function, Struct"
 .\ltp agent                             # AI agent mode (REPL, requires DEEPSEEK_API_KEY)
 .\ltp agent "list all structs"          # single-prompt agent mode
 .\ltp serve                             # Start MCP server (for OpenCode plugin)
@@ -25,12 +23,10 @@ go build -o ltp.exe .
 |---------|-------------|
 | `go build -o ltp.exe .` | Build binary |
 | `go run . scan -root <path>` | Run topology scan |
-| `go run . mermaid -input .ltp/topology.db` | Generate Mermaid diagram |
 | `go run . agent` | Run AI agent (requires DEEPSEEK_API_KEY) |
 | `go run . serve` | Start MCP server (stdio transport) |
 | `go run . install` | Configure OpenCode MCP in opencode.json |
 | `go test ./internal/topology/` | Run topology tests |
-| `go test ./internal/mermaid/` | Run mermaid tests |
 | `go vet ./...` | Check for suspicious constructs |
 | `gofmt -l -w .` | Format code |
 | `go mod tidy` | Tidy dependencies |
@@ -39,7 +35,7 @@ go build -o ltp.exe .
 ## Project Structure
 
 ```
-main.go                         # CLI entry point (scan / mermaid / agent / serve / install subcommands)
+main.go                         # CLI entry point (scan / agent / serve / install subcommands)
 internal/
   helper/
     db.go                       # SQLite persistence layer (schema, write, read)
@@ -73,9 +69,6 @@ internal/
       read_function.go          # "read_function" tool (name-based lookup → rich context)
       read_struct.go            # "read_struct" tool (name-based lookup → rich context)
       format.go                 # formatFunctionContext, formatStructContext formatters
-  mermaid/
-    generate.go                 # Mermaid diagram generator (Generate, GenerateToFile)
-    generate_test.go            # Tests for diagram generation
 ```
 
 ## Code Conventions
@@ -136,19 +129,10 @@ Description preservation: if the old topology had a non-empty description and th
 
 All Read methods accept optional `TopologyOption` arguments. `WithResourceFilter(ResourceName...)` limits which resource categories are populated. When no filter is passed, all data is returned (backward compatible).
 
-## Mermaid Generator
-
-Package `internal/mermaid/` provides:
-- `Generate(topo *Topology, resourceFilter ...ResourceName) string` — returns Mermaid flowchart TD
-- `GenerateToFile(path string, topo *Topology, resourceFilter ...ResourceName) error` — writes to file
-
-Features: nested subgraphs for Package→File→elements, colored classDefs per resource type, arrow relationships (Calls, Uses, Implements, Imports).
-
 ## Testing
 
 - `internal/topology/manager_test.go` — Cut, ReadFunction, ReadStruct
-- `internal/mermaid/generate_test.go` — diagram generation and filtering
-- Tests use `go test -v ./internal/topology/` and `go test -v ./internal/mermaid/`
+- Tests use `go test -v ./internal/topology/`
 - Test databases are built in-package via `FullScan`
 
 ## MCP Server & OpenCode Plugin
