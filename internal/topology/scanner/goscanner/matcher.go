@@ -4,8 +4,16 @@ import (
 	"llm-topology/internal/topology/golang"
 )
 
-// Iterates all structs and interfaces in the topology, checking if each struct implements each interface, and records the ConnImplements/ConnImplBy connections bidirectionally.
 func matchStructsToInterfaces(gt *golang.GolangTopology) {
+	for ifaceID, iface := range gt.Interfaces {
+		delete(iface.Connections, golang.ConnImplBy)
+		gt.Interfaces[ifaceID] = iface
+	}
+	for structID, str := range gt.Structs {
+		delete(str.Connections, golang.ConnImplements)
+		gt.Structs[structID] = str
+	}
+
 	for ifaceID, iface := range gt.Interfaces {
 		for structID, str := range gt.Structs {
 			if implements(str, iface, gt) {
@@ -30,7 +38,6 @@ func matchStructsToInterfaces(gt *golang.GolangTopology) {
 	}
 }
 
-// Checks whether a given GolangStruct satisfies all methods of a GolangInterface by comparing method signatures in the topology; returns true only if every interface method has a matching struct method.
 func implements(str golang.GolangStruct, iface golang.GolangInterface, gt *golang.GolangTopology) bool {
 	if len(iface.Methods) == 0 {
 		return false
@@ -61,7 +68,6 @@ func implements(str golang.GolangStruct, iface golang.GolangInterface, gt *golan
 	return true
 }
 
-// Compares a struct method against an interface method definition by name, parameter count, and parameter types to determine if the method satisfies the interface contract.
 func signaturesMatch(method golang.GolangFunction, ifaceMethod golang.FunctionDefinition) bool {
 	if method.Name != ifaceMethod.Name {
 		return false

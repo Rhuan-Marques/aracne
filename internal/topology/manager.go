@@ -100,6 +100,9 @@ func (m *TopologyManager) Cut(loc domain.Location) (*domain.CodeEntry, error) {
 	if len(lines) > 0 && lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
 	}
+	if loc.EndsAt < loc.StartsAt {
+		return nil, fmt.Errorf("EndsAt %d < StartsAt %d", loc.EndsAt, loc.StartsAt)
+	}
 	if loc.StartsAt < 1 || loc.StartsAt > len(lines) {
 		return nil, fmt.Errorf("StartsAt %d out of range (1-%d)", loc.StartsAt, len(lines))
 	}
@@ -110,10 +113,10 @@ func (m *TopologyManager) Cut(loc domain.Location) (*domain.CodeEntry, error) {
 	return &domain.CodeEntry{Location: loc, Cut: cut}, nil
 }
 
-func (m *TopologyManager) UpdateFile(path string, reg *scanner.Registry) []domain.TopologyWarning {
+func (m *TopologyManager) UpdateFile(path string, reg *scanner.Registry) ([]domain.TopologyWarning, error) {
 	topo, err := helper.ReadDb(m.dbPath)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("read topology db: %w", err)
 	}
 
 	var langScanner scanner.LanguageScanner
@@ -129,16 +132,19 @@ func (m *TopologyManager) UpdateFile(path string, reg *scanner.Registry) []domai
 		langScanner = reg.Detect(topo.Root)
 	}
 	if langScanner == nil {
-		return nil
+		return nil, fmt.Errorf("no language scanner found")
 	}
 
-	warnings := langScanner.UpdateFile(topo, path)
+	warnings, err := langScanner.UpdateFile(topo, path)
+	if err != nil {
+		return nil, err
+	}
 
 	if err := helper.WriteDb(topo, m.dbPath); err != nil {
-		return nil
+		return nil, fmt.Errorf("write topology db: %w", err)
 	}
 
-	return warnings
+	return warnings, nil
 }
 
 func (m *TopologyManager) FindResourcesByName(name string, kinds ...domain.ResourceKind) ([]string, error) {

@@ -14,4 +14,5 @@ func RegisterGoTools(registry *tools.Registry, mgr *golang.GoManager) {
 	registry.Register(NewReadResourceAndCut(mgr))
 	registry.Register(NewUpdateDescriptionTool(mgr))
 	registry.Register(NewListUndocumented(mgr))
+	registry.Register(NewListWarnings(mgr))
 }

@@ -175,27 +175,27 @@ func (s *PythonScanner) Scan(root string) (*domain.Topology, error) {
 	return python.ToGeneric(gt), nil
 }
 
-func (s *PythonScanner) UpdateFile(topo *domain.Topology, path string) []domain.TopologyWarning {
+func (s *PythonScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.TopologyWarning, error) {
 	gt := python.FromGeneric(topo)
 	if gt == nil {
-		return nil
+		return nil, fmt.Errorf("failed to convert topology from generic")
 	}
 
 	var warnings []domain.TopologyWarning
 
 	rootPath := gt.Root
 	if rootPath == "" {
-		return warnings
+		return warnings, nil
 	}
 
 	absPath, err := filepath.Abs(path)
 	if err != nil {
-		return warnings
+		return warnings, nil
 	}
 
 	oldMod, hasMod := gt.Modules[python.ModuleID(absPath)]
 	if !hasMod {
-		return warnings
+		return warnings, nil
 	}
 
 	oldFunctions := make(map[python.FunctionID]python.PythonFunction)
@@ -223,7 +223,7 @@ func (s *PythonScanner) UpdateFile(topo *domain.Topology, path string) []domain.
 	pr, err := ParseFile(absPath, pkgPath, rootPath)
 	if err != nil {
 		gt.Errors[absPath] = err.Error()
-		return warnings
+		return warnings, nil
 	}
 
 	for i, fi := range pr.Functions {
@@ -252,7 +252,7 @@ func (s *PythonScanner) UpdateFile(topo *domain.Topology, path string) []domain.
 				found = true
 				if !signaturesEqualPy(oldFunc, fi.Function) {
 					warnings = append(warnings, domain.TopologyWarning{
-						ID:  string(fid) + "@sig_change@", SourceID: string(fid), Kind: domain.WarnSignatureChanged, TargetID: "", Message:  fmt.Sprintf("function %s changed signature, verify callers", oldFunc.Name),
+						ID: string(fid) + "@sig_change@", SourceID: string(fid), Kind: domain.WarnSignatureChanged, TargetID: "", Message: fmt.Sprintf("function %s changed signature, verify callers", oldFunc.Name),
 					})
 				}
 				break
@@ -260,7 +260,7 @@ func (s *PythonScanner) UpdateFile(topo *domain.Topology, path string) []domain.
 		}
 		if !found {
 			warnings = append(warnings, domain.TopologyWarning{
-				ID:  string(fid) + "@node_removed@", SourceID: string(fid), Kind: domain.WarnNodeRemoved, TargetID: "", Message:  fmt.Sprintf("function %s was removed", oldFunc.Name),
+				ID: string(fid) + "@node_removed@", SourceID: string(fid), Kind: domain.WarnNodeRemoved, TargetID: "", Message: fmt.Sprintf("function %s was removed", oldFunc.Name),
 			})
 		}
 	}
@@ -346,7 +346,7 @@ func (s *PythonScanner) UpdateFile(topo *domain.Topology, path string) []domain.
 	topo.Resources = python.ToGeneric(gt).Resources
 	topo.Errors = gt.Errors
 
-	return warnings
+	return warnings, nil
 }
 
 func getPythonPackagePath(root, dir string) python.PackagePath {

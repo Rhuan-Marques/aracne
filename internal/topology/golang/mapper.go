@@ -39,8 +39,10 @@ func FromGeneric(topo *domain.Topology) *GolangTopology {
 				jsonConvert(output, &f.Output)
 			}
 			if mf, ok := res.Properties["method_from"]; ok && mf != nil {
-				sid := StructID(mf.(string))
-				f.MethodFrom = &sid
+				if s, ok := mf.(string); ok {
+					sid := StructID(s)
+					f.MethodFrom = &sid
+				}
 			}
 			gt.Functions[f.ID] = f
 
@@ -56,8 +58,10 @@ func FromGeneric(topo *domain.Topology) *GolangTopology {
 				jsonConvert(params, &s.Params)
 			}
 			if ctor, ok := res.Properties["constructor"]; ok && ctor != nil {
-				cid := FunctionID(ctor.(string))
-				s.Constructor = &cid
+				if c, ok := ctor.(string); ok {
+					cid := FunctionID(c)
+					s.Constructor = &cid
+				}
 			}
 			gt.Structs[s.ID] = s
 
@@ -81,7 +85,9 @@ func FromGeneric(topo *domain.Topology) *GolangTopology {
 				Description: res.Description,
 			}
 			if typing, ok := res.Properties["typing"]; ok {
-				v.Typing = typing.(string)
+				if t, ok := typing.(string); ok {
+					v.Typing = t
+				}
 			}
 			if val, ok := res.Properties["value"]; ok {
 				var x any
@@ -99,7 +105,9 @@ func FromGeneric(topo *domain.Topology) *GolangTopology {
 				Connections: mapKindConn(res.Connections),
 			}
 			if fp, ok := res.Properties["from_package"]; ok {
-				f.FromPackage = PackagePath(fp.(string))
+				if p, ok := fp.(string); ok {
+					f.FromPackage = PackagePath(p)
+				}
 			}
 			gt.Files[f.ID] = f
 

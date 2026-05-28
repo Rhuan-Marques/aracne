@@ -71,7 +71,10 @@ func (e *Edit) Run(args json.RawMessage) (string, error) {
 	}
 
 	if e.mgr != nil {
-		warnings := e.mgr.UpdateFile(params.FilePath, e.reg)
+		warnings, err := e.mgr.UpdateFile(params.FilePath, e.reg)
+		if err != nil {
+			return "", fmt.Errorf("update topology: %w", err)
+		}
 		if len(warnings) > 0 {
 			var msgs []string
 			for _, w := range warnings {

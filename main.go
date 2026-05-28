@@ -100,7 +100,7 @@ Flags for "install":
 
 // Creates and initializes the scanner registry with Go language support, performs a full project topology scan, writes results to the database, and returns the TopologyManager for further operations.
 Flags for "descriptions generate":
-  (no flags required — uses agent loop to process all undocumented resources)
+  (no flags required Ã¢â‚¬â€ uses agent loop to process all undocumented resources)
 
   Examples:
     ltp scan -root ./myproject -output myproject.db
@@ -729,8 +729,11 @@ func runUpdateFile(args []string) {
 	}
 	path := args[0]
 	manager, reg := initRegistry(".ltp/topology.db")
-	warnings := manager.UpdateFile(path, reg)
-// CLI helper that maps resource kind strings (Function, Struct, etc.) to their domain.ResourceKind constant.
+	warnings, err := manager.UpdateFile(path, reg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error updating file: %v\n", err)
+		os.Exit(1)
+	}
 	if len(warnings) > 0 {
 		for _, w := range warnings {
 			fmt.Printf("Warning: [%s] %s (source: %s, target: %s)\n", w.Kind, w.Message, w.SourceID, w.TargetID)
