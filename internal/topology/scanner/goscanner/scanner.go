@@ -10,27 +10,21 @@ import (
 	"llm-topology/internal/topology/golang"
 )
 
-// Empty struct implementing the LanguageScanner interface for Go, providing Detect (go.mod check), Scan (full AST-based topology build), and UpdateFile for incremental re-parsing.
 type GoScanner struct{}
 
-// Constructs a new GoScanner instance for scanning Go source files.
 func NewGoScanner() *GoScanner {
 	return &GoScanner{}
 }
 
-// Returns the scanner name "go" used for language detection and registry lookups.
 func (s *GoScanner) Name() string { return "go" }
 
-// Returns the file extensions this scanner handles — always [".go"] for the Go scanner.
 func (s *GoScanner) Extensions() []string { return []string{".go"} }
 
-// Detects whether the given root directory is a Go project by checking for the presence of a "go.mod" file. Returns true if go.mod exists, false otherwise.
 func (s *GoScanner) Detect(root string) bool {
 	_, err := os.Stat(filepath.Join(root, "go.mod"))
 	return err == nil
 }
 
-// Performs a full recursive scan of Go source files starting from root. Collects packages, files, structs, interfaces, functions, external variables, resolves call graphs, detects constructors, matches structs to interfaces, and returns a generic domain.Topology. Takes the project root path string. Returns the populated topology or an error.
 func (s *GoScanner) Scan(root string) (*domain.Topology, error) {
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
@@ -58,6 +52,7 @@ func (s *GoScanner) Scan(root string) (*domain.Topology, error) {
 		ExternalVars: make(map[golang.ExternalVarID]golang.GolangExternalVar),
 		Files:        make(map[golang.FileID]golang.GolangFile),
 		Packages:     make(map[golang.PackagePath]golang.GolangPackage),
+		Warnings:     make(map[string]domain.TopologyWarning),
 		Errors:       make(map[string]string),
 	}
 
@@ -163,7 +158,7 @@ func (s *GoScanner) Scan(root string) (*domain.Topology, error) {
 		}
 		for _, fi := range fp.result.Functions {
 			if fi.Body != nil {
-				conns := analyzeFunctionBody(fi.Body, fp.result, gt, fi.Function.Input, fi.ReceiverName, fi.Function.MethodFrom)
+				conns := analyzeFunctionBody(fi.Body, fp.result, gt, fi.Function.Input, fi.ReceiverName, fi.Function.MethodFrom, fi.Function.ID)
 				f := gt.Functions[fi.Function.ID]
 				if f.Connections == nil {
 					f.Connections = make(map[golang.ConnectionKind][]string)
@@ -183,11 +178,14 @@ func (s *GoScanner) Scan(root string) (*domain.Topology, error) {
 	return golang.ToGeneric(gt), nil
 }
 
-// Re-parses a single Go file and updates the in-memory topology in-place. Preserves existing descriptions, detects removed/changed functions emitting warnings, and re-runs interface matching and dependency collection.
 func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) []domain.TopologyWarning {
 	gt := golang.FromGeneric(topo)
 	if gt == nil {
 		return nil
+	}
+
+	if gt.Warnings == nil {
+		gt.Warnings = make(map[string]domain.TopologyWarning)
 	}
 
 	var warnings []domain.TopologyWarning
@@ -243,6 +241,9 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) []domain.Topo
 	pr, err := ParseFile(absPath, pkgPath, modulePath, rootPath)
 	if err != nil {
 		gt.Errors[absPath] = err.Error()
+		topo.Resources = golang.ToGeneric(gt).Resources
+		topo.Errors = gt.Errors
+		topo.Warnings = gt.Warnings
 		return warnings
 	}
 
@@ -270,27 +271,79 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) []domain.Topo
 		pr.FileDescription = oldFile.Description
 	}
 
+	removedFuncs := make(map[golang.FunctionID]golang.GolangFunction)
 	for fid, oldFunc := range oldFunctions {
 		found := false
 		for _, fi := range pr.Functions {
 			if fi.Function.ID == fid {
 				found = true
 				if !signaturesEqualFn(oldFunc, fi.Function) {
-					warnings = append(warnings, domain.TopologyWarning{
-						Resource:          domain.ResourceFunction,
-						AffectedResources: []string{string(fid)},
-						Message:           fmt.Sprintf("function %s changed input/output format, verify callers", oldFunc.Name),
-					})
+					callers := s.getCallers(gt, string(fid), string(golang.ConnCalls))
+					for _, callerID := range callers {
+						if _, isOld := oldFunctions[golang.FunctionID(callerID)]; isOld {
+							continue
+						}
+						warnID := callerID + "@" + string(domain.WarnSignatureChanged) + "@" + string(fid)
+						gt.Warnings[warnID] = domain.TopologyWarning{
+							ID:       warnID,
+							SourceID: string(fid),
+							Kind:     domain.WarnSignatureChanged,
+							TargetID: callerID,
+							Message:  fmt.Sprintf("function %s changed input/output format, verify caller %s", oldFunc.Name, callerID),
+						}
+					}
 				}
 				break
 			}
 		}
 		if !found {
-			warnings = append(warnings, domain.TopologyWarning{
-				Resource:          domain.ResourceFunction,
-				AffectedResources: []string{string(fid)},
-				Message:           fmt.Sprintf("function %s was removed, update or remove all references", oldFunc.Name),
-			})
+			removedFuncs[fid] = oldFunc
+		}
+	}
+
+	removedStructs := make(map[golang.StructID]golang.GolangStruct)
+	for sid := range oldStructs {
+		found := false
+		for _, si := range pr.Structs {
+			if si.ID == sid {
+				found = true
+				break
+			}
+		}
+		if !found {
+			removedStructs[sid] = oldStructs[sid]
+		}
+	}
+
+	for fid, oldFunc := range removedFuncs {
+		callers := s.getCallers(gt, string(fid), string(golang.ConnCalls))
+		for _, callerID := range callers {
+			if _, isOld := oldFunctions[golang.FunctionID(callerID)]; isOld {
+				continue
+			}
+			warnID := callerID + "@" + string(domain.WarnNodeRemoved) + "@" + string(fid)
+			gt.Warnings[warnID] = domain.TopologyWarning{
+				ID:       warnID,
+				SourceID: callerID,
+				Kind:     domain.WarnNodeRemoved,
+				TargetID: string(fid),
+				Message:  fmt.Sprintf("function %s calls %s which was removed from %s", callerID, oldFunc.Name, absPath),
+			}
+			if callerFn, ok := gt.Functions[golang.FunctionID(callerID)]; ok {
+				callerFn.Connections[golang.ConnCalls] = removeString(callerFn.Connections[golang.ConnCalls], string(fid))
+				gt.Functions[golang.FunctionID(callerID)] = callerFn
+			}
+		}
+
+		structUsers := s.getCallers(gt, string(fid), string(golang.ConnUsesStruct))
+		for _, sourceID := range structUsers {
+			if _, isOld := oldFunctions[golang.FunctionID(sourceID)]; isOld {
+				continue
+			}
+			if sourceFn, ok := gt.Functions[golang.FunctionID(sourceID)]; ok {
+				sourceFn.Connections[golang.ConnUsesStruct] = removeString(sourceFn.Connections[golang.ConnUsesStruct], string(fid))
+				gt.Functions[golang.FunctionID(sourceID)] = sourceFn
+			}
 		}
 	}
 
@@ -364,7 +417,7 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) []domain.Topo
 
 	for _, fi := range pr.Functions {
 		if fi.Body != nil {
-			conns := analyzeFunctionBody(fi.Body, pr, gt, fi.Function.Input, fi.ReceiverName, fi.Function.MethodFrom)
+			conns := analyzeFunctionBody(fi.Body, pr, gt, fi.Function.Input, fi.ReceiverName, fi.Function.MethodFrom, fi.Function.ID)
 			f := gt.Functions[fi.Function.ID]
 			if f.Connections == nil {
 				f.Connections = make(map[golang.ConnectionKind][]string)
@@ -377,17 +430,127 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) []domain.Topo
 		}
 	}
 
+	s.resolveWarnings(gt, pr, removedFuncs, removedStructs)
+
 	matchStructsToInterfaces(gt)
 	collectDependencies(gt)
 	delete(gt.Errors, absPath)
 
 	topo.Resources = golang.ToGeneric(gt).Resources
 	topo.Errors = gt.Errors
+	topo.Warnings = gt.Warnings
 
 	return warnings
 }
 
-// Reads the go.mod file at the project root and extracts the module path from the "module" directive.
+func (s *GoScanner) resolveWarnings(gt *golang.GolangTopology, pr *ParseResult, removedFuncs map[golang.FunctionID]golang.GolangFunction, removedStructs map[golang.StructID]golang.GolangStruct) {
+	newIDs := make(map[string]bool)
+	for _, fi := range pr.Functions {
+		newIDs[string(fi.Function.ID)] = true
+	}
+	for _, si := range pr.Structs {
+		newIDs[string(si.ID)] = true
+	}
+	for _, ii := range pr.Interfaces {
+		newIDs[string(ii.ID)] = true
+	}
+	for _, v := range pr.ExternalVars {
+		newIDs[string(v.ID)] = true
+	}
+
+	for warnID, w := range gt.Warnings {
+		if !newIDs[w.TargetID] {
+			continue
+		}
+
+		switch w.Kind {
+		case domain.WarnUseMissingNode:
+			s.resolveUseMissingWarning(gt, w)
+			delete(gt.Warnings, warnID)
+		case domain.WarnNodeRemoved:
+			s.resolveUseMissingWarning(gt, w)
+			delete(gt.Warnings, warnID)
+		case domain.WarnSignatureChanged:
+			if _, removed := removedFuncs[golang.FunctionID(w.TargetID)]; removed {
+				delete(gt.Warnings, warnID)
+			}
+		}
+	}
+
+	for warnID, w := range gt.Warnings {
+		if w.Kind == domain.WarnUseMissingNode || w.Kind == domain.WarnNodeRemoved {
+			if _, removed := removedFuncs[golang.FunctionID(w.TargetID)]; removed {
+				continue
+			}
+			if _, removed := removedStructs[golang.StructID(w.TargetID)]; removed {
+				continue
+			}
+		}
+		if w.Kind == domain.WarnNodeRemoved {
+			if _, removed := removedFuncs[golang.FunctionID(w.SourceID)]; removed {
+				delete(gt.Warnings, warnID)
+			}
+			if _, removed := removedStructs[golang.StructID(w.SourceID)]; removed {
+				delete(gt.Warnings, warnID)
+			}
+		}
+	}
+}
+
+func (s *GoScanner) resolveUseMissingWarning(gt *golang.GolangTopology, w domain.TopologyWarning) {
+	sourceFn, ok := gt.Functions[golang.FunctionID(w.SourceID)]
+	if !ok {
+		return
+	}
+
+	switch {
+	case s.existsInFunctions(gt, w.TargetID):
+		sourceFn.Connections[golang.ConnCalls] = append(sourceFn.Connections[golang.ConnCalls], w.TargetID)
+	case s.existsInStructs(gt, w.TargetID):
+		sourceFn.Connections[golang.ConnUsesStruct] = append(sourceFn.Connections[golang.ConnUsesStruct], w.TargetID)
+	case s.existsInInterfaces(gt, w.TargetID):
+		sourceFn.Connections[golang.ConnUsesIface] = append(sourceFn.Connections[golang.ConnUsesIface], w.TargetID)
+	case s.existsInExtVars(gt, w.TargetID):
+		sourceFn.Connections[golang.ConnUsesExtVar] = append(sourceFn.Connections[golang.ConnUsesExtVar], w.TargetID)
+	}
+
+	sourceFn.Connections = uniqueConns(sourceFn.Connections)
+	gt.Functions[golang.FunctionID(w.SourceID)] = sourceFn
+}
+
+func (s *GoScanner) existsInFunctions(gt *golang.GolangTopology, id string) bool {
+	_, ok := gt.Functions[golang.FunctionID(id)]
+	return ok
+}
+
+func (s *GoScanner) existsInStructs(gt *golang.GolangTopology, id string) bool {
+	_, ok := gt.Structs[golang.StructID(id)]
+	return ok
+}
+
+func (s *GoScanner) existsInInterfaces(gt *golang.GolangTopology, id string) bool {
+	_, ok := gt.Interfaces[golang.InterfaceID(id)]
+	return ok
+}
+
+func (s *GoScanner) existsInExtVars(gt *golang.GolangTopology, id string) bool {
+	_, ok := gt.ExternalVars[golang.ExternalVarID(id)]
+	return ok
+}
+
+func (s *GoScanner) getCallers(gt *golang.GolangTopology, targetID string, connType string) []string {
+	var callers []string
+	for id, fn := range gt.Functions {
+		for _, callID := range fn.Connections[golang.ConnectionKind(connType)] {
+			if callID == targetID {
+				callers = append(callers, string(id))
+				break
+			}
+		}
+	}
+	return callers
+}
+
 func readModulePath(root string) (string, error) {
 	data, err := os.ReadFile(filepath.Join(root, "go.mod"))
 	if err != nil {
@@ -402,7 +565,6 @@ func readModulePath(root string) (string, error) {
 	return "", fmt.Errorf("no module declaration in go.mod")
 }
 
-// Computes the Go package path for a given directory relative to the project root and module path. Returns the module path for the root directory, or a joined path with proper forward-slash separators for subdirectories.
 func getPackagePath(root, dir, modulePath string) golang.PackagePath {
 	if dir == root {
 		return golang.PackagePath(modulePath)
@@ -414,7 +576,6 @@ func getPackagePath(root, dir, modulePath string) golang.PackagePath {
 	return golang.PackagePath(modulePath + "/" + strings.ReplaceAll(rel, "\\", "/"))
 }
 
-// Walks a root directory recursively and collects all non-test .go file paths, skipping vendor, .git, node_modules, and hidden directories.
 func collectGoFiles(root string) []string {
 	var files []string
 	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
@@ -436,7 +597,6 @@ func collectGoFiles(root string) []string {
 	return files
 }
 
-// Iterates all functions in a GolangTopology and populates each struct's ConnHasMethod connection with the IDs of methods whose MethodFrom points to that struct. Mutates the topology in place.
 func populateStructMethods(gt *golang.GolangTopology) {
 	for _, f := range gt.Functions {
 		if f.MethodFrom != nil {
@@ -450,7 +610,6 @@ func populateStructMethods(gt *golang.GolangTopology) {
 	}
 }
 
-// Scans all functions in the topology to detect constructor functions (named "New*") and links them to their return type structs by setting the struct's Constructor field.
 func detectConstructors(gt *golang.GolangTopology) {
 	for pkgPath, pkg := range gt.Packages {
 		for _, funcID := range pkg.HasFunctions() {
@@ -487,7 +646,6 @@ func detectConstructors(gt *golang.GolangTopology) {
 	}
 }
 
-// Collects all unique dependencies from all files in the topology into a flat slice on the GolangTopology. Takes a *GolangTopology, iterates file dependencies, and populates the Dependencies field.
 func collectDependencies(gt *golang.GolangTopology) {
 	seen := make(map[golang.DependancyPath]bool)
 	for _, file := range gt.Files {
@@ -500,7 +658,6 @@ func collectDependencies(gt *golang.GolangTopology) {
 	}
 }
 
-// Deduplicates connection values per ConnectionKind, returning a new map with unique string entries.
 func uniqueConns(conns map[golang.ConnectionKind][]string) map[golang.ConnectionKind][]string {
 	result := make(map[golang.ConnectionKind][]string, len(conns))
 	for k, v := range conns {
@@ -519,7 +676,6 @@ func uniqueConns(conns map[golang.ConnectionKind][]string) map[golang.Connection
 	return result
 }
 
-// Compares two GolangFunction signatures by checking parameter and result count and types for equality.
 func signaturesEqualFn(a, b golang.GolangFunction) bool {
 	if len(a.Input) != len(b.Input) {
 		return false
@@ -540,7 +696,6 @@ func signaturesEqualFn(a, b golang.GolangFunction) bool {
 	return true
 }
 
-// Removes the first occurrence of a string item from a slice, returning a new slice without it.
 func removeString(slice []string, item string) []string {
 	var result []string
 	for _, s := range slice {
@@ -551,7 +706,6 @@ func removeString(slice []string, item string) []string {
 	return result
 }
 
-// Removes all occurrences of specified items from a string slice, returning a new slice without them.
 func removeStrings(slice []string, items ...string) []string {
 	if len(items) == 0 {
 		return slice
@@ -569,7 +723,6 @@ func removeStrings(slice []string, items ...string) []string {
 	return result
 }
 
-// Converts a slice of FunctionID typed strings to a plain string slice for generic storage.
 func castFuncIDs(ids []golang.FunctionID) []string {
 	var result []string
 	for _, id := range ids {
@@ -578,7 +731,6 @@ func castFuncIDs(ids []golang.FunctionID) []string {
 	return result
 }
 
-// Converts a slice of typed golang.StructID values to a slice of plain strings for generic processing. Takes []golang.StructID and returns []string.
 func castStructIDs(ids []golang.StructID) []string {
 	var result []string
 	for _, id := range ids {
@@ -587,7 +739,6 @@ func castStructIDs(ids []golang.StructID) []string {
 	return result
 }
 
-// Converts a slice of typed golang.InterfaceID values to a slice of plain strings for generic processing. Takes []golang.InterfaceID and returns []string.
 func castInterfaceIDs(ids []golang.InterfaceID) []string {
 	var result []string
 	for _, id := range ids {
@@ -596,7 +747,6 @@ func castInterfaceIDs(ids []golang.InterfaceID) []string {
 	return result
 }
 
-// Converts a slice of ExternalVarID typed values to a plain string slice.
 func castExtVarIDs(ids []golang.ExternalVarID) []string {
 	var result []string
 	for _, id := range ids {

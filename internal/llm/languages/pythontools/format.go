@@ -7,6 +7,13 @@ import (
 	"llm-topology/internal/topology/python"
 )
 
+func desc(s string) string {
+	if s == "" {
+		return "no description"
+	}
+	return s
+}
+
 func FormatPythonFunctionContext(ctx *python.PythonFunctionContext) string {
 	var b strings.Builder
 
@@ -39,14 +46,14 @@ func FormatPythonFunctionContext(ctx *python.PythonFunctionContext) string {
 	b.WriteString("# CONTEXT:\n")
 
 	for _, cu := range ctx.ClassesUsed {
-		b.WriteString(fmt.Sprintf("## %s: %s\n", cu.Name, cu.Description))
+		b.WriteString(fmt.Sprintf("## %s: %s\n", cu.Name, desc(cu.Description)))
 		for _, m := range cu.Methods {
-			b.WriteString(fmt.Sprintf("\t%s.%s: %s\n", cu.Name, m.Name, m.Description))
+			b.WriteString(fmt.Sprintf("\t%s.%s: %s\n", cu.Name, m.Name, desc(m.Description)))
 		}
 	}
 
 	for _, cf := range ctx.CalledFunctions {
-		b.WriteString(fmt.Sprintf("## %s: %s\n", cf.Name, cf.Description))
+		b.WriteString(fmt.Sprintf("## %s: %s\n", cf.Name, desc(cf.Description)))
 	}
 
 	for _, ev := range ctx.ExtVarsUsed {
@@ -99,17 +106,17 @@ func FormatPythonClassContext(ctx *python.PythonClassContext) string {
 			methods := strings.Join(base.NeedToImplementMethods, ", ")
 			need = fmt.Sprintf(" [NEED TO IMPLEMENT: %s]", methods)
 		}
-		b.WriteString(fmt.Sprintf("## %s (base class): %s%s\n", base.Name, base.Description, need))
+		b.WriteString(fmt.Sprintf("## %s (base class): %s%s\n", base.Name, desc(base.Description), need))
 	}
 
 	for _, m := range ctx.Methods {
-		b.WriteString(fmt.Sprintf("## %s: %s\n", m.Name, m.Description))
+		b.WriteString(fmt.Sprintf("## %s: %s\n", m.Name, desc(m.Description)))
 	}
 
 	for _, cu := range ctx.ClassesUsed {
-		b.WriteString(fmt.Sprintf("## %s: %s\n", cu.Name, cu.Description))
+		b.WriteString(fmt.Sprintf("## %s: %s\n", cu.Name, desc(cu.Description)))
 		for _, m := range cu.Methods {
-			b.WriteString(fmt.Sprintf("\t%s.%s: %s\n", cu.Name, m.Name, m.Description))
+			b.WriteString(fmt.Sprintf("\t%s.%s: %s\n", cu.Name, m.Name, desc(m.Description)))
 		}
 	}
 

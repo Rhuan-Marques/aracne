@@ -733,7 +733,7 @@ func runUpdateFile(args []string) {
 // CLI helper that maps resource kind strings (Function, Struct, etc.) to their domain.ResourceKind constant.
 	if len(warnings) > 0 {
 		for _, w := range warnings {
-			fmt.Printf("Warning: %s: %s (affects: %s)\n", w.Resource, w.Message, strings.Join(w.AffectedResources, ", "))
+			fmt.Printf("Warning: [%s] %s (source: %s, target: %s)\n", w.Kind, w.Message, w.SourceID, w.TargetID)
 		}
 	}
 }

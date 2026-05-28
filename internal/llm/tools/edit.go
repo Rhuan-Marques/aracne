@@ -75,7 +75,7 @@ func (e *Edit) Run(args json.RawMessage) (string, error) {
 		if len(warnings) > 0 {
 			var msgs []string
 			for _, w := range warnings {
-				msgs = append(msgs, fmt.Sprintf("  - %s: %s (affects: %s)", w.Resource, w.Message, strings.Join(w.AffectedResources, ", ")))
+				msgs = append(msgs, fmt.Sprintf("  - [%s] %s (source: %s, target: %s)", w.Kind, w.Message, w.SourceID, w.TargetID))
 			}
 			return "edit succeeded\n\nTopology warnings (functions that may need manual review):\n" + strings.Join(msgs, "\n"), nil
 		}

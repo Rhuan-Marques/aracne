@@ -4,6 +4,7 @@
 This repository supports `ltp`. This means you should navigate by the repository in a clean way by focusing on reading `functions` and `structs` when possible.
 These are the supported Languages for `ltp` integration:
 - Golang
+- Python
 
 ## How to read:
 When acting within these languages you should cleverly use `read_function`, `read_struct` or `read` (files) when most relevant.
@@ -117,7 +118,7 @@ Every feature must be available in all three modes:
 
 ## Project Overview
 
-`llm-topology` is a Go static analysis tool that recursively scans Go source trees, parses `.go` files using `go/ast`/`go/parser`, and builds a comprehensive graph model ("topology") of the project's structure: packages, files, structs, interfaces, functions (with call graphs), external variables, and dependencies. Output is stored in an SQLite database. It includes an AI coding agent powered by DeepSeek and an MCP server for integration with OpenCode and other LLM platforms. A React + Vite + TailwindCSS frontend (`frontend/`) uses @xyflow/react for graph visualization.
+`llm-topology` is a Go static analysis tool that recursively scans Go source trees, parses `.go` files using `go/ast`/`go/parser`, and builds a comprehensive graph model ("topology") of the project's structure: packages, files, structs, interfaces, functions (with call graphs), external variables, and dependencies. Output is stored in an SQLite database. It includes an AI coding agent powered by DeepSeek and an MCP server for integration with OpenCode and other LLM platforms.
 
 ## Build & Run
 
@@ -154,7 +155,6 @@ go build -o ltp.exe .
 ```
 main.go                         # CLI entry point (scan / agent / serve / install / generate-descriptions)
 opencode.json                   # MCP plugin configuration
-frontend/                       # React + Vite + TailwindCSS + @xyflow/react graph viz
 internal/
   helper/
     db.go                       # SQLite persistence layer (schema, write, read)

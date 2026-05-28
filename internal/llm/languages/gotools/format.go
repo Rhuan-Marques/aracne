@@ -7,6 +7,13 @@ import (
 	"llm-topology/internal/topology/golang"
 )
 
+func desc(s string) string {
+	if s == "" {
+		return "no description"
+	}
+	return s
+}
+
 // Formats a GoFunctionContext into a human-readable string with code blocks, import statements, parent struct, function cut, and a hierarchical CONTEXT section listing interfaces, structs, called functions, and external variables.
 func FormatGoFunctionContext(ctx *golang.GoFunctionContext) string {
 	var b strings.Builder
@@ -41,24 +48,24 @@ func FormatGoFunctionContext(ctx *golang.GoFunctionContext) string {
 	b.WriteString("# CONTEXT:\n")
 
 	for _, iu := range ctx.InterfacesUsed {
-		b.WriteString(fmt.Sprintf("## %s: %s\n", iu.Name, iu.Description))
+		b.WriteString(fmt.Sprintf("## %s: %s\n", iu.Name, desc(iu.Description)))
 		for _, impl := range iu.Implementations {
-			b.WriteString(fmt.Sprintf("\t%s: %s\n", impl.Name, impl.Description))
+			b.WriteString(fmt.Sprintf("\t%s: %s\n", impl.Name, desc(impl.Description)))
 			for _, m := range impl.Methods {
-				b.WriteString(fmt.Sprintf("\t\t%s.%s: %s\n", impl.Name, m.Name, m.Description))
+				b.WriteString(fmt.Sprintf("\t\t%s.%s: %s\n", impl.Name, m.Name, desc(m.Description)))
 			}
 		}
 	}
 
 	for _, su := range ctx.StructsUsed {
-		b.WriteString(fmt.Sprintf("## %s: %s\n", su.Name, su.Description))
+		b.WriteString(fmt.Sprintf("## %s: %s\n", su.Name, desc(su.Description)))
 		for _, m := range su.Methods {
-			b.WriteString(fmt.Sprintf("\t%s.%s: %s\n", su.Name, m.Name, m.Description))
+			b.WriteString(fmt.Sprintf("\t%s.%s: %s\n", su.Name, m.Name, desc(m.Description)))
 		}
 	}
 
 	for _, cf := range ctx.CalledFunctions {
-		b.WriteString(fmt.Sprintf("## %s: %s\n", cf.Name, cf.Description))
+		b.WriteString(fmt.Sprintf("## %s: %s\n", cf.Name, desc(cf.Description)))
 	}
 
 	for _, ev := range ctx.ExtVarsUsed {
@@ -112,26 +119,26 @@ func FormatGoStructContext(ctx *golang.GoStructContext) string {
 		if iface.NeedToImplement {
 			need = " [NEED TO IMPLEMENT]"
 		}
-		b.WriteString(fmt.Sprintf("## %s: %s%s\n", iface.Name, iface.Description, need))
+		b.WriteString(fmt.Sprintf("## %s: %s%s\n", iface.Name, desc(iface.Description), need))
 	}
 
 	for _, m := range ctx.Methods {
-		b.WriteString(fmt.Sprintf("## %s: %s\n", m.Name, m.Description))
+		b.WriteString(fmt.Sprintf("## %s: %s\n", m.Name, desc(m.Description)))
 	}
 
 	for _, su := range ctx.StructsUsed {
-		b.WriteString(fmt.Sprintf("## %s: %s\n", su.Name, su.Description))
+		b.WriteString(fmt.Sprintf("## %s: %s\n", su.Name, desc(su.Description)))
 		for _, m := range su.Methods {
-			b.WriteString(fmt.Sprintf("\t%s.%s: %s\n", su.Name, m.Name, m.Description))
+			b.WriteString(fmt.Sprintf("\t%s.%s: %s\n", su.Name, m.Name, desc(m.Description)))
 		}
 	}
 
 	for _, iu := range ctx.InterfacesUsed {
-		b.WriteString(fmt.Sprintf("## %s: %s\n", iu.Name, iu.Description))
+		b.WriteString(fmt.Sprintf("## %s: %s\n", iu.Name, desc(iu.Description)))
 		for _, impl := range iu.Implementations {
-			b.WriteString(fmt.Sprintf("\t%s: %s\n", impl.Name, impl.Description))
+			b.WriteString(fmt.Sprintf("\t%s: %s\n", impl.Name, desc(impl.Description)))
 			for _, m := range impl.Methods {
-				b.WriteString(fmt.Sprintf("\t\t%s.%s: %s\n", impl.Name, m.Name, m.Description))
+				b.WriteString(fmt.Sprintf("\t\t%s.%s: %s\n", impl.Name, m.Name, desc(m.Description)))
 			}
 		}
 	}

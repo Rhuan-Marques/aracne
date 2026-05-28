@@ -1,27 +1,31 @@
 package goscanner
 
 import (
+	"fmt"
 	"go/ast"
 	"strings"
 
+	"llm-topology/internal/topology/domain"
 	"llm-topology/internal/topology/golang"
 )
 
-// Walks Go AST nodes within function bodies to resolve call graphs, struct usage, interface references, and external variable references, building connection maps for the topology.
 type bodyAnalyzer struct {
 	pr         *ParseResult
 	gt         *golang.GolangTopology
 	conn       map[golang.ConnectionKind][]string
 	varTypeMap map[string]golang.StructID
+	callerID   golang.FunctionID
+	warnings   *map[string]domain.TopologyWarning
 }
 
-// Creates and initializes a bodyAnalyzer for function body analysis, setting up connection maps and resolving parameter and receiver variable types to their corresponding struct IDs for call graph resolution.
-func newBodyAnalyzer(pr *ParseResult, gt *golang.GolangTopology, funcInput []golang.VariableDefinition, receiverName string, receiverStruct *golang.StructID) *bodyAnalyzer {
+func newBodyAnalyzer(pr *ParseResult, gt *golang.GolangTopology, funcInput []golang.VariableDefinition, receiverName string, receiverStruct *golang.StructID, callerID golang.FunctionID) *bodyAnalyzer {
 	ba := &bodyAnalyzer{
 		pr:         pr,
 		gt:         gt,
 		conn:       make(map[golang.ConnectionKind][]string),
 		varTypeMap: make(map[string]golang.StructID),
+		callerID:   callerID,
+		warnings:   &gt.Warnings,
 	}
 
 	for _, param := range funcInput {
@@ -41,7 +45,6 @@ func newBodyAnalyzer(pr *ParseResult, gt *golang.GolangTopology, funcInput []gol
 	return ba
 }
 
-// Converts a type expression string to a StructID by resolving package aliases via the import map, trimming pointer prefixes, and only returning IDs for types within the module.
 func paramTypeNameToStruct(typing string, pkgPath golang.PackagePath, importMap map[string]string, modulePath string) *golang.StructID {
 	t := strings.TrimPrefix(typing, "*")
 
@@ -59,7 +62,6 @@ func paramTypeNameToStruct(typing string, pkgPath golang.PackagePath, importMap 
 	return &sid
 }
 
-// Adds a connection of the given kind and ID to the bodyAnalyzer's connection map, preventing duplicates via containsString check. Takes kind ConnectionKind and id string, returns nothing.
 func (ba *bodyAnalyzer) add(kind golang.ConnectionKind, id string) {
 	ids := ba.conn[kind]
 	if !containsString(ids, id) {
@@ -67,9 +69,25 @@ func (ba *bodyAnalyzer) add(kind golang.ConnectionKind, id string) {
 	}
 }
 
-// Walks the AST of a function body to resolve call expressions, composite literals, and identifier references, returning collected connection data (calls, struct usage, variable usage).
-func analyzeFunctionBody(body *ast.BlockStmt, pr *ParseResult, gt *golang.GolangTopology, funcInput []golang.VariableDefinition, receiverName string, receiverStruct *golang.StructID) map[golang.ConnectionKind][]string {
-	ba := newBodyAnalyzer(pr, gt, funcInput, receiverName, receiverStruct)
+func (ba *bodyAnalyzer) addWarning(kind domain.WarningKind, targetID string, message string) {
+	id := fmt.Sprintf("%s@%s@%s", ba.callerID, kind, targetID)
+	if ba.warnings == nil {
+		return
+	}
+	if _, exists := (*ba.warnings)[id]; exists {
+		return
+	}
+	(*ba.warnings)[id] = domain.TopologyWarning{
+		ID:       id,
+		SourceID: string(ba.callerID),
+		Kind:     kind,
+		TargetID: targetID,
+		Message:  message,
+	}
+}
+
+func analyzeFunctionBody(body *ast.BlockStmt, pr *ParseResult, gt *golang.GolangTopology, funcInput []golang.VariableDefinition, receiverName string, receiverStruct *golang.StructID, callerID golang.FunctionID) map[golang.ConnectionKind][]string {
+	ba := newBodyAnalyzer(pr, gt, funcInput, receiverName, receiverStruct, callerID)
 
 	ast.Inspect(body, func(n ast.Node) bool {
 		switch node := n.(type) {
@@ -86,7 +104,6 @@ func analyzeFunctionBody(body *ast.BlockStmt, pr *ParseResult, gt *golang.Golang
 	return ba.conn
 }
 
-// Resolves a function call expression by dispatching to the appropriate handler: direct identifier calls are matched to package-level functions, and selector expressions (x.Func) are delegated to resolveQualifiedCall.
 func (ba *bodyAnalyzer) resolveCallExpr(call *ast.CallExpr) {
 	switch fun := call.Fun.(type) {
 	case *ast.Ident:
@@ -97,6 +114,16 @@ func (ba *bodyAnalyzer) resolveCallExpr(call *ast.CallExpr) {
 			}
 		}
 
+		pkgFuncID := golang.FunctionID(string(ba.pr.PkgPath) + "." + fun.Name)
+		if _, exists := ba.gt.Functions[pkgFuncID]; exists {
+			ba.add(golang.ConnCalls, string(pkgFuncID))
+			ba.add(golang.ConnUsesPkg, string(ba.pr.PkgPath))
+			return
+		}
+
+		ba.addWarning(domain.WarnUseMissingNode, string(pkgFuncID),
+			fmt.Sprintf("function %s calls %s which does not exist in package %s", ba.callerID, fun.Name, ba.pr.PkgPath))
+
 	case *ast.SelectorExpr:
 		switch x := fun.X.(type) {
 		case *ast.Ident:
@@ -105,7 +132,6 @@ func (ba *bodyAnalyzer) resolveCallExpr(call *ast.CallExpr) {
 	}
 }
 
-// Resolves a qualified call expression (e.g. pkg.Func or struct.Method). Checks import maps for internal package calls, falls back to checking struct methods via varTypeMap or direct struct type lookup, and records call and usage connections.
 func (ba *bodyAnalyzer) resolveQualifiedCall(xName, selName string) {
 	if impPath, ok := ba.pr.ImportMap[xName]; ok {
 		if strings.HasPrefix(impPath, ba.pr.ModulePath) {
@@ -114,8 +140,11 @@ func (ba *bodyAnalyzer) resolveQualifiedCall(xName, selName string) {
 			if _, exists := ba.gt.Functions[targetID]; exists {
 				ba.add(golang.ConnCalls, string(targetID))
 				ba.add(golang.ConnUsesPkg, string(internalPkg))
-				return
+			} else {
+				ba.addWarning(domain.WarnUseMissingNode, string(targetID),
+					fmt.Sprintf("function %s calls %s which does not exist", ba.callerID, targetID))
 			}
+			return
 		} else {
 			ba.add(golang.ConnUsesDep, string(impPath))
 			return
@@ -149,13 +178,15 @@ func (ba *bodyAnalyzer) resolveQualifiedCall(xName, selName string) {
 	}
 }
 
-// Resolves composite literal expressions (e.g., MyStruct{...}) by identifying the struct type and recording struct usage and package references in the topology.
 func (ba *bodyAnalyzer) resolveCompositeLit(lit *ast.CompositeLit) {
 	switch t := lit.Type.(type) {
 	case *ast.Ident:
 		structID := golang.StructID(string(ba.pr.PkgPath) + "." + t.Name)
 		if _, exists := ba.gt.Structs[structID]; exists {
 			ba.add(golang.ConnUsesStruct, string(structID))
+		} else {
+			ba.addWarning(domain.WarnUseMissingNode, string(structID),
+				fmt.Sprintf("function %s references struct %s which does not exist", ba.callerID, structID))
 		}
 	case *ast.SelectorExpr:
 		if x, ok := t.X.(*ast.Ident); ok {
@@ -165,13 +196,15 @@ func (ba *bodyAnalyzer) resolveCompositeLit(lit *ast.CompositeLit) {
 				if _, exists := ba.gt.Structs[structID]; exists {
 					ba.add(golang.ConnUsesStruct, string(structID))
 					ba.add(golang.ConnUsesPkg, string(internalPkg))
+				} else {
+					ba.addWarning(domain.WarnUseMissingNode, string(structID),
+						fmt.Sprintf("function %s references struct %s which does not exist", ba.callerID, structID))
 				}
 			}
 		}
 	}
 }
 
-// Resolves an ast.Ident reference by checking if the identifier matches an external variable or struct in the parsed topology, and records the appropriate connection (ConnUsesExtVar or ConnUsesStruct). Takes *ast.Ident, returns nothing.
 func (ba *bodyAnalyzer) resolveIdentRef(ident *ast.Ident) {
 	varID := golang.ExternalVarID(string(ba.pr.PkgPath) + "." + ident.Name)
 	if _, exists := ba.gt.ExternalVars[varID]; exists {
@@ -184,7 +217,6 @@ func (ba *bodyAnalyzer) resolveIdentRef(ident *ast.Ident) {
 	}
 }
 
-// Checks whether a given string item exists in a string slice by linear search. Returns true if found, false otherwise.
 func containsString(slice []string, item string) bool {
 	for _, s := range slice {
 		if s == item {

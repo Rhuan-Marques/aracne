@@ -8,7 +8,6 @@ import (
 	"llm-topology/internal/topology/domain"
 )
 
-// Serializes a Topology to an SQLite database at the given path. Creates the schema if needed, then writes all resources, connections, and errors inside a transaction.
 func WriteDb(topo *domain.Topology, path string) error {
 	db, err := sql.Open("sqlite", path+"?cache=shared&_journal_mode=WAL")
 	if err != nil {
@@ -29,6 +28,7 @@ func WriteDb(topo *domain.Topology, path string) error {
 	tx.Exec("DELETE FROM info")
 	tx.Exec("DELETE FROM resources")
 	tx.Exec("DELETE FROM connections")
+	tx.Exec("DELETE FROM warnings")
 
 	if _, err := tx.Exec("INSERT INTO info VALUES ('root', ?)", topo.Root); err != nil {
 		return err
@@ -48,6 +48,12 @@ func WriteDb(topo *domain.Topology, path string) error {
 		return err
 	}
 	defer connStmt.Close()
+
+	warnStmt, err := tx.Prepare("INSERT INTO warnings VALUES (?, ?, ?, ?, ?)")
+	if err != nil {
+		return err
+	}
+	defer warnStmt.Close()
 
 	for id, res := range topo.Resources {
 		propsJSON := toJSON(res.Properties)
@@ -71,8 +77,14 @@ func WriteDb(topo *domain.Topology, path string) error {
 		}
 	}
 
-	for path, msg := range topo.Errors {
-		if _, err := tx.Exec("INSERT INTO info VALUES (?, ?)", "error:"+path, msg); err != nil {
+	for id, w := range topo.Warnings {
+		if _, err := warnStmt.Exec(id, w.SourceID, string(w.Kind), w.TargetID, w.Message); err != nil {
+			return err
+		}
+	}
+
+	for pat, msg := range topo.Errors {
+		if _, err := tx.Exec("INSERT INTO info VALUES (?, ?)", "error:"+pat, msg); err != nil {
 			return err
 		}
 	}
@@ -80,7 +92,6 @@ func WriteDb(topo *domain.Topology, path string) error {
 	return tx.Commit()
 }
 
-// Creates the SQLite database schema (resources and connections tables with indexes) if they do not already exist, enabling WAL mode for performance.
 func createSchema(db *sql.DB) error {
 	ddl := `
 	PRAGMA journal_mode=WAL;
@@ -106,12 +117,21 @@ func createSchema(db *sql.DB) error {
 		PRIMARY KEY(source_id, conn_type, target_id)
 	);
 	CREATE INDEX IF NOT EXISTS idx_conn_target ON connections(target_id);
+
+	CREATE TABLE IF NOT EXISTS warnings (
+		id TEXT PRIMARY KEY,
+		source_id TEXT NOT NULL,
+		kind TEXT NOT NULL,
+		target_id TEXT DEFAULT '',
+		message TEXT NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_warnings_source ON warnings(source_id);
+	CREATE INDEX IF NOT EXISTS idx_warnings_target ON warnings(target_id);
 	`
 	_, err := db.Exec(ddl)
 	return err
 }
 
-// Reads a complete topology from an SQLite database at the given path. Opens the database, loads info entries (root, language, errors), all resources with their locations and properties, and all connections between resources. Returns the reconstructed Topology or an error.
 func ReadDb(path string) (*domain.Topology, error) {
 	db, err := sql.Open("sqlite", path+"?cache=shared&_journal_mode=WAL")
 	if err != nil {
@@ -121,6 +141,7 @@ func ReadDb(path string) (*domain.Topology, error) {
 
 	topo := &domain.Topology{
 		Resources: make(map[string]domain.Resource),
+		Warnings:  make(map[string]domain.TopologyWarning),
 		Errors:    make(map[string]string),
 	}
 
@@ -191,10 +212,28 @@ func ReadDb(path string) (*domain.Topology, error) {
 		}
 	}
 
+	warnRows, err := db.Query("SELECT id, source_id, kind, target_id, message FROM warnings")
+	if err == nil {
+		defer warnRows.Close()
+		for warnRows.Next() {
+			var id, sourceID, kind, targetID, message string
+			err = warnRows.Scan(&id, &sourceID, &kind, &targetID, &message)
+			if err != nil {
+				continue
+			}
+			topo.Warnings[id] = domain.TopologyWarning{
+				ID:       id,
+				SourceID: sourceID,
+				Kind:     domain.WarningKind(kind),
+				TargetID: targetID,
+				Message:  message,
+			}
+		}
+	}
+
 	return topo, nil
 }
 
-// Directly updates a resource description in the SQLite database by executing an UPDATE on the resources table.
 func UpdateDescription(dbPath string, kind domain.ResourceKind, id string, description string) error {
 	db, err := sql.Open("sqlite", dbPath+"?cache=shared&_journal_mode=WAL")
 	if err != nil {
@@ -206,7 +245,30 @@ func UpdateDescription(dbPath string, kind domain.ResourceKind, id string, descr
 	return err
 }
 
-// Marshals an interface value to a JSON string. Returns "{}" for nil inputs or if marshaling fails.
+func GetCallers(dbPath string, targetID string, connType string) ([]string, error) {
+	db, err := sql.Open("sqlite", dbPath+"?cache=shared&_journal_mode=WAL")
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	rows, err := db.Query("SELECT source_id FROM connections WHERE conn_type = ? AND target_id = ?", connType, targetID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []string
+	for rows.Next() {
+		var sourceID string
+		if err := rows.Scan(&sourceID); err != nil {
+			continue
+		}
+		results = append(results, sourceID)
+	}
+	return results, nil
+}
+
 func toJSON(v interface{}) string {
 	if v == nil {
 		return "{}"
@@ -218,7 +280,6 @@ func toJSON(v interface{}) string {
 	return string(b)
 }
 
-// Parses a JSON string into a generic map[string]any, returning an empty map if the input is empty or parsing fails.
 func fromJSONMap(s string) map[string]any {
 	var v map[string]any
 	if s != "" {

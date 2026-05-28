@@ -252,9 +252,7 @@ func (s *PythonScanner) UpdateFile(topo *domain.Topology, path string) []domain.
 				found = true
 				if !signaturesEqualPy(oldFunc, fi.Function) {
 					warnings = append(warnings, domain.TopologyWarning{
-						Resource:          domain.ResourceFunction,
-						AffectedResources: []string{string(fid)},
-						Message:           fmt.Sprintf("function %s changed signature, verify callers", oldFunc.Name),
+						ID:  string(fid) + "@sig_change@", SourceID: string(fid), Kind: domain.WarnSignatureChanged, TargetID: "", Message:  fmt.Sprintf("function %s changed signature, verify callers", oldFunc.Name),
 					})
 				}
 				break
@@ -262,9 +260,7 @@ func (s *PythonScanner) UpdateFile(topo *domain.Topology, path string) []domain.
 		}
 		if !found {
 			warnings = append(warnings, domain.TopologyWarning{
-				Resource:          domain.ResourceFunction,
-				AffectedResources: []string{string(fid)},
-				Message:           fmt.Sprintf("function %s was removed", oldFunc.Name),
+				ID:  string(fid) + "@node_removed@", SourceID: string(fid), Kind: domain.WarnNodeRemoved, TargetID: "", Message:  fmt.Sprintf("function %s was removed", oldFunc.Name),
 			})
 		}
 	}

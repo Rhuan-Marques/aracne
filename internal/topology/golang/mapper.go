@@ -6,7 +6,6 @@ import (
 	"llm-topology/internal/topology/domain"
 )
 
-// Converts a generic domain Topology into a Go-specific GolangTopology by mapping each domain.Resource to its corresponding Go type (GolangFunction, GolangStruct, GolangInterface, etc.) with type-specific properties deserialized from JSON.
 func FromGeneric(topo *domain.Topology) *GolangTopology {
 	if topo == nil {
 		return nil
@@ -19,6 +18,7 @@ func FromGeneric(topo *domain.Topology) *GolangTopology {
 		ExternalVars: make(map[ExternalVarID]GolangExternalVar),
 		Files:        make(map[FileID]GolangFile),
 		Packages:     make(map[PackagePath]GolangPackage),
+		Warnings:     topo.Warnings,
 		Errors:       topo.Errors,
 	}
 
@@ -121,7 +121,6 @@ func FromGeneric(topo *domain.Topology) *GolangTopology {
 	return gt
 }
 
-// Converts a GolangTopology (Go-specific types with typed connections) into a generic domain.Topology with normalized Resources for all kinds: functions, methods, structs, interfaces, external vars, files, packages, and dependencies.
 func ToGeneric(gt *GolangTopology) *domain.Topology {
 	if gt == nil {
 		return nil
@@ -130,6 +129,7 @@ func ToGeneric(gt *GolangTopology) *domain.Topology {
 		Root:      gt.Root,
 		Language:  "go",
 		Resources: make(map[string]domain.Resource),
+		Warnings:  gt.Warnings,
 		Errors:    gt.Errors,
 	}
 
@@ -244,7 +244,6 @@ func ToGeneric(gt *GolangTopology) *domain.Topology {
 	return topo
 }
 
-// Converts a map of string-keyed connections to a map keyed by ConnectionKind, returning an empty map if the input is nil.
 func mapKindConn(conns map[string][]string) map[ConnectionKind][]string {
 	if conns == nil {
 		return make(map[ConnectionKind][]string)
@@ -256,7 +255,6 @@ func mapKindConn(conns map[string][]string) map[ConnectionKind][]string {
 	return result
 }
 
-// Utility function that marshals the 'from' value to JSON and unmarshals it into the 'to' target. Used for deep copying or type conversion between Go types via JSON round-tripping.
 func jsonConvert(from any, to any) {
 	b, err := json.Marshal(from)
 	if err != nil {
@@ -265,7 +263,6 @@ func jsonConvert(from any, to any) {
 	json.Unmarshal(b, to)
 }
 
-// Converts a ConnectionKind-keyed map to a string-keyed map for storage in the generic domain model.
 func stringMapConn(conns map[ConnectionKind][]string) map[string][]string {
 	if conns == nil {
 		return make(map[string][]string)
