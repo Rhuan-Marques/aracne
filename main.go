@@ -13,14 +13,17 @@ import (
 	"llm-topology/internal/helper"
 	"llm-topology/internal/llm/agent"
 	"llm-topology/internal/llm/languages/gotools"
+	"llm-topology/internal/llm/languages/pythontools"
 	"llm-topology/internal/llm/providers"
 	"llm-topology/internal/llm/tools"
 	"llm-topology/internal/mcp"
 	"llm-topology/internal/topology"
 	"llm-topology/internal/topology/domain"
 	"llm-topology/internal/topology/golang"
+	"llm-topology/internal/topology/python"
 	"llm-topology/internal/topology/scanner"
 	"llm-topology/internal/topology/scanner/goscanner"
+	"llm-topology/internal/topology/scanner/pyscanner"
 )
 
 // Entry point of the ltp CLI. Parses os.Args to dispatch to subcommands: scan, agent, serve, install, descriptions (generate/apply), update-file, read_function, read_struct, or printUsage. Takes no parameters and returns nothing.
@@ -114,7 +117,19 @@ Flags for "descriptions generate":
 func newScannerRegistry() *scanner.Registry {
 	reg := scanner.NewRegistry()
 	reg.Register(goscanner.NewGoScanner())
+	reg.Register(pyscanner.NewPythonScanner())
 	return reg
+}
+
+func getLanguage(manager *topology.TopologyManager) string {
+	topo, err := manager.ReadAll()
+	if err != nil || topo == nil {
+		return "go"
+	}
+	if topo.Language != "" {
+		return topo.Language
+	}
+	return "go"
 }
 
 func runScan(args []string) {
@@ -217,16 +232,22 @@ func runAgent() {
 	}
 
 	provider := providers.NewDeepSeek()
-	goManager := golang.NewGoManager(manager)
 
 	toolReg := tools.NewRegistry()
 	toolReg.Register(&tools.Ls{})
 	toolReg.Register(&tools.Read{})
 	toolReg.Register(tools.NewEdit(manager, reg))
-	gotools.RegisterGoTools(toolReg, goManager)
+
+	lang := getLanguage(manager)
+	if lang == "python" {
+		pythonManager := python.NewPythonManager(manager)
+		pythontools.RegisterPythonTools(toolReg, pythonManager)
+	} else {
+		goManager := golang.NewGoManager(manager)
+		gotools.RegisterGoTools(toolReg, goManager)
+	}
 
 	topo, _ := manager.ReadAll()
-	lang := "go"
 	if topo != nil {
 		lang = topo.Language
 	}
@@ -265,13 +286,20 @@ func runAgent() {
 
 func runServe() {
 	manager, reg := initRegistry(".ltp/topology.db")
-	goManager := golang.NewGoManager(manager)
 
 	registry := tools.NewRegistry()
 	registry.Register(&tools.Ls{})
 	registry.Register(&tools.Read{})
 	registry.Register(tools.NewEdit(manager, reg))
-	gotools.RegisterGoTools(registry, goManager)
+
+	lang := getLanguage(manager)
+	if lang == "python" {
+		pythonManager := python.NewPythonManager(manager)
+		pythontools.RegisterPythonTools(registry, pythonManager)
+	} else {
+		goManager := golang.NewGoManager(manager)
+		gotools.RegisterGoTools(registry, goManager)
+	}
 
 	server := mcp.NewServer(registry)
 	if err := server.Serve(); err != nil {
@@ -473,17 +501,22 @@ func runGenerateDescriptions(args []string) {
 
 	manager, reg := initRegistry(".ltp/topology.db")
 	provider := providers.NewDeepSeek()
-	goManager := golang.NewGoManager(manager)
-// CLI handler for the read_struct command: resolves struct by name and prints its context via GoManager.ReadStruct.
 
 	toolReg := tools.NewRegistry()
 	toolReg.Register(&tools.Ls{})
 	toolReg.Register(&tools.Read{})
 	toolReg.Register(tools.NewEdit(manager, reg))
-	gotools.RegisterGoTools(toolReg, goManager)
+
+	lang := getLanguage(manager)
+	if lang == "python" {
+		pythonManager := python.NewPythonManager(manager)
+		pythontools.RegisterPythonTools(toolReg, pythonManager)
+	} else {
+		goManager := golang.NewGoManager(manager)
+		gotools.RegisterGoTools(toolReg, goManager)
+	}
 
 	topo, _ := manager.ReadAll()
-	lang := "go"
 	if topo != nil {
 		lang = topo.Language
 	}
@@ -545,6 +578,40 @@ func runReadFunction() {
 	name := args[0]
 
 	manager, _ := initRegistry(".ltp/topology.db")
+	lang := getLanguage(manager)
+
+	if lang == "python" {
+		pythonManager := python.NewPythonManager(manager)
+		ctx, err := pythonManager.ReadFunction(name)
+		if err == nil {
+			fmt.Print(pythontools.FormatPythonFunctionContext(ctx))
+			return
+		}
+		ids, err := pythonManager.FindFunctionsByName(name)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		if len(ids) == 0 {
+			fmt.Fprintf(os.Stderr, "Function %q not found in topology\n", name)
+			os.Exit(1)
+		}
+		if len(ids) > 1 {
+			fmt.Printf("Multiple functions named %q found:\n", name)
+			for _, id := range ids {
+				fmt.Printf("  - %s\n", id)
+			}
+			return
+		}
+		ctx, err = pythonManager.ReadFunction(string(ids[0]))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Print(pythontools.FormatPythonFunctionContext(ctx))
+		return
+	}
+
 	goManager := golang.NewGoManager(manager)
 
 	ctx, err := goManager.ReadFunction(name)
@@ -570,7 +637,6 @@ func runReadFunction() {
 		return
 	}
 
-// Parses CLI arguments for `ltp read_function` command, looks up the function by name via GoManager.ReadFunction, and prints the formatted function context to stdout. Exits with code 1 if no name is provided or lookup fails.
 	ctx, err = goManager.ReadFunction(string(ids[0]))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -589,13 +655,46 @@ func runReadStruct() {
 	name := args[0]
 
 	manager, _ := initRegistry(".ltp/topology.db")
+	lang := getLanguage(manager)
+
+	if lang == "python" {
+		pythonManager := python.NewPythonManager(manager)
+		ctx, err := pythonManager.ReadClass(name)
+		if err == nil {
+			fmt.Print(pythontools.FormatPythonClassContext(ctx))
+			return
+		}
+		ids, err := pythonManager.FindClassesByName(name)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		if len(ids) == 0 {
+			fmt.Fprintf(os.Stderr, "Class %q not found in topology\n", name)
+			os.Exit(1)
+		}
+		if len(ids) > 1 {
+			fmt.Printf("Multiple classes named %q found:\n", name)
+			for _, id := range ids {
+				fmt.Printf("  - %s\n", id)
+			}
+			return
+		}
+		ctx, err = pythonManager.ReadClass(string(ids[0]))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Print(pythontools.FormatPythonClassContext(ctx))
+		return
+	}
+
 	goManager := golang.NewGoManager(manager)
 
 	ctx, err := goManager.ReadStruct(name)
 	if err == nil {
 		fmt.Print(gotools.FormatGoStructContext(ctx))
 		return
-// CLI handler for the list-undocumented command: reads topology from the database and prints all resources missing descriptions.
 	}
 
 	ids, err := goManager.FindStructsByName(name)
@@ -648,7 +747,7 @@ func runReadResourceAndCut(args []string) {
 	id, resourceName := args[0], args[1]
 
 	manager, _ := initRegistry(".ltp/topology.db")
-	goManager := golang.NewGoManager(manager)
+	lang := getLanguage(manager)
 
 	kind := mapResourceKind(resourceName)
 	if kind == "" {
@@ -665,7 +764,17 @@ func runReadResourceAndCut(args []string) {
 		return
 	}
 
-	entry, err := goManager.ReadResourceAndCut(id, kind)
+	var entry *domain.CodeEntry
+	var err error
+
+	if lang == "python" {
+		pythonManager := python.NewPythonManager(manager)
+		entry, err = pythonManager.ReadResourceAndCut(id, kind)
+	} else {
+		goManager := golang.NewGoManager(manager)
+		entry, err = goManager.ReadResourceAndCut(id, kind)
+	}
+
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
@@ -683,7 +792,6 @@ func runUpdateDescription(args []string) {
 	description := strings.Join(args[2:], " ")
 
 	manager, _ := initRegistry(".ltp/topology.db")
-	goManager := golang.NewGoManager(manager)
 
 	kind := mapResourceKind(resourceName)
 	if kind == "" {
@@ -691,7 +799,7 @@ func runUpdateDescription(args []string) {
 		os.Exit(1)
 	}
 
-	if err := goManager.UpdateDescription(id, kind, description); err != nil {
+	if err := manager.UpdateDescription(id, kind, description); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
