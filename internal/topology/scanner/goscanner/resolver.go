@@ -3,6 +3,7 @@ package goscanner
 import (
 	"fmt"
 	"go/ast"
+	"go/token"
 	"strings"
 
 	"llm-topology/internal/topology/domain"
@@ -16,9 +17,10 @@ type bodyAnalyzer struct {
 	varTypeMap map[string]golang.StructID
 	callerID   golang.FunctionID
 	warnings   *map[string]domain.TopologyWarning
+	knownNames map[string]bool
 }
 
-func newBodyAnalyzer(pr *ParseResult, gt *golang.GolangTopology, funcInput []golang.VariableDefinition, receiverName string, receiverStruct *golang.StructID, callerID golang.FunctionID) *bodyAnalyzer {
+func newBodyAnalyzer(pr *ParseResult, gt *golang.GolangTopology, funcInput []golang.VariableDefinition, receiverName string, receiverStruct *golang.StructID, callerID golang.FunctionID, extraKnownNames []string) *bodyAnalyzer {
 	ba := &bodyAnalyzer{
 		pr:         pr,
 		gt:         gt,
@@ -26,9 +28,20 @@ func newBodyAnalyzer(pr *ParseResult, gt *golang.GolangTopology, funcInput []gol
 		varTypeMap: make(map[string]golang.StructID),
 		callerID:   callerID,
 		warnings:   &gt.Warnings,
+		knownNames: make(map[string]bool),
+	}
+
+	for name := range goBuiltins {
+		ba.knownNames[name] = true
+	}
+	for _, name := range extraKnownNames {
+		ba.knownNames[name] = true
 	}
 
 	for _, param := range funcInput {
+		if param.Name != "_" {
+			ba.knownNames[param.Name] = true
+		}
 		if sid := paramTypeNameToStruct(param.Typing, pr.PkgPath, pr.ImportMap, pr.ModulePath); sid != nil {
 			if _, ok := gt.Structs[*sid]; ok {
 				ba.varTypeMap[param.Name] = *sid
@@ -37,6 +50,7 @@ func newBodyAnalyzer(pr *ParseResult, gt *golang.GolangTopology, funcInput []gol
 	}
 
 	if receiverName != "" && receiverStruct != nil {
+		ba.knownNames[receiverName] = true
 		if _, ok := gt.Structs[*receiverStruct]; ok {
 			ba.varTypeMap[receiverName] = *receiverStruct
 		}
@@ -86,8 +100,14 @@ func (ba *bodyAnalyzer) addWarning(kind domain.WarningKind, targetID string, mes
 	}
 }
 
-func analyzeFunctionBody(body *ast.BlockStmt, pr *ParseResult, gt *golang.GolangTopology, funcInput []golang.VariableDefinition, receiverName string, receiverStruct *golang.StructID, callerID golang.FunctionID) map[golang.ConnectionKind][]string {
-	ba := newBodyAnalyzer(pr, gt, funcInput, receiverName, receiverStruct, callerID)
+func analyzeFunctionBody(body *ast.BlockStmt, pr *ParseResult, gt *golang.GolangTopology, funcInput []golang.VariableDefinition, receiverName string, receiverStruct *golang.StructID, callerID golang.FunctionID, typeParamNames []string) map[golang.ConnectionKind][]string {
+	localTypeNames := collectLocalTypeNames(body)
+	localVarNames := collectLocalVarNames(body)
+	extraKnownNames := make([]string, 0, len(typeParamNames)+len(localTypeNames)+len(localVarNames))
+	extraKnownNames = append(extraKnownNames, typeParamNames...)
+	extraKnownNames = append(extraKnownNames, localTypeNames...)
+	extraKnownNames = append(extraKnownNames, localVarNames...)
+	ba := newBodyAnalyzer(pr, gt, funcInput, receiverName, receiverStruct, callerID, extraKnownNames)
 
 	ast.Inspect(body, func(n ast.Node) bool {
 		switch node := n.(type) {
@@ -119,10 +139,56 @@ var goBuiltins = map[string]bool{
 	"uintptr": true, "nil": true, "true": true, "false": true, "iota": true,
 }
 
+func collectLocalTypeNames(body *ast.BlockStmt) []string {
+	var names []string
+	ast.Inspect(body, func(n ast.Node) bool {
+		if ts, ok := n.(*ast.TypeSpec); ok && ts.Name != nil {
+			names = append(names, ts.Name.Name)
+			return false
+		}
+		return true
+	})
+	return names
+}
+
+func collectLocalVarNames(body *ast.BlockStmt) []string {
+	var names []string
+	if body == nil {
+		return names
+	}
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch node := n.(type) {
+		case *ast.AssignStmt:
+			if node.Tok == token.DEFINE {
+				for _, lhs := range node.Lhs {
+					if ident, ok := lhs.(*ast.Ident); ok && ident.Name != "_" {
+						names = append(names, ident.Name)
+					}
+				}
+			}
+		case *ast.RangeStmt:
+			if node.Tok == token.DEFINE || node.Tok == token.ASSIGN {
+				if ident, ok := node.Key.(*ast.Ident); ok && ident.Name != "_" {
+					names = append(names, ident.Name)
+				}
+				if ident, ok := node.Value.(*ast.Ident); ok && ident.Name != "_" {
+					names = append(names, ident.Name)
+				}
+			}
+		}
+		return true
+	})
+	return names
+}
+
 func (ba *bodyAnalyzer) resolveCallExpr(call *ast.CallExpr) {
-	switch fun := call.Fun.(type) {
+	fun := call.Fun
+	if ile, ok := fun.(*ast.IndexListExpr); ok {
+		fun = ile.X
+	}
+	switch fun := fun.(type) {
 	case *ast.Ident:
-		if goBuiltins[fun.Name] {
+		if ba.knownNames[fun.Name] {
 			return
 		}
 
@@ -228,8 +294,15 @@ func (ba *bodyAnalyzer) resolveQualifiedCall(xName, selName string) {
 }
 
 func (ba *bodyAnalyzer) resolveCompositeLit(lit *ast.CompositeLit) {
-	switch t := lit.Type.(type) {
+	typ := lit.Type
+	if ile, ok := typ.(*ast.IndexListExpr); ok {
+		typ = ile.X
+	}
+	switch t := typ.(type) {
 	case *ast.Ident:
+		if ba.knownNames[t.Name] {
+			return
+		}
 		structID := golang.StructID(string(ba.pr.PkgPath) + "." + t.Name)
 		if _, exists := ba.gt.Structs[structID]; exists {
 			ba.add(golang.ConnUsesStruct, string(structID))

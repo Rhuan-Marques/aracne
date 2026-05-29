@@ -27,7 +27,7 @@ The `edit` mcp function is there for you to use. Use the `edit` **MCP** function
 
 ## Project Overview
 
-`llm-topology` is a Go static analysis tool that recursively scans Go source trees, parses `.go` files using `go/ast`/`go/parser`, and builds a comprehensive graph model ("topology") of the project's structure: packages, files, structs, interfaces, functions (with call graphs), external variables, and dependencies. Output is stored in an SQLite database. It includes an AI coding agent powered by DeepSeek and an MCP server for integration with OpenCode and other LLM platforms.
+`llm-topology` is a static analysis tool that recursively scans Go and Python source trees, parses source files using language-specific parsers, and builds a comprehensive graph model ("topology") of the project's structure: packages, files, structs, interfaces, functions (with call graphs), external variables, and dependencies. Output is stored in an SQLite database. It includes an AI coding agent powered by DeepSeek and an MCP server for integration with OpenCode and other LLM platforms.
 
 ## Build & Run
 
@@ -64,10 +64,12 @@ go build -o ltp.exe .
 ```
 main.go                         # CLI entry point (scan / agent / serve / init / generate-descriptions)
 opencode.json                   # MCP plugin configuration
+LLM_INTEGRATION_CHARTER.md      # Charter for LLM integration guidelines
 internal/
   helper/
     db.go                       # SQLite persistence layer (schema, write, read)
     json.go                     # JSON persistence layer (alternative serialization)
+    apply.go                    # Description injection into source files (comment insertion)
   mcp/
     protocol.go                 # JSON-RPC 2.0 + MCP protocol types
     server.go                   # MCP server (stdio loop, delegates to tool instances)
@@ -88,12 +90,28 @@ internal/
         parser.go               # Go source AST parser (struct, interface, func extraction)
         resolver.go             # Function body reference resolution (call graphs)
         matcher.go              # Struct-to-interface matching
+      pyscanner/
+        scanner.go              # Python Scanner implementation (Scan, UpdateFile, helpers)
+        parser.go               # Python source AST parser (class, function extraction)
+        resolver.go             # Function body reference resolution (call graphs)
+        matcher.go              # Class-to-interface/ABC matching
+        parse_script.go         # Python source parsing via script subprocess
     golang/
       resources.go              # Go-specific types: GolangFunction, GolangStruct, GolangInterface, GolangExternalVar, GolangFile, GolangPackage
       types.go                  # Output types: FunctionCut, StructCut, SimplifiedFunction, GoFunctionContext, GoStructContext, etc.
       connections.go            # ConnectionKind constants + typed accessor methods
       mapper.go                 # FromGeneric / ToGeneric (domain <-> golang)
       manager.go                # GoManager wrapping TopologyManager (ReadFunction, ReadStruct, FindFunctionsByName, FindStructsByName, ReadResourceAndCut, UpdateDescription)
+    python/
+      resources.go              # Python-specific types: PythonFunction, PythonClass, PythonExternalVar, PythonFile, PythonModule
+      types.go                  # Output types: FunctionCut, StructCut, SimplifiedFunction, PyFunctionContext, PyStructContext, etc.
+      connections.go            # PythonConnectionKind constants + typed accessor methods
+      mapper.go                 # FromGeneric / ToGeneric (domain <-> python)
+      manager.go                # PyManager wrapping TopologyManager (ReadFunction, ReadStruct, FindFunctionsByName, FindClassesByName, ReadResourceAndCut, UpdateDescription)
+      plan.md                   # Python support implementation plan
+    py_testdata/
+      sample.py                 # Python test fixture
+      test_module.py            # Python test module fixture
   llm/
     provider.go                 # LLM Provider interface + Message/Tool types
     providers/
@@ -103,18 +121,29 @@ internal/
       prompt.go                 # System prompt (topology-aware)
     tools/
       tool.go                   # Tool interface + Registry
-      read.go                   # "read" tool (raw file read)
+      read_file.go              # "read" tool (raw file read)
       edit.go                   # "edit" tool (replace text, auto-updates topology)
       ls.go                     # "ls" tool (list files/directories)
     languages/
       gotools/
         register.go             # Register Go-specific tools in tool registry
-        read_function.go        # "read_function" tool (name-based lookup → rich context)
-        read_struct.go          # "read_struct" tool (name-based lookup → rich context)
+        read_function.go        # "read_function" tool (name-based lookup -> rich context)
+        read_struct.go          # "read_struct" tool (name-based lookup -> rich context)
         read_resource_and_cut.go # "read_resource_and_cut" tool (source cut + description instructions)
         update_description.go   # "update_description" tool
+        list_undocumented.go    # "list_undocumented" tool (list resources needing descriptions)
+        list_warnings.go        # "list_warnings" tool (list topology warnings)
         format.go               # FormatGoFunctionContext, FormatGoStructContext formatters
         prompt.go               # BuildGoSystemPrompt for agent
+      pythontools/
+        register.go             # Register Python-specific tools in tool registry
+        read_function.go        # "read_function" tool (name-based lookup -> rich context)
+        read_struct.go          # "read_struct" tool (class-based lookup -> rich context)
+        read_resource_and_cut.go # "read_resource_and_cut" tool (source cut + description instructions)
+        update_description.go   # "update_description" tool
+        list_undocumented.go    # "list_undocumented" tool (list resources needing descriptions)
+        format.go               # FormatPyFunctionContext, FormatPyStructContext formatters
+        prompt.go               # BuildPySystemPrompt for agent
 ```
 
 ## Code Conventions
@@ -236,5 +265,5 @@ The MCP server auto-scans the project if `.ltp/topology.db` is missing on first 
 
 - AI agent mode requires `DEEPSEEK_API_KEY` environment variable.
 - MCP server mode does not require an API key (the external LLM platform provides its own).
-- The scanner architecture supports multiple languages via `LanguageScanner` interface and `Registry`; currently only Go is implemented.
+- The scanner architecture supports multiple languages via `LanguageScanner` interface and `Registry`; Go and Python are currently implemented.
 - `generate-descriptions` subcommand uses the LLM to auto-generate descriptions for all undocumented resources.

@@ -28,9 +28,10 @@ type ParseResult struct {
 }
 
 type FunctionParse struct {
-	Function     golang.GolangFunction
-	Body         *ast.BlockStmt
-	ReceiverName string
+	Function       golang.GolangFunction
+	Body           *ast.BlockStmt
+	ReceiverName   string
+	TypeParamNames []string
 }
 
 func ParseFile(filePath string, pkgPath golang.PackagePath, modulePath, rootPath string) (*ParseResult, error) {
@@ -287,6 +288,26 @@ func (pr *ParseResult) processFuncDecl(funcDecl *ast.FuncDecl, fset *token.FileS
 		fi.Body = funcDecl.Body
 	}
 
+	if funcDecl.Type.TypeParams != nil {
+		var pkgRefs []golang.PackagePath
+		var depRefs []golang.DependancyPath
+		refSeen := make(map[string]bool)
+		for _, tp := range funcDecl.Type.TypeParams.List {
+			for _, name := range tp.Names {
+				fi.TypeParamNames = append(fi.TypeParamNames, name.Name)
+			}
+			if tp.Type != nil {
+				extractTypeRefs(tp.Type, pr.ImportMap, pr.ModulePath, refSeen, &pkgRefs, &depRefs)
+			}
+		}
+		if len(pkgRefs) > 0 {
+			f.Connections[golang.ConnUsesPkg] = append(f.Connections[golang.ConnUsesPkg], castStrings(pkgRefs)...)
+		}
+		if len(depRefs) > 0 {
+			f.Connections[golang.ConnUsesDep] = append(f.Connections[golang.ConnUsesDep], castStrings(depRefs)...)
+		}
+	}
+
 	pr.Functions = append(pr.Functions, fi)
 }
 
@@ -321,6 +342,12 @@ func exprToString(expr ast.Expr) string {
 		return exprToString(e.X) + "[" + exprToString(e.Index) + "]"
 	case *ast.StructType:
 		return "struct{...}"
+	case *ast.IndexListExpr:
+		var indices []string
+		for _, idx := range e.Indices {
+			indices = append(indices, exprToString(idx))
+		}
+		return exprToString(e.X) + "[" + strings.Join(indices, ", ") + "]"
 	default:
 		return fmt.Sprintf("%T", expr)
 	}
@@ -401,6 +428,11 @@ func extractTypeRefsRec(expr ast.Expr, importMap map[string]string, modulePath s
 		extractTypeRefsRec(e.Index, importMap, modulePath, seen, packages, deps)
 	case *ast.ParenExpr:
 		extractTypeRefsRec(e.X, importMap, modulePath, seen, packages, deps)
+	case *ast.IndexListExpr:
+		extractTypeRefsRec(e.X, importMap, modulePath, seen, packages, deps)
+		for _, idx := range e.Indices {
+			extractTypeRefsRec(idx, importMap, modulePath, seen, packages, deps)
+		}
 	}
 }
 
