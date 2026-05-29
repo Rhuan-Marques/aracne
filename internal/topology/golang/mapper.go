@@ -15,6 +15,7 @@ func FromGeneric(topo *domain.Topology) *GolangTopology {
 		Functions:    make(map[FunctionID]GolangFunction),
 		Structs:      make(map[StructID]GolangStruct),
 		Interfaces:   make(map[InterfaceID]GolangInterface),
+		NamedTypes:   make(map[NamedTypeID]GolangNamedType),
 		ExternalVars: make(map[ExternalVarID]GolangExternalVar),
 		Files:        make(map[FileID]GolangFile),
 		Packages:     make(map[PackagePath]GolangPackage),
@@ -64,6 +65,21 @@ func FromGeneric(topo *domain.Topology) *GolangTopology {
 				}
 			}
 			gt.Structs[s.ID] = s
+
+		case domain.ResourceNamedType:
+			n := GolangNamedType{
+				ID:          NamedTypeID(id),
+				Name:        res.Name,
+				Description: res.Description,
+				Loc:         res.Location,
+				Connections: mapKindConn(res.Connections),
+			}
+			if underlying, ok := res.Properties["underlying"]; ok {
+				if u, ok := underlying.(string); ok {
+					n.Underlying = u
+				}
+			}
+			gt.NamedTypes[n.ID] = n
 
 		case domain.ResourceInterface:
 			iface := GolangInterface{
@@ -179,6 +195,21 @@ func ToGeneric(gt *GolangTopology) *domain.Topology {
 			Location:    s.Loc,
 			Properties:  props,
 			Connections: stringMapConn(s.Connections),
+		}
+	}
+
+	for id, n := range gt.NamedTypes {
+		props := map[string]any{
+			"underlying": n.Underlying,
+		}
+		topo.Resources[string(id)] = domain.Resource{
+			ID:          string(id),
+			Kind:        domain.ResourceNamedType,
+			Name:        n.Name,
+			Description: n.Description,
+			Location:    n.Loc,
+			Properties:  props,
+			Connections: stringMapConn(n.Connections),
 		}
 	}
 

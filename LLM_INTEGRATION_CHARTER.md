@@ -26,9 +26,9 @@ There are three integration modes sharing the same topology engine. All must mai
 
 ### Mode B: MCP Server (`ltp serve`)
 - Exposes all topology tools as MCP (Model Context Protocol) tools over stdio
-- Consumed by OpenCode and other MCP-compatible platforms
+- Consumed by OpenCode, Claude Code, and other MCP-compatible platforms
 - Same tool set, same behavior, same topology awareness
-- Setup: `ltp install` generates `opencode.json` MCP config + custom `edit.ts` tool
+- Setup: `ltp init` generates `opencode.json` MCP config + custom `edit.ts` tool
 - No API key required (the external LLM platform provides its own)
 
 ### Mode C: Internal Agent (`ltp agent`)

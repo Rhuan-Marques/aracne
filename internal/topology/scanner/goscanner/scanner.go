@@ -49,6 +49,7 @@ func (s *GoScanner) Scan(root string) (*domain.Topology, error) {
 		Functions:    make(map[golang.FunctionID]golang.GolangFunction),
 		Structs:      make(map[golang.StructID]golang.GolangStruct),
 		Interfaces:   make(map[golang.InterfaceID]golang.GolangInterface),
+		NamedTypes:   make(map[golang.NamedTypeID]golang.GolangNamedType),
 		ExternalVars: make(map[golang.ExternalVarID]golang.GolangExternalVar),
 		Files:        make(map[golang.FileID]golang.GolangFile),
 		Packages:     make(map[golang.PackagePath]golang.GolangPackage),
@@ -125,6 +126,10 @@ func (s *GoScanner) Scan(root string) (*domain.Topology, error) {
 			gt.Interfaces[iface.ID] = iface
 			file.Connections[golang.ConnHasIface] = append(file.Connections[golang.ConnHasIface], string(iface.ID))
 		}
+		for _, nt := range fp.result.NamedTypes {
+			gt.NamedTypes[nt.ID] = nt
+			file.Connections[golang.ConnHasNamedType] = append(file.Connections[golang.ConnHasNamedType], string(nt.ID))
+		}
 		for _, f := range fp.result.Functions {
 			gt.Functions[f.Function.ID] = f.Function
 			file.Connections[golang.ConnHasFunc] = append(file.Connections[golang.ConnHasFunc], string(f.Function.ID))
@@ -144,6 +149,7 @@ func (s *GoScanner) Scan(root string) (*domain.Topology, error) {
 		pkgConns[golang.ConnHasFunc] = append(pkgConns[golang.ConnHasFunc], file.Connections[golang.ConnHasFunc]...)
 		pkgConns[golang.ConnHasStruct] = append(pkgConns[golang.ConnHasStruct], file.Connections[golang.ConnHasStruct]...)
 		pkgConns[golang.ConnHasIface] = append(pkgConns[golang.ConnHasIface], file.Connections[golang.ConnHasIface]...)
+		pkgConns[golang.ConnHasNamedType] = append(pkgConns[golang.ConnHasNamedType], file.Connections[golang.ConnHasNamedType]...)
 		pkgConns[golang.ConnHasVar] = append(pkgConns[golang.ConnHasVar], file.Connections[golang.ConnHasVar]...)
 		pkg.Connections = pkgConns
 		gt.Packages[file.FromPackage] = pkg
@@ -241,6 +247,10 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.Top
 			gt.Interfaces[ii.ID] = ii
 			newFile.Connections[golang.ConnHasIface] = append(newFile.Connections[golang.ConnHasIface], string(ii.ID))
 		}
+		for _, nt := range pr.NamedTypes {
+			gt.NamedTypes[nt.ID] = nt
+			newFile.Connections[golang.ConnHasNamedType] = append(newFile.Connections[golang.ConnHasNamedType], string(nt.ID))
+		}
 		for _, fi := range pr.Functions {
 			gt.Functions[fi.Function.ID] = fi.Function
 			newFile.Connections[golang.ConnHasFunc] = append(newFile.Connections[golang.ConnHasFunc], string(fi.Function.ID))
@@ -262,6 +272,7 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.Top
 		pkg.Connections[golang.ConnHasFunc] = append(pkg.Connections[golang.ConnHasFunc], newFile.Connections[golang.ConnHasFunc]...)
 		pkg.Connections[golang.ConnHasStruct] = append(pkg.Connections[golang.ConnHasStruct], newFile.Connections[golang.ConnHasStruct]...)
 		pkg.Connections[golang.ConnHasIface] = append(pkg.Connections[golang.ConnHasIface], newFile.Connections[golang.ConnHasIface]...)
+		pkg.Connections[golang.ConnHasNamedType] = append(pkg.Connections[golang.ConnHasNamedType], newFile.Connections[golang.ConnHasNamedType]...)
 		pkg.Connections[golang.ConnHasVar] = append(pkg.Connections[golang.ConnHasVar], newFile.Connections[golang.ConnHasVar]...)
 		gt.Packages[pkgPath] = pkg
 
@@ -311,6 +322,12 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.Top
 			oldInterfaces[iid] = iface
 		}
 	}
+	oldNamedTypes := make(map[golang.NamedTypeID]golang.GolangNamedType)
+	for _, nid := range oldFile.NamedTypes() {
+		if nt, ok := gt.NamedTypes[nid]; ok {
+			oldNamedTypes[nid] = nt
+		}
+	}
 	oldExtVars := make(map[golang.ExternalVarID]golang.GolangExternalVar)
 	for _, vid := range oldFile.ExternalVars() {
 		if v, ok := gt.ExternalVars[vid]; ok {
@@ -343,6 +360,11 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.Top
 	for i, ii := range pr.Interfaces {
 		if oldIface, ok := oldInterfaces[ii.ID]; ok && ii.Description == "" && oldIface.Description != "" {
 			pr.Interfaces[i].Description = oldIface.Description
+		}
+	}
+	for i, nt := range pr.NamedTypes {
+		if oldNT, ok := oldNamedTypes[nt.ID]; ok && nt.Description == "" && oldNT.Description != "" {
+			pr.NamedTypes[i].Description = oldNT.Description
 		}
 	}
 	for i, v := range pr.ExternalVars {
@@ -395,6 +417,20 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.Top
 		}
 		if !found {
 			removedStructs[sid] = oldStructs[sid]
+		}
+	}
+
+	removedNamedTypes := make(map[golang.NamedTypeID]golang.GolangNamedType)
+	for nid := range oldNamedTypes {
+		found := false
+		for _, nt := range pr.NamedTypes {
+			if nt.ID == nid {
+				found = true
+				break
+			}
+		}
+		if !found {
+			removedNamedTypes[nid] = oldNamedTypes[nid]
 		}
 	}
 
@@ -451,11 +487,33 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.Top
 		}
 	}
 
+	for nid, oldNT := range removedNamedTypes {
+		ntUsers := s.getCallers(gt, string(nid), string(golang.ConnUsesNamedType))
+		for _, sourceID := range ntUsers {
+			if _, isOld := oldFunctions[golang.FunctionID(sourceID)]; isOld {
+				continue
+			}
+			if sourceFn, ok := gt.Functions[golang.FunctionID(sourceID)]; ok {
+				sourceFn.Connections[golang.ConnUsesNamedType] = removeString(sourceFn.Connections[golang.ConnUsesNamedType], string(nid))
+				gt.Functions[golang.FunctionID(sourceID)] = sourceFn
+			}
+			warnID := sourceID + "@" + string(domain.WarnNodeRemoved) + "@" + string(nid)
+			gt.Warnings[warnID] = domain.TopologyWarning{
+				ID:       warnID,
+				SourceID: sourceID,
+				Kind:     domain.WarnNodeRemoved,
+				TargetID: string(nid),
+				Message:  fmt.Sprintf("function %s uses named type %s which was removed from %s", sourceID, oldNT.Name, absPath),
+			}
+		}
+	}
+
 	pkg := gt.Packages[oldFile.FromPackage]
 	pkg.Connections[golang.ConnHasFile] = removeString(pkg.Connections[golang.ConnHasFile], string(oldFile.ID))
 	pkg.Connections[golang.ConnHasFunc] = removeStrings(pkg.Connections[golang.ConnHasFunc], castFuncIDs(oldFile.Functions())...)
 	pkg.Connections[golang.ConnHasStruct] = removeStrings(pkg.Connections[golang.ConnHasStruct], castStructIDs(oldFile.Structs())...)
 	pkg.Connections[golang.ConnHasIface] = removeStrings(pkg.Connections[golang.ConnHasIface], castInterfaceIDs(oldFile.Interfaces())...)
+	pkg.Connections[golang.ConnHasNamedType] = removeStrings(pkg.Connections[golang.ConnHasNamedType], castNamedTypeIDs(oldFile.NamedTypes())...)
 	pkg.Connections[golang.ConnHasVar] = removeStrings(pkg.Connections[golang.ConnHasVar], castExtVarIDs(oldFile.ExternalVars())...)
 	gt.Packages[oldFile.FromPackage] = pkg
 
@@ -467,6 +525,9 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.Top
 	}
 	for _, iid := range oldFile.Interfaces() {
 		delete(gt.Interfaces, iid)
+	}
+	for _, nid := range oldFile.NamedTypes() {
+		delete(gt.NamedTypes, nid)
 	}
 	for _, vid := range oldFile.ExternalVars() {
 		delete(gt.ExternalVars, vid)
@@ -495,6 +556,10 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.Top
 		gt.Interfaces[ii.ID] = ii
 		newFile.Connections[golang.ConnHasIface] = append(newFile.Connections[golang.ConnHasIface], string(ii.ID))
 	}
+	for _, nt := range pr.NamedTypes {
+		gt.NamedTypes[nt.ID] = nt
+		newFile.Connections[golang.ConnHasNamedType] = append(newFile.Connections[golang.ConnHasNamedType], string(nt.ID))
+	}
 	for _, fi := range pr.Functions {
 		gt.Functions[fi.Function.ID] = fi.Function
 		newFile.Connections[golang.ConnHasFunc] = append(newFile.Connections[golang.ConnHasFunc], string(fi.Function.ID))
@@ -513,6 +578,7 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.Top
 	pkg.Connections[golang.ConnHasFunc] = append(pkg.Connections[golang.ConnHasFunc], newFile.Connections[golang.ConnHasFunc]...)
 	pkg.Connections[golang.ConnHasStruct] = append(pkg.Connections[golang.ConnHasStruct], newFile.Connections[golang.ConnHasStruct]...)
 	pkg.Connections[golang.ConnHasIface] = append(pkg.Connections[golang.ConnHasIface], newFile.Connections[golang.ConnHasIface]...)
+	pkg.Connections[golang.ConnHasNamedType] = append(pkg.Connections[golang.ConnHasNamedType], newFile.Connections[golang.ConnHasNamedType]...)
 	pkg.Connections[golang.ConnHasVar] = append(pkg.Connections[golang.ConnHasVar], newFile.Connections[golang.ConnHasVar]...)
 	gt.Packages[pkgPath] = pkg
 
@@ -534,7 +600,7 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.Top
 		}
 	}
 
-	s.resolveWarnings(gt, pr, removedFuncs, removedStructs)
+	s.resolveWarnings(gt, pr, removedFuncs, removedStructs, removedNamedTypes)
 
 	matchStructsToInterfaces(gt)
 	collectDependencies(gt)
@@ -547,7 +613,7 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.Top
 	return warnings, nil
 }
 
-func (s *GoScanner) resolveWarnings(gt *golang.GolangTopology, pr *ParseResult, removedFuncs map[golang.FunctionID]golang.GolangFunction, removedStructs map[golang.StructID]golang.GolangStruct) {
+func (s *GoScanner) resolveWarnings(gt *golang.GolangTopology, pr *ParseResult, removedFuncs map[golang.FunctionID]golang.GolangFunction, removedStructs map[golang.StructID]golang.GolangStruct, removedNamedTypes map[golang.NamedTypeID]golang.GolangNamedType) {
 	newIDs := make(map[string]bool)
 	for _, fi := range pr.Functions {
 		newIDs[string(fi.Function.ID)] = true
@@ -557,6 +623,9 @@ func (s *GoScanner) resolveWarnings(gt *golang.GolangTopology, pr *ParseResult, 
 	}
 	for _, ii := range pr.Interfaces {
 		newIDs[string(ii.ID)] = true
+	}
+	for _, nt := range pr.NamedTypes {
+		newIDs[string(nt.ID)] = true
 	}
 	for _, v := range pr.ExternalVars {
 		newIDs[string(v.ID)] = true
@@ -589,6 +658,9 @@ func (s *GoScanner) resolveWarnings(gt *golang.GolangTopology, pr *ParseResult, 
 			if _, removed := removedStructs[golang.StructID(w.TargetID)]; removed {
 				continue
 			}
+			if _, removed := removedNamedTypes[golang.NamedTypeID(w.TargetID)]; removed {
+				continue
+			}
 		}
 		if w.Kind == domain.WarnNodeRemoved {
 			if _, removed := removedFuncs[golang.FunctionID(w.SourceID)]; removed {
@@ -612,6 +684,8 @@ func (s *GoScanner) resolveUseMissingWarning(gt *golang.GolangTopology, w domain
 		sourceFn.Connections[golang.ConnCalls] = append(sourceFn.Connections[golang.ConnCalls], w.TargetID)
 	case s.existsInStructs(gt, w.TargetID):
 		sourceFn.Connections[golang.ConnUsesStruct] = append(sourceFn.Connections[golang.ConnUsesStruct], w.TargetID)
+	case s.existsInNamedTypes(gt, w.TargetID):
+		sourceFn.Connections[golang.ConnUsesNamedType] = append(sourceFn.Connections[golang.ConnUsesNamedType], w.TargetID)
 	case s.existsInInterfaces(gt, w.TargetID):
 		sourceFn.Connections[golang.ConnUsesIface] = append(sourceFn.Connections[golang.ConnUsesIface], w.TargetID)
 	case s.existsInExtVars(gt, w.TargetID):
@@ -629,6 +703,11 @@ func (s *GoScanner) existsInFunctions(gt *golang.GolangTopology, id string) bool
 
 func (s *GoScanner) existsInStructs(gt *golang.GolangTopology, id string) bool {
 	_, ok := gt.Structs[golang.StructID(id)]
+	return ok
+}
+
+func (s *GoScanner) existsInNamedTypes(gt *golang.GolangTopology, id string) bool {
+	_, ok := gt.NamedTypes[golang.NamedTypeID(id)]
 	return ok
 }
 
@@ -868,6 +947,14 @@ func castInterfaceIDs(ids []golang.InterfaceID) []string {
 }
 
 func castExtVarIDs(ids []golang.ExternalVarID) []string {
+	var result []string
+	for _, id := range ids {
+		result = append(result, string(id))
+	}
+	return result
+}
+
+func castNamedTypeIDs(ids []golang.NamedTypeID) []string {
 	var result []string
 	for _, id := range ids {
 		result = append(result, string(id))

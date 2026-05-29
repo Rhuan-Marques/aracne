@@ -104,14 +104,54 @@ func analyzeFunctionBody(body *ast.BlockStmt, pr *ParseResult, gt *golang.Golang
 	return ba.conn
 }
 
+var goBuiltins = map[string]bool{
+	"append": true, "cap": true, "clear": true, "close": true,
+	"complex": true, "copy": true, "delete": true, "imag": true,
+	"len": true, "make": true, "max": true, "min": true,
+	"new": true, "panic": true, "print": true,
+	"println": true, "real": true, "recover": true,
+	"any": true, "bool": true, "byte": true,
+	"comparable": true, "complex64": true, "complex128": true,
+	"error": true, "float32": true, "float64": true,
+	"int": true, "int8": true, "int16": true, "int32": true, "int64": true,
+	"rune": true, "string": true,
+	"uint": true, "uint8": true, "uint16": true, "uint32": true, "uint64": true,
+	"uintptr": true, "nil": true, "true": true, "false": true, "iota": true,
+}
+
 func (ba *bodyAnalyzer) resolveCallExpr(call *ast.CallExpr) {
 	switch fun := call.Fun.(type) {
 	case *ast.Ident:
+		if goBuiltins[fun.Name] {
+			return
+		}
+
 		for _, f := range ba.pr.Functions {
 			if f.Function.Name == fun.Name && f.Function.MethodFrom == nil {
 				ba.add(golang.ConnCalls, string(f.Function.ID))
 				return
 			}
+		}
+
+		pkgTypedID := golang.StructID(string(ba.pr.PkgPath) + "." + fun.Name)
+		if _, exists := ba.gt.Structs[pkgTypedID]; exists {
+			ba.add(golang.ConnUsesStruct, string(pkgTypedID))
+			ba.add(golang.ConnUsesPkg, string(ba.pr.PkgPath))
+			return
+		}
+
+		namedTypeID := golang.NamedTypeID(string(ba.pr.PkgPath) + "." + fun.Name)
+		for _, nt := range ba.pr.NamedTypes {
+			if nt.Name == fun.Name {
+				ba.add(golang.ConnUsesNamedType, string(namedTypeID))
+				ba.add(golang.ConnUsesPkg, string(ba.pr.PkgPath))
+				return
+			}
+		}
+		if _, exists := ba.gt.NamedTypes[namedTypeID]; exists {
+			ba.add(golang.ConnUsesNamedType, string(namedTypeID))
+			ba.add(golang.ConnUsesPkg, string(ba.pr.PkgPath))
+			return
 		}
 
 		pkgFuncID := golang.FunctionID(string(ba.pr.PkgPath) + "." + fun.Name)
@@ -136,14 +176,23 @@ func (ba *bodyAnalyzer) resolveQualifiedCall(xName, selName string) {
 	if impPath, ok := ba.pr.ImportMap[xName]; ok {
 		if strings.HasPrefix(impPath, ba.pr.ModulePath) {
 			internalPkg := golang.PackagePath(impPath)
-			targetID := golang.FunctionID(string(internalPkg) + "." + selName)
-			if _, exists := ba.gt.Functions[targetID]; exists {
-				ba.add(golang.ConnCalls, string(targetID))
+
+			fnTargetID := golang.FunctionID(string(internalPkg) + "." + selName)
+			if _, exists := ba.gt.Functions[fnTargetID]; exists {
+				ba.add(golang.ConnCalls, string(fnTargetID))
 				ba.add(golang.ConnUsesPkg, string(internalPkg))
-			} else {
-				ba.addWarning(domain.WarnUseMissingNode, string(targetID),
-					fmt.Sprintf("function %s calls %s which does not exist", ba.callerID, targetID))
+				return
 			}
+
+			namedTargetID := golang.NamedTypeID(string(internalPkg) + "." + selName)
+			if _, exists := ba.gt.NamedTypes[namedTargetID]; exists {
+				ba.add(golang.ConnUsesNamedType, string(namedTargetID))
+				ba.add(golang.ConnUsesPkg, string(internalPkg))
+				return
+			}
+
+			ba.addWarning(domain.WarnUseMissingNode, string(fnTargetID),
+				fmt.Sprintf("function %s calls %s which does not exist", ba.callerID, fnTargetID))
 			return
 		} else {
 			ba.add(golang.ConnUsesDep, string(impPath))
@@ -184,10 +233,21 @@ func (ba *bodyAnalyzer) resolveCompositeLit(lit *ast.CompositeLit) {
 		structID := golang.StructID(string(ba.pr.PkgPath) + "." + t.Name)
 		if _, exists := ba.gt.Structs[structID]; exists {
 			ba.add(golang.ConnUsesStruct, string(structID))
-		} else {
-			ba.addWarning(domain.WarnUseMissingNode, string(structID),
-				fmt.Sprintf("function %s references struct %s which does not exist", ba.callerID, structID))
+			return
 		}
+		namedTypeID := golang.NamedTypeID(string(ba.pr.PkgPath) + "." + t.Name)
+		for _, nt := range ba.pr.NamedTypes {
+			if nt.Name == t.Name {
+				ba.add(golang.ConnUsesNamedType, string(namedTypeID))
+				return
+			}
+		}
+		if _, exists := ba.gt.NamedTypes[namedTypeID]; exists {
+			ba.add(golang.ConnUsesNamedType, string(namedTypeID))
+			return
+		}
+		ba.addWarning(domain.WarnUseMissingNode, string(structID),
+			fmt.Sprintf("function %s references struct %s which does not exist", ba.callerID, structID))
 	case *ast.SelectorExpr:
 		if x, ok := t.X.(*ast.Ident); ok {
 			if impPath, ok := ba.pr.ImportMap[x.Name]; ok && strings.HasPrefix(impPath, ba.pr.ModulePath) {
@@ -196,10 +256,16 @@ func (ba *bodyAnalyzer) resolveCompositeLit(lit *ast.CompositeLit) {
 				if _, exists := ba.gt.Structs[structID]; exists {
 					ba.add(golang.ConnUsesStruct, string(structID))
 					ba.add(golang.ConnUsesPkg, string(internalPkg))
-				} else {
-					ba.addWarning(domain.WarnUseMissingNode, string(structID),
-						fmt.Sprintf("function %s references struct %s which does not exist", ba.callerID, structID))
+					return
 				}
+				namedTypeID := golang.NamedTypeID(string(internalPkg) + "." + t.Sel.Name)
+				if _, exists := ba.gt.NamedTypes[namedTypeID]; exists {
+					ba.add(golang.ConnUsesNamedType, string(namedTypeID))
+					ba.add(golang.ConnUsesPkg, string(internalPkg))
+					return
+				}
+				ba.addWarning(domain.WarnUseMissingNode, string(structID),
+					fmt.Sprintf("function %s references struct %s which does not exist", ba.callerID, structID))
 			}
 		}
 	}
@@ -214,6 +280,11 @@ func (ba *bodyAnalyzer) resolveIdentRef(ident *ast.Ident) {
 	structID := golang.StructID(string(ba.pr.PkgPath) + "." + ident.Name)
 	if _, exists := ba.gt.Structs[structID]; exists {
 		ba.add(golang.ConnUsesStruct, string(structID))
+	}
+
+	namedTypeID := golang.NamedTypeID(string(ba.pr.PkgPath) + "." + ident.Name)
+	if _, exists := ba.gt.NamedTypes[namedTypeID]; exists {
+		ba.add(golang.ConnUsesNamedType, string(namedTypeID))
 	}
 }
 

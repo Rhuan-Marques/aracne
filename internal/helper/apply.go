@@ -22,7 +22,7 @@ func ApplyDescriptions(topo *domain.Topology) error {
 			continue
 		}
 		switch res.Kind {
-		case domain.ResourceFunction, domain.ResourceMethod, domain.ResourceType, domain.ResourceInterface, domain.ResourceVariable:
+		case domain.ResourceFunction, domain.ResourceMethod, domain.ResourceType, domain.ResourceNamedType, domain.ResourceInterface, domain.ResourceVariable:
 		default:
 			continue
 		}

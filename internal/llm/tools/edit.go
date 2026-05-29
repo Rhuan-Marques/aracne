@@ -62,7 +62,13 @@ func (e *Edit) Run(args json.RawMessage) (string, error) {
 
 	content := string(data)
 	if !strings.Contains(content, params.OldString) {
-		return "", fmt.Errorf("old_string not found in %s", params.FilePath)
+		normalizedContent := strings.ReplaceAll(content, "\r\n", "\n")
+		normalizedOld := strings.ReplaceAll(params.OldString, "\r\n", "\n")
+		if !strings.Contains(normalizedContent, normalizedOld) {
+			return "", fmt.Errorf("old_string not found in %s", params.FilePath)
+		}
+		params.OldString = normalizedOld
+		content = normalizedContent
 	}
 
 	newContent := strings.Replace(content, params.OldString, params.NewString, 1)

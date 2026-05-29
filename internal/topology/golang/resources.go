@@ -9,6 +9,7 @@ type ExternalVarID = string
 type FileID = string
 type PackagePath = string
 type DependancyPath = string
+type NamedTypeID = string
 
 type VariableDefinition struct {
 	Name   string
@@ -30,6 +31,7 @@ type GolangTopology struct {
 	Functions    map[FunctionID]GolangFunction
 	Structs      map[StructID]GolangStruct
 	Interfaces   map[InterfaceID]GolangInterface
+	NamedTypes   map[NamedTypeID]GolangNamedType
 	ExternalVars map[ExternalVarID]GolangExternalVar
 	Files        map[FileID]GolangFile
 	Packages     map[PackagePath]GolangPackage
@@ -64,6 +66,15 @@ type GolangInterface struct {
 	Name        string
 	Description string
 	Methods     []FunctionDefinition
+	Loc         domain.Location
+	Connections map[ConnectionKind][]string
+}
+
+type GolangNamedType struct {
+	ID          NamedTypeID
+	Name        string
+	Description string
+	Underlying  string
 	Loc         domain.Location
 	Connections map[ConnectionKind][]string
 }

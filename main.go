@@ -1,11 +1,13 @@
-package main
+﻿package main
 
 import (
 	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
+	"sort"
 	"path/filepath"
 	"strings"
 	"time"
@@ -26,7 +28,7 @@ import (
 	"llm-topology/internal/topology/scanner/pyscanner"
 )
 
-// Entry point of the ltp CLI. Parses os.Args to dispatch to subcommands: scan, agent, serve, install, descriptions (generate/apply), update-file, read_function, read_struct, or printUsage. Takes no parameters and returns nothing.
+// Entry point of the ltp CLI. Parses os.Args to dispatch to subcommands: scan, agent, serve, init, descriptions (generate/apply), update-file, read_function, read_struct, or printUsage. Takes no parameters and returns nothing.
 func main() {
 	if len(os.Args) < 2 {
 		printUsage()
@@ -40,8 +42,8 @@ func main() {
 		runAgent()
 	case "serve":
 		runServe()
-	case "install":
-		runInstall(os.Args[2:])
+	case "init":
+		runInit(os.Args[2:], "")
 	case "descriptions":
 		if len(os.Args) < 3 {
 			printUsage()
@@ -61,13 +63,23 @@ func main() {
 		runReadFunction()
 	case "read_struct":
 		runReadStruct()
-// Prints the ltp CLI usage information to stdout, documenting all subcommands (scan, agent, serve, install, descriptions, read_function, read_struct, etc.) and their flags. No parameters, no return value.
+		// Prints the ltp CLI usage information to stdout, documenting all subcommands (scan, agent, serve, init, descriptions, read_function, read_struct, etc.) and their flags. No parameters, no return value.
 	case "read-resource-and-cut":
 		runReadResourceAndCut(os.Args[2:])
 	case "update-description":
 		runUpdateDescription(os.Args[2:])
+	case "edit":
+		runEdit(os.Args[2:])
 	case "list-undocumented":
 		runListUndocumented()
+	case "warnings":
+		if len(os.Args) < 3 || os.Args[2] != "list" {
+			fmt.Fprintln(os.Stderr, "Usage: ltp warnings list [--source <id>] [--target <id>] [--kind <kind>]")
+			os.Exit(1)
+		}
+		runWarningsList(os.Args[3:])
+	case "read_file":
+		runReadFile()
 	default:
 		printUsage()
 	}
@@ -79,8 +91,8 @@ func printUsage() {
 Usage:
   ltp scan    [flags]    Scan a Go project and build topology database
   ltp agent   [prompt]   Run the AI coding agent
-  ltp serve              Start MCP server (for OpenCode plugin integration)
-  ltp install [flags]    Configure OpenCode to use llm-topology as a plugin
+  ltp serve              Start MCP server (for OpenCode / Claude Code integration)
+  ltp init   [flags]    Initialize topology integration (--claude, --opencode, --global)
   ltp descriptions generate [flags]  Generate descriptions for all undocumented resources
   ltp descriptions apply            Write topology descriptions back into source as doc comments
   ltp read_function <name>  Show a function's source code and its interconnected context
@@ -89,24 +101,37 @@ Usage:
   ltp read-resource-and-cut <id> <kind>  Get a resource's source code cut (kind: Function, Struct, Interface, ExternalVar, File, Package)
   ltp update-description <id> <kind> <desc>  Update a resource's description in the topology DB
   ltp list-undocumented     List all resources without descriptions
+  ltp warnings list [flags] List outstanding topology warnings
+  ltp edit                 Edit a file (reads JSON from stdin: {"file_path", "old_string", "new_string"})
+  ltp read_file <path>     Read a file by path, returning filename and full content
 
 Flags for "scan":
   -root <path>    Root folder of the Go project (default ".")
   -output <file>  Output SQLite database path (default ".ltp/topology.db")
   --hard          Force full rebuild instead of incremental update
+  --debug         Compare warnings before and after scan, print differences
 
-Flags for "install":
-  --global        Install globally (~/.config/opencode/opencode.json)
+Flags for "warnings list":
+  --db <path>     Topology database path (default ".ltp/topology.db")
+Flags for "warnings list":
+  --target <id>   Filter by target resource ID
+  --kind <kind>    Filter by warning kind (use_missing_node, node_removed, signature_changed)
 
-// Creates and initializes the scanner registry with Go language support, performs a full project topology scan, writes results to the database, and returns the TopologyManager for further operations.
-Flags for "descriptions generate":
-  (no flags required Ã¢â‚¬â€ uses agent loop to process all undocumented resources)
+Flags for "init":
+  --claude        Initialize Claude Code integration (.mcp.json, CLAUDE.md, .claude/commands/)
+  --opencode      Initialize OpenCode integration (.opencode/opencode.json, custom tools, commands)
+  --global        Install to user-level (applies across all projects)
+
+  Without flags, initializes both Claude Code and OpenCode.
 
   Examples:
     ltp scan -root ./myproject -output myproject.db
     ltp agent "list all structs"
 // Parses CLI flags for the "scan" command (root, output, hard), creates a scanner registry, and runs either a FullScan or IncrementalScan on the project. Reports timing statistics and resource counts after completion.
-    ltp install               # add MCP config to opencode.json
+    ltp init                   # init for both Claude Code and OpenCode
+    ltp init --claude          # init for Claude Code only
+    ltp init --opencode        # init for OpenCode only
+    ltp init --global          # global config (both platforms)
     ltp serve                 # start MCP server (used by OpenCode)
     ltp descriptions generate # generate descriptions for all resources
     ltp descriptions apply    # write descriptions into source as doc comments
@@ -137,11 +162,21 @@ func runScan(args []string) {
 	root := fs.String("root", ".", "Root folder of the Go project to analyze")
 	output := fs.String("output", ".ltp/topology.db", "Output SQLite database path")
 	hard := fs.Bool("hard", false, "Force full rebuild (clears all existing descriptions)")
+	debug := fs.Bool("debug", false, "Compare warnings before and after scan, print differences")
 	fs.Parse(args)
 
 	manager := topology.New()
 	manager.Load(*output)
 	os.MkdirAll(filepath.Dir(*output), 0755)
+
+	var beforeWarnings map[string]domain.TopologyWarning
+	if *debug {
+		if _, statErr := os.Stat(*output); statErr == nil {
+			if beforeTopo, readErr := helper.ReadDb(*output); readErr == nil {
+				beforeWarnings = beforeTopo.Warnings
+			}
+		}
+	}
 
 	fmt.Printf("Analyzing Go project at: %s\n", *root)
 
@@ -168,6 +203,35 @@ func runScan(args []string) {
 		os.Exit(1)
 	}
 
+	if *debug && beforeWarnings != nil {
+		added, removed := diffWarnings(beforeWarnings, topo.Warnings)
+		if len(added) > 0 || len(removed) > 0 {
+			fmt.Printf("\n=== Warning Differences ===\n\n")
+			if len(added) > 0 {
+				fmt.Printf("Added (%d):\n", len(added))
+				for _, w := range added {
+					fmt.Printf("  + [%s] %s\n    source: %s", w.Kind, w.Message, w.SourceID)
+					if w.TargetID != "" {
+						fmt.Printf("\n    target: %s", w.TargetID)
+					}
+					fmt.Print("\n\n")
+				}
+			}
+			if len(removed) > 0 {
+				fmt.Printf("Resolved (%d):\n", len(removed))
+				for _, w := range removed {
+					fmt.Printf("  - [%s] %s\n    source: %s", w.Kind, w.Message, w.SourceID)
+					if w.TargetID != "" {
+						fmt.Printf("\n    target: %s", w.TargetID)
+					}
+					fmt.Print("\n\n")
+				}
+			}
+		} else {
+			fmt.Println("\nNo warning differences detected.")
+		}
+	}
+
 	pkgCount := 0
 	fileCount := 0
 	funcCount := 0
@@ -177,7 +241,7 @@ func runScan(args []string) {
 	depCount := 0
 
 	for _, res := range topo.Resources {
-// Initializes the scanner registry and performs a full project topology scan, categorizing resources by kind (package, file, function, type, interface, variable, dependency) and displaying summary statistics.
+		// Initializes the scanner registry and performs a full project topology scan, categorizing resources by kind (package, file, function, type, interface, variable, dependency) and displaying summary statistics.
 		switch res.Kind {
 		case domain.ResourcePackage:
 			pkgCount++
@@ -185,7 +249,7 @@ func runScan(args []string) {
 			fileCount++
 		case domain.ResourceFunction, domain.ResourceMethod:
 			funcCount++
-		case domain.ResourceType:
+		case domain.ResourceType, domain.ResourceNamedType:
 			typeCount++
 		case domain.ResourceInterface:
 			ifaceCount++
@@ -197,7 +261,7 @@ func runScan(args []string) {
 	}
 
 	fmt.Printf("Topology written to: %s\n", *output)
-// CLI handler for the "agent" command. Initializes the topology database and tool registry, creates the DeepSeek provider and agent, then runs either a single-prompt session (from CLI args) or a REPL loop reading stdin prompts.
+	// CLI handler for the "agent" command. Initializes the topology database and tool registry, creates the DeepSeek provider and agent, then runs either a single-prompt session (from CLI args) or a REPL loop reading stdin prompts.
 	fmt.Printf("Analyzed in %s\n", elapsed.Round(time.Millisecond))
 	fmt.Printf("-%d packages\n-%d files\n-%d functions\n-%d types\n-%d interfaces\n-%d variables\n-%d dependencies\n-%d errors\n",
 		pkgCount, fileCount, funcCount, typeCount, ifaceCount, varCount, depCount, len(topo.Errors))
@@ -235,7 +299,7 @@ func runAgent() {
 
 	toolReg := tools.NewRegistry()
 	toolReg.Register(&tools.Ls{})
-	toolReg.Register(&tools.Read{})
+	toolReg.Register(&tools.ReadFile{})
 	toolReg.Register(tools.NewEdit(manager, reg))
 
 	lang := getLanguage(manager)
@@ -258,7 +322,7 @@ func runAgent() {
 	input := strings.Join(args, " ")
 	if input != "" {
 		if err := a.Run(input); err != nil {
-// Initializes the topology database and scanner registry, then starts the MCP server on stdio to handle JSON-RPC tool requests from OpenCode or other MCP clients.
+			// Initializes the topology database and scanner registry, then starts the MCP server on stdio to handle JSON-RPC tool requests from OpenCode or other MCP clients.
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
@@ -276,7 +340,7 @@ func runAgent() {
 		if input == "exit" || input == "quit" {
 			break
 		}
-// Configures the MCP server entry in opencode.json and installs the custom edit.ts tool. Supports --global flag for user-wide installation.
+		// Configures the MCP server entry in opencode.json and installs the custom edit.ts tool. Supports --global flag for user-wide installation.
 		if err := a.Run(input); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		}
@@ -289,7 +353,7 @@ func runServe() {
 
 	registry := tools.NewRegistry()
 	registry.Register(&tools.Ls{})
-	registry.Register(&tools.Read{})
+	registry.Register(&tools.ReadFile{})
 	registry.Register(tools.NewEdit(manager, reg))
 
 	lang := getLanguage(manager)
@@ -308,13 +372,38 @@ func runServe() {
 	}
 }
 
-func runInstall(args []string) {
-	fs := flag.NewFlagSet("install", flag.ExitOnError)
-	global := fs.Bool("global", false, "Install globally (~/.config/opencode/opencode.json)")
+func runInit(args []string, defaultPlatform string) {
+	fs := flag.NewFlagSet("init", flag.ExitOnError)
+	claude := fs.Bool("claude", false, "Initialize Claude Code integration")
+	opencode := fs.Bool("opencode", false, "Initialize OpenCode integration")
+	global := fs.Bool("global", false, "Install globally")
 	fs.Parse(args)
 
+	if defaultPlatform != "" && !*claude && !*opencode {
+		switch defaultPlatform {
+		case "opencode":
+			*opencode = true
+		case "claude":
+			*claude = true
+		}
+	}
+
+	if !*claude && !*opencode {
+		*claude = true
+		*opencode = true
+	}
+
+	if *opencode {
+		initOpenCode(*global)
+	}
+	if *claude {
+		initClaudeCode(*global)
+	}
+}
+
+func initOpenCode(global bool) {
 	var configPath string
-	if *global {
+	if global {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error finding home dir: %v\n", err)
@@ -323,7 +412,8 @@ func runInstall(args []string) {
 		configPath = filepath.Join(home, ".config", "opencode", "opencode.json")
 		os.MkdirAll(filepath.Dir(configPath), 0755)
 	} else {
-		configPath = filepath.Join(filepath.Dir(configPath), ".opencode", "opencode.json")
+		configPath = ".opencode/opencode.json"
+		os.MkdirAll(".opencode", 0755)
 	}
 
 	var config map[string]interface{}
@@ -350,6 +440,16 @@ func runInstall(args []string) {
 			"enabled": true,
 		}
 		config["mcp"] = mcpMap
+		permissionMap, _ := config["permission"].(map[string]interface{})
+		if permissionMap == nil {
+			permissionMap = make(map[string]interface{})
+		}
+		for _, toolName := range []string{"read", "edit"} {
+			if _, exists := permissionMap[toolName]; !exists {
+				permissionMap[toolName] = "deny"
+			}
+		}
+		config["permission"] = permissionMap
 
 		out, err := json.MarshalIndent(config, "", "  ")
 		if err != nil {
@@ -362,79 +462,13 @@ func runInstall(args []string) {
 			fmt.Fprintf(os.Stderr, "Error writing %s: %v\n", configPath, err)
 			os.Exit(1)
 		}
-		fmt.Printf("llm-topology MCP server configured in %s\n", configPath)
+		fmt.Printf("[OpenCode] llm-topology MCP server configured in %s\n", configPath)
 	} else {
-		fmt.Printf("llm-topology MCP config already present in %s\n", configPath)
-	}
-
-	var toolsDir string
-	if *global {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error finding home dir: %v\n", err)
-			os.Exit(1)
-		}
-		toolsDir = filepath.Join(home, ".config", "opencode", "tools")
-	} else {
-		toolsDir = filepath.Join(filepath.Dir(configPath), ".opencode", "tools")
-	}
-	os.MkdirAll(toolsDir, 0755)
-
-	toolPath := filepath.Join(toolsDir, "edit.ts")
-	if _, err := os.Stat(toolPath); err == nil {
-		fmt.Printf("Custom edit tool already present at %s\n", toolPath)
-	} else {
-		toolContent := []byte(`import { tool } from "@opencode-ai/plugin"
-import path from "path"
-
-export default tool({
-  description: "Edit a file by replacing exact text with new text. The project topology is automatically updated.",
-  args: {
-    file_path: tool.schema.string().describe("The absolute path to the file to edit"),
-    old_string: tool.schema.string().describe("The exact text to search for and replace"),
-    new_string: tool.schema.string().describe("The replacement text"),
-  },
-  async execute(args, context) {
-    const filePath = args.file_path
-    const oldStr = args.old_string
-    const newStr = args.new_string
-
-    const file = Bun.file(filePath)
-    const content = await file.text()
-
-    if (!content.includes(oldStr)) {
-      return "old_string not found in " + filePath
-    }
-
-    const newContent = content.replace(oldStr, newStr)
-    await Bun.write(filePath, newContent)
-
-    const ltpPath = path.join(
-      context.worktree,
-// CLI handler for the generate-descriptions subcommand. Scans all undocumented resources, dispatches an LLM sub-agent for each, and applies the generated descriptions to the topology database.
-      "ltp" + (process.platform === "win32" ? ".exe" : ""),
-    )
-    const proc = Bun.spawnSync([ltpPath, "update-file", filePath])
-    if (proc.exitCode === 0) {
-      const out = proc.stdout.toString().trim()
-      if (out) {
-        return "edit succeeded\n\nTopology warnings:\n" + out
-      }
-    }
-    // topology DB missing or file not tracked -- edit still succeeded
-    return "edit succeeded"
-  },
-})
-`)
-		if err := os.WriteFile(toolPath, []byte(toolContent), 0644); err != nil {
-			fmt.Fprintf(os.Stderr, "Error writing custom edit tool: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Printf("Custom edit tool written to %s\n", toolPath)
+		fmt.Printf("[OpenCode] llm-topology MCP config already present in %s\n", configPath)
 	}
 
 	var commandsDir string
-	if *global {
+	if global {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error finding home dir: %v\n", err)
@@ -442,14 +476,14 @@ export default tool({
 		}
 		commandsDir = filepath.Join(home, ".config", "opencode", "commands")
 	} else {
-		commandsDir = filepath.Join(filepath.Dir(configPath), ".opencode", "commands")
+		commandsDir = ".opencode/commands"
 	}
 	os.MkdirAll(commandsDir, 0755)
 
-	writeCommand := func(name, description, template string) {
+	writeOpenCodeCommand := func(name, description, template string) {
 		cmdPath := filepath.Join(commandsDir, name+".md")
 		if _, err := os.Stat(cmdPath); err == nil {
-			fmt.Printf("Command %s already present at %s\n", name, cmdPath)
+			fmt.Printf("[OpenCode] Command %s already present at %s\n", name, cmdPath)
 			return
 		}
 		content := fmt.Sprintf("---\ndescription: %s\n---\n\n%s\n", description, template)
@@ -457,11 +491,10 @@ export default tool({
 			fmt.Fprintf(os.Stderr, "Error writing command %s: %v\n", name, err)
 			os.Exit(1)
 		}
-		fmt.Printf("Command %s written to %s\n", name, cmdPath)
-// CLI handler for the "read_function" command. Looks up a function by name via GoManager (exact match first, then fallback to FindFunctionsByName), prints the formatted Go function context, or exits with an error if not found.
+		fmt.Printf("[OpenCode] Command %s written to %s\n", name, cmdPath)
 	}
 
-	writeCommand(
+	writeOpenCodeCommand(
 		"descriptions-generate",
 		"Generate descriptions for undocumented resources in the topology",
 		`The following resources are missing descriptions and need them:
@@ -480,13 +513,235 @@ For each resource listed above, call **read_resource_and_cut** with its `+"`id`"
 Process ALL resources listed above. Report how many descriptions were generated.`,
 	)
 
-	writeCommand(
+	writeOpenCodeCommand(
 		"descriptions-apply",
 		"Write topology descriptions back into source files as doc comments",
 		`Run `+"`ltp descriptions apply`"+` to write all topology descriptions back into the source files as Go doc comments. Report any files that were modified.`,
 	)
 
-	fmt.Println("Restart OpenCode to activate the topology tools.")
+	fmt.Println("[OpenCode] Restart OpenCode to activate the topology tools.")
+}
+
+func initClaudeCode(global bool) {
+	var mcpConfigPath string
+	var commandsDir string
+	var agentsDir string
+	var claudeMdPath string
+
+	if global {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error finding home dir: %v\n", err)
+			os.Exit(1)
+		}
+		mcpConfigPath = filepath.Join(home, ".claude.json")
+		commandsDir = filepath.Join(home, ".claude", "commands")
+		agentsDir = filepath.Join(home, ".claude", "agents")
+		claudeMdPath = filepath.Join(home, ".claude", "CLAUDE.md")
+	} else {
+		mcpConfigPath = ".mcp.json"
+		commandsDir = ".claude/commands"
+		agentsDir = ".claude/agents"
+		claudeMdPath = "CLAUDE.md"
+	}
+
+	var claudeConfig map[string]interface{}
+	data, err := os.ReadFile(mcpConfigPath)
+	if err == nil && len(data) > 0 {
+		if err := json.Unmarshal(data, &claudeConfig); err != nil {
+			fmt.Fprintf(os.Stderr, "Error parsing %s: %v\n  Please fix or remove the file and try again.\n", mcpConfigPath, err)
+			os.Exit(1)
+		}
+	}
+	if claudeConfig == nil {
+		claudeConfig = make(map[string]interface{})
+	}
+
+	if global {
+		mcpServers, _ := claudeConfig["mcpServers"].(map[string]interface{})
+		if mcpServers == nil {
+			mcpServers = make(map[string]interface{})
+		}
+		if _, exists := mcpServers["llm-topology"]; !exists {
+			mcpServers["llm-topology"] = map[string]interface{}{
+				"command": "ltp",
+				"args":    []string{"serve"},
+			}
+			claudeConfig["mcpServers"] = mcpServers
+
+			out, err := json.MarshalIndent(claudeConfig, "", "  ")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error encoding config: %v\n", err)
+				os.Exit(1)
+			}
+			out = append(out, '\n')
+			if err := os.WriteFile(mcpConfigPath, out, 0644); err != nil {
+				fmt.Fprintf(os.Stderr, "Error writing %s: %v\n", mcpConfigPath, err)
+				os.Exit(1)
+			}
+			fmt.Printf("[Claude Code] Global MCP server configured in %s\n", mcpConfigPath)
+		} else {
+			fmt.Printf("[Claude Code] Global MCP config already present in %s\n", mcpConfigPath)
+		}
+	} else {
+		mcpServers, _ := claudeConfig["mcpServers"].(map[string]interface{})
+		if mcpServers == nil {
+			mcpServers = make(map[string]interface{})
+		}
+		if _, exists := mcpServers["llm-topology"]; !exists {
+			mcpServers["llm-topology"] = map[string]interface{}{
+				"command": "ltp",
+				"args":    []string{"serve"},
+			}
+			claudeConfig["mcpServers"] = mcpServers
+
+			out, err := json.MarshalIndent(claudeConfig, "", "  ")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error encoding config: %v\n", err)
+				os.Exit(1)
+			}
+			out = append(out, '\n')
+			if err := os.WriteFile(mcpConfigPath, out, 0644); err != nil {
+				fmt.Fprintf(os.Stderr, "Error writing %s: %v\n", mcpConfigPath, err)
+				os.Exit(1)
+			}
+			fmt.Printf("[Claude Code] Project MCP server configured in %s\n", mcpConfigPath)
+		} else {
+			fmt.Printf("[Claude Code] MCP config already present in %s\n", mcpConfigPath)
+		}
+	}
+
+	os.MkdirAll(commandsDir, 0755)
+	os.MkdirAll(agentsDir, 0755)
+
+	writeClaudeCommand := func(name, description, template string) {
+		cmdPath := filepath.Join(commandsDir, name+".md")
+		if _, err := os.Stat(cmdPath); err == nil {
+			fmt.Printf("[Claude Code] Command %s already present at %s\n", name, cmdPath)
+			return
+		}
+		content := fmt.Sprintf("---\ndescription: %s\n---\n\n%s\n", description, template)
+		if err := os.WriteFile(cmdPath, []byte(content), 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing command %s: %v\n", name, err)
+			os.Exit(1)
+		}
+		fmt.Printf("[Claude Code] Command %s written to %s\n", name, cmdPath)
+	}
+
+	writeClaudeCommand(
+		"descriptions-generate",
+		"Generate descriptions for undocumented resources in the topology",
+		`The following resources are missing descriptions and need them:
+
+!`+"`ltp list-undocumented`"+`
+
+For each resource listed above, call **read_resource_and_cut** with its `+"`id`"+` and `+"`resource_name`"+`, then call **update_description** to write a concise description. Follow these guidelines:
+
+- Functions: 1-3 lines covering purpose, parameters, return values, side effects
+- Structs: 1-3 lines covering what it represents, key fields, usage
+- Interfaces: 1-3 lines covering the contract and key methods
+- Variables: 1 line covering what it stores and purpose
+- Files: 1 line covering the file's role in its package
+- Packages: 1-2 lines covering overall purpose
+
+Process ALL resources listed above. Report how many descriptions were generated.`,
+	)
+
+	writeClaudeCommand(
+		"descriptions-apply",
+		"Write topology descriptions back into source files as doc comments",
+		`Run `+"`ltp descriptions apply`"+` to write all topology descriptions back into the source files as Go doc comments. Report any files that were modified.`,
+	)
+
+	agentPath := filepath.Join(agentsDir, "describe.md")
+	if _, err := os.Stat(agentPath); err == nil {
+		fmt.Printf("[Claude Code] Agent describe already present at %s\n", agentPath)
+	} else {
+		agentContent := `---
+description: Generates descriptions for undocumented resources in the project topology
+mode: subagent
+---
+
+You are a description generator for the project topology database.
+
+Your goal is to generate concise descriptions for ALL undocumented resources.
+
+## Workflow
+
+1. Call **list_undocumented_resources** to get the full list of resources needing descriptions
+2. For each resource in the list:
+   a. Call **read_resource_and_cut** with its ` + "`id`" + ` and ` + "`resource_name`" + `
+   b. Read the returned source code and type-specific instructions
+   c. Call **update_description** with ` + "`id`" + `, ` + "`resource_name`" + `, and your generated description
+3. Continue until all resources have been processed
+4. Report how many descriptions were generated
+
+## Guidelines
+
+- Functions: 1-3 lines covering purpose, parameters, return values, side effects
+- Structs: 1-3 lines covering what it represents, key fields, usage
+- Interfaces: 1-3 lines covering the contract and key methods
+- Variables: 1 line covering what it stores and purpose
+- Files: 1 line covering the file's role in its package
+- Packages: 1-2 lines covering overall purpose
+- Be concise and accurate
+- Do not skip any resource
+`
+		if err := os.WriteFile(agentPath, []byte(agentContent), 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing agent: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("[Claude Code] Agent describe written to %s\n", agentPath)
+	}
+
+	if _, err := os.Stat(claudeMdPath); err == nil {
+		fmt.Printf("[Claude Code] CLAUDE.md already present at %s\n", claudeMdPath)
+	} else {
+		claudeMdContent := fmt.Sprintf(`# CLAUDE.md
+
+This project uses **llm-topology** for codebase navigation. The topology database provides a pre-analyzed graph of all functions, structs, interfaces, variables, and their relationships.
+
+## Navigation Tools
+
+Prefer these topology-aware tools over standard file reading:
+
+| Tool | Purpose |
+|------|---------|
+| %[1]sread_function%[1]s | Function source + connected context (called functions, structs, interfaces) |
+| %[1]sread_struct%[1]s | Struct source + methods, interfaces, constructor |
+| %[1]sread_resource_and_cut%[1]s | Get source code + description instructions for any resource |
+| %[1]supdate_description%[1]s | Persist a description into the topology database |
+| %[1]slist_undocumented_resources%[1]s | List all resources missing descriptions |
+| %[1]sls%[1]s | List files and directories |
+| %[1]sread%[1]s | Read raw file contents (use only when topology tools aren't sufficient) |
+
+## How to Use
+
+1. Start with %[1]sls%[1]s to explore the project structure
+2. Use %[1]sread_function%[1]s or %[1]sread_struct%[1]s to investigate code — these return both source code AND a # CONTEXT: section showing all connected resources
+3. After editing a file, run %[1]sltp update-file <path>%[1]s to keep the topology in sync
+
+## Description Generation
+
+To document the project:
+1. Call %[1]slist_undocumented_resources%[1]s
+2. For each resource, call %[1]sread_resource_and_cut%[1]s followed by %[1]supdate_description%[1]s
+
+## Guidelines
+
+- Prefer topology tools over raw file reads — they provide richer context
+- The # CONTEXT: section in tool output often answers follow-up questions without extra calls
+- Keep descriptions concise (1-3 lines for functions/structs/interfaces)
+`, "`")
+
+		if err := os.WriteFile(claudeMdPath, []byte(claudeMdContent), 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing CLAUDE.md: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("[Claude Code] CLAUDE.md written to %s\n", claudeMdPath)
+	}
+
+	fmt.Println("[Claude Code] Restart Claude Code to activate the topology tools.")
 }
 
 func runGenerateDescriptions(args []string) {
@@ -504,7 +759,7 @@ func runGenerateDescriptions(args []string) {
 
 	toolReg := tools.NewRegistry()
 	toolReg.Register(&tools.Ls{})
-	toolReg.Register(&tools.Read{})
+	toolReg.Register(&tools.ReadFile{})
 	toolReg.Register(tools.NewEdit(manager, reg))
 
 	lang := getLanguage(manager)
@@ -551,7 +806,7 @@ func runDescriptionApply(args []string) {
 	}
 
 	count := 0
-// CLI handler for the update-file subcommand. Re-parses a single Go file, updates the topology database in-place via TopologyManager.UpdateFile, and prints any topology warnings.
+	// CLI handler for the update-file subcommand. Re-parses a single Go file, updates the topology database in-place via TopologyManager.UpdateFile, and prints any topology warnings.
 	for _, res := range topo.Resources {
 		if res.Description != "" {
 			count++
@@ -741,6 +996,54 @@ func runUpdateFile(args []string) {
 	}
 }
 
+func runEdit(args []string) {
+	var input struct {
+		FilePath  string `json:"file_path"`
+		OldString string `json:"old_string"`
+		NewString string `json:"new_string"`
+	}
+	data, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading stdin: %v\n", err)
+		os.Exit(1)
+	}
+	if err := json.Unmarshal(data, &input); err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing JSON: %v\n", err)
+		os.Exit(1)
+	}
+	if input.FilePath == "" || input.OldString == "" || input.NewString == "" {
+		fmt.Fprintln(os.Stderr, "Usage: echo '{\"file_path\":\"...\",\"old_string\":\"...\",\"new_string\":\"...\"}' | ltp edit")
+		os.Exit(1)
+	}
+
+	content, err := os.ReadFile(input.FilePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading %s: %v\n", input.FilePath, err)
+		os.Exit(1)
+	}
+
+	s := string(content)
+	if !strings.Contains(s, input.OldString) {
+		fmt.Fprintf(os.Stderr, "old_string not found in %s\n", input.FilePath)
+		os.Exit(1)
+	}
+
+	newContent := strings.Replace(s, input.OldString, input.NewString, 1)
+	if err := os.WriteFile(input.FilePath, []byte(newContent), 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing %s: %v\n", input.FilePath, err)
+		os.Exit(1)
+	}
+
+	manager, reg := initRegistry(".ltp/topology.db")
+	warnings, err := manager.UpdateFile(input.FilePath, reg)
+	if err == nil && len(warnings) > 0 {
+		for _, w := range warnings {
+			fmt.Printf("Warning: [%s] %s (source: %s, target: %s)\n", w.Kind, w.Message, w.SourceID, w.TargetID)
+		}
+	}
+	fmt.Println("edit succeeded")
+}
+
 func runReadResourceAndCut(args []string) {
 	if len(args) < 2 {
 		fmt.Fprintln(os.Stderr, "Usage: ltp read-resource-and-cut <id> <kind>")
@@ -809,6 +1112,78 @@ func runUpdateDescription(args []string) {
 	fmt.Println("description updated")
 }
 
+func runWarningsList(args []string) {
+	dbPath := ".ltp/topology.db"
+	sourceID := ""
+	targetID := ""
+	var kind domain.WarningKind
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--db":
+			if i+1 < len(args) {
+				dbPath = args[i+1]
+				i++
+			}
+		case "--source":
+			if i+1 < len(args) {
+				sourceID = args[i+1]
+				i++
+			}
+		case "--target":
+			if i+1 < len(args) {
+				targetID = args[i+1]
+				i++
+			}
+		case "--kind":
+			if i+1 < len(args) {
+				kind = domain.WarningKind(args[i+1])
+				i++
+			}
+		}
+	}
+
+	manager, _ := initRegistry(dbPath)
+	warnings, err := manager.ListWarnings(sourceID, targetID, kind)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(warnings) == 0 {
+		fmt.Println("No warnings found.")
+		return
+	}
+
+	sort.SliceStable(warnings, func(i, j int) bool {
+		if warnings[i].Kind != warnings[j].Kind {
+			return warnings[i].Kind < warnings[j].Kind
+		}
+		return warnings[i].SourceID < warnings[j].SourceID
+	})
+
+	counts := make(map[domain.WarningKind]int)
+	for _, w := range warnings {
+		counts[w.Kind]++
+	}
+
+	fmt.Printf("Found %d warning(s):\n\n", len(warnings))
+	for _, k := range []domain.WarningKind{domain.WarnUseMissingNode, domain.WarnNodeRemoved, domain.WarnSignatureChanged} {
+		if c := counts[k]; c > 0 {
+			fmt.Printf("  %s: %d\n", k, c)
+		}
+	}
+	fmt.Println()
+
+	for _, w := range warnings {
+		fmt.Printf("  [%s] %s\n", w.Kind, w.Message)
+		fmt.Printf("    source: %s\n", w.SourceID)
+		if w.TargetID != "" {
+			fmt.Printf("    target: %s\n", w.TargetID)
+		}
+		fmt.Println()
+	}
+}
+
 func runListUndocumented() {
 	manager, _ := initRegistry(".ltp/topology.db")
 
@@ -860,4 +1235,36 @@ func mapResourceKind(name string) domain.ResourceKind {
 		return domain.ResourcePackage
 	}
 	return ""
+}
+
+func runReadFile() {
+	args := os.Args[2:]
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "Usage: ltp read_file <path>")
+		os.Exit(1)
+	}
+	path := args[0]
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	name := filepath.Base(path)
+	fmt.Printf("%s\n%s", name, string(data))
+}
+
+func diffWarnings(before, after map[string]domain.TopologyWarning) (added, removed []domain.TopologyWarning) {
+	for id, w := range after {
+		if _, exists := before[id]; !exists {
+			added = append(added, w)
+		}
+	}
+	for id, w := range before {
+		if _, exists := after[id]; !exists {
+			removed = append(removed, w)
+		}
+	}
+	return
 }
