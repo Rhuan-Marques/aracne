@@ -2,13 +2,17 @@
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
     "llm-topology": {
-      "type": "local",
-      "command": ["ltp", "serve"],
-      "enabled": true
+      "command": [
+        "ltp",
+        "serve"
+      ],
+      "enabled": true,
+      "type": "local"
     }
   },
   "permission": {
+    "edit": "deny",
     "read": "deny",
-    "edit": "deny"
+    "write": "deny"
   }
 }

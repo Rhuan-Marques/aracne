@@ -4,12 +4,17 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"llm-topology/internal/helper"
 	"llm-topology/internal/topology/domain"
 	"llm-topology/internal/topology/scanner"
 )
+
+var bugIDCounter int64
 
 type TopologyManager struct {
 	dbPath string
@@ -33,18 +38,82 @@ func (m *TopologyManager) FullScan(root string, reg *scanner.Registry) error {
 	if err != nil {
 		return err
 	}
-	return helper.WriteDb(topo, m.dbPath)
+	if err := helper.WriteDb(topo, m.dbPath); err != nil {
+		return err
+	}
+	helper.SyncManifest(topo, m.dbPath)
+	return nil
 }
 
-func (m *TopologyManager) IncrementalScan(root string, reg *scanner.Registry) error {
+func (m *TopologyManager) IncrementalScan(root string, reg *scanner.Registry) ([]domain.TopologyWarning, error) {
 	langScanner := reg.Detect(root)
 	if langScanner == nil {
-		return fmt.Errorf("no language scanner detected for %s", root)
+		return nil, fmt.Errorf("no language scanner detected for %s", root)
+	}
+
+	topo, err := helper.ReadDb(m.dbPath)
+	if err != nil {
+		return m.FullReScan(root, reg)
+	}
+
+	manifestPath := helper.ManifestPath(m.dbPath)
+	if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
+		return m.FullReScan(root, reg)
+	}
+
+	added, modified, deleted := helper.DiffScanFiles(root, topo.Language, manifestPath)
+
+	if len(added) == 0 && len(modified) == 0 && len(deleted) == 0 {
+		helper.SyncManifest(topo, m.dbPath)
+		return nil, nil
+	}
+
+	var allWarnings []domain.TopologyWarning
+
+	for _, path := range append(added, modified...) {
+		warnings, err := langScanner.UpdateFile(topo, path)
+		if err != nil {
+			allWarnings = append(allWarnings, domain.TopologyWarning{
+				ID:       "error:" + path,
+				SourceID: path,
+				Kind:     "",
+				Message:  fmt.Sprintf("error updating %s: %v", path, err),
+			})
+		} else {
+			allWarnings = append(allWarnings, warnings...)
+		}
+	}
+
+	for _, path := range deleted {
+		warnings := helper.RemoveFileResources(topo, path)
+		allWarnings = append(allWarnings, warnings...)
+	}
+
+	for _, w := range allWarnings {
+		topo.Warnings[w.ID] = w
+	}
+
+	helper.CleanupOrphanedWarnings(topo)
+
+	if err := helper.WriteDb(topo, m.dbPath); err != nil {
+		return allWarnings, fmt.Errorf("write topology db: %w", err)
+	}
+
+	helper.CleanupOrphanedBugs(m.dbPath, topo)
+	helper.SyncManifest(topo, m.dbPath)
+
+	return allWarnings, nil
+}
+
+func (m *TopologyManager) FullReScan(root string, reg *scanner.Registry) ([]domain.TopologyWarning, error) {
+	langScanner := reg.Detect(root)
+	if langScanner == nil {
+		return nil, fmt.Errorf("no language scanner detected for %s", root)
 	}
 
 	newTopo, err := langScanner.Scan(root)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	oldTopo, readErr := helper.ReadDb(m.dbPath)
@@ -61,7 +130,13 @@ func (m *TopologyManager) IncrementalScan(root string, reg *scanner.Registry) er
 		}
 	}
 
-	return helper.WriteDb(newTopo, m.dbPath)
+	if err := helper.WriteDb(newTopo, m.dbPath); err != nil {
+		return nil, err
+	}
+
+	helper.CleanupOrphanedBugs(m.dbPath, newTopo)
+	helper.SyncManifest(newTopo, m.dbPath)
+	return nil, nil
 }
 
 func (m *TopologyManager) Load(path string) error {
@@ -135,16 +210,44 @@ func (m *TopologyManager) UpdateFile(path string, reg *scanner.Registry) ([]doma
 		return nil, fmt.Errorf("no language scanner found")
 	}
 
-	warnings, err := langScanner.UpdateFile(topo, path)
+	beforeWarnings := cloneWarnings(topo.Warnings)
+
+	_, err = langScanner.UpdateFile(topo, path)
 	if err != nil {
 		return nil, err
 	}
+
+	helper.CleanupOrphanedWarnings(topo)
+	warnings := addedWarnings(beforeWarnings, topo.Warnings)
 
 	if err := helper.WriteDb(topo, m.dbPath); err != nil {
 		return nil, fmt.Errorf("write topology db: %w", err)
 	}
 
+	helper.SyncManifest(topo, m.dbPath)
+
 	return warnings, nil
+}
+
+func cloneWarnings(warnings map[string]domain.TopologyWarning) map[string]domain.TopologyWarning {
+	cloned := make(map[string]domain.TopologyWarning, len(warnings))
+	for id, warning := range warnings {
+		cloned[id] = warning
+	}
+	return cloned
+}
+
+func addedWarnings(before, after map[string]domain.TopologyWarning) []domain.TopologyWarning {
+	var added []domain.TopologyWarning
+	for id, warning := range after {
+		if _, exists := before[id]; !exists {
+			added = append(added, warning)
+		}
+	}
+	sort.Slice(added, func(i, j int) bool {
+		return added[i].ID < added[j].ID
+	})
+	return added
 }
 
 func (m *TopologyManager) FindResourcesByName(name string, kinds ...domain.ResourceKind) ([]string, error) {
@@ -167,6 +270,39 @@ func (m *TopologyManager) FindResourcesByName(name string, kinds ...domain.Resou
 		results = append(results, id)
 	}
 	return results, nil
+}
+
+func (m *TopologyManager) CreateBug(nodeID string, description string) (*domain.KnownBug, error) {
+	bug := domain.KnownBug{
+		ID:          fmt.Sprintf("bug_%d_%d", time.Now().UnixNano(), atomic.AddInt64(&bugIDCounter, 1)),
+		NodeID:      nodeID,
+		Description: description,
+		State:       domain.BugPending,
+	}
+	if err := helper.CreateBug(m.dbPath, bug); err != nil {
+		return nil, fmt.Errorf("create bug: %w", err)
+	}
+	return &bug, nil
+}
+
+func (m *TopologyManager) ListBugs(nodeID string, state domain.BugState) ([]domain.KnownBug, error) {
+	return helper.ReadBugs(m.dbPath, nodeID, state)
+}
+
+func (m *TopologyManager) AcknowledgeBug(bugID string) error {
+	return helper.UpdateBugState(m.dbPath, bugID, domain.BugAcknowledged)
+}
+
+func (m *TopologyManager) DismissBug(bugID string) error {
+	return helper.UpdateBugState(m.dbPath, bugID, domain.BugDismissed)
+}
+
+func (m *TopologyManager) DeleteBug(bugID string) error {
+	return helper.DeleteBug(m.dbPath, bugID)
+}
+
+func (m *TopologyManager) DeleteAllBugs() error {
+	return helper.DeleteAllBugs(m.dbPath)
 }
 
 func (m *TopologyManager) UpdateDescription(id string, kind domain.ResourceKind, description string) error {

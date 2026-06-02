@@ -1,4 +1,4 @@
-package cli
+﻿package cli
 
 import (
 	"bufio"
@@ -30,6 +30,12 @@ func RunAgent(args []string) {
 	toolReg.Register(&tools.Ls{})
 	toolReg.Register(&tools.ReadFile{})
 	toolReg.Register(tools.NewEdit(manager, reg))
+	toolReg.Register(tools.NewWrite(manager, reg))
+	toolReg.Register(tools.NewBugReport(manager))
+	toolReg.Register(tools.NewBugList(manager))
+	toolReg.Register(tools.NewBugAcknowledge(manager))
+	toolReg.Register(tools.NewBugDismiss(manager))
+	toolReg.Register(tools.NewBugDelete(manager))
 
 	lang := GetLanguage(manager)
 	if lang == "python" {

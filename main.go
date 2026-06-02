@@ -1,4 +1,4 @@
-﻿package main
+package main
 
 import (
 	"fmt"
@@ -55,6 +55,10 @@ func main() {
 			os.Exit(1)
 		}
 		cli.RunWarningsList(os.Args[3:])
+	case "bug":
+		cli.RunBug(os.Args[2:])
+	case "check-updates":
+		cli.RunCheckUpdates(os.Args[2:])
 	case "read_file":
 		cli.RunReadFile()
 	default:

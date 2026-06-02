@@ -22,6 +22,22 @@ Prefer these topology-aware tools over standard file reading:
 | %[1]sls%[1]s | List files and directories |
 | %[1]sread%[1]s | Read raw file contents (use only when topology tools aren't sufficient) |
 
+## Bug Tracking Tools
+
+| Tool | Purpose |
+|------|---------|
+| %[1]sbug_report%[1]s | Report a bug on a resource node (starts as pending) |
+| %[1]sbug_list%[1]s | List known bugs (filterable by node or state) |
+| %[1]sbug_acknowledge%[1]s | Mark a bug as acknowledged (confirmed, needs fixing) |
+| %[1]sbug_dismiss%[1]s | Mark a bug as dismissed (false positive, kept for reference) |
+| %[1]sbug_delete%[1]s | Delete a bug from the database |
+
+## Bug Workflow
+
+1. Use /bug-hunter to scan the topology for potential bugs
+2. Use /bug-judge to triage pending bugs (acknowledge real ones, dismiss false positives)
+3. Use /bug-solver to fix acknowledged bugs
+
 ## How to Use
 
 1. Start with %[1]sls%[1]s to explore the project structure

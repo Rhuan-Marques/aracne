@@ -66,15 +66,15 @@ type PythonFunctionContext struct {
 }
 
 type PythonClassContext struct {
-	Class         *ClassCut
-	Constructor   *FunctionCut
-	BaseClasses   []SimplifiedClass
-	Methods       []SimplifiedFunction
-	ClassesUsed   []ClassUsage
-	ExtVarsUsed   []SimplifiedExtVar
-	Dependencies  []DependancyPath
-	ModulesUsed   []PackagePath
-	Blocks        []ContextBlock
+	Class        *ClassCut
+	Constructor  *FunctionCut
+	BaseClasses  []SimplifiedClass
+	Methods      []SimplifiedFunction
+	ClassesUsed  []ClassUsage
+	ExtVarsUsed  []SimplifiedExtVar
+	Dependencies []DependancyPath
+	ModulesUsed  []PackagePath
+	Blocks       []ContextBlock
 }
 
 type TopologyWarning struct {

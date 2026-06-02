@@ -1,4 +1,4 @@
-package cli
+﻿package cli
 
 import (
 	"flag"
@@ -32,6 +32,7 @@ func RunGenerateDescriptions(args []string) {
 	toolReg.Register(&tools.Ls{})
 	toolReg.Register(&tools.ReadFile{})
 	toolReg.Register(tools.NewEdit(manager, reg))
+	toolReg.Register(tools.NewWrite(manager, reg))
 
 	lang := GetLanguage(manager)
 	if lang == "python" {

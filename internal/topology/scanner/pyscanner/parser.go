@@ -12,9 +12,9 @@ import (
 )
 
 type pyImport struct {
-	Name    string `json:"name"`
-	Alias   string `json:"alias"`
-	Module  string `json:"module,omitempty"`
+	Name   string `json:"name"`
+	Alias  string `json:"alias"`
+	Module string `json:"module,omitempty"`
 }
 
 type pyClass struct {
@@ -32,17 +32,17 @@ type pyClass struct {
 }
 
 type pyFunc struct {
-	Name       string            `json:"name"`
-	Docstring  string            `json:"docstring"`
-	Decorators []string          `json:"decorators"`
-	IsAsync    bool              `json:"is_async"`
-	IsProperty bool              `json:"is_property"`
-	IsAbstract bool              `json:"is_abstract"`
-	Params     []pyVarDef        `json:"params"`
-	Results    []pyVarDef        `json:"results"`
-	Lineno     int               `json:"lineno"`
-	EndLineno  int               `json:"end_lineno"`
-	Parent     *string           `json:"parent"`
+	Name       string     `json:"name"`
+	Docstring  string     `json:"docstring"`
+	Decorators []string   `json:"decorators"`
+	IsAsync    bool       `json:"is_async"`
+	IsProperty bool       `json:"is_property"`
+	IsAbstract bool       `json:"is_abstract"`
+	Params     []pyVarDef `json:"params"`
+	Results    []pyVarDef `json:"results"`
+	Lineno     int        `json:"lineno"`
+	EndLineno  int        `json:"end_lineno"`
+	Parent     *string    `json:"parent"`
 }
 
 type pyVarDef struct {

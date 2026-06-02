@@ -7,6 +7,7 @@ import (
 
 	"llm-topology/internal/helper"
 	"llm-topology/internal/topology"
+	"llm-topology/internal/topology/domain"
 	"llm-topology/internal/topology/golang"
 	"llm-topology/internal/topology/python"
 	"llm-topology/internal/topology/scanner"
@@ -49,6 +50,205 @@ func TestCut(t *testing.T) {
 			t.Fatalf("Cut(%s): path mismatch", id)
 		}
 		break
+	}
+}
+
+func TestCreateAndListBugs(t *testing.T) {
+	dbPath := "../test_bugs.db"
+	defer os.Remove(dbPath)
+
+	mgr := topology.New()
+	mgr.Load(dbPath)
+
+	bug1, err := mgr.CreateBug("node-1", "nil dereference in function X")
+	if err != nil {
+		t.Fatalf("CreateBug: %v", err)
+	}
+	if bug1.State != domain.BugPending {
+		t.Fatalf("expected pending state, got %s", bug1.State)
+	}
+
+	bug2, err := mgr.CreateBug("node-1", "missing error check in function Y")
+	if err != nil {
+		t.Fatalf("CreateBug: %v", err)
+	}
+
+	bug3, err := mgr.CreateBug("node-2", "race condition in struct Z")
+	if err != nil {
+		t.Fatalf("CreateBug: %v", err)
+	}
+
+	all, err := mgr.ListBugs("", "")
+	if err != nil {
+		t.Fatalf("ListBugs: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("expected 3 bugs, got %d", len(all))
+	}
+
+	node1Bugs, err := mgr.ListBugs("node-1", "")
+	if err != nil {
+		t.Fatalf("ListBugs: %v", err)
+	}
+	if len(node1Bugs) != 2 {
+		t.Fatalf("expected 2 bugs for node-1, got %d", len(node1Bugs))
+	}
+
+	pending, err := mgr.ListBugs("", domain.BugPending)
+	if err != nil {
+		t.Fatalf("ListBugs: %v", err)
+	}
+	if len(pending) != 3 {
+		t.Fatalf("expected 3 pending bugs, got %d", len(pending))
+	}
+
+	_ = bug2
+	_ = bug3
+}
+
+func TestBugStateTransitions(t *testing.T) {
+	dbPath := "../test_bug_states.db"
+	defer os.Remove(dbPath)
+
+	mgr := topology.New()
+	mgr.Load(dbPath)
+
+	bug, err := mgr.CreateBug("node-1", "test bug")
+	if err != nil {
+		t.Fatalf("CreateBug: %v", err)
+	}
+
+	if err := mgr.AcknowledgeBug(bug.ID); err != nil {
+		t.Fatalf("AcknowledgeBug: %v", err)
+	}
+
+	ack, err := mgr.ListBugs("", domain.BugAcknowledged)
+	if err != nil {
+		t.Fatalf("ListBugs: %v", err)
+	}
+	if len(ack) != 1 || ack[0].ID != bug.ID {
+		t.Fatalf("expected acknowledged bug %s", bug.ID)
+	}
+
+	if err := mgr.DismissBug(bug.ID); err != nil {
+		t.Fatalf("DismissBug: %v", err)
+	}
+
+	dismissed, err := mgr.ListBugs("", domain.BugDismissed)
+	if err != nil {
+		t.Fatalf("ListBugs: %v", err)
+	}
+	if len(dismissed) != 1 {
+		t.Fatalf("expected 1 dismissed bug, got %d", len(dismissed))
+	}
+}
+
+func TestDeleteBug(t *testing.T) {
+	dbPath := "../test_bug_delete.db"
+	defer os.Remove(dbPath)
+
+	mgr := topology.New()
+	mgr.Load(dbPath)
+
+	bug, err := mgr.CreateBug("node-1", "bug to delete")
+	if err != nil {
+		t.Fatalf("CreateBug: %v", err)
+	}
+
+	if err := mgr.DeleteBug(bug.ID); err != nil {
+		t.Fatalf("DeleteBug: %v", err)
+	}
+
+	all, err := mgr.ListBugs("", "")
+	if err != nil {
+		t.Fatalf("ListBugs: %v", err)
+	}
+	if len(all) != 0 {
+		t.Fatalf("expected 0 bugs after delete, got %d", len(all))
+	}
+}
+
+func TestDeleteAllBugs(t *testing.T) {
+	dbPath := "../test_bug_deleteall.db"
+	defer os.Remove(dbPath)
+
+	mgr := topology.New()
+	mgr.Load(dbPath)
+
+	for i := 0; i < 5; i++ {
+		if _, err := mgr.CreateBug("node-1", "bug"); err != nil {
+			t.Fatalf("CreateBug: %v", err)
+		}
+	}
+
+	if err := mgr.DeleteAllBugs(); err != nil {
+		t.Fatalf("DeleteAllBugs: %v", err)
+	}
+
+	all, err := mgr.ListBugs("", "")
+	if err != nil {
+		t.Fatalf("ListBugs: %v", err)
+	}
+	if len(all) != 0 {
+		t.Fatalf("expected 0 bugs after delete all, got %d", len(all))
+	}
+}
+
+func TestBugSurvivesScan(t *testing.T) {
+	dbPath := "../test_bug_scan_survival.db"
+	defer os.Remove(dbPath)
+
+	reg := newTestRegistry()
+	mgr := topology.New()
+	mgr.Load(dbPath)
+
+	if err := mgr.FullScan("../..", reg); err != nil {
+		t.Fatal(err)
+	}
+
+	topo, err := helper.ReadDb(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var firstID string
+	for id := range topo.Resources {
+		firstID = id
+		break
+	}
+
+	bug, err := mgr.CreateBug(firstID, "test bug survival")
+	if err != nil {
+		t.Fatalf("CreateBug: %v", err)
+	}
+
+	if err := mgr.FullScan("../..", reg); err != nil {
+		t.Fatal(err)
+	}
+
+	all, err := mgr.ListBugs("", "")
+	if err != nil {
+		t.Fatalf("ListBugs: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("expected bug to survive scan, got %d bugs", len(all))
+	}
+	if all[0].ID != bug.ID {
+		t.Fatalf("expected bug %s to survive, got %s", bug.ID, all[0].ID)
+	}
+
+	if err := mgr.DeleteAllBugs(); err != nil {
+		t.Fatalf("DeleteAllBugs: %v", err)
+	}
+	if err := mgr.FullScan("../..", reg); err != nil {
+		t.Fatal(err)
+	}
+	after, err := mgr.ListBugs("", "")
+	if err != nil {
+		t.Fatalf("ListBugs: %v", err)
+	}
+	if len(after) != 0 {
+		t.Fatalf("expected bugs to be gone after explicit delete, got %d", len(after))
 	}
 }
 

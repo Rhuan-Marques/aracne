@@ -3,21 +3,21 @@ package python
 type ConnectionKind string
 
 var (
-	ConnCalls        ConnectionKind = "calls"
-	ConnUsesClass    ConnectionKind = "uses_class"
-	ConnUsesExtVar   ConnectionKind = "uses_extvar"
-	ConnUsesPkg      ConnectionKind = "uses_package"
-	ConnUsesDep      ConnectionKind = "uses_dependency"
-	ConnHasMethod    ConnectionKind = "methods"
-	ConnInherits     ConnectionKind = "inherits"
-	ConnInheritedBy  ConnectionKind = "inherited_by"
-	ConnConstructor  ConnectionKind = "constructor"
-	ConnHasFunc      ConnectionKind = "has_function"
-	ConnHasClass     ConnectionKind = "has_class"
-	ConnHasVar       ConnectionKind = "has_extvar"
-	ConnHasFile      ConnectionKind = "has_file"
-	ConnImportsPkg   ConnectionKind = "imports_package"
-	ConnImportsDep   ConnectionKind = "imports_dependency"
+	ConnCalls       ConnectionKind = "calls"
+	ConnUsesClass   ConnectionKind = "uses_class"
+	ConnUsesExtVar  ConnectionKind = "uses_extvar"
+	ConnUsesPkg     ConnectionKind = "uses_package"
+	ConnUsesDep     ConnectionKind = "uses_dependency"
+	ConnHasMethod   ConnectionKind = "methods"
+	ConnInherits    ConnectionKind = "inherits"
+	ConnInheritedBy ConnectionKind = "inherited_by"
+	ConnConstructor ConnectionKind = "constructor"
+	ConnHasFunc     ConnectionKind = "has_function"
+	ConnHasClass    ConnectionKind = "has_class"
+	ConnHasVar      ConnectionKind = "has_extvar"
+	ConnHasFile     ConnectionKind = "has_file"
+	ConnImportsPkg  ConnectionKind = "imports_package"
+	ConnImportsDep  ConnectionKind = "imports_dependency"
 )
 
 func (f *PythonFunction) Calls() []FunctionID {

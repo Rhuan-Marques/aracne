@@ -1,4 +1,4 @@
-package cli
+﻿package cli
 
 import (
 	"fmt"
@@ -39,7 +39,7 @@ func InitRegistry(dbPath string) (*topology.TopologyManager, *scanner.Registry) 
 		mgr.Load(dbPath)
 		fmt.Fprintf(os.Stderr, "No topology found. Scanning project...\n")
 		start := time.Now()
-		if err := mgr.IncrementalScan(".", reg); err != nil {
+		if _, err := mgr.IncrementalScan(".", reg); err != nil {
 			fmt.Fprintf(os.Stderr, "Error scanning project: %v\n", err)
 			os.Exit(1)
 		}
@@ -81,3 +81,4 @@ func DiffWarnings(before, after map[string]domain.TopologyWarning) (added, remov
 	}
 	return
 }
+

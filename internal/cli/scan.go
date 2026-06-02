@@ -1,4 +1,4 @@
-package cli
+﻿package cli
 
 import (
 	"flag"
@@ -16,13 +16,23 @@ func RunScan(args []string) {
 	fs := flag.NewFlagSet("scan", flag.ExitOnError)
 	root := fs.String("root", ".", "Root folder of the Go project to analyze")
 	output := fs.String("output", ".ltp/topology.db", "Output SQLite database path")
-	hard := fs.Bool("hard", false, "Force full rebuild (clears all existing descriptions)")
+	allFlag := fs.Bool("all", false, "Re-scan all files (preserves existing descriptions)")
+	hardFlag := fs.Bool("hard", false, "Force full rebuild from scratch (clears descriptions and bugs)")
+	defaultFlag := fs.Bool("default", false, "Force default incremental scan (overrides config)")
 	debug := fs.Bool("debug", false, "Compare warnings before and after scan, print differences")
 	fs.Parse(args)
 
 	manager := topology.New()
 	manager.Load(*output)
 	os.MkdirAll(filepath.Dir(*output), 0755)
+
+	cfgPath := helper.ConfigPath(*output)
+	cfg := helper.EnsureConfig(cfgPath)
+
+	explicitFlags := make(map[string]bool)
+	fs.Visit(func(f *flag.Flag) {
+		explicitFlags[f.Name] = true
+	})
 
 	var beforeWarnings map[string]domain.TopologyWarning
 	if *debug {
@@ -37,17 +47,48 @@ func RunScan(args []string) {
 
 	start := time.Now()
 	reg := NewScannerRegistry()
-	if *hard {
+
+	resolvedMode := cfg.ScanMode
+	switch {
+	case explicitFlags["hard"] && *hardFlag:
+		resolvedMode = helper.ScanModeHard
+	case explicitFlags["all"] && *allFlag:
+		resolvedMode = helper.ScanModeAll
+	case explicitFlags["default"] && *defaultFlag:
+		resolvedMode = helper.ScanModeDefault
+	}
+
+	switch resolvedMode {
+	case helper.ScanModeHard:
 		fmt.Println("Hard scan: rebuilding topology from scratch")
 		if err := manager.FullScan(*root, reg); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
-	} else {
-		fmt.Println("Incremental scan: preserving existing descriptions")
-		if err := manager.IncrementalScan(*root, reg); err != nil {
+		manager.DeleteAllBugs()
+	case helper.ScanModeAll:
+		fmt.Println("Full re-scan: processing all files")
+		if _, err := manager.FullReScan(*root, reg); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
+		}
+	default:
+		fmt.Println("Incremental scan: processing only changed files")
+		warnings, err := manager.IncrementalScan(*root, reg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		if len(warnings) > 0 {
+			fmt.Printf("\n%d warning(s) during scan:\n", len(warnings))
+			for _, w := range warnings {
+				if w.Kind != "" {
+					fmt.Printf("  [%s] %s\n", w.Kind, w.Message)
+				} else {
+					fmt.Printf("  %s\n", w.Message)
+				}
+			}
+			fmt.Println()
 		}
 	}
 	elapsed := time.Since(start)

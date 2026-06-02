@@ -1,4 +1,4 @@
-package cli
+﻿package cli
 
 import (
 	"fmt"
@@ -19,6 +19,12 @@ func RunServe() {
 	registry.Register(&tools.Ls{})
 	registry.Register(&tools.ReadFile{})
 	registry.Register(tools.NewEdit(manager, reg))
+	registry.Register(tools.NewWrite(manager, reg))
+	registry.Register(tools.NewBugReport(manager))
+	registry.Register(tools.NewBugList(manager))
+	registry.Register(tools.NewBugAcknowledge(manager))
+	registry.Register(tools.NewBugDismiss(manager))
+	registry.Register(tools.NewBugDelete(manager))
 
 	lang := GetLanguage(manager)
 	if lang == "python" {

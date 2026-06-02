@@ -469,7 +469,7 @@ func (m *PythonManager) ReadClass(id string, opts ...topology.TopologyOption) (*
 		abcFlag := ""
 		blocks = append(blocks, ContextBlock{
 			Kind: "base_class", FileID: ModuleID(base.Location.Path),
-			Line: base.Location.StartsAt,
+			Line:  base.Location.StartsAt,
 			Title: fmt.Sprintf("class %s%s%s", base.Name, abcFlag, needBadge),
 		})
 	}

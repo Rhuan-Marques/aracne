@@ -155,6 +155,11 @@ func (s *GoScanner) Scan(root string) (*domain.Topology, error) {
 		gt.Packages[file.FromPackage] = pkg
 	}
 
+	for pkgPath, pkg := range gt.Packages {
+		pkg.Connections = uniqueConns(pkg.Connections)
+		gt.Packages[pkgPath] = pkg
+	}
+
 	populateStructMethods(gt)
 	detectConstructors(gt)
 
@@ -274,9 +279,15 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.Top
 		pkg.Connections[golang.ConnHasIface] = append(pkg.Connections[golang.ConnHasIface], newFile.Connections[golang.ConnHasIface]...)
 		pkg.Connections[golang.ConnHasNamedType] = append(pkg.Connections[golang.ConnHasNamedType], newFile.Connections[golang.ConnHasNamedType]...)
 		pkg.Connections[golang.ConnHasVar] = append(pkg.Connections[golang.ConnHasVar], newFile.Connections[golang.ConnHasVar]...)
+		pkg.Connections = uniqueConns(pkg.Connections)
 		gt.Packages[pkgPath] = pkg
 
 		for _, fi := range pr.Functions {
+			for warnID, w := range gt.Warnings {
+				if w.Kind == domain.WarnUseMissingNode && w.SourceID == string(fi.Function.ID) {
+					delete(gt.Warnings, warnID)
+				}
+			}
 			if fi.Body != nil {
 				conns := analyzeFunctionBody(fi.Body, pr, gt, fi.Function.Input, fi.ReceiverName, fi.Function.MethodFrom, fi.Function.ID, fi.TypeParamNames)
 				f := gt.Functions[fi.Function.ID]
@@ -293,6 +304,7 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.Top
 
 		populateStructMethods(gt)
 		detectConstructors(gt)
+		s.resolveWarnings(gt, pr, nil, nil, nil)
 		matchStructsToInterfaces(gt)
 		collectDependencies(gt)
 		delete(gt.Errors, absPath)
@@ -469,9 +481,6 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.Top
 	for sid, oldStruct := range removedStructs {
 		structUsers := s.getCallers(gt, string(sid), string(golang.ConnUsesStruct))
 		for _, sourceID := range structUsers {
-			if _, isOld := oldFunctions[golang.FunctionID(sourceID)]; isOld {
-				continue
-			}
 			if sourceFn, ok := gt.Functions[golang.FunctionID(sourceID)]; ok {
 				sourceFn.Connections[golang.ConnUsesStruct] = removeString(sourceFn.Connections[golang.ConnUsesStruct], string(sid))
 				gt.Functions[golang.FunctionID(sourceID)] = sourceFn
@@ -490,9 +499,6 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.Top
 	for nid, oldNT := range removedNamedTypes {
 		ntUsers := s.getCallers(gt, string(nid), string(golang.ConnUsesNamedType))
 		for _, sourceID := range ntUsers {
-			if _, isOld := oldFunctions[golang.FunctionID(sourceID)]; isOld {
-				continue
-			}
 			if sourceFn, ok := gt.Functions[golang.FunctionID(sourceID)]; ok {
 				sourceFn.Connections[golang.ConnUsesNamedType] = removeString(sourceFn.Connections[golang.ConnUsesNamedType], string(nid))
 				gt.Functions[golang.FunctionID(sourceID)] = sourceFn
@@ -580,12 +586,18 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.Top
 	pkg.Connections[golang.ConnHasIface] = append(pkg.Connections[golang.ConnHasIface], newFile.Connections[golang.ConnHasIface]...)
 	pkg.Connections[golang.ConnHasNamedType] = append(pkg.Connections[golang.ConnHasNamedType], newFile.Connections[golang.ConnHasNamedType]...)
 	pkg.Connections[golang.ConnHasVar] = append(pkg.Connections[golang.ConnHasVar], newFile.Connections[golang.ConnHasVar]...)
+	pkg.Connections = uniqueConns(pkg.Connections)
 	gt.Packages[pkgPath] = pkg
 
 	populateStructMethods(gt)
 	detectConstructors(gt)
 
 	for _, fi := range pr.Functions {
+		for warnID, w := range gt.Warnings {
+			if w.Kind == domain.WarnUseMissingNode && w.SourceID == string(fi.Function.ID) {
+				delete(gt.Warnings, warnID)
+			}
+		}
 		if fi.Body != nil {
 			conns := analyzeFunctionBody(fi.Body, pr, gt, fi.Function.Input, fi.ReceiverName, fi.Function.MethodFrom, fi.Function.ID, fi.TypeParamNames)
 			f := gt.Functions[fi.Function.ID]
@@ -667,6 +679,11 @@ func (s *GoScanner) resolveWarnings(gt *golang.GolangTopology, pr *ParseResult, 
 				delete(gt.Warnings, warnID)
 			}
 			if _, removed := removedStructs[golang.StructID(w.SourceID)]; removed {
+				delete(gt.Warnings, warnID)
+			}
+		}
+		if w.Kind == domain.WarnSignatureChanged {
+			if _, removed := removedFuncs[golang.FunctionID(w.TargetID)]; removed {
 				delete(gt.Warnings, warnID)
 			}
 		}

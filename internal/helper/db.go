@@ -1,11 +1,12 @@
-package helper
+﻿package helper
 
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 
-	_ "modernc.org/sqlite"
 	"llm-topology/internal/topology/domain"
+	_ "modernc.org/sqlite"
 )
 
 func WriteDb(topo *domain.Topology, path string) error {
@@ -127,6 +128,15 @@ func createSchema(db *sql.DB) error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_warnings_source ON warnings(source_id);
 	CREATE INDEX IF NOT EXISTS idx_warnings_target ON warnings(target_id);
+
+	CREATE TABLE IF NOT EXISTS bugs (
+		id TEXT PRIMARY KEY,
+		node_id TEXT NOT NULL,
+		description TEXT NOT NULL,
+		state TEXT NOT NULL DEFAULT 'pending'
+	);
+	CREATE INDEX IF NOT EXISTS idx_bugs_node ON bugs(node_id);
+	CREATE INDEX IF NOT EXISTS idx_bugs_state ON bugs(state);
 	`
 	_, err := db.Exec(ddl)
 	return err
@@ -269,6 +279,100 @@ func GetCallers(dbPath string, targetID string, connType string) ([]string, erro
 	return results, nil
 }
 
+func CreateBug(dbPath string, bug domain.KnownBug) error {
+	db, err := sql.Open("sqlite", dbPath+"?cache=shared&_journal_mode=WAL")
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	if err := createSchema(db); err != nil {
+		return err
+	}
+
+	_, err = db.Exec("INSERT INTO bugs (id, node_id, description, state) VALUES (?, ?, ?, ?)",
+		bug.ID, bug.NodeID, bug.Description, string(bug.State))
+	return err
+}
+
+func ReadBugs(dbPath string, nodeID string, state domain.BugState) ([]domain.KnownBug, error) {
+	db, err := sql.Open("sqlite", dbPath+"?cache=shared&_journal_mode=WAL")
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	q := "SELECT id, node_id, description, state FROM bugs WHERE 1=1"
+	var args []interface{}
+	if nodeID != "" {
+		q += " AND node_id = ?"
+		args = append(args, nodeID)
+	}
+	if state != "" {
+		q += " AND state = ?"
+		args = append(args, string(state))
+	}
+	q += " ORDER BY id"
+
+	rows, err := db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var bugs []domain.KnownBug
+	for rows.Next() {
+		var b domain.KnownBug
+		var stateStr string
+		if err := rows.Scan(&b.ID, &b.NodeID, &b.Description, &stateStr); err != nil {
+			continue
+		}
+		b.State = domain.BugState(stateStr)
+		bugs = append(bugs, b)
+	}
+	return bugs, nil
+}
+
+func UpdateBugState(dbPath string, bugID string, state domain.BugState) error {
+	db, err := sql.Open("sqlite", dbPath+"?cache=shared&_journal_mode=WAL")
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	result, err := db.Exec("UPDATE bugs SET state = ? WHERE id = ?", string(state), bugID)
+	if err != nil {
+		return err
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("bug not found: %s", bugID)
+	}
+	return nil
+}
+
+func DeleteBug(dbPath string, bugID string) error {
+	db, err := sql.Open("sqlite", dbPath+"?cache=shared&_journal_mode=WAL")
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	_, err = db.Exec("DELETE FROM bugs WHERE id = ?", bugID)
+	return err
+}
+
+func DeleteAllBugs(dbPath string) error {
+	db, err := sql.Open("sqlite", dbPath+"?cache=shared&_journal_mode=WAL")
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	_, err = db.Exec("DELETE FROM bugs")
+	return err
+}
+
 func toJSON(v interface{}) string {
 	if v == nil {
 		return "{}"
@@ -290,3 +394,19 @@ func fromJSONMap(s string) map[string]any {
 	}
 	return v
 }
+
+func CleanupOrphanedBugs(dbPath string, topo *domain.Topology) error {
+	bugs, err := ReadBugs(dbPath, "", "")
+	if err != nil {
+		return nil
+	}
+	for _, bug := range bugs {
+		if _, ok := topo.Resources[bug.NodeID]; !ok {
+			if err := DeleteBug(dbPath, bug.ID); err != nil {
+				fmt.Printf("Warning: failed to delete orphaned bug %s: %v\n", bug.ID, err)
+			}
+		}
+	}
+	return nil
+}
+
