@@ -17,12 +17,12 @@ import (
 type ToolProfile string
 
 const (
-	ToolProfileAll        ToolProfile = "all"
-	ToolProfileDefault    ToolProfile = "default"
-	ToolProfileDescriptor ToolProfile = "descriptor"
-	ToolProfileBugHunter  ToolProfile = "bug-hunter"
-	ToolProfileBugJudge   ToolProfile = "bug-judge"
-	ToolProfileBugSolver  ToolProfile = "bug-solver"
+	ToolProfileAll                  ToolProfile = "all"
+	ToolProfileDefault              ToolProfile = "default"
+	ToolProfileDescriptionsExecutor ToolProfile = "descriptions-executor"
+	ToolProfileBugHunter            ToolProfile = "bug-hunter"
+	ToolProfileBugJudge             ToolProfile = "bug-judge"
+	ToolProfileBugSolver            ToolProfile = "bug-solver"
 )
 
 func ParseToolProfile(value string) (ToolProfile, error) {
@@ -30,7 +30,7 @@ func ParseToolProfile(value string) (ToolProfile, error) {
 		return ToolProfileDefault, nil
 	}
 	switch ToolProfile(value) {
-	case ToolProfileAll, ToolProfileDefault, ToolProfileDescriptor, ToolProfileBugHunter, ToolProfileBugJudge, ToolProfileBugSolver:
+	case ToolProfileAll, ToolProfileDefault, ToolProfileDescriptionsExecutor, ToolProfileBugHunter, ToolProfileBugJudge, ToolProfileBugSolver:
 		return ToolProfile(value), nil
 	default:
 		return "", fmt.Errorf("invalid tool profile %q", value)
@@ -96,8 +96,8 @@ func profileTools(profile ToolProfile) []string {
 	switch profile {
 	case ToolProfileAll:
 		return []string{"read_file", "edit", "write", "read_struct", "read_function", "warnings_list", "bug_report", "bug_list", "bug_acknowledge", "bug_dismiss", "bug_delete", "list_undocumented_resources", "read_resource_and_cut", "update_description"}
-	case ToolProfileDescriptor:
-		return []string{"read_file", "read_struct", "read_function", "list_undocumented_resources", "read_resource_and_cut", "update_description"}
+	case ToolProfileDescriptionsExecutor:
+		return []string{"read_file", "read_struct", "read_function", "read_resource_and_cut", "update_description"}
 	case ToolProfileBugHunter:
 		return []string{"read_file", "read_struct", "read_function", "bug_report"}
 	case ToolProfileBugJudge:

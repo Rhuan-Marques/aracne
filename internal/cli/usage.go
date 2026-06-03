@@ -38,10 +38,13 @@ Flags for "scan":
   --debug         Compare warnings before and after scan, print differences
 
 Flags for "serve":
-  --tool-profile <profile>  Tool profile: default, descriptor, bug-hunter, bug-judge, bug-solver, or all
+  --tool-profile <profile>  Tool profile: default, descriptions-executor, bug-hunter, bug-judge, bug-solver, or all
 
 Flags for "descriptions generate":
-  --targets <kinds>  Comma-separated resource kinds overriding config describe_targets (default: function,type,method,interface,file)
+  --targets <kinds>       Comma-separated resource kinds overriding config describe_targets (default: function,type,method,interface,file)
+  --batch-size <n>        Maximum resources assigned to each description executor (default 20)
+  --parallel <n>          Maximum description executors to run concurrently (default 4)
+  --max-retries <n>       Maximum executor attempts per resource (default 3)
 
 Flags for "warnings list":
   --db <path>     Topology database path (default ".ltp/topology.db")
@@ -82,7 +85,7 @@ Flags for "init":
     ltp init --read-mode mcp --edit-mode native --other-mode mcp
     ltp init --claude
     ltp init --opencode
-    ltp serve --tool-profile descriptor
+    ltp serve --tool-profile descriptions-executor
     ltp descriptions generate
     ltp read_function ReadFunction
     ltp read_struct TopologyManager`)

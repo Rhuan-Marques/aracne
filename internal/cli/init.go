@@ -159,13 +159,13 @@ func initOpenCode(global bool, modes helper.ToolModes, autoYes bool) {
 	os.MkdirAll(commandsDir, 0755)
 	os.MkdirAll(agentsDir, 0755)
 
-	writeOpenCodeCommand(commandsDir, "descriptions-generate", "Generate descriptions for undocumented resources in the topology", "descriptor", descriptionsGenerateCommandForAgent("descriptor"), autoYes)
+	writeOpenCodePrimaryCommand(commandsDir, "descriptions-generate", "Generate descriptions for undocumented resources in the topology", "build", prompts.DescriptionsGenerateCommand("descriptions-generation-executor"), autoYes)
 	writeOpenCodeCommand(commandsDir, "descriptions-apply", "Write topology descriptions back into source files as doc comments", "build", prompts.DescriptionsApplyCommand(), autoYes)
 	writeOpenCodeCommand(commandsDir, "bug-hunter", "Launch a Bug Hunter sub-agent to scan the entire topology for bugs", "bug-hunter", bugHunterCommandForAgent("bug-hunter"), autoYes)
 	writeOpenCodeCommand(commandsDir, "bug-judge", "Triage pending bugs by launching Bug Judge sub-agents for each node", "bug-judge", bugJudgeCommandForAgent("bug-judge"), autoYes)
 	writeOpenCodeCommand(commandsDir, "bug-solver", "Fix acknowledged bugs by launching Bug Solver sub-agents", "bug-solver", bugSolverCommandForAgent("bug-solver"), autoYes)
 
-	writeAgent(agentsDir, "descriptor", openCodeAgentContent("descriptor", "Generates descriptions for undocumented resources in the project topology", ToolProfileDescriptor, modes, prompts.DescribeAgentPrompt()), autoYes)
+	writeAgent(agentsDir, "descriptions-generation-executor", openCodeAgentContent("descriptions-generation-executor", "Generates descriptions for one assigned batch of undocumented topology resources", ToolProfileDescriptionsExecutor, modes, prompts.DescriptionsGenerationExecutorPrompt()), autoYes)
 	writeAgent(agentsDir, "bug-hunter", openCodeAgentContent("bug-hunter", "Scans the entire project topology looking for bugs", ToolProfileBugHunter, modes, prompts.BugHunterPrompt()), autoYes)
 	writeAgent(agentsDir, "bug-judge", openCodeAgentContent("bug-judge", "Triages pending bugs by comparing against dismissed bug patterns", ToolProfileBugJudge, modes, prompts.BugJudgePrompt()), autoYes)
 	writeAgent(agentsDir, "bug-solver", openCodeAgentContent("bug-solver", "Fixes acknowledged bugs in the codebase and removes them", ToolProfileBugSolver, modes, prompts.BugSolverPrompt()), autoYes)
@@ -202,13 +202,13 @@ func initClaudeCode(global bool, modes helper.ToolModes, autoYes bool) {
 	os.MkdirAll(commandsDir, 0755)
 	os.MkdirAll(agentsDir, 0755)
 
-	writeCommand(commandsDir, "descriptions-generate", "Generate descriptions for undocumented resources in the topology", descriptionsGenerateCommandForAgent(".claude/agents/descriptor.md"), autoYes)
+	writeCommand(commandsDir, "descriptions-generate", "Generate descriptions for undocumented resources in the topology", prompts.DescriptionsGenerateCommand("descriptions-generation-executor"), autoYes)
 	writeCommand(commandsDir, "descriptions-apply", "Write topology descriptions back into source files as doc comments", prompts.DescriptionsApplyCommand(), autoYes)
 	writeCommand(commandsDir, "bug-hunter", "Launch a Bug Hunter sub-agent to scan the entire topology for bugs", bugHunterCommandForAgent(".claude/agents/bug-hunter.md"), autoYes)
 	writeCommand(commandsDir, "bug-judge", "Triage pending bugs by launching Bug Judge sub-agents for each node", bugJudgeCommandForAgent(".claude/agents/bug-judge.md"), autoYes)
 	writeCommand(commandsDir, "bug-solver", "Fix acknowledged bugs by launching Bug Solver sub-agents", bugSolverCommandForAgent(".claude/agents/bug-solver.md"), autoYes)
 
-	writeAgent(agentsDir, "descriptor", claudeAgentContent("descriptor", "Generates descriptions for undocumented resources in the project topology", ToolProfileDescriptor, modes, prompts.DescribeAgentPrompt()), autoYes)
+	writeAgent(agentsDir, "descriptions-generation-executor", claudeAgentContent("descriptions-generation-executor", "Generates descriptions for one assigned batch of undocumented topology resources", ToolProfileDescriptionsExecutor, modes, prompts.DescriptionsGenerationExecutorPrompt()), autoYes)
 	writeAgent(agentsDir, "bug-hunter", claudeAgentContent("bug-hunter", "Scans the entire project topology looking for bugs", ToolProfileBugHunter, modes, prompts.BugHunterPrompt()), autoYes)
 	writeAgent(agentsDir, "bug-judge", claudeAgentContent("bug-judge", "Triages pending bugs by comparing against dismissed bug patterns", ToolProfileBugJudge, modes, prompts.BugJudgePrompt()), autoYes)
 	writeAgent(agentsDir, "bug-solver", claudeAgentContent("bug-solver", "Fixes acknowledged bugs in the codebase and removes them", ToolProfileBugSolver, modes, prompts.BugSolverPrompt()), autoYes)
@@ -298,10 +298,6 @@ func writeJSONConfig(path string, config map[string]interface{}) {
 		fmt.Fprintf(os.Stderr, "Error writing %s: %v\n", path, err)
 		os.Exit(1)
 	}
-}
-
-func descriptionsGenerateCommandForAgent(agentRef string) string {
-	return "Use the " + agentRef + " agent to generate descriptions for targeted undocumented resources from config. The agent must use list_undocumented_resources, then read_resource_and_cut and update_description for each returned resource, and process all listed resources without skipping any."
 }
 
 func bugHunterCommandForAgent(agentRef string) string {
@@ -476,6 +472,11 @@ func terminalCommandForTool(name string) string {
 
 func writeCommand(dir, name, description, template string, autoYes bool) {
 	writeMarkdownFile(filepath.Join(dir, name+".md"), "command "+name, fmt.Sprintf("---\ndescription: %s\n---\n\n%s\n", description, template), autoYes)
+}
+
+func writeOpenCodePrimaryCommand(dir, name, description, agentName, template string, autoYes bool) {
+	content := fmt.Sprintf("---\ndescription: %s\nagent: %s\n---\n\n%s\n", description, agentName, template)
+	writeMarkdownFile(filepath.Join(dir, name+".md"), "command "+name, content, autoYes)
 }
 
 func writeOpenCodeCommand(dir, name, description, agentName, template string, autoYes bool) {

@@ -35,7 +35,7 @@ There are three integration modes sharing the same topology engine. All must mai
 - Self-contained REPL agent connecting directly to DeepSeek API
 - Full topology-aware system prompt prepended with this charter
 - Same tool set as MCP, registered in `main.go`
-- Supports descriptor sub-agent workflow for description generation
+- Supports batched description executor workflow for description generation
 
 ### What This Means for You (the LLM)
 
@@ -113,13 +113,16 @@ Use the CONTEXT section to understand relationships **without making additional 
 When asked to document the project or generate descriptions:
 
 1. Call `list_undocumented_resources` to get all resources with empty descriptions
-2. For **each** resource in that list, dispatch a **descriptor sub-agent** that:
-   - Calls `read_resource_and_cut` with the resource's ID and kind
+2. Split the list into deterministic batches of at most 20 resources
+3. Assign each batch to a **descriptions-generation-executor** sub-agent when subagents are available. Each executor:
+   - Receives only its assigned IDs, names, and kinds
+   - Calls `read_resource_and_cut` with each assigned resource's ID and kind
    - Reads the source code and type-specific instructions
-   - Generates a concise description (1-3 lines for functions/structs/interfaces, 1 line for variables/files/packages)
+   - Manually generates a concise description (1-3 lines for functions/structs/interfaces, 1 line for variables/files/packages)
    - Calls `update_description` to persist it
-   - Returns "done"
-3. Process ALL resources. Do not skip any.
+   - Returns completed and failed IDs
+4. Re-run `list_undocumented_resources` after executor batches finish and retry any resources that are still listed
+5. Process ALL targeted resources. Do not skip any.
 
 ## 7. Behavioral Rules
 

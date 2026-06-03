@@ -33,7 +33,7 @@ func (r *ReadResourceAndCut) Description() string {
 func (r *ReadResourceAndCut) Parameters() []Parameter {
 	return []Parameter{
 		{Name: "id", Type: "string", Description: "Resource ID", Required: true},
-		{Name: "resource_name", Type: "string", Description: "Resource kind: Function, Struct, Interface, ExternalVar, File, Package", Required: true},
+		{Name: "resource_name", Type: "string", Description: "Resource kind: function, method, type, named_type, interface, variable, file, or package", Required: true},
 	}
 }
 
@@ -47,29 +47,12 @@ func (r *ReadResourceAndCut) Run(args json.RawMessage) (string, error) {
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
 
-	kind := domain.ResourceKind(strings.ToLower(params.ResourceName))
-	var instructions string
-	switch params.ResourceName {
-	case "Function":
-		kind = domain.ResourceFunction
-		instructions = "Generate a concise description (1-3 lines) for this Go function. Include its main purpose, what parameters it takes, what it returns, and any notable behavior or side effects."
-	case "Struct", "Type":
-		kind = domain.ResourceType
-		instructions = "Generate a concise description (1-3 lines) for this Go struct. Include what it represents, its key fields and their purpose, and how it is typically used."
-	case "Interface":
-		kind = domain.ResourceInterface
-		instructions = "Generate a concise description (1-3 lines) for this Go interface. Include what contract it defines, what behavior it abstracts, and the key methods it requires."
-	case "ExternalVar", "Variable":
-		kind = domain.ResourceVariable
-		instructions = "Generate a concise description (1 line) for this Go external variable. Include what it stores and its purpose in the codebase."
-	case "File":
-		kind = domain.ResourceFile
-		instructions = "Generate a concise description (1 line) for this Go source file. What does it contain and what is its role within its package? The file name is all the context available."
-	case "Package":
-		kind = domain.ResourcePackage
-		instructions = "Generate a concise description (1-2 lines) for this Go package. Include its overall purpose and what functionality it provides."
-	default:
-		instructions = "Generate a concise description for this resource."
+	kind, instructions := goDescriptionKind(params.ResourceName)
+	if kind == domain.ResourceFile {
+		return fmt.Sprintf("File: %s\n\n%s\n\nWrite ONLY the description text, nothing else.", params.ID, instructions), nil
+	}
+	if kind == domain.ResourcePackage {
+		return fmt.Sprintf("Package: %s\n\n%s\n\nWrite ONLY the description text, nothing else.", params.ID, instructions), nil
 	}
 
 	entry, err := r.mgr.ReadResourceAndCut(params.ID, kind)
@@ -77,12 +60,32 @@ func (r *ReadResourceAndCut) Run(args json.RawMessage) (string, error) {
 		return "", err
 	}
 
-	if entry.Cut == "" && kind == domain.ResourceFile {
-		return fmt.Sprintf("File: %s\n\n%s\n\nWrite ONLY the description text, nothing else.", params.ID, instructions), nil
-	}
-	if entry.Cut == "" && kind == domain.ResourcePackage {
-		return fmt.Sprintf("Package: %s\n\n%s\n\nWrite ONLY the description text, nothing else.", params.ID, instructions), nil
-	}
-
 	return fmt.Sprintf("%s\n\n```go\n%s\n```\n\nWrite ONLY the description text, nothing else.", instructions, entry.Cut), nil
+}
+
+func goDescriptionKind(resourceName string) (domain.ResourceKind, string) {
+	normalized := strings.ToLower(strings.TrimSpace(resourceName))
+	normalized = strings.ReplaceAll(normalized, "-", "_")
+	normalized = strings.ReplaceAll(normalized, " ", "_")
+
+	switch normalized {
+	case "function":
+		return domain.ResourceFunction, "Generate a concise description (1-3 lines) for this Go function. Include its main purpose, what parameters it takes, what it returns, and any notable behavior or side effects."
+	case "method":
+		return domain.ResourceMethod, "Generate a concise description (1-3 lines) for this Go method. Include its receiver behavior, main purpose, parameters, return values, and any notable side effects."
+	case "struct", "type":
+		return domain.ResourceType, "Generate a concise description (1-3 lines) for this Go struct. Include what it represents, its key fields and their purpose, and how it is typically used."
+	case "named_type", "namedtype":
+		return domain.ResourceNamedType, "Generate a concise description (1-3 lines) for this Go named type. Include what it represents, its underlying kind, and how it is used."
+	case "interface":
+		return domain.ResourceInterface, "Generate a concise description (1-3 lines) for this Go interface. Include what contract it defines, what behavior it abstracts, and the key methods it requires."
+	case "externalvar", "external_var", "variable":
+		return domain.ResourceVariable, "Generate a concise description (1 line) for this Go external variable. Include what it stores and its purpose in the codebase."
+	case "file":
+		return domain.ResourceFile, "Generate a concise description (1 line) for this Go source file. What does it contain and what is its role within its package? The file name is all the context available."
+	case "package":
+		return domain.ResourcePackage, "Generate a concise description (1-2 lines) for this Go package. Include its overall purpose and what functionality it provides."
+	default:
+		return domain.ResourceKind(normalized), "Generate a concise description for this resource."
+	}
 }

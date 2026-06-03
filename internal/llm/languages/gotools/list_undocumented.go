@@ -3,6 +3,7 @@ package gotools
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"ltp/internal/helper"
@@ -32,7 +33,7 @@ func (l *ListUndocumented) Name() string {
 
 // Returns the description string for the ListUndocumented tool, explaining it lists all resources needing descriptions with their ID, name, and kind.
 func (l *ListUndocumented) Description() string {
-	return "List all resources that need descriptions. Returns each resource's ID, name, and kind. After receiving this list, dispatch descriptor sub-agents — one per resource — that each call read_resource_and_cut then update_description."
+	return "List targeted resources that still need descriptions. Returns each resource's ID, name, and kind for batching into description executor tasks."
 }
 
 // Returns the parameter schema for the ListUndocumented tool, which takes no parameters (returns nil).
@@ -40,7 +41,7 @@ func (l *ListUndocumented) Parameters() []Parameter {
 	return nil
 }
 
-// Lists all resources in the topology that lack descriptions, formatting output with instructions for sub-agents to generate descriptions.
+// Lists all resources in the topology that lack descriptions, formatting output for main-session batching.
 func (l *ListUndocumented) Run(args json.RawMessage) (string, error) {
 	topo, err := l.mgr.Generic().ReadAll()
 	if err != nil {
@@ -65,31 +66,30 @@ func (l *ListUndocumented) Run(args json.RawMessage) (string, error) {
 		}
 	}
 
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].Kind != entries[j].Kind {
+			return entries[i].Kind < entries[j].Kind
+		}
+		if entries[i].Name != entries[j].Name {
+			return entries[i].Name < entries[j].Name
+		}
+		return entries[i].ID < entries[j].ID
+	})
+
 	if len(entries) == 0 {
 		return "All targeted resources already have descriptions. Nothing to generate.", nil
 	}
 
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("Found %d undocumented resources for targets: %s.\n\n", len(entries), helper.FormatDescribeTargets(l.targets)))
-	b.WriteString(`## INSTRUCTIONS
+	b.WriteString(`## Orchestration Guidance
 
-Dispatch a descriptor sub-agent for EACH resource below. Each sub-agent receives:
-- A system prompt instructing it to generate a description
-- Two exclusive tools: **read_resource_and_cut** and **update_description**
-
-Each sub-agent workflow:
-1. Call **read_resource_and_cut** with the resource's ID and resource_name
-2. Read the returned source code and the type-specific instructions
-3. Generate a concise description (1-3 lines for functions/structs/interfaces, 1 line for variables/files/packages)
-4. Call **update_description** with the generated description (parameters: id, resource_name, description)
-5. Return "done"
-
-Process all resources below. Do not skip any.
+The main session should split these resources into batches of at most 20 and assign each batch to a descriptions-generation-executor subagent. Do not assign the same resource ID to more than one active executor. After executor batches finish, call this tool again and retry any resources that are still listed.
 
 `)
 	b.WriteString("## Resources\n\n")
 	for _, e := range entries {
-		b.WriteString(fmt.Sprintf("  - ID: %s\n    Name: %s\n    Kind: %s\n\n", e.ID, e.Name, strings.ToUpper(e.Kind)))
+		b.WriteString(fmt.Sprintf("  - ID: %s\n    Name: %s\n    Kind: %s\n\n", e.ID, e.Name, e.Kind))
 	}
 
 	return b.String(), nil

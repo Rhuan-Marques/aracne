@@ -690,6 +690,15 @@ func (m *GoManager) ReadResourceAndCut(id string, kind domain.ResourceKind) (*do
 				break
 			}
 		}
+	case domain.ResourceNamedType:
+		gt := FromGeneric(topo)
+		for _, n := range gt.NamedTypes {
+			if string(n.ID) == id {
+				loc = n.Loc
+				found = true
+				break
+			}
+		}
 	case domain.ResourceInterface:
 		gt := FromGeneric(topo)
 		for _, iface := range gt.Interfaces {

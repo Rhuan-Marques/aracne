@@ -11,7 +11,7 @@ import (
 
 func RunServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	profileName := fs.String("tool-profile", "default", "Tool profile: default, descriptor, bug-hunter, bug-judge, bug-solver, or all")
+	profileName := fs.String("tool-profile", "default", "Tool profile: default, descriptions-executor, bug-hunter, bug-judge, bug-solver, or all")
 	fs.Parse(args)
 
 	profile, err := ParseToolProfile(*profileName)
