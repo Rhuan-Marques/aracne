@@ -1,4 +1,4 @@
-﻿package helper
+package helper
 
 import (
 	"encoding/json"
@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"llm-topology/internal/topology/domain"
+	"ltp/internal/topology/domain"
 )
 
 type FileManifest map[string]string
@@ -55,7 +55,7 @@ func SyncManifest(topo *domain.Topology, dbPath string) {
 
 	currentFiles := make(map[string]bool)
 	for _, res := range topo.Resources {
-		if res.Kind == domain.ResourceFile {
+		if res.Kind == domain.ResourceFile && IsSourceFile(res.ID, topo.Language) {
 			currentFiles[res.ID] = true
 		}
 	}
@@ -88,32 +88,51 @@ func CollectSourceFiles(root, language string) []string {
 			return nil
 		}
 		if d.IsDir() {
-			name := d.Name()
-			if name == "vendor" || name == ".git" || name == "node_modules" ||
-				name == "__pycache__" || name == ".pytest_cache" ||
-				name == "venv" || name == ".venv" || name == "env" ||
-				strings.HasPrefix(name, ".") {
+			if isIgnoredSourceDir(d.Name()) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if language == "go" {
-			if strings.HasSuffix(d.Name(), ".go") && !strings.HasSuffix(d.Name(), "_test.go") {
-				files = append(files, path)
-			}
-		} else if language == "python" {
-			if strings.HasSuffix(d.Name(), ".py") && !strings.HasPrefix(d.Name(), "test_") {
-				files = append(files, path)
-			}
-		} else {
-			ext := filepath.Ext(d.Name())
-			if ext == ".go" || ext == ".py" {
-				files = append(files, path)
-			}
+		if IsSourceFile(path, language) {
+			files = append(files, path)
 		}
 		return nil
 	})
 	return files
+}
+
+func IsSourceFile(path, language string) bool {
+	if path == "" || isIgnoredSourcePath(path) {
+		return false
+	}
+	name := filepath.Base(path)
+	switch language {
+	case "go":
+		return strings.HasSuffix(name, ".go") && !strings.HasSuffix(name, "_test.go")
+	case "python":
+		return strings.HasSuffix(name, ".py") && !strings.HasPrefix(name, "test_")
+	default:
+		ext := filepath.Ext(name)
+		return ext == ".go" || ext == ".py"
+	}
+}
+
+func isIgnoredSourcePath(path string) bool {
+	for _, part := range strings.FieldsFunc(filepath.Clean(path), func(r rune) bool {
+		return r == '/' || r == '\\'
+	}) {
+		if isIgnoredSourceDir(part) {
+			return true
+		}
+	}
+	return false
+}
+
+func isIgnoredSourceDir(name string) bool {
+	return name == "vendor" || name == ".git" || name == "node_modules" ||
+		name == "__pycache__" || name == ".pytest_cache" ||
+		name == "venv" || name == ".venv" || name == "env" ||
+		strings.HasPrefix(name, ".")
 }
 
 func DiffScanFiles(root, language, manifestPath string) (added, modified, deleted []string) {

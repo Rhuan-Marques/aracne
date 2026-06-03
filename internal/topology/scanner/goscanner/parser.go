@@ -7,8 +7,8 @@ import (
 	"go/token"
 	"strings"
 
-	"llm-topology/internal/topology/domain"
-	"llm-topology/internal/topology/golang"
+	"ltp/internal/topology/domain"
+	"ltp/internal/topology/golang"
 )
 
 type ParseResult struct {

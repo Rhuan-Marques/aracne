@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"llm-topology/internal/topology/domain"
+	"ltp/internal/topology/domain"
 )
 
 type resourceEntry struct {

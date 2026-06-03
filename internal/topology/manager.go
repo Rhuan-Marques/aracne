@@ -4,14 +4,15 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
 
-	"llm-topology/internal/helper"
-	"llm-topology/internal/topology/domain"
-	"llm-topology/internal/topology/scanner"
+	"ltp/internal/helper"
+	"ltp/internal/topology/domain"
+	"ltp/internal/topology/scanner"
 )
 
 var bugIDCounter int64
@@ -193,6 +194,32 @@ func (m *TopologyManager) UpdateFile(path string, reg *scanner.Registry) ([]doma
 	if err != nil {
 		return nil, fmt.Errorf("read topology db: %w", err)
 	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+
+	finish := func(warnings []domain.TopologyWarning) ([]domain.TopologyWarning, error) {
+		for _, w := range warnings {
+			topo.Warnings[w.ID] = w
+		}
+		helper.CleanupOrphanedWarnings(topo)
+		if err := helper.WriteDb(topo, m.dbPath); err != nil {
+			return nil, fmt.Errorf("write topology db: %w", err)
+		}
+		helper.CleanupOrphanedBugs(m.dbPath, topo)
+		helper.SyncManifest(topo, m.dbPath)
+		return warnings, nil
+	}
+
+	if !helper.IsSourceFile(absPath, topo.Language) {
+		return finish(helper.RemoveFileResources(topo, absPath))
+	}
+	if _, err := os.Stat(absPath); os.IsNotExist(err) {
+		return finish(helper.RemoveFileResources(topo, absPath))
+	} else if err != nil {
+		return nil, err
+	}
 
 	var langScanner scanner.LanguageScanner
 	if topo.Language != "" {
@@ -212,21 +239,13 @@ func (m *TopologyManager) UpdateFile(path string, reg *scanner.Registry) ([]doma
 
 	beforeWarnings := cloneWarnings(topo.Warnings)
 
-	_, err = langScanner.UpdateFile(topo, path)
+	_, err = langScanner.UpdateFile(topo, absPath)
 	if err != nil {
 		return nil, err
 	}
 
-	helper.CleanupOrphanedWarnings(topo)
 	warnings := addedWarnings(beforeWarnings, topo.Warnings)
-
-	if err := helper.WriteDb(topo, m.dbPath); err != nil {
-		return nil, fmt.Errorf("write topology db: %w", err)
-	}
-
-	helper.SyncManifest(topo, m.dbPath)
-
-	return warnings, nil
+	return finish(warnings)
 }
 
 func cloneWarnings(warnings map[string]domain.TopologyWarning) map[string]domain.TopologyWarning {

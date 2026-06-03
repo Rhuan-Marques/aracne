@@ -4,11 +4,12 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
-	"llm-topology/internal/topology"
-	"llm-topology/internal/topology/domain"
-	"llm-topology/internal/topology/scanner"
-	"llm-topology/internal/topology/scanner/goscanner"
+	"ltp/internal/topology"
+	"ltp/internal/topology/domain"
+	"ltp/internal/topology/scanner"
+	"ltp/internal/topology/scanner/goscanner"
 )
 
 type warnProj struct {
@@ -34,6 +35,17 @@ func (p *warnProj) write(t *testing.T, name, content string) {
 	}
 }
 
+func (p *warnProj) writeForIncrementalScan(t *testing.T, name, content string) {
+	path := filepath.Join(p.dir, name)
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	mtime := time.Now().Add(3 * time.Second)
+	if err := os.Chtimes(path, mtime, mtime); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func (p *warnProj) scan(t *testing.T) *topology.TopologyManager {
 	reg := scanner.NewRegistry()
 	reg.Register(goscanner.NewGoScanner())
@@ -53,6 +65,16 @@ func (p *warnProj) updateFileWarnings(t *testing.T, mgr *topology.TopologyManage
 	reg := scanner.NewRegistry()
 	reg.Register(goscanner.NewGoScanner())
 	warnings, err := mgr.UpdateFile(filepath.Join(p.dir, name), reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return warnings
+}
+
+func (p *warnProj) incrementalScan(t *testing.T, mgr *topology.TopologyManager) []domain.TopologyWarning {
+	reg := scanner.NewRegistry()
+	reg.Register(goscanner.NewGoScanner())
+	warnings, err := mgr.IncrementalScan(p.dir, reg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,6 +149,70 @@ func FuncA() int { return 42 }
 	warnings = p.updateFileWarnings(t, mgr, "target.go")
 	if len(warnings) != 0 {
 		t.Fatalf("expected no newly added warnings on unchanged update, got %d", len(warnings))
+	}
+}
+
+func TestIncrementalScanClearsNodeRemovedWhenCallerStopsUsingRemovedNode(t *testing.T) {
+	p := newWarnProj(t)
+	p.write(t, "caller.go", `package testproject
+var Result int
+func Caller() int { return FuncA() }
+`)
+	p.write(t, "target.go", `package testproject
+func FuncA() int { return 42 }
+`)
+
+	mgr := p.scan(t)
+	if n := countWarns(t, mgr, ""); n != 0 {
+		t.Fatalf("expected 0 after scan, got %d", n)
+	}
+
+	p.writeForIncrementalScan(t, "target.go", "package testproject\n")
+	p.incrementalScan(t, mgr)
+	if n := countWarns(t, mgr, domain.WarnNodeRemoved); n == 0 {
+		t.Fatal("expected WarnNodeRemoved after removing FuncA")
+	}
+
+	p.writeForIncrementalScan(t, "caller.go", `package testproject
+var Result int
+func Caller() int { return 0 }
+`)
+	p.incrementalScan(t, mgr)
+	if n := countWarns(t, mgr, ""); n != 0 {
+		t.Fatalf("expected stale warning to clear after caller stopped using removed node, got %d", n)
+	}
+}
+
+func TestIncrementalScanClearsSignatureChangedWhenCallerIsEdited(t *testing.T) {
+	p := newWarnProj(t)
+	p.write(t, "caller.go", `package testproject
+var Res int
+func Caller() int { return FuncA(1) }
+`)
+	p.write(t, "target.go", `package testproject
+func FuncA(x int) int { return x }
+`)
+
+	mgr := p.scan(t)
+	if n := countWarns(t, mgr, ""); n != 0 {
+		t.Fatalf("expected 0 after scan, got %d", n)
+	}
+
+	p.writeForIncrementalScan(t, "target.go", `package testproject
+func FuncA(x int, y int) int { return x + y }
+`)
+	p.incrementalScan(t, mgr)
+	if n := countWarns(t, mgr, domain.WarnSignatureChanged); n == 0 {
+		t.Fatal("expected WarnSignatureChanged")
+	}
+
+	p.writeForIncrementalScan(t, "caller.go", `package testproject
+var Res int
+func Caller() int { return FuncA(1, 2) }
+`)
+	p.incrementalScan(t, mgr)
+	if n := countWarns(t, mgr, ""); n != 0 {
+		t.Fatalf("expected stale signature warning to clear after caller edit, got %d", n)
 	}
 }
 

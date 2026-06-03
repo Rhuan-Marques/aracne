@@ -5,15 +5,22 @@ import (
 	"fmt"
 	"strings"
 
-	"llm-topology/internal/topology/python"
+	"ltp/internal/helper"
+	"ltp/internal/topology/domain"
+	"ltp/internal/topology/python"
 )
 
 type ListUndocumented struct {
-	mgr *python.PythonManager
+	mgr     *python.PythonManager
+	targets []domain.ResourceKind
 }
 
-func NewListUndocumented(mgr *python.PythonManager) *ListUndocumented {
-	return &ListUndocumented{mgr: mgr}
+func NewListUndocumented(mgr *python.PythonManager, targets ...[]domain.ResourceKind) *ListUndocumented {
+	describeTargets := helper.DefaultDescribeTargets()
+	if len(targets) > 0 {
+		describeTargets = targets[0]
+	}
+	return &ListUndocumented{mgr: mgr, targets: describeTargets}
 }
 
 func (l *ListUndocumented) Name() string {
@@ -41,8 +48,9 @@ func (l *ListUndocumented) Run(args json.RawMessage) (string, error) {
 	}
 	var entries []entry
 
+	targetSet := helper.DescribeTargetSet(l.targets)
 	for id, res := range topo.Resources {
-		if res.Description == "" {
+		if res.Description == "" && targetSet[res.Kind] {
 			entries = append(entries, entry{
 				ID:   id,
 				Name: res.Name,
@@ -52,11 +60,11 @@ func (l *ListUndocumented) Run(args json.RawMessage) (string, error) {
 	}
 
 	if len(entries) == 0 {
-		return "All resources already have descriptions. Nothing to generate.", nil
+		return "All targeted resources already have descriptions. Nothing to generate.", nil
 	}
 
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Found %d undocumented resources.\n\n", len(entries)))
+	b.WriteString(fmt.Sprintf("Found %d undocumented resources for targets: %s.\n\n", len(entries), helper.FormatDescribeTargets(l.targets)))
 	b.WriteString(`## INSTRUCTIONS
 
 Dispatch a descriptor sub-agent for EACH resource below. Each sub-agent receives:

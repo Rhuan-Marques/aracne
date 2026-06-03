@@ -5,17 +5,24 @@ import (
 	"fmt"
 	"strings"
 
-	"llm-topology/internal/topology/golang"
+	"ltp/internal/helper"
+	"ltp/internal/topology/domain"
+	"ltp/internal/topology/golang"
 )
 
 // Holds a GoManager reference and serves as the receiver for methods that list undocumented resources from the topology database. Used as a tool for the LLM agent to discover resources needing descriptions.
 type ListUndocumented struct {
-	mgr *golang.GoManager
+	mgr     *golang.GoManager
+	targets []domain.ResourceKind
 }
 
 // Creates a new ListUndocumented tool instance with the given GoManager. Returns a pointer to the initialized ListUndocumented struct.
-func NewListUndocumented(mgr *golang.GoManager) *ListUndocumented {
-	return &ListUndocumented{mgr: mgr}
+func NewListUndocumented(mgr *golang.GoManager, targets ...[]domain.ResourceKind) *ListUndocumented {
+	describeTargets := helper.DefaultDescribeTargets()
+	if len(targets) > 0 {
+		describeTargets = targets[0]
+	}
+	return &ListUndocumented{mgr: mgr, targets: describeTargets}
 }
 
 // Returns the tool name "list_undocumented_resources" for MCP/agent tool registration. No parameters. Returns the string constant identifying this tool.
@@ -47,8 +54,9 @@ func (l *ListUndocumented) Run(args json.RawMessage) (string, error) {
 	}
 	var entries []entry
 
+	targetSet := helper.DescribeTargetSet(l.targets)
 	for id, res := range topo.Resources {
-		if res.Description == "" {
+		if res.Description == "" && targetSet[res.Kind] {
 			entries = append(entries, entry{
 				ID:   id,
 				Name: res.Name,
@@ -58,11 +66,11 @@ func (l *ListUndocumented) Run(args json.RawMessage) (string, error) {
 	}
 
 	if len(entries) == 0 {
-		return "All resources already have descriptions. Nothing to generate.", nil
+		return "All targeted resources already have descriptions. Nothing to generate.", nil
 	}
 
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Found %d undocumented resources.\n\n", len(entries)))
+	b.WriteString(fmt.Sprintf("Found %d undocumented resources for targets: %s.\n\n", len(entries), helper.FormatDescribeTargets(l.targets)))
 	b.WriteString(`## INSTRUCTIONS
 
 Dispatch a descriptor sub-agent for EACH resource below. Each sub-agent receives:

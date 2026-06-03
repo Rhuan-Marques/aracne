@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"llm-topology/internal/topology"
-	"llm-topology/internal/topology/domain"
+	"ltp/internal/topology"
+	"ltp/internal/topology/domain"
 )
 
 type BugList struct {

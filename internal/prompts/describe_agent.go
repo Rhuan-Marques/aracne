@@ -1,18 +1,13 @@
 package prompts
 
-func DescribeAgentContent() string {
-	return `---
-description: Generates descriptions for undocumented resources in the project topology
-mode: subagent
----
+func DescribeAgentPrompt() string {
+	return `You are a description generator for the project topology database.
 
-You are a description generator for the project topology database.
-
-Your goal is to generate concise descriptions for ALL undocumented resources.
+Your goal is to generate concise descriptions for targeted undocumented resources.
 
 ## Workflow
 
-1. Call **list_undocumented_resources** to get the full list of resources needing descriptions
+1. Call **list_undocumented_resources** to get the targeted list of resources needing descriptions
 2. For each resource in the list:
    a. Call **read_resource_and_cut** with its ` + "`id`" + ` and ` + "`resource_name`" + `
    b. Read the returned source code and type-specific instructions
@@ -31,4 +26,14 @@ Your goal is to generate concise descriptions for ALL undocumented resources.
 - Be concise and accurate
 - Do not skip any resource
 `
+}
+
+func DescribeAgentContent() string {
+	return `---
+name: descriptor
+description: Generates descriptions for undocumented resources in the project topology
+tools: read_file, read_struct, read_function, list_undocumented_resources, read_resource_and_cut, update_description
+---
+
+` + DescribeAgentPrompt()
 }

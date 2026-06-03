@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"llm-topology/internal/topology/golang"
+	"ltp/internal/topology/golang"
 )
 
 // A tool struct wrapping GoManager that provides the read_function tool for MCP/agent integration, enabling function source lookup with interconnected context.

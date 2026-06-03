@@ -1,8 +1,8 @@
 package agent
 
 import (
-	"llm-topology/internal/llm/languages/gotools"
-	"llm-topology/internal/llm/languages/pythontools"
+	"ltp/internal/llm/languages/gotools"
+	"ltp/internal/llm/languages/pythontools"
 )
 
 func BuildPrompt(language string) string {

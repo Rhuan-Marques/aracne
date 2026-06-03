@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"llm-topology/internal/topology/python"
+	"ltp/internal/topology/python"
 )
 
 type ReadStruct struct {

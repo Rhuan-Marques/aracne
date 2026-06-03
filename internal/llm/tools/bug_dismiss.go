@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"llm-topology/internal/topology"
+	"ltp/internal/topology"
 )
 
 type BugDismiss struct {

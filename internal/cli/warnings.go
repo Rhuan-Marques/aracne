@@ -5,7 +5,7 @@ import (
 	"os"
 	"sort"
 
-	"llm-topology/internal/topology/domain"
+	"ltp/internal/topology/domain"
 )
 
 func RunWarningsList(args []string) {

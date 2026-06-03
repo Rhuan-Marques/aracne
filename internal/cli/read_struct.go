@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"os"
 
-	"llm-topology/internal/llm/languages/gotools"
-	"llm-topology/internal/llm/languages/pythontools"
-	"llm-topology/internal/topology/golang"
-	"llm-topology/internal/topology/python"
+	"ltp/internal/llm/languages/gotools"
+	"ltp/internal/llm/languages/pythontools"
+	"ltp/internal/topology/golang"
+	"ltp/internal/topology/python"
 )
 
 func RunReadStruct() {

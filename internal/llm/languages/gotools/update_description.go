@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"llm-topology/internal/topology/domain"
-	"llm-topology/internal/topology/golang"
+	"ltp/internal/topology/domain"
+	"ltp/internal/topology/golang"
 )
 
 // MCP/agent tool that updates a resource's description in the topology database. Wraps GoManager.UpdateDescription with JSON argument parsing.

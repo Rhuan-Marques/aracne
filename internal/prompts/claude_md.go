@@ -1,59 +1,81 @@
 package prompts
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+
+	"ltp/internal/helper"
+)
 
 func ClaudeMdContent() string {
+	return ClaudeMdContentForModes(helper.DefaultToolModes())
+}
+
+func AgentsMdContent() string {
+	return AgentsMdContentForModes(helper.DefaultToolModes())
+}
+
+func ClaudeMdContentForModes(modes helper.ToolModes) string {
+	return agentInstructionsContent(modes, "mcp__llm-topology__")
+}
+
+func AgentsMdContentForModes(modes helper.ToolModes) string {
+	return agentInstructionsContent(modes, "llm-topology_")
+}
+
+func agentInstructionsContent(modes helper.ToolModes, mcpToolPrefix string) string {
 	bt := "`"
-	return fmt.Sprintf(`# CLAUDE.md
+	var mcpTools []string
+	var terminalCommands []string
+	if modes.Read == helper.ReadModeMCP {
+		mcpTools = append(mcpTools, fmt.Sprintf("| %[1]s%[2]sread_file%[1]s | Read raw file contents |", bt, mcpToolPrefix))
+	} else if modes.Read == helper.ReadModeTerminal {
+		terminalCommands = append(terminalCommands, fmt.Sprintf("| %[1]sltp read_file <path>%[1]s | Read raw file contents |", bt))
+	}
+	if modes.Edit == helper.EditModeMCP {
+		mcpTools = append(mcpTools,
+			fmt.Sprintf("| %[1]s%[2]sedit%[1]s | Edit files and update topology automatically |", bt, mcpToolPrefix),
+			fmt.Sprintf("| %[1]s%[2]swrite%[1]s | Write files and update topology automatically |", bt, mcpToolPrefix),
+		)
+	} else if modes.Edit == helper.EditModeTerminal {
+		terminalCommands = append(terminalCommands,
+			fmt.Sprintf("| %[1]sltp edit%[1]s | Edit files through terminal commands |", bt),
+			fmt.Sprintf("| %[1]sltp write%[1]s | Write files through terminal commands |", bt),
+		)
+	}
+	if modes.Other == helper.OtherModeMCP {
+		mcpTools = append(mcpTools,
+			fmt.Sprintf("| %[1]s%[2]sread_function%[1]s | Function source + connected context |", bt, mcpToolPrefix),
+			fmt.Sprintf("| %[1]s%[2]sread_struct%[1]s | Struct source + methods/interfaces/context |", bt, mcpToolPrefix),
+			fmt.Sprintf("| %[1]s%[2]swarnings_list%[1]s | List topology warnings |", bt, mcpToolPrefix),
+			fmt.Sprintf("| %[1]s%[2]sbug_report%[1]s | Report a confirmed bug on a resource node |", bt, mcpToolPrefix),
+		)
+	} else {
+		terminalCommands = append(terminalCommands,
+			fmt.Sprintf("| %[1]sltp read_function <name>%[1]s | Function source + connected context |", bt),
+			fmt.Sprintf("| %[1]sltp read_struct <name>%[1]s | Struct source + methods/interfaces/context |", bt),
+			fmt.Sprintf("| %[1]sltp warnings list%[1]s | List topology warnings |", bt),
+			fmt.Sprintf("| %[1]sltp bug report --node <id> --description <text>%[1]s | Report a confirmed bug on a resource node |", bt),
+		)
+	}
 
-This project uses **llm-topology** for codebase navigation. The topology database provides a pre-analyzed graph of all functions, structs, interfaces, variables, and their relationships.
+	sections := toolSection("MCP Tools", "Use these llm-topology MCP tools for MCP-mode topology operations:", "Tool", mcpTools) +
+		toolSection("Terminal Commands", "Use these ltp commands for terminal-mode topology operations:", "Command", terminalCommands)
 
-## Navigation Tools
+	return fmt.Sprintf(`# LTP Integration
 
-Prefer these topology-aware tools over standard file reading:
+This project uses **llm-topology** for codebase navigation. The topology database provides a pre-analyzed graph of all functions, structs/classes, interfaces, variables, and their relationships.
 
-| Tool | Purpose |
-|------|---------|
-| %[1]sread_function%[1]s | Function source + connected context (called functions, structs, interfaces) |
-| %[1]sread_struct%[1]s | Struct source + methods, interfaces, constructor |
-| %[1]sread_resource_and_cut%[1]s | Get source code + description instructions for any resource |
-| %[1]supdate_description%[1]s | Persist a description into the topology database |
-| %[1]slist_undocumented_resources%[1]s | List all resources missing descriptions |
-| %[1]sls%[1]s | List files and directories |
-| %[1]sread%[1]s | Read raw file contents (use only when topology tools aren't sufficient) |
+%[1]s
 
-## Bug Tracking Tools
+This is it for ltp integration
 
-| Tool | Purpose |
-|------|---------|
-| %[1]sbug_report%[1]s | Report a bug on a resource node (starts as pending) |
-| %[1]sbug_list%[1]s | List known bugs (filterable by node or state) |
-| %[1]sbug_acknowledge%[1]s | Mark a bug as acknowledged (confirmed, needs fixing) |
-| %[1]sbug_dismiss%[1]s | Mark a bug as dismissed (false positive, kept for reference) |
-| %[1]sbug_delete%[1]s | Delete a bug from the database |
+`, sections)
+}
 
-## Bug Workflow
-
-1. Use /bug-hunter to scan the topology for potential bugs
-2. Use /bug-judge to triage pending bugs (acknowledge real ones, dismiss false positives)
-3. Use /bug-solver to fix acknowledged bugs
-
-## How to Use
-
-1. Start with %[1]sls%[1]s to explore the project structure
-2. Use %[1]sread_function%[1]s or %[1]sread_struct%[1]s to investigate code — these return both source code AND a # CONTEXT: section showing all connected resources
-3. After editing a file, run %[1]sltp update-file <path>%[1]s to keep the topology in sync
-
-## Description Generation
-
-To document the project:
-1. Call %[1]slist_undocumented_resources%[1]s
-2. For each resource, call %[1]sread_resource_and_cut%[1]s followed by %[1]supdate_description%[1]s
-
-## Guidelines
-
-- Prefer topology tools over raw file reads — they provide richer context
-- The # CONTEXT: section in tool output often answers follow-up questions without extra calls
-- Keep descriptions concise (1-3 lines for functions/structs/interfaces)
-`, bt)
+func toolSection(title, lead, column string, rows []string) string {
+	if len(rows) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("## %s\n\n%s\n\n| %s | Purpose |\n|------|---------|\n%s\n\n", title, lead, column, strings.Join(rows, "\n"))
 }

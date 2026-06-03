@@ -4,9 +4,10 @@ import (
 	"fmt"
 	"os"
 
-	"llm-topology/internal/cli"
+	"ltp/internal/cli"
 )
 
+// main dispatches ltp subcommands
 func main() {
 	if len(os.Args) < 2 {
 		cli.PrintUsage()
@@ -19,7 +20,7 @@ func main() {
 	case "agent":
 		cli.RunAgent(os.Args[2:])
 	case "serve":
-		cli.RunServe()
+		cli.RunServe(os.Args[2:])
 	case "init":
 		cli.RunInit(os.Args[2:])
 	case "descriptions":
@@ -47,6 +48,8 @@ func main() {
 		cli.RunUpdateDescription(os.Args[2:])
 	case "edit":
 		cli.RunEdit()
+	case "write":
+		cli.RunWrite()
 	case "list-undocumented":
 		cli.RunListUndocumented()
 	case "warnings":

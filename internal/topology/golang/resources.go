@@ -1,6 +1,6 @@
 package golang
 
-import "llm-topology/internal/topology/domain"
+import "ltp/internal/topology/domain"
 
 type FunctionID = string
 type StructID = string

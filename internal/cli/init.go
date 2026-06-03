@@ -1,4 +1,4 @@
-﻿package cli
+package cli
 
 import (
 	"bufio"
@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"llm-topology/internal/helper"
-	"llm-topology/internal/prompts"
+	"ltp/internal/helper"
+	"ltp/internal/prompts"
 )
 
 func promptReplace(path string) bool {
@@ -34,7 +34,9 @@ func RunInit(args []string) {
 	claude := fs.Bool("claude", false, "Initialize Claude Code integration")
 	opencode := fs.Bool("opencode", false, "Initialize OpenCode integration")
 	global := fs.Bool("global", false, "Install globally")
-	cliMode := fs.String("cli-mode", "", "CLI function mode: mcp or terminal (overrides .ltp/config.json)")
+	readMode := fs.String("read-mode", "", "Read tool mode: native, mcp, or terminal")
+	editMode := fs.String("edit-mode", "", "Edit/write tool mode: native, mcp, or terminal")
+	otherMode := fs.String("other-mode", "", "Other topology tool mode: mcp or terminal")
 	yes := fs.Bool("y", false, "Auto-confirm all replacement prompts")
 	fs.Parse(args)
 
@@ -45,348 +47,634 @@ func RunInit(args []string) {
 
 	cfgPath := helper.ConfigPath(".ltp/topology.db")
 	cfg := helper.EnsureConfig(cfgPath)
-
-	if *cliMode != "" {
-		switch *cliMode {
-		case "mcp":
-			cfg.CliFunctionMode = helper.CliModeMCP
-		case "terminal":
-			cfg.CliFunctionMode = helper.CliModeTerminal
-		default:
-			fmt.Fprintf(os.Stderr, "Invalid --cli-mode: %s (must be 'mcp' or 'terminal')\n", *cliMode)
+	changed := false
+	if *readMode != "" {
+		mode, err := parseReadToolMode(*readMode)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		helper.SaveConfig(cfg, cfgPath)
+		cfg.ToolModes.Read = mode
+		changed = true
+	}
+	if *editMode != "" {
+		mode, err := parseEditToolMode(*editMode)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		cfg.ToolModes.Edit = mode
+		changed = true
+	}
+	if *otherMode != "" {
+		mode, err := parseOtherToolMode(*otherMode)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		cfg.ToolModes.Other = mode
+		changed = true
+	}
+	if changed {
+		if err := helper.SaveConfig(cfg, cfgPath); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing %s: %v\n", cfgPath, err)
+			os.Exit(1)
+		}
 	}
 
 	if *opencode {
-		initOpenCode(*global, cfg.CliFunctionMode, *yes)
+		initOpenCode(*global, cfg.ToolModes, *yes)
 	}
 	if *claude {
-		initClaudeCode(*global, cfg.CliFunctionMode, *yes)
+		initClaudeCode(*global, cfg.ToolModes, *yes)
 	}
 }
 
-func initOpenCode(global bool, mode helper.CliFunctionMode, autoYes bool) {
-	var configPath string
-	if global {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error finding home dir: %v\n", err)
-			os.Exit(1)
-		}
-		configPath = filepath.Join(home, ".config", "opencode", "opencode.json")
-		os.MkdirAll(filepath.Dir(configPath), 0755)
-	} else {
-		configPath = ".opencode/opencode.json"
-		os.MkdirAll(".opencode", 0755)
+func parseReadToolMode(value string) (helper.ReadToolMode, error) {
+	switch helper.ReadToolMode(value) {
+	case helper.ReadModeNative, helper.ReadModeMCP, helper.ReadModeTerminal:
+		return helper.ReadToolMode(value), nil
+	default:
+		return "", fmt.Errorf("invalid --read-mode: %s (must be native, mcp, or terminal)", value)
 	}
+}
 
-	if mode == helper.CliModeTerminal {
-		initOpenCodeTerminal(configPath, global, autoYes)
-		return
+func parseEditToolMode(value string) (helper.EditToolMode, error) {
+	switch helper.EditToolMode(value) {
+	case helper.EditModeNative, helper.EditModeMCP, helper.EditModeTerminal:
+		return helper.EditToolMode(value), nil
+	default:
+		return "", fmt.Errorf("invalid --edit-mode: %s (must be native, mcp, or terminal)", value)
 	}
+}
 
-	var config map[string]interface{}
-	data, err := os.ReadFile(configPath)
-	if err == nil && len(data) > 0 {
-		if err := json.Unmarshal(data, &config); err != nil {
-			fmt.Fprintf(os.Stderr, "Error parsing %s: %v\n  Please fix or remove the file and try again.\n", configPath, err)
-			os.Exit(1)
-		}
+func parseOtherToolMode(value string) (helper.OtherToolMode, error) {
+	switch helper.OtherToolMode(value) {
+	case helper.OtherModeMCP, helper.OtherModeTerminal:
+		return helper.OtherToolMode(value), nil
+	default:
+		return "", fmt.Errorf("invalid --other-mode: %s (must be mcp or terminal)", value)
 	}
-	if config == nil {
-		config = make(map[string]interface{})
-	}
+}
 
-	shouldWrite := true
-	if _, exists := config["mcp"]; exists {
-		if autoYes || promptReplaceConfigExists(configPath) {
-			fmt.Printf("[OpenCode] Overwriting %s\n", configPath)
-		} else {
-			fmt.Printf("[OpenCode] Skipping %s\n", configPath)
-			shouldWrite = false
-		}
-	}
+func initOpenCode(global bool, modes helper.ToolModes, autoYes bool) {
+	configPath, configDir, agentsMdPath := opencodePaths(global)
+	os.MkdirAll(configDir, 0755)
 
-	if shouldWrite {
-		mcpMap, _ := config["mcp"].(map[string]interface{})
-		if mcpMap == nil {
-			mcpMap = make(map[string]interface{})
-		}
-		mcpMap["llm-topology"] = map[string]interface{}{
-			"type":    "local",
-			"command": []string{"ltp", "serve"},
-			"enabled": true,
-		}
-		config["mcp"] = mcpMap
-		permissionMap, _ := config["permission"].(map[string]interface{})
-		if permissionMap == nil {
-			permissionMap = make(map[string]interface{})
-		}
-		for _, toolName := range []string{"read", "edit", "write"} {
-			if _, exists := permissionMap[toolName]; !exists {
-				permissionMap[toolName] = "deny"
+	config := readJSONConfig(configPath)
+	if anyMCPMode(modes) {
+		if shouldWriteConfig(config, "mcp", configPath, "OpenCode", autoYes) {
+			mcpMap, _ := config["mcp"].(map[string]interface{})
+			if mcpMap == nil {
+				mcpMap = make(map[string]interface{})
 			}
+			mcpMap["llm-topology"] = map[string]interface{}{
+				"type":    "local",
+				"command": []string{"ltp", "serve", "--tool-profile", "all"},
+				"enabled": true,
+			}
+			config["mcp"] = mcpMap
 		}
-		config["permission"] = permissionMap
-
-		out, err := json.MarshalIndent(config, "", "  ")
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error encoding config: %v\n", err)
-			os.Exit(1)
-		}
-		out = append(out, '\n')
-
-		if err := os.WriteFile(configPath, out, 0644); err != nil {
-			fmt.Fprintf(os.Stderr, "Error writing %s: %v\n", configPath, err)
-			os.Exit(1)
-		}
-		fmt.Printf("[OpenCode] llm-topology MCP server configured in %s\n", configPath)
-	}
-
-	var commandsDir string
-	if global {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error finding home dir: %v\n", err)
-			os.Exit(1)
-		}
-		commandsDir = filepath.Join(home, ".config", "opencode", "commands")
 	} else {
-		commandsDir = ".opencode/commands"
+		fmt.Println("[OpenCode] Terminal/native mode: no llm-topology MCP server needed")
 	}
+
+	permissionMap, _ := config["permission"].(map[string]interface{})
+	if permissionMap == nil {
+		permissionMap = make(map[string]interface{})
+	}
+	permissionMap["read"] = nativePermission(modes.Read == helper.ReadModeNative)
+	permissionMap["edit"] = nativePermission(modes.Edit == helper.EditModeNative)
+	delete(permissionMap, "write")
+	permissionMap["llm-topology_*"] = "deny"
+	for _, toolName := range allowedMCPToolNames(modes, ToolProfileDefault) {
+		permissionMap["llm-topology_"+toolName] = "allow"
+	}
+	config["permission"] = permissionMap
+	writeJSONConfig(configPath, config)
+	fmt.Printf("[OpenCode] Config written to %s\n", configPath)
+
+	commandsDir := filepath.Join(configDir, "commands")
+	agentsDir := filepath.Join(configDir, "agents")
 	os.MkdirAll(commandsDir, 0755)
+	os.MkdirAll(agentsDir, 0755)
 
-	writeCommand(commandsDir, "descriptions-generate",
-		"Generate descriptions for undocumented resources in the topology",
-		prompts.DescriptionsGenerateCommand(), autoYes)
+	writeOpenCodeCommand(commandsDir, "descriptions-generate", "Generate descriptions for undocumented resources in the topology", "descriptor", descriptionsGenerateCommandForAgent("descriptor"), autoYes)
+	writeOpenCodeCommand(commandsDir, "descriptions-apply", "Write topology descriptions back into source files as doc comments", "build", prompts.DescriptionsApplyCommand(), autoYes)
+	writeOpenCodeCommand(commandsDir, "bug-hunter", "Launch a Bug Hunter sub-agent to scan the entire topology for bugs", "bug-hunter", bugHunterCommandForAgent("bug-hunter"), autoYes)
+	writeOpenCodeCommand(commandsDir, "bug-judge", "Triage pending bugs by launching Bug Judge sub-agents for each node", "bug-judge", bugJudgeCommandForAgent("bug-judge"), autoYes)
+	writeOpenCodeCommand(commandsDir, "bug-solver", "Fix acknowledged bugs by launching Bug Solver sub-agents", "bug-solver", bugSolverCommandForAgent("bug-solver"), autoYes)
 
-	writeCommand(commandsDir, "descriptions-apply",
-		"Write topology descriptions back into source files as doc comments",
-		prompts.DescriptionsApplyCommand(), autoYes)
+	writeAgent(agentsDir, "descriptor", openCodeAgentContent("descriptor", "Generates descriptions for undocumented resources in the project topology", ToolProfileDescriptor, modes, prompts.DescribeAgentPrompt()), autoYes)
+	writeAgent(agentsDir, "bug-hunter", openCodeAgentContent("bug-hunter", "Scans the entire project topology looking for bugs", ToolProfileBugHunter, modes, prompts.BugHunterPrompt()), autoYes)
+	writeAgent(agentsDir, "bug-judge", openCodeAgentContent("bug-judge", "Triages pending bugs by comparing against dismissed bug patterns", ToolProfileBugJudge, modes, prompts.BugJudgePrompt()), autoYes)
+	writeAgent(agentsDir, "bug-solver", openCodeAgentContent("bug-solver", "Fixes acknowledged bugs in the codebase and removes them", ToolProfileBugSolver, modes, prompts.BugSolverPrompt()), autoYes)
 
-	writeCommand(commandsDir, "bug-hunter",
-		"Launch a Bug Hunter sub-agent to scan the entire topology for bugs",
-		prompts.BugHunterCommand(), autoYes)
-
-	writeCommand(commandsDir, "bug-judge",
-		"Triage pending bugs by launching Bug Judge sub-agents for each node",
-		prompts.BugJudgeCommand(), autoYes)
-
-	writeCommand(commandsDir, "bug-solver",
-		"Fix acknowledged bugs by launching Bug Solver sub-agents",
-		prompts.BugSolverCommand(), autoYes)
-
-	fmt.Println("[OpenCode] Restart OpenCode to activate the topology tools.")
+	if modes.Edit == helper.EditModeNative {
+		writeOpenCodeNativeEditPlugin(filepath.Join(configDir, "plugins"), autoYes)
+	}
+	writeMarkdownIntegrationFile(agentsMdPath, "OpenCode AGENTS.md", prompts.AgentsMdContentForModes(modes))
+	fmt.Println("[OpenCode] Restart OpenCode to activate the topology workflow.")
 }
 
-func initOpenCodeTerminal(configPath string, global bool, autoYes bool) {
-	fmt.Printf("[OpenCode] Terminal mode: skipping MCP server setup\n")
+func initClaudeCode(global bool, modes helper.ToolModes, autoYes bool) {
+	mcpConfigPath, commandsDir, agentsDir, claudeMdPath := claudePaths(global)
 
-	var agentsMdPath string
-	if global {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error finding home dir: %v\n", err)
-			os.Exit(1)
+	if anyMCPMode(modes) {
+		claudeConfig := readJSONConfig(mcpConfigPath)
+		if shouldWriteConfig(claudeConfig, "mcpServers", mcpConfigPath, "Claude Code", autoYes) {
+			mcpServers, _ := claudeConfig["mcpServers"].(map[string]interface{})
+			if mcpServers == nil {
+				mcpServers = make(map[string]interface{})
+			}
+			mcpServers["llm-topology"] = map[string]interface{}{
+				"command": "ltp",
+				"args":    []string{"serve", "--tool-profile", string(ToolProfileDefault)},
+			}
+			claudeConfig["mcpServers"] = mcpServers
+			writeJSONConfig(mcpConfigPath, claudeConfig)
+			fmt.Printf("[Claude Code] MCP server configured in %s\n", mcpConfigPath)
 		}
-		agentsMdPath = filepath.Join(home, ".config", "opencode", "AGENTS.md")
 	} else {
-		agentsMdPath = "AGENTS.md"
-	}
-
-	if _, err := os.Stat(agentsMdPath); err == nil {
-		if !autoYes && !promptReplace(agentsMdPath) {
-			fmt.Printf("[OpenCode] Skipping AGENTS.md (terminal instructions already present)\n")
-			return
-		}
-		fmt.Printf("[OpenCode] Overwriting AGENTS.md with terminal navigation instructions\n")
-	} else {
-		fmt.Printf("[OpenCode] Writing AGENTS.md with terminal navigation instructions\n")
-	}
-
-	content := prompts.TerminalClaudeMdContent()
-	if err := os.WriteFile(agentsMdPath, []byte(content), 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "Error writing %s: %v\n", agentsMdPath, err)
-		os.Exit(1)
-	}
-	fmt.Printf("[OpenCode] Terminal navigation instructions written to %s\n", agentsMdPath)
-}
-
-func initClaudeCode(global bool, mode helper.CliFunctionMode, autoYes bool) {
-	var mcpConfigPath string
-	var commandsDir string
-	var agentsDir string
-	var claudeMdPath string
-
-	if global {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error finding home dir: %v\n", err)
-			os.Exit(1)
-		}
-		mcpConfigPath = filepath.Join(home, ".claude.json")
-		commandsDir = filepath.Join(home, ".claude", "commands")
-		agentsDir = filepath.Join(home, ".claude", "agents")
-		claudeMdPath = filepath.Join(home, ".claude", "CLAUDE.md")
-	} else {
-		mcpConfigPath = ".claude/.mcp.json"
-		commandsDir = ".claude/commands"
-		agentsDir = ".claude/agents"
-		claudeMdPath = "CLAUDE.md"
-	}
-
-	if mode == helper.CliModeTerminal {
-		initClaudeCodeTerminal(claudeMdPath, global, autoYes)
-		return
-	}
-
-	var claudeConfig map[string]interface{}
-	data, err := os.ReadFile(mcpConfigPath)
-	if err == nil && len(data) > 0 {
-		if err := json.Unmarshal(data, &claudeConfig); err != nil {
-			fmt.Fprintf(os.Stderr, "Error parsing %s: %v\n  Please fix or remove the file and try again.\n", mcpConfigPath, err)
-			os.Exit(1)
-		}
-	}
-	if claudeConfig == nil {
-		claudeConfig = make(map[string]interface{})
-	}
-
-	shouldWrite := true
-	if _, exists := claudeConfig["mcpServers"]; exists {
-		if autoYes || promptReplaceConfigExists(mcpConfigPath) {
-			fmt.Printf("[Claude Code] Overwriting %s\n", mcpConfigPath)
-		} else {
-			fmt.Printf("[Claude Code] Skipping %s\n", mcpConfigPath)
-			shouldWrite = false
-		}
-	}
-
-	if shouldWrite {
-		mcpServers, _ := claudeConfig["mcpServers"].(map[string]interface{})
-		if mcpServers == nil {
-			mcpServers = make(map[string]interface{})
-		}
-		mcpServers["llm-topology"] = map[string]interface{}{
-			"command": "ltp",
-			"args":    []string{"serve"},
-		}
-		claudeConfig["mcpServers"] = mcpServers
-
-		out, err := json.MarshalIndent(claudeConfig, "", "  ")
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error encoding config: %v\n", err)
-			os.Exit(1)
-		}
-		out = append(out, '\n')
-		if err := os.WriteFile(mcpConfigPath, out, 0644); err != nil {
-			fmt.Fprintf(os.Stderr, "Error writing %s: %v\n", mcpConfigPath, err)
-			os.Exit(1)
-		}
-		fmt.Printf("[Claude Code] MCP server configured in %s\n", mcpConfigPath)
+		fmt.Println("[Claude Code] Terminal/native mode: no llm-topology MCP server needed")
 	}
 
 	os.MkdirAll(commandsDir, 0755)
 	os.MkdirAll(agentsDir, 0755)
 
-	writeCommand(commandsDir, "descriptions-generate",
-		"Generate descriptions for undocumented resources in the topology",
-		prompts.DescriptionsGenerateCommand(), autoYes)
+	writeCommand(commandsDir, "descriptions-generate", "Generate descriptions for undocumented resources in the topology", descriptionsGenerateCommandForAgent(".claude/agents/descriptor.md"), autoYes)
+	writeCommand(commandsDir, "descriptions-apply", "Write topology descriptions back into source files as doc comments", prompts.DescriptionsApplyCommand(), autoYes)
+	writeCommand(commandsDir, "bug-hunter", "Launch a Bug Hunter sub-agent to scan the entire topology for bugs", bugHunterCommandForAgent(".claude/agents/bug-hunter.md"), autoYes)
+	writeCommand(commandsDir, "bug-judge", "Triage pending bugs by launching Bug Judge sub-agents for each node", bugJudgeCommandForAgent(".claude/agents/bug-judge.md"), autoYes)
+	writeCommand(commandsDir, "bug-solver", "Fix acknowledged bugs by launching Bug Solver sub-agents", bugSolverCommandForAgent(".claude/agents/bug-solver.md"), autoYes)
 
-	writeCommand(commandsDir, "descriptions-apply",
-		"Write topology descriptions back into source files as doc comments",
-		prompts.DescriptionsApplyCommand(), autoYes)
+	writeAgent(agentsDir, "descriptor", claudeAgentContent("descriptor", "Generates descriptions for undocumented resources in the project topology", ToolProfileDescriptor, modes, prompts.DescribeAgentPrompt()), autoYes)
+	writeAgent(agentsDir, "bug-hunter", claudeAgentContent("bug-hunter", "Scans the entire project topology looking for bugs", ToolProfileBugHunter, modes, prompts.BugHunterPrompt()), autoYes)
+	writeAgent(agentsDir, "bug-judge", claudeAgentContent("bug-judge", "Triages pending bugs by comparing against dismissed bug patterns", ToolProfileBugJudge, modes, prompts.BugJudgePrompt()), autoYes)
+	writeAgent(agentsDir, "bug-solver", claudeAgentContent("bug-solver", "Fixes acknowledged bugs in the codebase and removes them", ToolProfileBugSolver, modes, prompts.BugSolverPrompt()), autoYes)
 
-	writeCommand(commandsDir, "bug-hunter",
-		"Launch a Bug Hunter sub-agent to scan the entire topology for bugs",
-		prompts.BugHunterCommand(), autoYes)
-
-	writeCommand(commandsDir, "bug-judge",
-		"Triage pending bugs by launching Bug Judge sub-agents for each node",
-		prompts.BugJudgeCommand(), autoYes)
-
-	writeCommand(commandsDir, "bug-solver",
-		"Fix acknowledged bugs by launching Bug Solver sub-agents",
-		prompts.BugSolverCommand(), autoYes)
-
-	writeAgent(agentsDir, "describe", prompts.DescribeAgentContent(), autoYes)
-	writeAgent(agentsDir, "bug-hunter", prompts.BugHunterAgentContent(), autoYes)
-	writeAgent(agentsDir, "bug-judge", prompts.BugJudgeAgentContent(), autoYes)
-	writeAgent(agentsDir, "bug-solver", prompts.BugSolverAgentContent(), autoYes)
-
-	if _, err := os.Stat(claudeMdPath); err == nil {
-		if autoYes || promptReplace(claudeMdPath) {
-			fmt.Printf("[Claude Code] Overwriting %s\n", claudeMdPath)
-		} else {
-			fmt.Printf("[Claude Code] Skipping %s (already exists)\n", claudeMdPath)
-			fmt.Println("[Claude Code] Restart Claude Code to activate the topology tools.")
-			return
-		}
+	if modes.Edit == helper.EditModeNative {
+		settingsPath := filepath.Join(filepath.Dir(commandsDir), "settings.json")
+		hooksDir := filepath.Join(filepath.Dir(commandsDir), "hooks")
+		writeClaudeNativeEditHook(settingsPath, hooksDir, autoYes)
 	}
 
-	if err := os.WriteFile(claudeMdPath, []byte(prompts.ClaudeMdContent()), 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "Error writing CLAUDE.md: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Printf("[Claude Code] CLAUDE.md written to %s\n", claudeMdPath)
-
-	fmt.Println("[Claude Code] Restart Claude Code to activate the topology tools.")
+	writeMarkdownIntegrationFile(claudeMdPath, "Claude Code CLAUDE.md", prompts.ClaudeMdContentForModes(modes))
+	fmt.Println("[Claude Code] Restart Claude Code to activate the topology workflow.")
 }
 
-func initClaudeCodeTerminal(claudeMdPath string, global bool, autoYes bool) {
-	fmt.Printf("[Claude Code] Terminal mode: skipping MCP server setup\n")
+func anyMCPMode(modes helper.ToolModes) bool {
+	return modes.Read == helper.ReadModeMCP || modes.Edit == helper.EditModeMCP || modes.Other == helper.OtherModeMCP
+}
 
-	if _, err := os.Stat(claudeMdPath); err == nil {
-		if !autoYes && !promptReplace(claudeMdPath) {
-			fmt.Printf("[Claude Code] Skipping CLAUDE.md (terminal instructions already present)\n")
-			return
-		}
-		fmt.Printf("[Claude Code] Overwriting CLAUDE.md with terminal navigation instructions\n")
-	} else {
-		fmt.Printf("[Claude Code] Writing CLAUDE.md with terminal navigation instructions\n")
+func nativePermission(allowed bool) string {
+	if allowed {
+		return "allow"
 	}
+	return "deny"
+}
 
-	content := prompts.TerminalClaudeMdContent()
-	if err := os.WriteFile(claudeMdPath, []byte(content), 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "Error writing %s: %v\n", claudeMdPath, err)
+func opencodePaths(global bool) (string, string, string) {
+	if global {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error finding home dir: %v\n", err)
+			os.Exit(1)
+		}
+		configDir := filepath.Join(home, ".config", "opencode")
+		return filepath.Join(configDir, "opencode.json"), configDir, filepath.Join(configDir, "AGENTS.md")
+	}
+	return ".opencode/opencode.json", ".opencode", "AGENTS.md"
+}
+
+func claudePaths(global bool) (string, string, string, string) {
+	if global {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error finding home dir: %v\n", err)
+			os.Exit(1)
+		}
+		return filepath.Join(home, ".claude.json"), filepath.Join(home, ".claude", "commands"), filepath.Join(home, ".claude", "agents"), filepath.Join(home, ".claude", "CLAUDE.md")
+	}
+	return ".claude/.mcp.json", ".claude/commands", ".claude/agents", "CLAUDE.md"
+}
+
+func readJSONConfig(path string) map[string]interface{} {
+	config := make(map[string]interface{})
+	data, err := os.ReadFile(path)
+	if err == nil && len(data) > 0 {
+		if err := json.Unmarshal(data, &config); err != nil {
+			fmt.Fprintf(os.Stderr, "Error parsing %s: %v\n  Please fix or remove the file and try again.\n", path, err)
+			os.Exit(1)
+		}
+	}
+	return config
+}
+
+func shouldWriteConfig(config map[string]interface{}, key, path, label string, autoYes bool) bool {
+	if _, exists := config[key]; exists {
+		if autoYes || promptReplaceConfigExists(path) {
+			fmt.Printf("[%s] Overwriting %s\n", label, path)
+			return true
+		}
+		fmt.Printf("[%s] Skipping %s\n", label, path)
+		return false
+	}
+	return true
+}
+
+func writeJSONConfig(path string, config map[string]interface{}) {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", filepath.Dir(path), err)
 		os.Exit(1)
 	}
-	fmt.Printf("[Claude Code] Terminal navigation instructions written to %s\n", claudeMdPath)
+	out, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error encoding config: %v\n", err)
+		os.Exit(1)
+	}
+	out = append(out, '\n')
+	if err := os.WriteFile(path, out, 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing %s: %v\n", path, err)
+		os.Exit(1)
+	}
+}
+
+func descriptionsGenerateCommandForAgent(agentRef string) string {
+	return "Use the " + agentRef + " agent to generate descriptions for targeted undocumented resources from config. The agent must use list_undocumented_resources, then read_resource_and_cut and update_description for each returned resource, and process all listed resources without skipping any."
+}
+
+func bugHunterCommandForAgent(agentRef string) string {
+	return "Use the " + agentRef + " agent to scan the project topology for confirmed correctness, reliability, and security bugs. Report each confirmed bug with bug_report and summarize the count found."
+}
+
+func bugJudgeCommandForAgent(agentRef string) string {
+	return "Use the " + agentRef + " agent to triage pending bugs. It must compare pending bugs with dismissed examples, then acknowledge real bugs, dismiss false positives, and delete duplicates."
+}
+
+func bugSolverCommandForAgent(agentRef string) string {
+	return "Use the " + agentRef + " agent to fix acknowledged bugs. It must inspect each acknowledged bug, apply the minimal fix, and delete the bug report after the fix is complete."
+}
+
+func claudeAgentContent(name, description string, profile ToolProfile, modes helper.ToolModes, prompt string) string {
+	return fmt.Sprintf("---\nname: %s\ndescription: %s\ntools: %s\n%s---\n\n%s\n\n%s", name, description, strings.Join(claudeToolsForProfile(modes, profile), ", "), claudeMCPServersFrontmatter(modes, profile), prompt, terminalGuidance(modes, profile))
+}
+
+func openCodeAgentContent(name, description string, profile ToolProfile, modes helper.ToolModes, prompt string) string {
+	return fmt.Sprintf("---\ndescription: %s\nmode: subagent\npermission:\n%s---\n\n%s\n\n%s", description, openCodePermissions(modes, profile), prompt, terminalGuidance(modes, profile))
+}
+
+func claudeMCPServersFrontmatter(modes helper.ToolModes, profile ToolProfile) string {
+	if !anyMCPMode(modes) {
+		return ""
+	}
+	return fmt.Sprintf("mcpServers:\n  - llm-topology:\n      type: stdio\n      command: ltp\n      args: [\"serve\", \"--tool-profile\", \"%s\"]\n", profile)
+}
+
+func claudeToolsForProfile(modes helper.ToolModes, profile ToolProfile) []string {
+	var result []string
+	if modes.Read == helper.ReadModeNative {
+		result = append(result, "Read")
+	} else if modes.Read == helper.ReadModeMCP && profileAllows(profile, "read_file") {
+		result = append(result, "mcp__llm-topology__read_file")
+	}
+	if modes.Edit == helper.EditModeNative {
+		if profileAllows(profile, "edit") {
+			result = append(result, "Edit")
+		}
+		if profileAllows(profile, "write") {
+			result = append(result, "Write")
+		}
+	} else if modes.Edit == helper.EditModeMCP {
+		for _, name := range []string{"edit", "write"} {
+			if profileAllows(profile, name) {
+				result = append(result, "mcp__llm-topology__"+name)
+			}
+		}
+	}
+	if modes.Other == helper.OtherModeMCP {
+		for _, name := range profileTools(profile) {
+			if name != "read_file" && name != "edit" && name != "write" {
+				result = append(result, "mcp__llm-topology__"+name)
+			}
+		}
+	}
+	if needsTerminal(modes) {
+		result = append(result, "Bash")
+	}
+	return result
+}
+
+func openCodePermissions(modes helper.ToolModes, profile ToolProfile) string {
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("  read: %s\n", nativePermission(modes.Read == helper.ReadModeNative)))
+	canEditNatively := modes.Edit == helper.EditModeNative && (profileAllows(profile, "edit") || profileAllows(profile, "write"))
+	b.WriteString(fmt.Sprintf("  edit: %s\n", nativePermission(canEditNatively)))
+	if needsTerminal(modes) {
+		b.WriteString("  bash: allow\n")
+	}
+	b.WriteString("  \"llm-topology_*\": deny\n")
+	for _, toolName := range allowedMCPToolNames(modes, profile) {
+		b.WriteString(fmt.Sprintf("  \"llm-topology_%s\": allow\n", toolName))
+	}
+	return b.String()
+}
+
+func allowedMCPToolNames(modes helper.ToolModes, profile ToolProfile) []string {
+	var result []string
+	for _, name := range profileTools(profile) {
+		switch name {
+		case "read_file":
+			if modes.Read == helper.ReadModeMCP {
+				result = append(result, name)
+			}
+		case "edit", "write":
+			if modes.Edit == helper.EditModeMCP {
+				result = append(result, name)
+			}
+		default:
+			if modes.Other == helper.OtherModeMCP {
+				result = append(result, name)
+			}
+		}
+	}
+	return result
+}
+
+func profileAllows(profile ToolProfile, toolName string) bool {
+	for _, name := range profileTools(profile) {
+		if name == toolName {
+			return true
+		}
+	}
+	return false
+}
+
+func needsTerminal(modes helper.ToolModes) bool {
+	return modes.Read == helper.ReadModeTerminal || modes.Edit == helper.EditModeTerminal || modes.Other == helper.OtherModeTerminal
+}
+
+func terminalGuidance(modes helper.ToolModes, profile ToolProfile) string {
+	if !needsTerminal(modes) {
+		return ""
+	}
+	var lines []string
+	for _, name := range profileTools(profile) {
+		switch name {
+		case "read_file":
+			if modes.Read == helper.ReadModeTerminal {
+				lines = append(lines, "- `ltp read_file <path>` for raw file reads")
+			}
+		case "edit":
+			if modes.Edit == helper.EditModeTerminal {
+				lines = append(lines, "- `ltp edit` with JSON stdin for exact string replacement")
+			}
+		case "write":
+			if modes.Edit == helper.EditModeTerminal {
+				lines = append(lines, "- `ltp write` with JSON stdin for file writes")
+			}
+		default:
+			if modes.Other == helper.OtherModeTerminal {
+				lines = append(lines, "- `"+terminalCommandForTool(name)+"`")
+			}
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "## Terminal llm-topology Commands\n\nUse only these ltp commands for terminal-mode topology operations:\n" + strings.Join(lines, "\n") + "\n"
+}
+
+func terminalCommandForTool(name string) string {
+	switch name {
+	case "read_function":
+		return "ltp read_function <name>"
+	case "read_struct":
+		return "ltp read_struct <name>"
+	case "warnings_list":
+		return "ltp warnings list"
+	case "bug_report":
+		return "ltp bug report --node <id> --description <text>"
+	case "bug_list":
+		return "ltp bug list [--node <id>] [--state <state>]"
+	case "bug_acknowledge":
+		return "ltp bug acknowledge <bugID>"
+	case "bug_dismiss":
+		return "ltp bug dismiss <bugID>"
+	case "bug_delete":
+		return "ltp bug delete <bugID>"
+	case "list_undocumented_resources":
+		return "ltp list-undocumented"
+	case "read_resource_and_cut":
+		return "ltp read-resource-and-cut <id> <kind>"
+	case "update_description":
+		return "ltp update-description <id> <kind> <desc>"
+	default:
+		return "ltp " + name
+	}
 }
 
 func writeCommand(dir, name, description, template string, autoYes bool) {
-	cmdPath := filepath.Join(dir, name+".md")
-	if _, err := os.Stat(cmdPath); err == nil {
-		if autoYes || promptReplace(cmdPath) {
-			fmt.Printf("Overwriting command %s at %s\n", name, cmdPath)
-		} else {
-			fmt.Printf("Command %s already present at %s, skipping\n", name, cmdPath)
-			return
-		}
-	}
-	content := fmt.Sprintf("---\ndescription: %s\n---\n\n%s\n", description, template)
-	if err := os.WriteFile(cmdPath, []byte(content), 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "Error writing command %s: %v\n", name, err)
-		os.Exit(1)
-	}
-	fmt.Printf("Command %s written to %s\n", name, cmdPath)
+	writeMarkdownFile(filepath.Join(dir, name+".md"), "command "+name, fmt.Sprintf("---\ndescription: %s\n---\n\n%s\n", description, template), autoYes)
+}
+
+func writeOpenCodeCommand(dir, name, description, agentName, template string, autoYes bool) {
+	content := fmt.Sprintf("---\ndescription: %s\nagent: %s\nsubtask: true\n---\n\n%s\n", description, agentName, template)
+	writeMarkdownFile(filepath.Join(dir, name+".md"), "command "+name, content, autoYes)
 }
 
 func writeAgent(dir, name, content string, autoYes bool) {
-	agentPath := filepath.Join(dir, name+".md")
-	if _, err := os.Stat(agentPath); err == nil {
-		if autoYes || promptReplace(agentPath) {
-			fmt.Printf("Overwriting agent %s at %s\n", name, agentPath)
+	writeMarkdownFile(filepath.Join(dir, name+".md"), "agent "+name, content, autoYes)
+}
+
+func writeMarkdownFile(path, label, content string, autoYes bool) {
+	if _, err := os.Stat(path); err == nil {
+		if autoYes || promptReplace(path) {
+			fmt.Printf("Overwriting %s at %s\n", label, path)
 		} else {
-			fmt.Printf("Agent %s already present at %s, skipping\n", name, agentPath)
+			fmt.Printf("%s already present at %s, skipping\n", label, path)
 			return
 		}
 	}
-	if err := os.WriteFile(agentPath, []byte(content), 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "Error writing agent %s: %v\n", name, err)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", filepath.Dir(path), err)
 		os.Exit(1)
 	}
-	fmt.Printf("Agent %s written to %s\n", name, agentPath)
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing %s: %v\n", path, err)
+		os.Exit(1)
+	}
+	fmt.Printf("%s written to %s\n", label, path)
+}
+
+const (
+	ltpIntegrationStart = "# LTP Integration"
+	ltpIntegrationEnd   = "This is it for ltp integration"
+)
+
+func writeMarkdownIntegrationFile(path, label, segment string) {
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "Error reading %s: %v\n", path, err)
+		os.Exit(1)
+	}
+
+	existing := ""
+	if err == nil {
+		existing = string(data)
+	}
+	updated := updateMarkdownIntegrationSegment(existing, segment)
+
+	if updated == existing {
+		fmt.Printf("%s already up to date at %s\n", label, path)
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", filepath.Dir(path), err)
+		os.Exit(1)
+	}
+	if err := os.WriteFile(path, []byte(updated), 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing %s: %v\n", path, err)
+		os.Exit(1)
+	}
+	fmt.Printf("%s updated at %s\n", label, path)
+}
+
+func updateMarkdownIntegrationSegment(existing, segment string) string {
+	lineEnding := markdownLineEnding(existing)
+	segment = normalizeMarkdownSegment(segment, lineEnding)
+	if strings.TrimSpace(existing) == "" {
+		return segment
+	}
+
+	start := findMarkdownLine(existing, ltpIntegrationStart, 0)
+	if start >= 0 {
+		end := findMarkdownLine(existing, ltpIntegrationEnd, start)
+		if end >= 0 {
+			end += len(ltpIntegrationEnd)
+			if strings.HasPrefix(existing[end:], "\r\n") {
+				end += 2
+			} else if strings.HasPrefix(existing[end:], "\n") {
+				end++
+			}
+			return existing[:start] + segment + existing[end:]
+		}
+	}
+
+	insertAt := markdownIntegrationInsertionIndex(existing)
+	prefix := existing[:insertAt]
+	suffix := existing[insertAt:]
+	if prefix != "" {
+		if !strings.HasSuffix(prefix, "\n") {
+			prefix += lineEnding
+		}
+		if !hasTrailingBlankLine(prefix) {
+			prefix += lineEnding
+		}
+	}
+	if suffix != "" && !strings.HasPrefix(suffix, "\n") && !strings.HasPrefix(suffix, "\r\n") {
+		segment += lineEnding
+	}
+	return prefix + segment + suffix
+}
+
+func normalizeMarkdownSegment(segment, lineEnding string) string {
+	segment = strings.TrimSpace(segment)
+	segment = strings.ReplaceAll(segment, "\r\n", "\n")
+	segment = strings.ReplaceAll(segment, "\r", "\n")
+	if lineEnding != "\n" {
+		segment = strings.ReplaceAll(segment, "\n", lineEnding)
+	}
+	return segment + lineEnding
+}
+
+func markdownLineEnding(content string) string {
+	if strings.Contains(content, "\r\n") {
+		return "\r\n"
+	}
+	return "\n"
+}
+
+func hasTrailingBlankLine(content string) bool {
+	return strings.HasSuffix(content, "\n\n") || strings.HasSuffix(content, "\r\n\r\n")
+}
+
+func markdownIntegrationInsertionIndex(content string) int {
+	pos := 0
+	if strings.HasPrefix(content, "\ufeff") {
+		pos = len("\ufeff")
+	}
+	pos = skipMarkdownFrontmatter(content, pos)
+	afterBlanks := skipBlankMarkdownLines(content, pos)
+	if !markdownLineIsHeading(lineAt(content, afterBlanks)) {
+		return pos
+	}
+
+	pos = afterBlanks
+	for pos < len(content) {
+		line, next := nextMarkdownLine(content, pos)
+		if !markdownLineIsHeading(line) {
+			break
+		}
+		pos = skipBlankMarkdownLines(content, next)
+	}
+	return pos
+}
+
+func skipMarkdownFrontmatter(content string, pos int) int {
+	line, next := nextMarkdownLine(content, pos)
+	if strings.TrimSpace(line) != "---" {
+		return pos
+	}
+	for next < len(content) {
+		line, after := nextMarkdownLine(content, next)
+		if strings.TrimSpace(line) == "---" {
+			return after
+		}
+		next = after
+	}
+	return pos
+}
+
+func skipBlankMarkdownLines(content string, pos int) int {
+	for pos < len(content) {
+		line, next := nextMarkdownLine(content, pos)
+		if strings.TrimSpace(line) != "" {
+			break
+		}
+		pos = next
+	}
+	return pos
+}
+
+func lineAt(content string, pos int) string {
+	line, _ := nextMarkdownLine(content, pos)
+	return line
+}
+
+func nextMarkdownLine(content string, pos int) (string, int) {
+	if pos >= len(content) {
+		return "", len(content)
+	}
+	newline := strings.IndexByte(content[pos:], '\n')
+	if newline < 0 {
+		return content[pos:], len(content)
+	}
+	next := pos + newline + 1
+	return content[pos:next], next
+}
+
+func markdownLineIsHeading(line string) bool {
+	return strings.HasPrefix(strings.TrimLeft(line, " \t"), "#")
+}
+
+func findMarkdownLine(content, marker string, from int) int {
+	for from < len(content) {
+		line, next := nextMarkdownLine(content, from)
+		if strings.TrimSpace(line) == marker {
+			return from
+		}
+		from = next
+	}
+	return -1
 }

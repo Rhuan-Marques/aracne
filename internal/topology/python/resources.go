@@ -1,6 +1,6 @@
 package python
 
-import "llm-topology/internal/topology/domain"
+import "ltp/internal/topology/domain"
 
 type FunctionID = string
 type ClassID = string

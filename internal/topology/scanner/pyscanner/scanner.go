@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"llm-topology/internal/topology/domain"
-	"llm-topology/internal/topology/python"
+	"ltp/internal/topology/domain"
+	"ltp/internal/topology/python"
 )
 
 type PythonScanner struct{}

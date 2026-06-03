@@ -1,4 +1,4 @@
-﻿package cli
+package cli
 
 import (
 	"flag"
@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"llm-topology/internal/helper"
-	"llm-topology/internal/topology"
-	"llm-topology/internal/topology/domain"
+	"ltp/internal/helper"
+	"ltp/internal/topology"
+	"ltp/internal/topology/domain"
 )
 
 func RunScan(args []string) {

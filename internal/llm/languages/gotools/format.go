@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"llm-topology/internal/topology/golang"
+	"ltp/internal/topology/golang"
 )
 
 func desc(s string) string {

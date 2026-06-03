@@ -6,8 +6,8 @@ import (
 	"os"
 	"strings"
 
-	"llm-topology/internal/topology"
-	"llm-topology/internal/topology/scanner"
+	"ltp/internal/topology"
+	"ltp/internal/topology/scanner"
 )
 
 // Tool implementation for the "edit" command. Wraps a TopologyManager and scanner Registry to perform file edits and auto-update the topology database in response.

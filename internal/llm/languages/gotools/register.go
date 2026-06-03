@@ -1,8 +1,8 @@
 package gotools
 
 import (
-	"llm-topology/internal/llm/tools"
-	"llm-topology/internal/topology/golang"
+	"ltp/internal/llm/tools"
+	"ltp/internal/topology/golang"
 )
 
 type Parameter = tools.Parameter

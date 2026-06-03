@@ -1,8 +1,8 @@
 package pythontools
 
 import (
-	"llm-topology/internal/llm/tools"
-	"llm-topology/internal/topology/python"
+	"ltp/internal/llm/tools"
+	"ltp/internal/topology/python"
 )
 
 type Parameter = tools.Parameter

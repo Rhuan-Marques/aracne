@@ -1,4 +1,4 @@
-﻿package tools
+package tools
 
 import (
 	"encoding/json"
@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"llm-topology/internal/topology"
-	"llm-topology/internal/topology/scanner"
+	"ltp/internal/topology"
+	"ltp/internal/topology/scanner"
 )
 
 type Write struct {
@@ -25,7 +25,7 @@ func (w *Write) Name() string {
 }
 
 func (w *Write) Description() string {
-	return "Write content to a file, creating parent directories if needed. Provide the file path and the content. The project topology is automatically updated."
+	return "Write a new file, creating parent directories if needed. Provide the file path and the content. The project topology is automatically updated. Overwrites file if it already existed"
 }
 
 func (w *Write) Parameters() []Parameter {

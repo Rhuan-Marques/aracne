@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	"llm-topology/internal/topology/domain"
-	"llm-topology/internal/topology/golang"
-	"llm-topology/internal/topology/python"
+	"ltp/internal/topology/domain"
+	"ltp/internal/topology/golang"
+	"ltp/internal/topology/python"
 )
 
 func RunReadResourceAndCut(args []string) {

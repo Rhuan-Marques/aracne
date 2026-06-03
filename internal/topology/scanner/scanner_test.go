@@ -3,7 +3,7 @@ package scanner
 import (
 	"testing"
 
-	"llm-topology/internal/topology/domain"
+	"ltp/internal/topology/domain"
 )
 
 type mockScanner struct {

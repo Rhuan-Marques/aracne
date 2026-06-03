@@ -1,4 +1,4 @@
-﻿package cli
+package cli
 
 import (
 	"bufio"
@@ -6,13 +6,9 @@ import (
 	"os"
 	"strings"
 
-	"llm-topology/internal/llm/agent"
-	"llm-topology/internal/llm/languages/gotools"
-	"llm-topology/internal/llm/languages/pythontools"
-	"llm-topology/internal/llm/providers"
-	"llm-topology/internal/llm/tools"
-	"llm-topology/internal/topology/golang"
-	"llm-topology/internal/topology/python"
+	"ltp/internal/helper"
+	"ltp/internal/llm/agent"
+	"ltp/internal/llm/providers"
 )
 
 func RunAgent(args []string) {
@@ -25,27 +21,10 @@ func RunAgent(args []string) {
 	}
 
 	provider := providers.NewDeepSeek()
-
-	toolReg := tools.NewRegistry()
-	toolReg.Register(&tools.Ls{})
-	toolReg.Register(&tools.ReadFile{})
-	toolReg.Register(tools.NewEdit(manager, reg))
-	toolReg.Register(tools.NewWrite(manager, reg))
-	toolReg.Register(tools.NewBugReport(manager))
-	toolReg.Register(tools.NewBugList(manager))
-	toolReg.Register(tools.NewBugAcknowledge(manager))
-	toolReg.Register(tools.NewBugDismiss(manager))
-	toolReg.Register(tools.NewBugDelete(manager))
+	cfg := helper.EnsureConfig(helper.ConfigPath(".ltp/topology.db"))
+	toolReg := BuildToolRegistry(manager, reg, cfg, ToolProfileDefault)
 
 	lang := GetLanguage(manager)
-	if lang == "python" {
-		pythonManager := python.NewPythonManager(manager)
-		pythontools.RegisterPythonTools(toolReg, pythonManager)
-	} else {
-		goManager := golang.NewGoManager(manager)
-		gotools.RegisterGoTools(toolReg, goManager)
-	}
-
 	topo, _ := manager.ReadAll()
 	if topo != nil {
 		lang = topo.Language

@@ -5,14 +5,14 @@ import (
 	"os"
 	"testing"
 
-	"llm-topology/internal/helper"
-	"llm-topology/internal/topology"
-	"llm-topology/internal/topology/domain"
-	"llm-topology/internal/topology/golang"
-	"llm-topology/internal/topology/python"
-	"llm-topology/internal/topology/scanner"
-	"llm-topology/internal/topology/scanner/goscanner"
-	"llm-topology/internal/topology/scanner/pyscanner"
+	"ltp/internal/helper"
+	"ltp/internal/topology"
+	"ltp/internal/topology/domain"
+	"ltp/internal/topology/golang"
+	"ltp/internal/topology/python"
+	"ltp/internal/topology/scanner"
+	"ltp/internal/topology/scanner/goscanner"
+	"ltp/internal/topology/scanner/pyscanner"
 )
 
 func newTestRegistry() *scanner.Registry {

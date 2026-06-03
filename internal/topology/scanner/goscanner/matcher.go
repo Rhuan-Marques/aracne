@@ -1,7 +1,7 @@
 package goscanner
 
 import (
-	"llm-topology/internal/topology/golang"
+	"ltp/internal/topology/golang"
 )
 
 func matchStructsToInterfaces(gt *golang.GolangTopology) {

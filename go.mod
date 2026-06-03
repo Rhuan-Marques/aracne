@@ -1,4 +1,4 @@
-module llm-topology
+module ltp
 
 go 1.25.0
 

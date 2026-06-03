@@ -3,7 +3,7 @@ package python
 import (
 	"encoding/json"
 
-	"llm-topology/internal/topology/domain"
+	"ltp/internal/topology/domain"
 )
 
 func FromGeneric(topo *domain.Topology) *PythonTopology {

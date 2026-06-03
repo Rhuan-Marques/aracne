@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"llm-topology/internal/llm"
-	"llm-topology/internal/llm/tools"
+	"ltp/internal/llm"
+	"ltp/internal/llm/tools"
 )
 
 type mockProvider struct {

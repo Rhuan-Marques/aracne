@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"llm-topology/internal/llm/tools"
+	"ltp/internal/llm/tools"
 )
 
 // MCP JSON-RPC server that listens on stdin/stdout and dispatches requests to the registered tool handlers.

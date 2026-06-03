@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"llm-topology/internal/topology/domain"
-	"llm-topology/internal/topology/golang"
+	"ltp/internal/topology/domain"
+	"ltp/internal/topology/golang"
 )
 
 // MCP/agent tool that retrieves a resource's source code cut and type-specific instructions for generating its description.

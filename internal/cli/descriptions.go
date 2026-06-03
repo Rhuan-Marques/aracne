@@ -1,22 +1,18 @@
-﻿package cli
+package cli
 
 import (
 	"flag"
 	"fmt"
 	"os"
 
-	"llm-topology/internal/helper"
-	"llm-topology/internal/llm/agent"
-	"llm-topology/internal/llm/languages/gotools"
-	"llm-topology/internal/llm/languages/pythontools"
-	"llm-topology/internal/llm/providers"
-	"llm-topology/internal/llm/tools"
-	"llm-topology/internal/topology/golang"
-	"llm-topology/internal/topology/python"
+	"ltp/internal/helper"
+	"ltp/internal/llm/agent"
+	"ltp/internal/llm/providers"
 )
 
 func RunGenerateDescriptions(args []string) {
 	fs := flag.NewFlagSet("generate-descriptions", flag.ExitOnError)
+	targetsFlag := fs.String("targets", "", "Comma-separated resource kinds to describe (overrides config describe_targets)")
 	fs.Parse(args)
 
 	apiKey := os.Getenv("DEEPSEEK_API_KEY")
@@ -27,41 +23,38 @@ func RunGenerateDescriptions(args []string) {
 
 	manager, reg := InitRegistry(".ltp/topology.db")
 	provider := providers.NewDeepSeek()
-
-	toolReg := tools.NewRegistry()
-	toolReg.Register(&tools.Ls{})
-	toolReg.Register(&tools.ReadFile{})
-	toolReg.Register(tools.NewEdit(manager, reg))
-	toolReg.Register(tools.NewWrite(manager, reg))
+	cfg := helper.EnsureConfig(helper.ConfigPath(".ltp/topology.db"))
+	if *targetsFlag != "" {
+		targets, err := helper.ParseDescribeTargets(*targetsFlag)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		cfg.DescribeTargets = targets
+	}
+	toolReg := BuildToolRegistry(manager, reg, cfg, ToolProfileDescriptor)
 
 	lang := GetLanguage(manager)
-	if lang == "python" {
-		pythonManager := python.NewPythonManager(manager)
-		pythontools.RegisterPythonTools(toolReg, pythonManager)
-	} else {
-		goManager := golang.NewGoManager(manager)
-		gotools.RegisterGoTools(toolReg, goManager)
-	}
-
 	topo, _ := manager.ReadAll()
 	if topo != nil {
 		lang = topo.Language
 	}
 
+	targetSet := helper.DescribeTargetSet(cfg.DescribeTargets)
 	count := 0
 	if topo != nil {
 		for _, res := range topo.Resources {
-			if res.Description == "" {
+			if res.Description == "" && targetSet[res.Kind] {
 				count++
 			}
 		}
 	}
-	fmt.Printf("Generating descriptions for %d resources...\n", count)
+	fmt.Printf("Generating descriptions for %d resources (targets: %s)...\n", count, helper.FormatDescribeTargets(cfg.DescribeTargets))
 
 	a := agent.New(provider, toolReg, lang)
 	a.SetMaxIterations(200)
 
-	err := a.Run("Generate descriptions for all undocumented resources. Use list_undocumented_resources first, then dispatch descriptor sub-agents for each resource. Process ALL of them.")
+	err := a.Run(fmt.Sprintf("Generate descriptions for undocumented resources matching these target kinds only: %s. Use list_undocumented_resources first, then process every listed resource with read_resource_and_cut and update_description. Process ALL listed resources.", helper.FormatDescribeTargets(cfg.DescribeTargets)))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "\nError: %v\n", err)
 		os.Exit(1)

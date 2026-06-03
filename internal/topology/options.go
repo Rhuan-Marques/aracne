@@ -1,6 +1,6 @@
 package topology
 
-import "llm-topology/internal/topology/domain"
+import "ltp/internal/topology/domain"
 
 // Filtering options for ReadAll operations, supporting resource kind filtering and description presence filtering.
 type TopologyOptions struct {

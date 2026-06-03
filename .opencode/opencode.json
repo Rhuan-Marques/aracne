@@ -4,7 +4,9 @@
     "llm-topology": {
       "command": [
         "ltp",
-        "serve"
+        "serve",
+        "--tool-profile",
+        "all"
       ],
       "enabled": true,
       "type": "local"
@@ -12,7 +14,14 @@
   },
   "permission": {
     "edit": "deny",
-    "read": "deny",
-    "write": "deny"
+    "llm-topology_*": "deny",
+    "llm-topology_bug_report": "allow",
+    "llm-topology_edit": "allow",
+    "llm-topology_read_file": "allow",
+    "llm-topology_read_function": "allow",
+    "llm-topology_read_struct": "allow",
+    "llm-topology_warnings_list": "allow",
+    "llm-topology_write": "allow",
+    "read": "deny"
   }
 }

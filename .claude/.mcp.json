@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "llm-topology": {
+      "args": [
+        "serve",
+        "--tool-profile",
+        "default"
+      ],
+      "command": "ltp"
+    }
+  }
+}

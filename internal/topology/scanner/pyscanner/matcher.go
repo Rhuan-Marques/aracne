@@ -1,6 +1,6 @@
 package pyscanner
 
-import "llm-topology/internal/topology/python"
+import "ltp/internal/topology/python"
 
 func matchClassInheritance(gt *python.PythonTopology) {
 	for classID, cls := range gt.Classes {

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"llm-topology/internal/topology/domain"
+	"ltp/internal/topology/domain"
 )
 
 func RunBug(args []string) {

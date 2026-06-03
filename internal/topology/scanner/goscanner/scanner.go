@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"llm-topology/internal/topology/domain"
-	"llm-topology/internal/topology/golang"
+	"ltp/internal/topology/domain"
+	"ltp/internal/topology/golang"
 )
 
 type GoScanner struct{}
@@ -283,11 +283,7 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.Top
 		gt.Packages[pkgPath] = pkg
 
 		for _, fi := range pr.Functions {
-			for warnID, w := range gt.Warnings {
-				if w.Kind == domain.WarnUseMissingNode && w.SourceID == string(fi.Function.ID) {
-					delete(gt.Warnings, warnID)
-				}
-			}
+			s.clearReanalyzedFunctionWarnings(gt, fi.Function.ID)
 			if fi.Body != nil {
 				conns := analyzeFunctionBody(fi.Body, pr, gt, fi.Function.Input, fi.ReceiverName, fi.Function.MethodFrom, fi.Function.ID, fi.TypeParamNames)
 				f := gt.Functions[fi.Function.ID]
@@ -593,11 +589,7 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.Top
 	detectConstructors(gt)
 
 	for _, fi := range pr.Functions {
-		for warnID, w := range gt.Warnings {
-			if w.Kind == domain.WarnUseMissingNode && w.SourceID == string(fi.Function.ID) {
-				delete(gt.Warnings, warnID)
-			}
-		}
+		s.clearReanalyzedFunctionWarnings(gt, fi.Function.ID)
 		if fi.Body != nil {
 			conns := analyzeFunctionBody(fi.Body, pr, gt, fi.Function.Input, fi.ReceiverName, fi.Function.MethodFrom, fi.Function.ID, fi.TypeParamNames)
 			f := gt.Functions[fi.Function.ID]
@@ -623,6 +615,22 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.Top
 	topo.Warnings = gt.Warnings
 
 	return warnings, nil
+}
+
+func (s *GoScanner) clearReanalyzedFunctionWarnings(gt *golang.GolangTopology, functionID golang.FunctionID) {
+	id := string(functionID)
+	for warnID, w := range gt.Warnings {
+		switch w.Kind {
+		case domain.WarnUseMissingNode, domain.WarnNodeRemoved:
+			if w.SourceID == id {
+				delete(gt.Warnings, warnID)
+			}
+		case domain.WarnSignatureChanged:
+			if w.TargetID == id {
+				delete(gt.Warnings, warnID)
+			}
+		}
+	}
 }
 
 func (s *GoScanner) resolveWarnings(gt *golang.GolangTopology, pr *ParseResult, removedFuncs map[golang.FunctionID]golang.GolangFunction, removedStructs map[golang.StructID]golang.GolangStruct, removedNamedTypes map[golang.NamedTypeID]golang.GolangNamedType) {

@@ -6,9 +6,9 @@ import (
 	"sort"
 	"strings"
 
-	"llm-topology/internal/llm/tools"
-	"llm-topology/internal/topology/domain"
-	"llm-topology/internal/topology/golang"
+	"ltp/internal/llm/tools"
+	"ltp/internal/topology/domain"
+	"ltp/internal/topology/golang"
 )
 
 type ListWarnings struct {
@@ -20,7 +20,7 @@ func NewListWarnings(mgr *golang.GoManager) *ListWarnings {
 }
 
 func (l *ListWarnings) Name() string {
-	return "list_warnings"
+	return "warnings_list"
 }
 
 func (l *ListWarnings) Description() string {

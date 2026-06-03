@@ -1,11 +1,11 @@
-﻿package helper
+package helper
 
 import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
 
-	"llm-topology/internal/topology/domain"
+	"ltp/internal/topology/domain"
 	_ "modernc.org/sqlite"
 )
 

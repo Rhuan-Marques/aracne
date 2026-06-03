@@ -1,4 +1,4 @@
-﻿package cli
+package cli
 
 import (
 	"fmt"
@@ -7,7 +7,7 @@ import (
 	"sort"
 	"time"
 
-	"llm-topology/internal/helper"
+	"ltp/internal/helper"
 )
 
 func RunCheckUpdates(args []string) {

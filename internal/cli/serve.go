@@ -1,39 +1,28 @@
-﻿package cli
+package cli
 
 import (
+	"flag"
 	"fmt"
 	"os"
 
-	"llm-topology/internal/llm/languages/gotools"
-	"llm-topology/internal/llm/languages/pythontools"
-	"llm-topology/internal/llm/tools"
-	"llm-topology/internal/mcp"
-	"llm-topology/internal/topology/golang"
-	"llm-topology/internal/topology/python"
+	"ltp/internal/helper"
+	"ltp/internal/mcp"
 )
 
-func RunServe() {
-	manager, reg := InitRegistry(".ltp/topology.db")
+func RunServe(args []string) {
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	profileName := fs.String("tool-profile", "default", "Tool profile: default, descriptor, bug-hunter, bug-judge, bug-solver, or all")
+	fs.Parse(args)
 
-	registry := tools.NewRegistry()
-	registry.Register(&tools.Ls{})
-	registry.Register(&tools.ReadFile{})
-	registry.Register(tools.NewEdit(manager, reg))
-	registry.Register(tools.NewWrite(manager, reg))
-	registry.Register(tools.NewBugReport(manager))
-	registry.Register(tools.NewBugList(manager))
-	registry.Register(tools.NewBugAcknowledge(manager))
-	registry.Register(tools.NewBugDismiss(manager))
-	registry.Register(tools.NewBugDelete(manager))
-
-	lang := GetLanguage(manager)
-	if lang == "python" {
-		pythonManager := python.NewPythonManager(manager)
-		pythontools.RegisterPythonTools(registry, pythonManager)
-	} else {
-		goManager := golang.NewGoManager(manager)
-		gotools.RegisterGoTools(registry, goManager)
+	profile, err := ParseToolProfile(*profileName)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
 	}
+
+	manager, reg := InitRegistry(".ltp/topology.db")
+	cfg := helper.EnsureConfig(helper.ConfigPath(".ltp/topology.db"))
+	registry := BuildToolRegistry(manager, reg, cfg, profile)
 
 	server := mcp.NewServer(registry)
 	if err := server.Serve(); err != nil {

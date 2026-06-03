@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"llm-topology/internal/topology/domain"
+	"ltp/internal/topology/domain"
 )
 
 func TestJSONRoundtrip(t *testing.T) {
@@ -16,9 +16,9 @@ func TestJSONRoundtrip(t *testing.T) {
 		Language: "go",
 		Resources: map[string]domain.Resource{
 			"f1": {
-				ID:   "f1",
-				Kind: domain.ResourceFunction,
-				Name: "Foo",
+				ID:       "f1",
+				Kind:     domain.ResourceFunction,
+				Name:     "Foo",
 				Location: domain.Location{StartsAt: 1, EndsAt: 10, Path: "main.go"},
 			},
 		},
@@ -65,6 +65,27 @@ func TestReadJsonNonexistent(t *testing.T) {
 	}
 }
 
+func TestIsSourceFileMatchesScanRules(t *testing.T) {
+	tests := []struct {
+		path     string
+		language string
+		want     bool
+	}{
+		{path: "main.go", language: "go", want: true},
+		{path: "main_test.go", language: "go", want: false},
+		{path: "pkg/test_main.py", language: "python", want: false},
+		{path: "pkg/main.py", language: "python", want: true},
+		{path: ".opencode/plugins/hook.js", language: "go", want: false},
+		{path: "node_modules/pkg/file.go", language: "go", want: false},
+	}
+
+	for _, tt := range tests {
+		if got := IsSourceFile(tt.path, tt.language); got != tt.want {
+			t.Fatalf("IsSourceFile(%q, %q) = %v, want %v", tt.path, tt.language, got, tt.want)
+		}
+	}
+}
+
 func TestDBRoundtrip(t *testing.T) {
 	path := "test_topology.db"
 	defer os.Remove(path)
@@ -74,11 +95,11 @@ func TestDBRoundtrip(t *testing.T) {
 		Language: "go",
 		Resources: map[string]domain.Resource{
 			"f1": {
-				ID:   "f1",
-				Kind: domain.ResourceFunction,
-				Name: "Foo",
+				ID:          "f1",
+				Kind:        domain.ResourceFunction,
+				Name:        "Foo",
 				Description: "does foo",
-				Location: domain.Location{StartsAt: 1, EndsAt: 10, Path: "main.go"},
+				Location:    domain.Location{StartsAt: 1, EndsAt: 10, Path: "main.go"},
 				Properties: map[string]any{
 					"input":  []any{},
 					"output": []any{},
@@ -278,7 +299,7 @@ func TestBugCRUD(t *testing.T) {
 	bug := domain.KnownBug{
 		ID: "bug_1", NodeID: "f1",
 		Description: "nil pointer",
-		State: domain.BugPending,
+		State:       domain.BugPending,
 	}
 	if err := CreateBug(path, bug); err != nil {
 		t.Fatalf("CreateBug: %v", err)
@@ -298,7 +319,7 @@ func TestBugCRUD(t *testing.T) {
 	bug2 := domain.KnownBug{
 		ID: "bug_2", NodeID: "f2",
 		Description: "race condition",
-		State: domain.BugPending,
+		State:       domain.BugPending,
 	}
 	if err := CreateBug(path, bug2); err != nil {
 		t.Fatalf("CreateBug: %v", err)

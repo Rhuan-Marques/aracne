@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"sort"
 
-	"llm-topology/internal/helper"
-	"llm-topology/internal/topology"
-	"llm-topology/internal/topology/domain"
+	"ltp/internal/helper"
+	"ltp/internal/topology"
+	"ltp/internal/topology/domain"
 )
 
 type PythonManager struct {

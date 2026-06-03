@@ -1,0 +1,55 @@
+package cli
+
+import "testing"
+
+func TestUpdateMarkdownIntegrationSegmentWritesEmptyFile(t *testing.T) {
+	segment := "# LTP Integration\n\nnew\n\nThis is it for ltp integration\n"
+	got := updateMarkdownIntegrationSegment("", segment)
+	if got != segment {
+		t.Fatalf("updated content = %q, want %q", got, segment)
+	}
+}
+
+func TestUpdateMarkdownIntegrationSegmentInsertsAfterTitle(t *testing.T) {
+	segment := "# LTP Integration\n\nnew\n\nThis is it for ltp integration\n"
+	existing := "# CLAUDE.md\n\nUser instructions stay here.\n"
+	want := "# CLAUDE.md\n\n# LTP Integration\n\nnew\n\nThis is it for ltp integration\n\nUser instructions stay here.\n"
+
+	got := updateMarkdownIntegrationSegment(existing, segment)
+	if got != want {
+		t.Fatalf("updated content = %q, want %q", got, want)
+	}
+}
+
+func TestUpdateMarkdownIntegrationSegmentInsertsAfterFrontmatterAndTitle(t *testing.T) {
+	segment := "# LTP Integration\n\nnew\n\nThis is it for ltp integration\n"
+	existing := "---\nname: docs\n---\n\n# AGENTS.md\n\nUser instructions stay here.\n"
+	want := "---\nname: docs\n---\n\n# AGENTS.md\n\n# LTP Integration\n\nnew\n\nThis is it for ltp integration\n\nUser instructions stay here.\n"
+
+	got := updateMarkdownIntegrationSegment(existing, segment)
+	if got != want {
+		t.Fatalf("updated content = %q, want %q", got, want)
+	}
+}
+
+func TestUpdateMarkdownIntegrationSegmentReplacesOnlyLTPBlock(t *testing.T) {
+	segment := "# LTP Integration\n\nnew\n\nThis is it for ltp integration\n"
+	existing := "# CLAUDE.md\n\nBefore.\n\n# LTP Integration\n\nold\n\nThis is it for ltp integration\n\nAfter.\n"
+	want := "# CLAUDE.md\n\nBefore.\n\n# LTP Integration\n\nnew\n\nThis is it for ltp integration\n\nAfter.\n"
+
+	got := updateMarkdownIntegrationSegment(existing, segment)
+	if got != want {
+		t.Fatalf("updated content = %q, want %q", got, want)
+	}
+}
+
+func TestUpdateMarkdownIntegrationSegmentPreservesCRLF(t *testing.T) {
+	segment := "# LTP Integration\n\nnew\n\nThis is it for ltp integration\n"
+	existing := "# CLAUDE.md\r\n\r\nUser instructions stay here.\r\n"
+	want := "# CLAUDE.md\r\n\r\n# LTP Integration\r\n\r\nnew\r\n\r\nThis is it for ltp integration\r\n\r\nUser instructions stay here.\r\n"
+
+	got := updateMarkdownIntegrationSegment(existing, segment)
+	if got != want {
+		t.Fatalf("updated content = %q, want %q", got, want)
+	}
+}

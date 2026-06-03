@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"os"
 
-	"llm-topology/internal/llm"
+	"ltp/internal/llm"
 )
 
 // DeepSeek is the LLM provider implementation for DeepSeek's API. It holds the API key, model name, and base URL for making chat completion requests.

@@ -1,6 +1,6 @@
 package golang
 
-import "llm-topology/internal/topology/domain"
+import "ltp/internal/topology/domain"
 
 // Wraps a GolangFunction with its source code cut string, providing both the function metadata and the actual source lines for display or analysis.
 type FunctionCut struct {

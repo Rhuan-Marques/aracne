@@ -3,7 +3,7 @@ package golang
 import (
 	"testing"
 
-	"llm-topology/internal/topology/domain"
+	"ltp/internal/topology/domain"
 )
 
 func TestConnectionKindValues(t *testing.T) {

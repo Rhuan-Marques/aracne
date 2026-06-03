@@ -3,7 +3,7 @@ package pyscanner
 import (
 	"strings"
 
-	"llm-topology/internal/topology/python"
+	"ltp/internal/topology/python"
 )
 
 func analyzeFunctionBody(body *pyFunc, pr *ParseResult, gt *python.PythonTopology, funcInput []python.VariableDefinition, receiverClass *python.ClassID) map[python.ConnectionKind][]string {
