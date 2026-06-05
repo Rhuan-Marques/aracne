@@ -12,5 +12,5 @@ func RegisterPythonTools(registry *tools.Registry, mgr *python.PythonManager) {
 	registry.Register(NewReadStruct(mgr))
 	registry.Register(NewReadResourceAndCut(mgr))
 	registry.Register(NewUpdateDescriptionTool(mgr))
-	registry.Register(NewListUndocumented(mgr))
+	registry.Register(NewNodeListNoDescription(mgr))
 }

@@ -44,8 +44,8 @@ func (w *Write) Run(args json.RawMessage) (string, error) {
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
 
-	if params.FilePath == "" || params.Content == "" {
-		return "", fmt.Errorf("missing required arguments: file_path, content")
+	if params.FilePath == "" {
+		return "", fmt.Errorf("missing required argument: file_path")
 	}
 
 	dir := filepath.Dir(params.FilePath)

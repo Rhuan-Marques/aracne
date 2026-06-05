@@ -33,15 +33,15 @@ func main() {
 			cli.RunGenerateDescriptions(os.Args[3:])
 		case "apply":
 			cli.RunDescriptionApply(os.Args[3:])
+		case "clear":
+			cli.RunClearDescriptions(os.Args[3:])
 		default:
 			cli.PrintUsage()
 		}
 	case "update-file":
 		cli.RunUpdateFile(os.Args[2:])
-	case "read_function":
-		cli.RunReadFunction()
-	case "read_struct":
-		cli.RunReadStruct()
+	case "read":
+		cli.RunRead()
 	case "read-resource-and-cut":
 		cli.RunReadResourceAndCut(os.Args[2:])
 	case "update-description":
@@ -50,8 +50,17 @@ func main() {
 		cli.RunEdit()
 	case "write":
 		cli.RunWrite()
-	case "list-undocumented":
-		cli.RunListUndocumented()
+	case "node":
+		if len(os.Args) < 3 || os.Args[2] != "list" {
+			fmt.Fprintln(os.Stderr, "Usage: ltp node list [--no-description]")
+			os.Exit(1)
+		}
+		noDesc := len(os.Args) > 3 && os.Args[3] == "--no-description"
+		if noDesc {
+			cli.RunNodeListNoDescription()
+		} else {
+			cli.RunNodeList()
+		}
 	case "warnings":
 		if len(os.Args) < 3 || os.Args[2] != "list" {
 			fmt.Fprintln(os.Stderr, "Usage: ltp warnings list [--source <id>] [--target <id>] [--kind <kind>]")
@@ -62,8 +71,6 @@ func main() {
 		cli.RunBug(os.Args[2:])
 	case "check-updates":
 		cli.RunCheckUpdates(os.Args[2:])
-	case "read_file":
-		cli.RunReadFile()
 	default:
 		cli.PrintUsage()
 	}

@@ -51,8 +51,8 @@ func (e *Edit) Run(args json.RawMessage) (string, error) {
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
 
-	if params.FilePath == "" || params.OldString == "" || params.NewString == "" {
-		return "", fmt.Errorf("missing required arguments: file_path, old_string, new_string")
+	if params.FilePath == "" || params.OldString == "" {
+		return "", fmt.Errorf("missing required arguments: file_path, old_string")
 	}
 
 	data, err := os.ReadFile(params.FilePath)

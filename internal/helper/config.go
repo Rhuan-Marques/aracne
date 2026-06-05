@@ -45,6 +45,14 @@ type Config struct {
 	ScanMode        ScanMode              `json:"scan_mode"`
 	ToolModes       ToolModes             `json:"tool_modes"`
 	DescribeTargets []domain.ResourceKind `json:"describe_targets"`
+	MaxFileSize     int64                 `json:"max_file_size,omitempty"`
+}
+
+func (c *Config) EffectiveMaxFileSize() int64 {
+	if c.MaxFileSize <= 0 {
+		return 512 * 1024
+	}
+	return c.MaxFileSize
 }
 
 func ConfigPath(dbPath string) string {
@@ -66,7 +74,7 @@ func DefaultDescribeTargets() []domain.ResourceKind {
 }
 
 func DefaultConfig() *Config {
-	return &Config{ScanMode: ScanModeDefault, ToolModes: DefaultToolModes(), DescribeTargets: DefaultDescribeTargets()}
+	return &Config{ScanMode: ScanModeDefault, ToolModes: DefaultToolModes(), DescribeTargets: DefaultDescribeTargets(), MaxFileSize: 512 * 1024}
 }
 
 func LoadConfig(path string) *Config {
@@ -95,6 +103,9 @@ func LoadConfig(path string) *Config {
 		if targets, err := NormalizeDescribeTargets(loaded.DescribeTargets); err == nil {
 			cfg.DescribeTargets = targets
 		}
+	}
+	if loaded.MaxFileSize > 0 {
+		cfg.MaxFileSize = loaded.MaxFileSize
 	}
 	return cfg
 }

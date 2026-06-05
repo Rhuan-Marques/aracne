@@ -21,7 +21,7 @@ func TestDescriptionsExecutorProfileIsLimited(t *testing.T) {
 			t.Fatalf("executor profile missing %q in %v", want, tools)
 		}
 	}
-	for _, blocked := range []string{"list_undocumented_resources", "edit", "write", "bug_report", "bug_list"} {
+	for _, blocked := range []string{"node_list_no_description", "edit", "write", "bug_report", "bug_list"} {
 		if allowed[blocked] {
 			t.Fatalf("executor profile should not include %q in %v", blocked, tools)
 		}
@@ -62,6 +62,26 @@ func TestDescriptionExecutorInputConstrainsAssignedResources(t *testing.T) {
 		if !strings.Contains(input, want) {
 			t.Fatalf("executor input missing %q:\n%s", want, input)
 		}
+	}
+}
+
+func TestParseClearDescriptionTargetsAcceptsBracketedKinds(t *testing.T) {
+	targets, err := parseClearDescriptionTargets("[Function, Type]")
+	if err != nil {
+		t.Fatalf("parseClearDescriptionTargets: %v", err)
+	}
+	if len(targets) != 2 || targets[0] != domain.ResourceFunction || targets[1] != domain.ResourceType {
+		t.Fatalf("targets = %v, want [function type]", targets)
+	}
+}
+
+func TestParseClearDescriptionTargetsEmptyMeansAll(t *testing.T) {
+	targets, err := parseClearDescriptionTargets("")
+	if err != nil {
+		t.Fatalf("parseClearDescriptionTargets: %v", err)
+	}
+	if targets != nil {
+		t.Fatalf("targets = %v, want nil", targets)
 	}
 }
 

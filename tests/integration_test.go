@@ -267,20 +267,18 @@ type MyStruct struct {
     X int
 }
 
-func useStruct() {
-    var s MyStruct
-    _ = s
+func useStruct() MyStruct {
+    return MyStruct{}
 }
 `)
 	p.scan(t)
 	assertNoWarnings(t, p)
 
-	// Remove the struct (not the function)
+	// Remove the struct — function still constructs it via MyStruct{}
 	writeFile(t, mainGo, `package main
 
-func useStruct() {
-    var s MyStruct
-    _ = s
+func useStruct() MyStruct {
+    return MyStruct{}
 }
 `)
 	p.updateFile(t, mainGo)
@@ -297,9 +295,8 @@ type MyStruct struct {
     X int
 }
 
-func useStruct() {
-    var s MyStruct
-    _ = s
+func useStruct() MyStruct {
+    return MyStruct{}
 }
 `)
 	p.updateFile(t, mainGo)

@@ -161,6 +161,7 @@ func initOpenCode(global bool, modes helper.ToolModes, autoYes bool) {
 
 	writeOpenCodePrimaryCommand(commandsDir, "descriptions-generate", "Generate descriptions for undocumented resources in the topology", "build", prompts.DescriptionsGenerateCommand("descriptions-generation-executor"), autoYes)
 	writeOpenCodeCommand(commandsDir, "descriptions-apply", "Write topology descriptions back into source files as doc comments", "build", prompts.DescriptionsApplyCommand(), autoYes)
+	writeOpenCodeCommand(commandsDir, "descriptions_clear", "Clear stored topology descriptions", "build", prompts.DescriptionsClearCommand(), autoYes)
 	writeOpenCodeCommand(commandsDir, "bug-hunter", "Launch a Bug Hunter sub-agent to scan the entire topology for bugs", "bug-hunter", bugHunterCommandForAgent("bug-hunter"), autoYes)
 	writeOpenCodeCommand(commandsDir, "bug-judge", "Triage pending bugs by launching Bug Judge sub-agents for each node", "bug-judge", bugJudgeCommandForAgent("bug-judge"), autoYes)
 	writeOpenCodeCommand(commandsDir, "bug-solver", "Fix acknowledged bugs by launching Bug Solver sub-agents", "bug-solver", bugSolverCommandForAgent("bug-solver"), autoYes)
@@ -204,6 +205,7 @@ func initClaudeCode(global bool, modes helper.ToolModes, autoYes bool) {
 
 	writeCommand(commandsDir, "descriptions-generate", "Generate descriptions for undocumented resources in the topology", prompts.DescriptionsGenerateCommand("descriptions-generation-executor"), autoYes)
 	writeCommand(commandsDir, "descriptions-apply", "Write topology descriptions back into source files as doc comments", prompts.DescriptionsApplyCommand(), autoYes)
+	writeCommand(commandsDir, "descriptions_clear", "Clear stored topology descriptions", prompts.DescriptionsClearCommand(), autoYes)
 	writeCommand(commandsDir, "bug-hunter", "Launch a Bug Hunter sub-agent to scan the entire topology for bugs", bugHunterCommandForAgent(".claude/agents/bug-hunter.md"), autoYes)
 	writeCommand(commandsDir, "bug-judge", "Triage pending bugs by launching Bug Judge sub-agents for each node", bugJudgeCommandForAgent(".claude/agents/bug-judge.md"), autoYes)
 	writeCommand(commandsDir, "bug-solver", "Fix acknowledged bugs by launching Bug Solver sub-agents", bugSolverCommandForAgent(".claude/agents/bug-solver.md"), autoYes)
@@ -419,7 +421,7 @@ func terminalGuidance(modes helper.ToolModes, profile ToolProfile) string {
 		switch name {
 		case "read_file":
 			if modes.Read == helper.ReadModeTerminal {
-				lines = append(lines, "- `ltp read_file <path>` for raw file reads")
+				lines = append(lines, "- `ltp read <resource-id>` to read resources or files")
 			}
 		case "edit":
 			if modes.Edit == helper.EditModeTerminal {
@@ -444,9 +446,11 @@ func terminalGuidance(modes helper.ToolModes, profile ToolProfile) string {
 func terminalCommandForTool(name string) string {
 	switch name {
 	case "read_function":
-		return "ltp read_function <name>"
+		return "ltp read <resource-id>"
 	case "read_struct":
-		return "ltp read_struct <name>"
+		return "ltp read <resource-id>"
+	case "read_file":
+		return "ltp read <resource-id>"
 	case "warnings_list":
 		return "ltp warnings list"
 	case "bug_report":
@@ -459,8 +463,8 @@ func terminalCommandForTool(name string) string {
 		return "ltp bug dismiss <bugID>"
 	case "bug_delete":
 		return "ltp bug delete <bugID>"
-	case "list_undocumented_resources":
-		return "ltp list-undocumented"
+	case "node_list_no_description":
+		return "ltp node list --no-description"
 	case "read_resource_and_cut":
 		return "ltp read-resource-and-cut <id> <kind>"
 	case "update_description":

@@ -615,6 +615,215 @@ func (m *GoManager) ReadStruct(id string, opts ...topology.TopologyOption) (*GoS
 	return ctx, nil
 }
 
+// Reads an interface from the topology by ID, returning a GoInterfaceContext with its source cut and implementing structs with matching methods.
+func (m *GoManager) ReadInterface(id string, opts ...topology.TopologyOption) (*GoInterfaceContext, error) {
+	opt := &topology.TopologyOptions{}
+	for _, o := range opts {
+		o(opt)
+	}
+
+	topo, err := m.generic.ReadAll()
+	if err != nil {
+		return nil, err
+	}
+	gt := FromGeneric(topo)
+
+	interfaceID := InterfaceID(id)
+	iface, ok := gt.Interfaces[interfaceID]
+	if !ok {
+		return nil, fmt.Errorf("interface %s not found in topology", id)
+	}
+
+	ctx := &GoInterfaceContext{}
+
+	interfaceCut, err := m.generic.Cut(iface.Loc)
+	if err != nil {
+		return nil, err
+	}
+	ctx.Interface = &InterfaceCut{GolangInterface: iface, Cut: interfaceCut.Cut}
+
+	if opt.HasResource(domain.ResourceType) || opt.HasResource(domain.ResourceFunction) {
+		for _, implStructID := range iface.ImplementedBy() {
+			implStruct, ok := gt.Structs[implStructID]
+			if !ok {
+				continue
+			}
+			impl := InterfaceImplementation{
+				StructID:    implStruct.ID,
+				Name:        implStruct.Name,
+				Description: implStruct.Description,
+				Location:    implStruct.Loc,
+			}
+			if opt.HasResource(domain.ResourceFunction) {
+				for _, reqMethod := range iface.Methods {
+					for _, methodID := range implStruct.Methods() {
+						method, exists := gt.Functions[methodID]
+						if !exists || !functionSignatureMatchesDefinition(method, reqMethod) {
+							continue
+						}
+						impl.Methods = append(impl.Methods, SimplifiedFunction{
+							ID:          method.ID,
+							Name:        method.Name,
+							Description: method.Description,
+							Input:       method.Input,
+							Output:      method.Output,
+							Location:    method.Loc,
+						})
+						break
+					}
+				}
+			}
+			ctx.Implementations = append(ctx.Implementations, impl)
+		}
+	}
+
+	if opt.HasResource(domain.ResourceDependency) {
+		ctx.Dependencies = append(ctx.Dependencies, iface.UsesDep()...)
+	}
+	if opt.HasResource(domain.ResourcePackage) {
+		ctx.PackagesUsed = append(ctx.PackagesUsed, iface.UsesPkg()...)
+	}
+
+	blocks := []ContextBlock{{
+		Kind: "interface", FileID: FileID(iface.Loc.Path), Line: iface.Loc.StartsAt,
+		Title: fmt.Sprintf("interface %s", iface.Name), Cut: interfaceCut.Cut,
+	}}
+	for _, impl := range ctx.Implementations {
+		blocks = append(blocks, ContextBlock{
+			Kind: "interface_impl", FileID: FileID(impl.Location.Path),
+			Line: impl.Location.StartsAt, Title: fmt.Sprintf("struct %s", impl.Name),
+		})
+		for _, method := range impl.Methods {
+			blocks = append(blocks, ContextBlock{
+				Kind: "impl_method", FileID: FileID(method.Location.Path),
+				Line: method.Location.StartsAt, Title: fmt.Sprintf("%s.%s", impl.Name, method.Name),
+			})
+		}
+	}
+	sortContextBlocks(blocks)
+	ctx.Blocks = blocks
+
+	return ctx, nil
+}
+
+// Reads a named type from the topology by ID, returning a GoNamedTypeContext with its source cut and resources that use it.
+func (m *GoManager) ReadNamedType(id string, opts ...topology.TopologyOption) (*GoNamedTypeContext, error) {
+	opt := &topology.TopologyOptions{}
+	for _, o := range opts {
+		o(opt)
+	}
+
+	topo, err := m.generic.ReadAll()
+	if err != nil {
+		return nil, err
+	}
+	gt := FromGeneric(topo)
+
+	namedTypeID := NamedTypeID(id)
+	namedType, ok := gt.NamedTypes[namedTypeID]
+	if !ok {
+		return nil, fmt.Errorf("named type %s not found in topology", id)
+	}
+
+	ctx := &GoNamedTypeContext{}
+
+	namedTypeCut, err := m.generic.Cut(namedType.Loc)
+	if err != nil {
+		return nil, err
+	}
+	ctx.NamedType = &NamedTypeCut{GolangNamedType: namedType, Cut: namedTypeCut.Cut}
+
+	if opt.HasResource(domain.ResourceFunction) {
+		for _, fn := range gt.Functions {
+			if usesNamedType(fn.UsesNamedType(), namedTypeID) {
+				kind := domain.ResourceFunction
+				if fn.MethodFrom != nil {
+					kind = domain.ResourceMethod
+				}
+				ctx.UsedBy = append(ctx.UsedBy, ResourceUsage{
+					ID:          string(fn.ID),
+					Kind:        kind,
+					Name:        fn.Name,
+					Description: fn.Description,
+					Location:    fn.Loc,
+				})
+			}
+		}
+	}
+	if opt.HasResource(domain.ResourceType) {
+		for _, s := range gt.Structs {
+			if usesNamedType(s.UsesNamedType(), namedTypeID) {
+				ctx.UsedBy = append(ctx.UsedBy, ResourceUsage{
+					ID:          string(s.ID),
+					Kind:        domain.ResourceType,
+					Name:        s.Name,
+					Description: s.Description,
+					Location:    s.Loc,
+				})
+			}
+		}
+	}
+	if opt.HasResource(domain.ResourceInterface) {
+		for _, iface := range gt.Interfaces {
+			if usesNamedType(iface.UsesNamedType(), namedTypeID) {
+				ctx.UsedBy = append(ctx.UsedBy, ResourceUsage{
+					ID:          string(iface.ID),
+					Kind:        domain.ResourceInterface,
+					Name:        iface.Name,
+					Description: iface.Description,
+					Location:    iface.Loc,
+				})
+			}
+		}
+	}
+	if opt.HasResource(domain.ResourceNamedType) {
+		for _, nt := range gt.NamedTypes {
+			if nt.ID == namedTypeID || !usesNamedType(nt.UsesNamedType(), namedTypeID) {
+				continue
+			}
+			ctx.UsedBy = append(ctx.UsedBy, ResourceUsage{
+				ID:          string(nt.ID),
+				Kind:        domain.ResourceNamedType,
+				Name:        nt.Name,
+				Description: nt.Description,
+				Location:    nt.Loc,
+			})
+		}
+	}
+
+	if opt.HasResource(domain.ResourceDependency) {
+		ctx.Dependencies = append(ctx.Dependencies, namedType.UsesDep()...)
+	}
+	if opt.HasResource(domain.ResourcePackage) {
+		ctx.PackagesUsed = append(ctx.PackagesUsed, namedType.UsesPkg()...)
+	}
+
+	sort.SliceStable(ctx.UsedBy, func(i, j int) bool {
+		if ctx.UsedBy[i].Location.Path != ctx.UsedBy[j].Location.Path {
+			return ctx.UsedBy[i].Location.Path < ctx.UsedBy[j].Location.Path
+		}
+		if ctx.UsedBy[i].Location.StartsAt != ctx.UsedBy[j].Location.StartsAt {
+			return ctx.UsedBy[i].Location.StartsAt < ctx.UsedBy[j].Location.StartsAt
+		}
+		return ctx.UsedBy[i].ID < ctx.UsedBy[j].ID
+	})
+
+	blocks := []ContextBlock{{
+		Kind: "named_type", FileID: FileID(namedType.Loc.Path), Line: namedType.Loc.StartsAt,
+		Title: fmt.Sprintf("type %s", namedType.Name), Cut: namedTypeCut.Cut,
+	}}
+	for _, usage := range ctx.UsedBy {
+		blocks = append(blocks, ContextBlock{
+			Kind: string(usage.Kind), FileID: FileID(usage.Location.Path),
+			Line: usage.Location.StartsAt, Title: usage.ID,
+		})
+	}
+	sortContextBlocks(blocks)
+	ctx.Blocks = blocks
+
+	return ctx, nil
+}
+
 // Searches all functions in the topology by name. Returns a slice of matching FunctionIDs, or an error if reading the topology fails.
 func (m *GoManager) FindFunctionsByName(name string) ([]FunctionID, error) {
 	topo, err := m.generic.ReadAll()
@@ -717,6 +926,10 @@ func (m *GoManager) ReadResourceAndCut(id string, kind domain.ResourceKind) (*do
 				break
 			}
 		}
+	case domain.ResourceDependency:
+		return &domain.CodeEntry{
+			Cut: string(kind),
+		}, nil
 	case domain.ResourceFile:
 		return nil, fmt.Errorf("ReadResourceAndCut not supported for File")
 	default:
@@ -739,4 +952,42 @@ func collectMethodIDs(gt *GolangTopology, structID StructID) []FunctionID {
 		}
 	}
 	return ids
+}
+
+func functionSignatureMatchesDefinition(fn GolangFunction, def FunctionDefinition) bool {
+	if fn.Name != def.Name {
+		return false
+	}
+	if len(fn.Input) != len(def.Input) || len(fn.Output) != len(def.Output) {
+		return false
+	}
+	for i := range fn.Input {
+		if fn.Input[i].Typing != def.Input[i].Typing {
+			return false
+		}
+	}
+	for i := range fn.Output {
+		if fn.Output[i].Typing != def.Output[i].Typing {
+			return false
+		}
+	}
+	return true
+}
+
+func usesNamedType(ids []NamedTypeID, target NamedTypeID) bool {
+	for _, id := range ids {
+		if id == target {
+			return true
+		}
+	}
+	return false
+}
+
+func sortContextBlocks(blocks []ContextBlock) {
+	sort.SliceStable(blocks, func(i, j int) bool {
+		if blocks[i].FileID != blocks[j].FileID {
+			return blocks[i].FileID < blocks[j].FileID
+		}
+		return blocks[i].Line < blocks[j].Line
+	})
 }

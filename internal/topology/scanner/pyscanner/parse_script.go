@@ -19,7 +19,7 @@ def expr_str(node):
     if t == 'Tuple': return 'tuple'
     if t == 'Dict': return 'dict'
     if t == 'Set': return 'set'
-    if t == 'Call': return 'callable'
+    if t == 'Call': return expr_str(node.func)
     if t == 'BinOp': return 'expr'
     if t == 'UnaryOp': return expr_str(node.operand)
     if t == 'JoinedStr': return 'str'

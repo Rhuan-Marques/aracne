@@ -14,6 +14,18 @@ type StructCut struct {
 	Cut string
 }
 
+// Holds a GolangInterface together with its raw source code cut for context display.
+type InterfaceCut struct {
+	GolangInterface
+	Cut string
+}
+
+// Holds a GolangNamedType together with its raw source code cut for context display.
+type NamedTypeCut struct {
+	GolangNamedType
+	Cut string
+}
+
 // Represents a lightweight summary of a function for context display, containing its ID, name, description, input/output parameters, and source location.
 type SimplifiedFunction struct {
 	ID          FunctionID
@@ -78,6 +90,15 @@ type SimplifiedInterface struct {
 	NeedToImplement bool
 }
 
+// Represents a resource that uses another resource, for reverse-reference context output.
+type ResourceUsage struct {
+	ID          string
+	Kind        domain.ResourceKind
+	Name        string
+	Description string
+	Location    domain.Location
+}
+
 // GoFunctionContext is the enriched context returned by ReadFunction. It bundles the function cut, parent struct (for methods), called functions, struct/interface usage, external variables, dependencies, packages, and sorted context blocks for proximity rendering in LLM prompts.
 type GoFunctionContext struct {
 	Function        *FunctionCut
@@ -103,6 +124,24 @@ type GoStructContext struct {
 	Dependencies   []DependancyPath
 	PackagesUsed   []PackagePath
 	Blocks         []ContextBlock
+}
+
+// Holds the complete enriched context of a Go interface: its source cut, implementing structs and methods, dependencies, packages, and sorted context blocks.
+type GoInterfaceContext struct {
+	Interface       *InterfaceCut
+	Implementations []InterfaceImplementation
+	Dependencies    []DependancyPath
+	PackagesUsed    []PackagePath
+	Blocks          []ContextBlock
+}
+
+// Holds the complete enriched context of a Go named type: its source cut, resources that use it, dependencies, packages, and sorted context blocks.
+type GoNamedTypeContext struct {
+	NamedType    *NamedTypeCut
+	UsedBy       []ResourceUsage
+	Dependencies []DependancyPath
+	PackagesUsed []PackagePath
+	Blocks       []ContextBlock
 }
 
 // Represents a warning emitted during topology updates when functions are removed or signatures change, containing the affected resource kind, function IDs, and a human-readable message.

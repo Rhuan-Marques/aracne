@@ -168,6 +168,7 @@ func (s *PythonScanner) Scan(root string) (*domain.Topology, error) {
 				gt.Functions[f.ID] = f
 			}
 		}
+		resolveClassVarRefs(fp.result, gt)
 	}
 
 	collectDependencies(gt)
@@ -195,6 +196,85 @@ func (s *PythonScanner) UpdateFile(topo *domain.Topology, path string) ([]domain
 
 	oldMod, hasMod := gt.Modules[python.ModuleID(absPath)]
 	if !hasMod {
+		dir := filepath.Dir(absPath)
+		pkgPath := getPythonPackagePath(rootPath, dir)
+
+		pr, err := ParseFile(absPath, pkgPath, rootPath)
+		if err != nil {
+			gt.Errors[absPath] = err.Error()
+			topo.Resources = python.ToGeneric(gt).Resources
+			topo.Errors = gt.Errors
+			return warnings, nil
+		}
+
+		modConns := make(map[python.ConnectionKind][]string)
+		for _, ip := range pr.InternalImports {
+			modConns[python.ConnImportsPkg] = append(modConns[python.ConnImportsPkg], string(ip))
+		}
+		for _, dep := range pr.ExternalImports {
+			modConns[python.ConnImportsDep] = append(modConns[python.ConnImportsDep], string(dep.PackagePath))
+		}
+		newMod := python.PythonModule{
+			ID:          python.ModuleID(absPath),
+			Name:        filepath.Base(absPath),
+			Description: pr.FileDescription,
+			FromPackage: pkgPath,
+			Connections: modConns,
+		}
+		for _, ci := range pr.Classes {
+			gt.Classes[ci.ID] = ci
+			newMod.Connections[python.ConnHasClass] = append(newMod.Connections[python.ConnHasClass], string(ci.ID))
+		}
+		for _, fi := range pr.Functions {
+			gt.Functions[fi.Function.ID] = fi.Function
+			newMod.Connections[python.ConnHasFunc] = append(newMod.Connections[python.ConnHasFunc], string(fi.Function.ID))
+		}
+		for _, v := range pr.ExternalVars {
+			gt.ExternalVars[v.ID] = v
+			newMod.Connections[python.ConnHasVar] = append(newMod.Connections[python.ConnHasVar], string(v.ID))
+		}
+		gt.Modules[python.ModuleID(absPath)] = newMod
+
+		pkg, exists := gt.Packages[pkgPath]
+		if !exists {
+			pkg = python.PythonPackage{Path: pkgPath, Connections: make(map[python.ConnectionKind][]string)}
+		}
+		if pkg.Connections == nil {
+			pkg.Connections = make(map[python.ConnectionKind][]string)
+		}
+		pkg.Connections[python.ConnHasFile] = append(pkg.Connections[python.ConnHasFile], absPath)
+		pkg.Connections[python.ConnHasFunc] = append(pkg.Connections[python.ConnHasFunc], newMod.Connections[python.ConnHasFunc]...)
+		pkg.Connections[python.ConnHasClass] = append(pkg.Connections[python.ConnHasClass], newMod.Connections[python.ConnHasClass]...)
+		pkg.Connections[python.ConnHasVar] = append(pkg.Connections[python.ConnHasVar], newMod.Connections[python.ConnHasVar]...)
+		pkg.Connections = uniqueConns(pkg.Connections)
+		gt.Packages[pkgPath] = pkg
+
+		populateClassMethods(gt)
+		detectConstructors(gt)
+		matchClassInheritance(gt)
+
+		for _, fi := range pr.Functions {
+			if fi.Body != nil {
+				conns := analyzeFunctionBody(fi.Body, pr, gt, fi.Function.Input, fi.Function.MethodFrom)
+				f := gt.Functions[fi.Function.ID]
+				if f.Connections == nil {
+					f.Connections = make(map[python.ConnectionKind][]string)
+				}
+				for k, v := range conns {
+					f.Connections[k] = append(f.Connections[k], v...)
+				}
+				f.Connections = uniqueConns(f.Connections)
+				gt.Functions[f.ID] = f
+			}
+		}
+		resolveClassVarRefs(pr, gt)
+
+		collectDependencies(gt)
+		delete(gt.Errors, absPath)
+
+		topo.Resources = python.ToGeneric(gt).Resources
+		topo.Errors = gt.Errors
+
 		return warnings, nil
 	}
 
@@ -339,6 +419,7 @@ func (s *PythonScanner) UpdateFile(topo *domain.Topology, path string) ([]domain
 			gt.Functions[f.ID] = f
 		}
 	}
+	resolveClassVarRefs(pr, gt)
 
 	collectDependencies(gt)
 	delete(gt.Errors, absPath)

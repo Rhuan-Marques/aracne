@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"ltp/internal/topology/domain"
@@ -162,6 +163,13 @@ func (s *GoScanner) Scan(root string) (*domain.Topology, error) {
 
 	populateStructMethods(gt)
 	detectConstructors(gt)
+	var namedTypeParseResults []*ParseResult
+	for _, fp := range parseResults {
+		if fp.err == nil && fp.result != nil {
+			namedTypeParseResults = append(namedTypeParseResults, fp.result)
+		}
+	}
+	populateNamedTypeUsage(gt, namedTypeParseResults)
 
 	for _, fp := range parseResults {
 		if fp.err != nil || fp.result == nil {
@@ -300,6 +308,7 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.Top
 
 		populateStructMethods(gt)
 		detectConstructors(gt)
+		populateNamedTypeUsage(gt, []*ParseResult{pr})
 		s.resolveWarnings(gt, pr, nil, nil, nil)
 		matchStructsToInterfaces(gt)
 		collectDependencies(gt)
@@ -397,13 +406,15 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.Top
 							continue
 						}
 						warnID := callerID + "@" + string(domain.WarnSignatureChanged) + "@" + string(fid)
-						gt.Warnings[warnID] = domain.TopologyWarning{
+						warning := domain.TopologyWarning{
 							ID:       warnID,
 							SourceID: string(fid),
 							Kind:     domain.WarnSignatureChanged,
 							TargetID: callerID,
 							Message:  fmt.Sprintf("function %s changed input/output format, verify caller %s", oldFunc.Name, callerID),
 						}
+						gt.Warnings[warnID] = warning
+						warnings = append(warnings, warning)
 					}
 				}
 				break
@@ -449,13 +460,15 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.Top
 				continue
 			}
 			warnID := callerID + "@" + string(domain.WarnNodeRemoved) + "@" + string(fid)
-			gt.Warnings[warnID] = domain.TopologyWarning{
+			warning := domain.TopologyWarning{
 				ID:       warnID,
 				SourceID: callerID,
 				Kind:     domain.WarnNodeRemoved,
 				TargetID: string(fid),
 				Message:  fmt.Sprintf("function %s calls %s which was removed from %s", callerID, oldFunc.Name, absPath),
 			}
+			gt.Warnings[warnID] = warning
+			warnings = append(warnings, warning)
 			if callerFn, ok := gt.Functions[golang.FunctionID(callerID)]; ok {
 				callerFn.Connections[golang.ConnCalls] = removeString(callerFn.Connections[golang.ConnCalls], string(fid))
 				gt.Functions[golang.FunctionID(callerID)] = callerFn
@@ -482,13 +495,15 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.Top
 				gt.Functions[golang.FunctionID(sourceID)] = sourceFn
 			}
 			warnID := sourceID + "@" + string(domain.WarnNodeRemoved) + "@" + string(sid)
-			gt.Warnings[warnID] = domain.TopologyWarning{
+			warning := domain.TopologyWarning{
 				ID:       warnID,
 				SourceID: sourceID,
 				Kind:     domain.WarnNodeRemoved,
 				TargetID: string(sid),
 				Message:  fmt.Sprintf("function %s uses struct %s which was removed from %s", sourceID, oldStruct.Name, absPath),
 			}
+			gt.Warnings[warnID] = warning
+			warnings = append(warnings, warning)
 		}
 	}
 
@@ -500,13 +515,15 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.Top
 				gt.Functions[golang.FunctionID(sourceID)] = sourceFn
 			}
 			warnID := sourceID + "@" + string(domain.WarnNodeRemoved) + "@" + string(nid)
-			gt.Warnings[warnID] = domain.TopologyWarning{
+			warning := domain.TopologyWarning{
 				ID:       warnID,
 				SourceID: sourceID,
 				Kind:     domain.WarnNodeRemoved,
 				TargetID: string(nid),
 				Message:  fmt.Sprintf("function %s uses named type %s which was removed from %s", sourceID, oldNT.Name, absPath),
 			}
+			gt.Warnings[warnID] = warning
+			warnings = append(warnings, warning)
 		}
 	}
 
@@ -587,6 +604,7 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.Top
 
 	populateStructMethods(gt)
 	detectConstructors(gt)
+	populateNamedTypeUsage(gt, []*ParseResult{pr})
 
 	for _, fi := range pr.Functions {
 		s.clearReanalyzedFunctionWarnings(gt, fi.Function.ID)
@@ -880,6 +898,115 @@ func collectDependencies(gt *golang.GolangTopology) {
 			}
 		}
 	}
+}
+
+var goTypeTokenPattern = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?`)
+
+func populateNamedTypeUsage(gt *golang.GolangTopology, parseResults []*ParseResult) {
+	for _, pr := range parseResults {
+		if pr == nil {
+			continue
+		}
+		for _, fnParse := range pr.Functions {
+			fn, ok := gt.Functions[fnParse.Function.ID]
+			if !ok {
+				continue
+			}
+			for _, param := range fn.Input {
+				addNamedTypeRefs(fn.Connections, namedTypeRefsFromType(param.Typing, pr, gt), string(fn.ID))
+			}
+			for _, result := range fn.Output {
+				addNamedTypeRefs(fn.Connections, namedTypeRefsFromType(result.Typing, pr, gt), string(fn.ID))
+			}
+			fn.Connections = uniqueConns(fn.Connections)
+			gt.Functions[fn.ID] = fn
+		}
+		for _, parsedStruct := range pr.Structs {
+			str, ok := gt.Structs[parsedStruct.ID]
+			if !ok {
+				continue
+			}
+			for _, param := range str.Params {
+				addNamedTypeRefs(str.Connections, namedTypeRefsFromType(param.Typing, pr, gt), string(str.ID))
+			}
+			str.Connections = uniqueConns(str.Connections)
+			gt.Structs[str.ID] = str
+		}
+		for _, parsedIface := range pr.Interfaces {
+			iface, ok := gt.Interfaces[parsedIface.ID]
+			if !ok {
+				continue
+			}
+			for _, method := range iface.Methods {
+				for _, param := range method.Input {
+					addNamedTypeRefs(iface.Connections, namedTypeRefsFromType(param.Typing, pr, gt), string(iface.ID))
+				}
+				for _, result := range method.Output {
+					addNamedTypeRefs(iface.Connections, namedTypeRefsFromType(result.Typing, pr, gt), string(iface.ID))
+				}
+			}
+			iface.Connections = uniqueConns(iface.Connections)
+			gt.Interfaces[iface.ID] = iface
+		}
+		for _, parsedNamedType := range pr.NamedTypes {
+			nt, ok := gt.NamedTypes[parsedNamedType.ID]
+			if !ok {
+				continue
+			}
+			addNamedTypeRefs(nt.Connections, namedTypeRefsFromType(nt.Underlying, pr, gt), string(nt.ID))
+			nt.Connections = uniqueConns(nt.Connections)
+			gt.NamedTypes[nt.ID] = nt
+		}
+	}
+}
+
+func namedTypeRefsFromType(typing string, pr *ParseResult, gt *golang.GolangTopology) []golang.NamedTypeID {
+	var refs []golang.NamedTypeID
+	for _, token := range goTypeTokenPattern.FindAllString(typing, -1) {
+		if token == "" || goBuiltins[token] {
+			continue
+		}
+
+		var id golang.NamedTypeID
+		if strings.Contains(token, ".") {
+			parts := strings.SplitN(token, ".", 2)
+			importPath, ok := pr.ImportMap[parts[0]]
+			if !ok || !strings.HasPrefix(importPath, pr.ModulePath) {
+				continue
+			}
+			id = golang.NamedTypeID(importPath + "." + parts[1])
+		} else {
+			id = golang.NamedTypeID(string(pr.PkgPath) + "." + token)
+		}
+
+		if _, ok := gt.NamedTypes[id]; ok && !containsNamedTypeID(refs, id) {
+			refs = append(refs, id)
+		}
+	}
+	return refs
+}
+
+func addNamedTypeRefs(conns map[golang.ConnectionKind][]string, refs []golang.NamedTypeID, ownerID string) {
+	if conns == nil || len(refs) == 0 {
+		return
+	}
+	for _, ref := range refs {
+		if string(ref) == ownerID {
+			continue
+		}
+		if !containsString(conns[golang.ConnUsesNamedType], string(ref)) {
+			conns[golang.ConnUsesNamedType] = append(conns[golang.ConnUsesNamedType], string(ref))
+		}
+	}
+}
+
+func containsNamedTypeID(ids []golang.NamedTypeID, target golang.NamedTypeID) bool {
+	for _, id := range ids {
+		if id == target {
+			return true
+		}
+	}
+	return false
 }
 
 func uniqueConns(conns map[golang.ConnectionKind][]string) map[golang.ConnectionKind][]string {

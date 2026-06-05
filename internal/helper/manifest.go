@@ -60,10 +60,12 @@ func SyncManifest(topo *domain.Topology, dbPath string) {
 		}
 	}
 
-	now := time.Now().UTC().Format(time.RFC3339)
-
 	for path := range currentFiles {
-		manifest[path] = now
+		if fi, err := os.Stat(path); err == nil {
+			manifest[path] = fi.ModTime().UTC().Format(time.RFC3339Nano)
+		} else {
+			manifest[path] = time.Now().UTC().Format(time.RFC3339Nano)
+		}
 	}
 
 	for path := range manifest {
@@ -140,7 +142,7 @@ func DiffScanFiles(root, language, manifestPath string) (added, modified, delete
 
 	manifestTimes := make(map[string]time.Time)
 	for path, ts := range manifest {
-		t, err := time.Parse(time.RFC3339, ts)
+		t, err := time.Parse(time.RFC3339Nano, ts)
 		if err == nil {
 			manifestTimes[path] = t
 		}
@@ -155,7 +157,7 @@ func DiffScanFiles(root, language, manifestPath string) (added, modified, delete
 			added = append(added, f)
 		} else {
 			fi, err := os.Stat(f)
-			if err == nil && fi.ModTime().Sub(t) > time.Second {
+			if err == nil && fi.ModTime().UTC().After(t) {
 				modified = append(modified, f)
 			}
 		}

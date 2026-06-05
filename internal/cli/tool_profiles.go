@@ -95,7 +95,7 @@ func allowedToolsForProfile(profile ToolProfile) map[string]bool {
 func profileTools(profile ToolProfile) []string {
 	switch profile {
 	case ToolProfileAll:
-		return []string{"read_file", "edit", "write", "read_struct", "read_function", "warnings_list", "bug_report", "bug_list", "bug_acknowledge", "bug_dismiss", "bug_delete", "list_undocumented_resources", "read_resource_and_cut", "update_description"}
+		return []string{"read_file", "edit", "write", "read_struct", "read_function", "warnings_list", "bug_report", "bug_list", "bug_acknowledge", "bug_dismiss", "bug_delete", "node_list_no_description", "read_resource_and_cut", "update_description"}
 	case ToolProfileDescriptionsExecutor:
 		return []string{"read_file", "read_struct", "read_function", "read_resource_and_cut", "update_description"}
 	case ToolProfileBugHunter:
@@ -122,8 +122,8 @@ func registerGoTopologyTools(registry *tools.Registry, mgr *golang.GoManager, al
 	if allowed["update_description"] {
 		registry.Register(gotools.NewUpdateDescriptionTool(mgr))
 	}
-	if allowed["list_undocumented_resources"] {
-		registry.Register(gotools.NewListUndocumented(mgr, describeTargets))
+	if allowed["node_list_no_description"] {
+		registry.Register(gotools.NewNodeListNoDescription(mgr, describeTargets))
 	}
 }
 
@@ -140,7 +140,7 @@ func registerPythonTopologyTools(registry *tools.Registry, mgr *python.PythonMan
 	if allowed["update_description"] {
 		registry.Register(pythontools.NewUpdateDescriptionTool(mgr))
 	}
-	if allowed["list_undocumented_resources"] {
-		registry.Register(pythontools.NewListUndocumented(mgr, describeTargets))
+	if allowed["node_list_no_description"] {
+		registry.Register(pythontools.NewNodeListNoDescription(mgr, describeTargets))
 	}
 }

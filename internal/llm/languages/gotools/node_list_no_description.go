@@ -1,4 +1,4 @@
-package pythontools
+package gotools
 
 import (
 	"encoding/json"
@@ -8,35 +8,35 @@ import (
 
 	"ltp/internal/helper"
 	"ltp/internal/topology/domain"
-	"ltp/internal/topology/python"
+	"ltp/internal/topology/golang"
 )
 
-type ListUndocumented struct {
-	mgr     *python.PythonManager
+type NodeListNoDescription struct {
+	mgr     *golang.GoManager
 	targets []domain.ResourceKind
 }
 
-func NewListUndocumented(mgr *python.PythonManager, targets ...[]domain.ResourceKind) *ListUndocumented {
+func NewNodeListNoDescription(mgr *golang.GoManager, targets ...[]domain.ResourceKind) *NodeListNoDescription {
 	describeTargets := helper.DefaultDescribeTargets()
 	if len(targets) > 0 {
 		describeTargets = targets[0]
 	}
-	return &ListUndocumented{mgr: mgr, targets: describeTargets}
+	return &NodeListNoDescription{mgr: mgr, targets: describeTargets}
 }
 
-func (l *ListUndocumented) Name() string {
-	return "list_undocumented_resources"
+func (l *NodeListNoDescription) Name() string {
+	return "node_list_no_description"
 }
 
-func (l *ListUndocumented) Description() string {
+func (l *NodeListNoDescription) Description() string {
 	return "List targeted resources that still need descriptions. Returns each resource's ID, name, and kind for batching into description executor tasks."
 }
 
-func (l *ListUndocumented) Parameters() []Parameter {
+func (l *NodeListNoDescription) Parameters() []Parameter {
 	return nil
 }
 
-func (l *ListUndocumented) Run(args json.RawMessage) (string, error) {
+func (l *NodeListNoDescription) Run(args json.RawMessage) (string, error) {
 	topo, err := l.mgr.Generic().ReadAll()
 	if err != nil {
 		return "", fmt.Errorf("error reading topology: %w", err)
@@ -76,11 +76,7 @@ func (l *ListUndocumented) Run(args json.RawMessage) (string, error) {
 
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("Found %d undocumented resources for targets: %s.\n\n", len(entries), helper.FormatDescribeTargets(l.targets)))
-	b.WriteString(`## Orchestration Guidance
-
-The main session should split these resources into batches of at most 20 and assign each batch to a descriptions-generation-executor subagent. Do not assign the same resource ID to more than one active executor. After executor batches finish, call this tool again and retry any resources that are still listed.
-
-`)
+	b.WriteString("## Orchestration Guidance\n\nThe main session should split these resources into batches of at most 20 and assign each batch to a descriptions-generation-executor subagent. Do not assign the same resource ID to more than one active executor. After executor batches finish, call this tool again and retry any resources that are still listed.\n\n")
 	b.WriteString("## Resources\n\n")
 	for _, e := range entries {
 		b.WriteString(fmt.Sprintf("  - ID: %s\n    Name: %s\n    Kind: %s\n\n", e.ID, e.Name, e.Kind))

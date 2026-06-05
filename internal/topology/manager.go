@@ -328,6 +328,10 @@ func (m *TopologyManager) UpdateDescription(id string, kind domain.ResourceKind,
 	return helper.UpdateDescription(m.dbPath, kind, id, description)
 }
 
+func (m *TopologyManager) ClearDescriptions(targets []domain.ResourceKind) (int64, error) {
+	return helper.ClearDescriptions(m.dbPath, targets)
+}
+
 func (m *TopologyManager) GetWarnings() (map[string]domain.TopologyWarning, error) {
 	topo, err := helper.ReadDb(m.dbPath)
 	if err != nil {

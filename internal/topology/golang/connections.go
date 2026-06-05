@@ -60,6 +60,10 @@ func (s *GolangStruct) Implements() []InterfaceID {
 	return castSlice[InterfaceID](s.Connections[ConnImplements])
 }
 
+func (s *GolangStruct) UsesNamedType() []NamedTypeID {
+	return castSlice[NamedTypeID](s.Connections[ConnUsesNamedType])
+}
+
 func (s *GolangStruct) UsesPkg() []PackagePath {
 	return castSlice[PackagePath](s.Connections[ConnUsesPkg])
 }
@@ -72,12 +76,20 @@ func (i *GolangInterface) ImplementedBy() []StructID {
 	return castSlice[StructID](i.Connections[ConnImplBy])
 }
 
+func (i *GolangInterface) UsesNamedType() []NamedTypeID {
+	return castSlice[NamedTypeID](i.Connections[ConnUsesNamedType])
+}
+
 func (i *GolangInterface) UsesPkg() []PackagePath {
 	return castSlice[PackagePath](i.Connections[ConnUsesPkg])
 }
 
 func (i *GolangInterface) UsesDep() []DependancyPath {
 	return castSlice[DependancyPath](i.Connections[ConnUsesDep])
+}
+
+func (n *GolangNamedType) UsesNamedType() []NamedTypeID {
+	return castSlice[NamedTypeID](n.Connections[ConnUsesNamedType])
 }
 
 func (n *GolangNamedType) UsesPkg() []PackagePath {

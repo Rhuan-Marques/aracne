@@ -47,7 +47,7 @@ func RunCheckUpdates(args []string) {
 
 	manifestTimes := make(map[string]time.Time)
 	for path, ts := range manifest {
-		t, err := time.Parse(time.RFC3339, ts)
+		t, err := time.Parse(time.RFC3339Nano, ts)
 		if err == nil {
 			manifestTimes[path] = t
 		}
@@ -64,7 +64,7 @@ func RunCheckUpdates(args []string) {
 			added = append(added, f)
 		} else {
 			fi, err := os.Stat(f)
-			if err == nil && fi.ModTime().Sub(t) > time.Second {
+			if err == nil && fi.ModTime().UTC().After(t) {
 				modified = append(modified, f)
 			}
 		}
@@ -115,4 +115,4 @@ func RunCheckUpdates(args []string) {
 		fmt.Println()
 	}
 }
-
+

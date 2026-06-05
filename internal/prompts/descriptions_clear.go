@@ -1,0 +1,5 @@
+package prompts
+
+func DescriptionsClearCommand() string {
+	return "Run `ltp descriptions clear $ARGUMENTS` to delete stored topology descriptions. If arguments were provided, pass them exactly; examples: `--target function,type` or `--target [Function, Type]`. Report how many descriptions were cleared."
+}

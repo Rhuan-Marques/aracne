@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"ltp/internal/topology/domain"
 	_ "modernc.org/sqlite"
@@ -255,6 +256,35 @@ func UpdateDescription(dbPath string, kind domain.ResourceKind, id string, descr
 	return err
 }
 
+func ClearDescriptions(dbPath string, targets []domain.ResourceKind) (int64, error) {
+	db, err := sql.Open("sqlite", dbPath+"?cache=shared&_journal_mode=WAL")
+	if err != nil {
+		return 0, err
+	}
+	defer db.Close()
+
+	query := "UPDATE resources SET description = '' WHERE COALESCE(description, '') <> ''"
+	args := make([]interface{}, 0, len(targets))
+	if len(targets) > 0 {
+		placeholders := make([]string, 0, len(targets))
+		for _, target := range targets {
+			placeholders = append(placeholders, "?")
+			args = append(args, string(target))
+		}
+		query += " AND kind IN (" + strings.Join(placeholders, ", ") + ")"
+	}
+
+	result, err := db.Exec(query, args...)
+	if err != nil {
+		return 0, err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 func GetCallers(dbPath string, targetID string, connType string) ([]string, error) {
 	db, err := sql.Open("sqlite", dbPath+"?cache=shared&_journal_mode=WAL")
 	if err != nil {
@@ -409,4 +439,3 @@ func CleanupOrphanedBugs(dbPath string, topo *domain.Topology) error {
 	}
 	return nil
 }
-

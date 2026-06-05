@@ -286,3 +286,47 @@ func RunDescriptionApply(args []string) {
 
 	fmt.Println("done")
 }
+
+func RunClearDescriptions(args []string) {
+	fs := flag.NewFlagSet("descriptions-clear", flag.ExitOnError)
+	targetFlag := fs.String("target", "", "Comma-separated resource kinds to clear; clears all kinds when omitted")
+	fs.Parse(args)
+
+	targetValue := strings.TrimSpace(*targetFlag)
+	if fs.NArg() > 0 {
+		if targetValue == "" {
+			fmt.Fprintln(os.Stderr, "Usage: ltp descriptions clear [--target <kinds>]")
+			os.Exit(1)
+		}
+		targetValue = strings.TrimSpace(targetValue + " " + strings.Join(fs.Args(), " "))
+	}
+
+	targets, err := parseClearDescriptionTargets(targetValue)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	manager, _ := InitRegistry(".ltp/topology.db")
+	count, err := manager.ClearDescriptions(targets)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(targets) > 0 {
+		fmt.Printf("Cleared %d description(s) for targets: %s\n", count, helper.FormatDescribeTargets(targets))
+		return
+	}
+	fmt.Printf("Cleared %d description(s)\n", count)
+}
+
+func parseClearDescriptionTargets(value string) ([]domain.ResourceKind, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	value = strings.TrimPrefix(value, "[")
+	value = strings.TrimSuffix(value, "]")
+	return helper.ParseDescribeTargets(value)
+}

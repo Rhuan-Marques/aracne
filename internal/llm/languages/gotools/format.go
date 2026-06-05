@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"ltp/internal/topology/domain"
 	"ltp/internal/topology/golang"
 )
 
@@ -152,4 +153,82 @@ func FormatGoStructContext(ctx *golang.GoStructContext) string {
 	}
 
 	return b.String()
+}
+
+// Formats a GoInterfaceContext into a human-readable string with interface source and implementing structs/methods.
+func FormatGoInterfaceContext(ctx *golang.GoInterfaceContext) string {
+	var b strings.Builder
+
+	b.WriteString("```go\n")
+	writeImports(&b, ctx.PackagesUsed, ctx.Dependencies)
+	b.WriteString(ctx.Interface.Cut)
+	b.WriteString("\n```\n\n")
+
+	if len(ctx.Implementations) == 0 {
+		return b.String()
+	}
+
+	b.WriteString("# CONTEXT:\n")
+	b.WriteString("## Implemented By\n")
+	for _, impl := range ctx.Implementations {
+		b.WriteString(fmt.Sprintf("\t%s: %s\n", impl.Name, desc(impl.Description)))
+		for _, m := range impl.Methods {
+			b.WriteString(fmt.Sprintf("\t\t%s.%s: %s\n", impl.Name, m.Name, desc(m.Description)))
+		}
+	}
+
+	return b.String()
+}
+
+// Formats a GoNamedTypeContext into a human-readable string with named type source and resources that use it.
+func FormatGoNamedTypeContext(ctx *golang.GoNamedTypeContext) string {
+	var b strings.Builder
+
+	b.WriteString("```go\n")
+	writeImports(&b, ctx.PackagesUsed, ctx.Dependencies)
+	b.WriteString(ctx.NamedType.Cut)
+	b.WriteString("\n```\n\n")
+
+	if len(ctx.UsedBy) == 0 {
+		return b.String()
+	}
+
+	b.WriteString("# CONTEXT:\n")
+	b.WriteString("## Used By\n")
+	for _, usage := range ctx.UsedBy {
+		b.WriteString(fmt.Sprintf("\t%s (%s): %s\n", usage.ID, resourceKindLabel(usage.Kind), desc(usage.Description)))
+	}
+
+	return b.String()
+}
+
+func writeImports(b *strings.Builder, packages []golang.PackagePath, dependencies []golang.DependancyPath) {
+	if len(packages) == 0 && len(dependencies) == 0 {
+		return
+	}
+	b.WriteString("import (\n")
+	for _, p := range packages {
+		b.WriteString(fmt.Sprintf("\t%q\n", p))
+	}
+	for _, d := range dependencies {
+		b.WriteString(fmt.Sprintf("\t%q\n", d))
+	}
+	b.WriteString(")\n\n")
+}
+
+func resourceKindLabel(kind domain.ResourceKind) string {
+	switch kind {
+	case domain.ResourceFunction:
+		return "function"
+	case domain.ResourceMethod:
+		return "method"
+	case domain.ResourceType:
+		return "type"
+	case domain.ResourceNamedType:
+		return "named_type"
+	case domain.ResourceInterface:
+		return "interface"
+	default:
+		return string(kind)
+	}
 }

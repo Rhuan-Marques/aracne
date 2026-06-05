@@ -22,7 +22,7 @@ There are three integration modes sharing the same topology engine. All must mai
 ### Mode A: Full CLI Integration
 - Direct terminal usage via `ltp` subcommands
 - No LLM involved — all topology operations via CLI flags
-- Commands: `scan`, `read_function`, `read_struct`, `read-resource-and-cut`, `update-description`, `list-undocumented`, `update-file`, `generate-descriptions`
+- Commands: `scan`, `read_function`, `read_struct`, `read-resource-and-cut`, `update-description`, `node list`, `update-file`, `generate-descriptions`
 
 ### Mode B: MCP Server (`ltp serve`)
 - Exposes all topology tools as MCP (Model Context Protocol) tools over stdio
@@ -112,7 +112,7 @@ Use the CONTEXT section to understand relationships **without making additional 
 
 When asked to document the project or generate descriptions:
 
-1. Call `list_undocumented_resources` to get all resources with empty descriptions
+1. Call `node_list_no_description` to get all resources with empty descriptions
 2. Split the list into deterministic batches of at most 20 resources
 3. Assign each batch to a **descriptions-generation-executor** sub-agent when subagents are available. Each executor:
    - Receives only its assigned IDs, names, and kinds
@@ -121,7 +121,7 @@ When asked to document the project or generate descriptions:
    - Manually generates a concise description (1-3 lines for functions/structs/interfaces, 1 line for variables/files/packages)
    - Calls `update_description` to persist it
    - Returns completed and failed IDs
-4. Re-run `list_undocumented_resources` after executor batches finish and retry any resources that are still listed
+4. Re-run `node_list_no_description` after executor batches finish and retry any resources that are still listed
 5. Process ALL targeted resources. Do not skip any.
 
 ## 7. Behavioral Rules
@@ -143,7 +143,7 @@ When asked to document the project or generate descriptions:
 | `read_struct` | Investigate a struct by name — preferred over `read` |
 | `read_resource_and_cut` | Get precise source cut + description instructions for any resource (by ID) |
 | `update_description` | Persist a generated description |
-| `list_undocumented_resources` | Before generating descriptions |
+| `node_list_no_description` | Before generating descriptions |
 | `edit` | Make code changes (topology auto-updates) |
 
 ## 9. The Dual-Prompt Architecture

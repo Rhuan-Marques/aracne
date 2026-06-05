@@ -3,9 +3,12 @@ package topology_test
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"ltp/internal/helper"
+	"ltp/internal/llm/languages/gotools"
 	"ltp/internal/topology"
 	"ltp/internal/topology/domain"
 	"ltp/internal/topology/golang"
@@ -256,6 +259,39 @@ func newPythonTestRegistry() *scanner.Registry {
 	reg := scanner.NewRegistry()
 	reg.Register(pyscanner.NewPythonScanner())
 	return reg
+}
+
+func TestPyUpdateFileAddsNewModule(t *testing.T) {
+	root := t.TempDir()
+	existingPath := filepath.Join(root, "existing.py")
+	if err := os.WriteFile(existingPath, []byte("def existing():\n    return 1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := pyscanner.NewPythonScanner()
+	topo, err := s.Scan(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	newPath := filepath.Join(root, "added.py")
+	if err := os.WriteFile(newPath, []byte("def added(value: int) -> int:\n    return value + 1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.UpdateFile(topo, newPath); err != nil {
+		t.Fatal(err)
+	}
+
+	gt := python.FromGeneric(topo)
+	if _, ok := gt.Modules[python.ModuleID(newPath)]; !ok {
+		t.Fatalf("expected new module %s to be present", newPath)
+	}
+
+	funcID := python.FunctionID(filepath.Base(root) + ".added")
+	if _, ok := gt.Functions[funcID]; !ok {
+		t.Fatalf("expected new function %s to be present", funcID)
+	}
 }
 
 func TestPyCut(t *testing.T) {
@@ -561,5 +597,129 @@ func TestReadStruct(t *testing.T) {
 		t.Logf("ReadStruct output for %s:\n%s", id, string(b))
 
 		break
+	}
+}
+
+func setupGoReadContextTest(t *testing.T) *topology.TopologyManager {
+	t.Helper()
+
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/readctx\n\ngo 1.22\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	source := `package readctx
+
+// ID identifies a resource.
+type ID string
+
+// Alias aliases ID.
+type Alias ID
+
+// Reader reads IDs.
+type Reader interface {
+	Read(ID) error
+}
+
+// Store stores the last ID.
+type Store struct {
+	Last ID
+}
+
+// Read reads an ID.
+func (Store) Read(id ID) error {
+	return nil
+}
+
+// UseID returns an ID.
+func UseID(id ID) ID {
+	return id
+}
+`
+	if err := os.WriteFile(filepath.Join(root, "readctx.go"), []byte(source), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr := topology.New()
+	mgr.Load(filepath.Join(root, "topology.db"))
+	if err := mgr.FullScan(root, newTestRegistry()); err != nil {
+		t.Fatal(err)
+	}
+
+	return mgr
+}
+
+func TestReadInterface(t *testing.T) {
+	mgr := setupGoReadContextTest(t)
+	gm := golang.NewGoManager(mgr)
+
+	ctx, err := gm.ReadInterface("example.com/readctx.Reader")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ctx.Interface == nil {
+		t.Fatal("expected non-nil Interface")
+	}
+	if !strings.Contains(ctx.Interface.Cut, "type Reader interface") {
+		t.Fatalf("expected interface cut, got %q", ctx.Interface.Cut)
+	}
+	if len(ctx.Implementations) != 1 {
+		t.Fatalf("expected 1 implementation, got %d", len(ctx.Implementations))
+	}
+	impl := ctx.Implementations[0]
+	if impl.Name != "Store" {
+		t.Fatalf("expected Store implementation, got %s", impl.Name)
+	}
+	if len(impl.Methods) != 1 || impl.Methods[0].Name != "Read" {
+		t.Fatalf("expected Store.Read implementation method, got %#v", impl.Methods)
+	}
+	if len(ctx.Blocks) < 3 {
+		t.Fatalf("expected interface, struct, and method blocks, got %d", len(ctx.Blocks))
+	}
+
+	formatted := gotools.FormatGoInterfaceContext(ctx)
+	if !strings.Contains(formatted, "## Implemented By") || !strings.Contains(formatted, "Store.Read") {
+		t.Fatalf("formatted interface context missing implementation details:\n%s", formatted)
+	}
+}
+
+func TestReadNamedType(t *testing.T) {
+	mgr := setupGoReadContextTest(t)
+	gm := golang.NewGoManager(mgr)
+
+	ctx, err := gm.ReadNamedType("example.com/readctx.ID")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ctx.NamedType == nil {
+		t.Fatal("expected non-nil NamedType")
+	}
+	if !strings.Contains(ctx.NamedType.Cut, "type ID string") {
+		t.Fatalf("expected named type cut, got %q", ctx.NamedType.Cut)
+	}
+
+	usedBy := make(map[string]domain.ResourceKind)
+	for _, usage := range ctx.UsedBy {
+		usedBy[usage.ID] = usage.Kind
+	}
+	want := map[string]domain.ResourceKind{
+		"example.com/readctx.Alias":        domain.ResourceNamedType,
+		"example.com/readctx.Reader":       domain.ResourceInterface,
+		"example.com/readctx.Store":        domain.ResourceType,
+		"example.com/readctx.(Store).Read": domain.ResourceMethod,
+		"example.com/readctx.UseID":        domain.ResourceFunction,
+	}
+	for id, kind := range want {
+		if got, ok := usedBy[id]; !ok || got != kind {
+			t.Fatalf("expected named type usage %s (%s), got %s present=%v; all usages=%#v", id, kind, got, ok, ctx.UsedBy)
+		}
+	}
+	if len(ctx.Blocks) < len(want)+1 {
+		t.Fatalf("expected named type and usage blocks, got %d", len(ctx.Blocks))
+	}
+
+	formatted := gotools.FormatGoNamedTypeContext(ctx)
+	if !strings.Contains(formatted, "## Used By") || !strings.Contains(formatted, "example.com/readctx.Store") {
+		t.Fatalf("formatted named type context missing usage details:\n%s", formatted)
 	}
 }

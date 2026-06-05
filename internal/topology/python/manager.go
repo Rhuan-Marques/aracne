@@ -593,6 +593,10 @@ func (m *PythonManager) ReadResourceAndCut(id string, kind domain.ResourceKind) 
 				break
 			}
 		}
+	case domain.ResourceDependency:
+		return &domain.CodeEntry{
+			Cut: string(kind),
+		}, nil
 	case domain.ResourceFile:
 		return nil, fmt.Errorf("ReadResourceAndCut not supported for File")
 	default:

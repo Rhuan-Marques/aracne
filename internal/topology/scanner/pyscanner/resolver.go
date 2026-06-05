@@ -1,6 +1,7 @@
 package pyscanner
 
 import (
+	"path/filepath"
 	"strings"
 
 	"ltp/internal/topology/python"
@@ -68,6 +69,8 @@ func resolveTypeRef(typeName string, pr *ParseResult, gt *python.PythonTopology,
 		clean = clean[:strings.Index(clean, "[")]
 	}
 
+	rootBase := filepath.Base(pr.ModuleRoot)
+
 	if strings.Contains(clean, ".") {
 		parts := strings.Split(clean, ".")
 		if len(parts) >= 2 {
@@ -75,9 +78,9 @@ func resolveTypeRef(typeName string, pr *ParseResult, gt *python.PythonTopology,
 			if impPath, ok := pr.ImportMap[alias]; ok {
 				if isInternal(impPath, pr.ModuleRoot) {
 					add(python.ConnUsesPkg, string(impPath))
-					classID := python.ClassID(string(impPath) + "." + parts[1])
-					if _, exists := gt.Classes[classID]; exists {
-						add(python.ConnUsesClass, string(classID))
+					symbol := strings.Join(parts[1:], ".")
+					if kind, id := tryResolveSymbol(string(impPath), symbol, rootBase, gt); kind != "" {
+						add(kind, id)
 					}
 				} else {
 					add(python.ConnUsesDep, string(impPath))
@@ -96,6 +99,12 @@ func resolveTypeRef(typeName string, pr *ParseResult, gt *python.PythonTopology,
 	if _, exists := gt.Functions[python.FunctionID(funcID)]; exists && !seen[funcID] {
 		seen[funcID] = true
 		add(python.ConnCalls, funcID)
+	}
+
+	if impPath, ok := pr.ImportMap[clean]; ok {
+		if kind, id := tryResolveSymbol(impPath, "", rootBase, gt); kind != "" {
+			add(kind, id)
+		}
 	}
 }
 
@@ -155,4 +164,106 @@ func uniqueConns(conns map[python.ConnectionKind][]string) map[python.Connection
 		}
 	}
 	return result
+}
+
+func resolveClassVarRefs(pr *ParseResult, gt *python.PythonTopology) {
+	for _, ref := range pr.ClassVarRefs {
+		cls, exists := gt.Classes[ref.ClassID]
+		if !exists {
+			continue
+		}
+		if cls.Connections == nil {
+			cls.Connections = make(map[python.ConnectionKind][]string)
+		}
+
+		add := func(kind python.ConnectionKind, id string) {
+			for _, existing := range cls.Connections[kind] {
+				if existing == id {
+					return
+				}
+			}
+			cls.Connections[kind] = append(cls.Connections[kind], id)
+		}
+
+		resolveValueRef(ref.RefValue, pr, gt, add)
+		gt.Classes[ref.ClassID] = cls
+	}
+}
+
+func resolveValueRef(value string, pr *ParseResult, gt *python.PythonTopology, add func(kind python.ConnectionKind, id string)) {
+	if value == "" || value == "None" || value == "True" || value == "False" {
+		return
+	}
+
+	rootBase := filepath.Base(pr.ModuleRoot)
+
+	if strings.Contains(value, ".") {
+		parts := strings.Split(value, ".")
+		if len(parts) >= 2 {
+			alias := parts[0]
+			if impPath, ok := pr.ImportMap[alias]; ok {
+				if isInternal(impPath, pr.ModuleRoot) {
+					add(python.ConnUsesPkg, string(impPath))
+				} else {
+					add(python.ConnUsesDep, string(impPath))
+				}
+				symbol := strings.Join(parts[1:], ".")
+				if kind, id := tryResolveSymbol(impPath, symbol, rootBase, gt); kind != "" {
+					add(kind, id)
+				}
+				return
+			}
+		}
+		return
+	}
+
+	if impPath, ok := pr.ImportMap[value]; ok {
+		if isInternal(impPath, pr.ModuleRoot) {
+			add(python.ConnUsesPkg, string(impPath))
+		} else {
+			add(python.ConnUsesDep, string(impPath))
+		}
+		if kind, id := tryResolveSymbol(impPath, "", rootBase, gt); kind != "" {
+			add(kind, id)
+		}
+		return
+	}
+
+	funcID := python.FunctionID(string(pr.PkgPath) + "." + value)
+	if _, exists := gt.Functions[python.FunctionID(funcID)]; exists {
+		add(python.ConnCalls, funcID)
+		return
+	}
+
+	classID := python.ClassID(string(pr.PkgPath) + "." + value)
+	if _, exists := gt.Classes[classID]; exists {
+		add(python.ConnUsesClass, string(classID))
+		return
+	}
+
+	extVarID := python.ExternalVarID(string(pr.PkgPath) + "." + value)
+	if _, exists := gt.ExternalVars[extVarID]; exists {
+		add(python.ConnUsesExtVar, string(extVarID))
+		return
+	}
+}
+
+func tryResolveSymbol(impPath string, symbol string, rootBase string, gt *python.PythonTopology) (python.ConnectionKind, string) {
+	fullPath := impPath
+	if symbol != "" {
+		fullPath = impPath + "." + symbol
+	}
+
+	candidates := []string{fullPath, rootBase + "." + fullPath}
+
+	for _, candidate := range candidates {
+		if _, exists := gt.Classes[python.ClassID(candidate)]; exists {
+			return python.ConnUsesClass, candidate
+		}
+		if _, exists := gt.Functions[python.FunctionID(candidate)]; exists {
+			return python.ConnCalls, candidate
+		}
+	}
+
+	return "", ""
 }

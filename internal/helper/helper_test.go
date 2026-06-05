@@ -287,6 +287,49 @@ func TestUpdateDescription(t *testing.T) {
 	}
 }
 
+func TestClearDescriptionsFiltersTargets(t *testing.T) {
+	path := "test_cleardesc.db"
+	defer os.Remove(path)
+
+	topo := &domain.Topology{
+		Resources: map[string]domain.Resource{
+			"f1": {ID: "f1", Kind: domain.ResourceFunction, Name: "Foo", Description: "function description"},
+			"t1": {ID: "t1", Kind: domain.ResourceType, Name: "Thing", Description: "type description"},
+			"m1": {ID: "m1", Kind: domain.ResourceMethod, Name: "Method"},
+		},
+	}
+	if err := WriteDb(topo, path); err != nil {
+		t.Fatalf("WriteDb: %v", err)
+	}
+
+	count, err := ClearDescriptions(path, []domain.ResourceKind{domain.ResourceFunction})
+	if err != nil {
+		t.Fatalf("ClearDescriptions: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("cleared %d descriptions, want 1", count)
+	}
+
+	read, err := ReadDb(path)
+	if err != nil {
+		t.Fatalf("ReadDb: %v", err)
+	}
+	if read.Resources["f1"].Description != "" {
+		t.Fatalf("function description was not cleared")
+	}
+	if read.Resources["t1"].Description != "type description" {
+		t.Fatalf("type description was unexpectedly cleared")
+	}
+
+	count, err = ClearDescriptions(path, nil)
+	if err != nil {
+		t.Fatalf("ClearDescriptions all: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("cleared %d descriptions, want 1", count)
+	}
+}
+
 func TestBugCRUD(t *testing.T) {
 	path := "test_bugs.db"
 	defer os.Remove(path)

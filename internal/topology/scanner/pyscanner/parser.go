@@ -101,11 +101,17 @@ type ParseResult struct {
 	Functions       []FunctionParse
 	ExternalVars    []python.PythonExternalVar
 	ImportMap       map[string]string
+	ClassVarRefs    []ClassVarRef
 }
 
 type FunctionParse struct {
 	Function python.PythonFunction
 	Body     *pyFunc
+}
+
+type ClassVarRef struct {
+	ClassID  python.ClassID
+	RefValue string
 }
 
 func ParseFile(filePath string, pkgPath python.PackagePath, moduleRoot string) (*ParseResult, error) {
@@ -135,6 +141,15 @@ func ParseFile(filePath string, pkgPath python.PackagePath, moduleRoot string) (
 	for _, cls := range raw.Classes {
 		c := convertClass(cls, filePath, pkgPath)
 		pr.Classes = append(pr.Classes, c)
+
+		for _, cv := range cls.ClassVars {
+			if cv.Value != "" && cv.Value != "None" {
+				pr.ClassVarRefs = append(pr.ClassVarRefs, ClassVarRef{
+					ClassID:  c.ID,
+					RefValue: cv.Value,
+				})
+			}
+		}
 
 		for _, method := range cls.Methods {
 			f := convertFunction(method, filePath, pkgPath, &c.ID)

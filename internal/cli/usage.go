@@ -12,12 +12,13 @@ Usage:
   ltp init    [flags]    Initialize topology integration (--claude, --opencode, --global)
   ltp descriptions generate [flags]  Generate descriptions for targeted undocumented resources
   ltp descriptions apply            Write topology descriptions back into source as doc comments
-  ltp read_function <name>  Show a function's source code and its interconnected context
-  ltp read_struct <name>    Show a struct/class source code and interconnected context
+  ltp descriptions clear [flags]    Clear stored topology descriptions
+  ltp read <resource-id>   Read a resource (function, struct, file, etc.) by its ID; falls back to raw file read if not in topology
   ltp update-file <path>  Re-parse a file and update the topology database (--db to specify db path)
   ltp read-resource-and-cut <id> <kind>  Get a resource's source code cut (kind: Function, Struct, Interface, ExternalVar, File, Package)
   ltp update-description <id> <kind> <desc>  Update a resource's description in the topology DB
-  ltp list-undocumented     List all resources without descriptions
+  ltp node list             List all nodes (IDs only)
+  ltp node list --no-description  List undocumented nodes (IDs only)
   ltp warnings list [flags] List outstanding topology warnings
   ltp bug report  [flags] Report a bug on a resource node
   ltp bug list    [flags] List known bugs (filterable by node or state)
@@ -27,7 +28,6 @@ Usage:
   ltp edit                 Edit a file (reads JSON from stdin: {"file_path", "old_string", "new_string"})
   ltp write                Write a file (reads JSON from stdin: {"file_path", "content"})
   ltp check-updates        Check which files were added, modified, or deleted since last scan
-  ltp read_file <path>     Read a file by path, returning filename and full content
 
 Flags for "scan":
   -root <path>    Root folder of the project (default ".")
@@ -45,6 +45,9 @@ Flags for "descriptions generate":
   --batch-size <n>        Maximum resources assigned to each description executor (default 20)
   --parallel <n>          Maximum description executors to run concurrently (default 4)
   --max-retries <n>       Maximum executor attempts per resource (default 3)
+
+Flags for "descriptions clear":
+  --target <kinds>        Comma-separated resource kinds to clear; omit to clear every description
 
 Flags for "warnings list":
   --db <path>     Topology database path (default ".ltp/topology.db")
@@ -87,6 +90,7 @@ Flags for "init":
     ltp init --opencode
     ltp serve --tool-profile descriptions-executor
     ltp descriptions generate
-    ltp read_function ReadFunction
-    ltp read_struct TopologyManager`)
+    ltp descriptions clear --target function,type
+    ltp read internal/topology/golang.GoManager
+    ltp read internal/cli/read.go`)
 }
