@@ -1,4 +1,4 @@
-package cli
+﻿package cli
 
 import (
 	"fmt"
@@ -40,9 +40,75 @@ func ParseToolProfile(value string) (ToolProfile, error) {
 func BuildToolRegistry(manager *topology.TopologyManager, scannerReg *scanner.Registry, cfg *helper.Config, profile ToolProfile) *tools.Registry {
 	registry := tools.NewRegistry()
 	allowed := allowedToolsForProfile(profile)
+	useSplit := len(cfg.ReadSplit) > 0 && profile != ToolProfileDescriptionsExecutor
 
-	if cfg.ToolModes.Read == helper.ReadModeMCP && allowed["read_file"] {
-		registry.Register(&tools.ReadFile{})
+	if cfg.ToolModes.Read == helper.ReadModeMCP {
+		if useSplit {
+			for kind := range cfg.ReadSplit {
+				switch kind {
+				case domain.ResourceFunction, domain.ResourceMethod:
+					if allowed["read_function"] {
+						lang := GetLanguage(manager)
+						if lang == "python" {
+							registry.Register(pythontools.NewReadFunction(python.NewPythonManager(manager)))
+						} else {
+							registry.Register(gotools.NewReadFunction(golang.NewGoManager(manager)))
+						}
+					}
+				case domain.ResourceType:
+					if allowed["read_struct"] {
+						lang := GetLanguage(manager)
+						if lang == "python" {
+							registry.Register(pythontools.NewReadStruct(python.NewPythonManager(manager)))
+						} else {
+							registry.Register(gotools.NewReadStruct(golang.NewGoManager(manager)))
+						}
+					}
+				case domain.ResourceInterface:
+					if allowed["read_interface"] {
+						lang := GetLanguage(manager)
+						if lang == "python" {
+							registry.Register(pythontools.NewReadInterface(python.NewPythonManager(manager)))
+						} else {
+							registry.Register(gotools.NewReadInterface(golang.NewGoManager(manager)))
+						}
+					}
+				case domain.ResourceNamedType:
+					if allowed["read_named_type"] {
+						registry.Register(gotools.NewReadNamedType(golang.NewGoManager(manager)))
+					}
+				case domain.ResourceFile:
+					if allowed["read_file"] {
+						lang := GetLanguage(manager)
+						if lang == "python" {
+							registry.Register(pythontools.NewReadFile(python.NewPythonManager(manager)))
+						} else {
+							registry.Register(gotools.NewReadFile(golang.NewGoManager(manager)))
+						}
+					}
+				case domain.ResourcePackage:
+					if allowed["read_package"] {
+						lang := GetLanguage(manager)
+						if lang == "python" {
+							registry.Register(pythontools.NewReadPackage(python.NewPythonManager(manager)))
+						} else {
+							registry.Register(gotools.NewReadPackage(golang.NewGoManager(manager)))
+						}
+					}
+				case domain.ResourceDependency:
+					if allowed["read_dependency"] {
+						lang := GetLanguage(manager)
+						if lang == "python" {
+							registry.Register(pythontools.NewReadDependency(python.NewPythonManager(manager)))
+						} else {
+							registry.Register(gotools.NewReadDependency(golang.NewGoManager(manager)))
+						}
+					}
+				}
+			}
+		} else if allowed["read"] {
+			registry.Register(tools.NewRead(manager))
+		}
 	}
 	if cfg.ToolModes.Edit == helper.EditModeMCP {
 		if allowed["edit"] {
@@ -95,30 +161,21 @@ func allowedToolsForProfile(profile ToolProfile) map[string]bool {
 func profileTools(profile ToolProfile) []string {
 	switch profile {
 	case ToolProfileAll:
-		return []string{"read_file", "edit", "write", "read_struct", "read_function", "warnings_list", "bug_report", "bug_list", "bug_acknowledge", "bug_dismiss", "bug_delete", "node_list_no_description", "read_resource_and_cut", "update_description"}
+		return []string{"read", "edit", "write", "read_struct", "read_function", "read_interface", "read_named_type", "read_file", "read_package", "read_dependency", "warnings_list", "bug_report", "bug_list", "bug_acknowledge", "bug_dismiss", "bug_delete", "node_list_no_description", "update_description"}
 	case ToolProfileDescriptionsExecutor:
-		return []string{"read_file", "read_struct", "read_function", "read_resource_and_cut", "update_description"}
+		return []string{"read", "read_struct", "read_function", "read_interface", "read_file", "read_package", "read_dependency", "update_description"}
 	case ToolProfileBugHunter:
-		return []string{"read_file", "read_struct", "read_function", "bug_report"}
+		return []string{"read", "read_struct", "read_function", "read_interface", "read_file", "read_package", "read_dependency", "bug_report"}
 	case ToolProfileBugJudge:
-		return []string{"read_file", "read_struct", "read_function", "bug_list", "bug_acknowledge", "bug_dismiss", "bug_delete"}
+		return []string{"read", "read_struct", "read_function", "read_interface", "read_file", "read_package", "read_dependency", "bug_list", "bug_acknowledge", "bug_dismiss", "bug_delete"}
 	case ToolProfileBugSolver:
-		return []string{"read_file", "edit", "write", "read_struct", "read_function", "bug_delete"}
+		return []string{"read", "edit", "write", "read_struct", "read_function", "read_interface", "read_file", "read_package", "read_dependency", "bug_delete"}
 	default:
-		return []string{"read_file", "edit", "write", "read_struct", "read_function", "warnings_list", "bug_report"}
+		return []string{"read", "edit", "write", "read_struct", "read_function", "read_interface", "read_named_type", "read_file", "read_package", "read_dependency", "warnings_list", "bug_report"}
 	}
 }
 
 func registerGoTopologyTools(registry *tools.Registry, mgr *golang.GoManager, allowed map[string]bool, describeTargets []domain.ResourceKind) {
-	if allowed["read_function"] {
-		registry.Register(gotools.NewReadFunction(mgr))
-	}
-	if allowed["read_struct"] {
-		registry.Register(gotools.NewReadStruct(mgr))
-	}
-	if allowed["read_resource_and_cut"] {
-		registry.Register(gotools.NewReadResourceAndCut(mgr))
-	}
 	if allowed["update_description"] {
 		registry.Register(gotools.NewUpdateDescriptionTool(mgr))
 	}
@@ -128,15 +185,6 @@ func registerGoTopologyTools(registry *tools.Registry, mgr *golang.GoManager, al
 }
 
 func registerPythonTopologyTools(registry *tools.Registry, mgr *python.PythonManager, allowed map[string]bool, describeTargets []domain.ResourceKind) {
-	if allowed["read_function"] {
-		registry.Register(pythontools.NewReadFunction(mgr))
-	}
-	if allowed["read_struct"] {
-		registry.Register(pythontools.NewReadStruct(mgr))
-	}
-	if allowed["read_resource_and_cut"] {
-		registry.Register(pythontools.NewReadResourceAndCut(mgr))
-	}
 	if allowed["update_description"] {
 		registry.Register(pythontools.NewUpdateDescriptionTool(mgr))
 	}

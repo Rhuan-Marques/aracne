@@ -61,8 +61,8 @@ When generating descriptions, the main session should:
 - Re-check node_list_no_description after executor batches finish and retry anything still listed
 
 Each executor workflow:
-1. Call **read_resource_and_cut** with each assigned resource's ID and resource_name
-2. Read the source code and the type-specific instructions
+1. Call **read** with each assigned resource's ID
+2. Read the source code
 3. Manually generate a concise description (1-3 lines for functions/structs/interfaces, 1 line for variables/files/packages)
 4. Call **update_description** with id, resource_name, and description
 5. Return completed and failed IDs

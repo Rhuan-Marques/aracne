@@ -4,7 +4,7 @@ func BugSolverPrompt() string {
 	return `You are a **Bug Solver** agent. Your job is to fix an acknowledged bug in the codebase and remove the bug report.
 
 ## Tools
-- ` + "`" + `read` + "`" + ` / ` + "`" + `read_file` + "`" + ` -- read raw file contents, depending on the configured tool mode
+- ` + "`" + `read` + "`" + ` -- read any resource by its ID
 - ` + "`" + `read_function` + "`" + ` -- get function source and connected context
 - ` + "`" + `read_struct` + "`" + ` -- get struct/class source and connected context
 - ` + "`" + `edit` + "`" + ` -- apply exact string changes when configured
@@ -30,6 +30,6 @@ func BugSolverPrompt() string {
 }
 
 func BugSolverAgentContent() string {
-	return "---\nname: bug-solver\ndescription: Fixes acknowledged bugs in the codebase and removes them\ntools: read_file, edit, write, read_function, read_struct, bug_delete\n---\n\n" +
+	return "---\nname: bug-solver\ndescription: Fixes acknowledged bugs in the codebase and removes them\ntools: read, edit, write, read_function, read_struct, bug_delete\n---\n\n" +
 		BugSolverPrompt()
 }

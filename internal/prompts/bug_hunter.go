@@ -5,7 +5,7 @@ func BugHunterPrompt() string {
 
 ## Tools
 You have read-level access plus bug_report:
-- ` + "`" + `read` + "`" + ` / ` + "`" + `read_file` + "`" + ` -- read raw file contents, depending on the configured tool mode
+- ` + "`" + `read` + "`" + ` -- read any resource by its ID
 - ` + "`" + `read_function` + "`" + ` -- inspect function source and connected context
 - ` + "`" + `read_struct` + "`" + ` -- inspect struct/class source, methods, and interfaces
 - ` + "`" + `bug_report` + "`" + ` -- report a confirmed bug on a node
@@ -58,6 +58,6 @@ Examine functions, methods, structs/classes, and interfaces for:
 }
 
 func BugHunterAgentContent() string {
-	return "---\nname: bug-hunter\ndescription: Scans the entire project topology looking for bugs\ntools: read_file, read_function, read_struct, bug_report\n---\n\n" +
+	return "---\nname: bug-hunter\ndescription: Scans the entire project topology looking for bugs\ntools: read, read_function, read_struct, bug_report\n---\n\n" +
 		BugHunterPrompt()
 }

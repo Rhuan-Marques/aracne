@@ -216,6 +216,114 @@ func writeImports(b *strings.Builder, packages []golang.PackagePath, dependencie
 	b.WriteString(")\n\n")
 }
 
+// Formats a GoFileContext into a human-readable string with file source and a CONTEXT section listing functions, structs, interfaces, and imports.
+func FormatGoFileContext(ctx *golang.GoFileContext) string {
+	var b strings.Builder
+
+	b.WriteString("```go\n")
+	b.WriteString(ctx.File.Cut)
+	if b.Len() > 0 && ctx.File.Cut != "" && ctx.File.Cut[len(ctx.File.Cut)-1] != '\n' {
+		b.WriteString("\n")
+	}
+	b.WriteString("```\n\n")
+
+	hasContext := len(ctx.Functions) > 0 || len(ctx.Structs) > 0 ||
+		len(ctx.Interfaces) > 0 || len(ctx.NamedTypes) > 0 || len(ctx.ExtVars) > 0
+	if !hasContext {
+		return b.String()
+	}
+
+	b.WriteString("# CONTEXT:\n")
+	b.WriteString(fmt.Sprintf("## Package: %s\n", ctx.FromPackage))
+
+	for _, fn := range ctx.Functions {
+		b.WriteString(fmt.Sprintf("## func %s: %s\n", fn.Name, desc(fn.Description)))
+	}
+	for _, s := range ctx.Structs {
+		b.WriteString(fmt.Sprintf("## struct %s: %s\n", s.Name, desc(s.Description)))
+		for _, m := range s.Methods {
+			b.WriteString(fmt.Sprintf("\t%s.%s: %s\n", s.Name, m.Name, desc(m.Description)))
+		}
+	}
+	for _, iface := range ctx.Interfaces {
+		b.WriteString(fmt.Sprintf("## interface %s: %s\n", iface.Name, desc(iface.Description)))
+	}
+	for _, nt := range ctx.NamedTypes {
+		b.WriteString(fmt.Sprintf("## type %s: %s\n", nt.Name, desc(nt.Description)))
+	}
+	for _, ev := range ctx.ExtVars {
+		b.WriteString(fmt.Sprintf("## var %s: %s\n", ev.Name, desc(ev.Description)))
+	}
+	for _, imp := range ctx.Imports {
+		b.WriteString(fmt.Sprintf("## import %q\n", imp))
+	}
+
+	return b.String()
+}
+
+// Formats a GoPackageContext into a human-readable string with a CONTEXT section listing files, functions, structs, interfaces, and dependencies.
+func FormatGoPackageContext(ctx *golang.GoPackageContext) string {
+	var b strings.Builder
+
+	b.WriteString(fmt.Sprintf("Package: %s\n\n", ctx.Package.Path))
+
+	hasContext := len(ctx.Files) > 0 || len(ctx.Functions) > 0 || len(ctx.Structs) > 0 ||
+		len(ctx.Interfaces) > 0 || len(ctx.NamedTypes) > 0 || len(ctx.ExtVars) > 0 ||
+		len(ctx.Dependencies) > 0
+	if !hasContext {
+		return b.String()
+	}
+
+	b.WriteString("# CONTEXT:\n")
+
+	for _, f := range ctx.Files {
+		b.WriteString(fmt.Sprintf("## file %s\n", f))
+	}
+	for _, fn := range ctx.Functions {
+		b.WriteString(fmt.Sprintf("## func %s: %s\n", fn.Name, desc(fn.Description)))
+	}
+	for _, s := range ctx.Structs {
+		b.WriteString(fmt.Sprintf("## struct %s: %s\n", s.Name, desc(s.Description)))
+		for _, m := range s.Methods {
+			b.WriteString(fmt.Sprintf("\t%s.%s: %s\n", s.Name, m.Name, desc(m.Description)))
+		}
+	}
+	for _, iface := range ctx.Interfaces {
+		b.WriteString(fmt.Sprintf("## interface %s: %s\n", iface.Name, desc(iface.Description)))
+	}
+	for _, nt := range ctx.NamedTypes {
+		b.WriteString(fmt.Sprintf("## type %s: %s\n", nt.Name, desc(nt.Description)))
+	}
+	for _, ev := range ctx.ExtVars {
+		b.WriteString(fmt.Sprintf("## var %s: %s\n", ev.Name, desc(ev.Description)))
+	}
+	for _, d := range ctx.Dependencies {
+		b.WriteString(fmt.Sprintf("## dep %q\n", d))
+	}
+
+	return b.String()
+}
+
+// Formats a GoDependencyContext into a human-readable string listing all resources that use the dependency.
+func FormatGoDependencyContext(ctx *golang.GoDependencyContext) string {
+	var b strings.Builder
+
+	b.WriteString(fmt.Sprintf("Dependency: %s\n\n", ctx.Dependency))
+
+	if len(ctx.UsedBy) == 0 {
+		b.WriteString("No resources reference this dependency.\n")
+		return b.String()
+	}
+
+	b.WriteString("# CONTEXT:\n")
+	b.WriteString("## Used By\n")
+	for _, usage := range ctx.UsedBy {
+		b.WriteString(fmt.Sprintf("\t%s (%s): %s\n", usage.ID, resourceKindLabel(usage.Kind), desc(usage.Description)))
+	}
+
+	return b.String()
+}
+
 func resourceKindLabel(kind domain.ResourceKind) string {
 	switch kind {
 	case domain.ResourceFunction:

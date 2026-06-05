@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"ltp/internal/topology"
@@ -51,19 +52,36 @@ func InitRegistry(dbPath string) (*topology.TopologyManager, *scanner.Registry) 
 }
 
 func MapResourceKind(name string) domain.ResourceKind {
-	switch name {
-	case "Function":
+	normalized := strings.TrimSpace(name)
+	normalized = strings.TrimPrefix(normalized, "domain.")
+	normalized = strings.TrimPrefix(normalized, "Resource")
+	normalized = strings.TrimPrefix(normalized, "Kind")
+	normalized = strings.ToLower(normalized)
+	normalized = strings.ReplaceAll(normalized, "-", "_")
+	normalized = strings.ReplaceAll(normalized, " ", "_")
+	normalized = strings.ReplaceAll(normalized, "external_var", "variable")
+	normalized = strings.ReplaceAll(normalized, "externalvar", "variable")
+	normalized = strings.ReplaceAll(normalized, "namedtype", "named_type")
+
+	switch normalized {
+	case "function":
 		return domain.ResourceFunction
-	case "Struct", "Type":
+	case "method":
+		return domain.ResourceMethod
+	case "struct", "type":
 		return domain.ResourceType
-	case "Interface":
+	case "named_type":
+		return domain.ResourceNamedType
+	case "interface":
 		return domain.ResourceInterface
-	case "ExternalVar", "Variable":
+	case "variable", "var":
 		return domain.ResourceVariable
-	case "File":
+	case "file":
 		return domain.ResourceFile
-	case "Package":
+	case "package":
 		return domain.ResourcePackage
+	case "dependency", "dependancy", "dep":
+		return domain.ResourceDependency
 	}
 	return ""
 }
@@ -81,4 +99,3 @@ func DiffWarnings(before, after map[string]domain.TopologyWarning) (added, remov
 	}
 	return
 }
-

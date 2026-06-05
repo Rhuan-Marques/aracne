@@ -1,9 +1,15 @@
 package goscanner
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"ltp/internal/topology/domain"
+	"ltp/internal/topology/golang"
 )
 
 func TestGoScannerName(t *testing.T) {
@@ -131,5 +137,904 @@ func TestRemoveStrings(t *testing.T) {
 	emptyArgs := removeStrings([]string{"a", "b"})
 	if len(emptyArgs) != 2 {
 		t.Errorf("expected no change with empty items, got %v", emptyArgs)
+	}
+}
+
+// helper to build a minimal GolangTopology for analyzeFunctionBody tests
+func buildTestTopology(t *testing.T, modulePath, pkgPath string) *golang.GolangTopology {
+	t.Helper()
+	return &golang.GolangTopology{
+		Root:         "",
+		Functions:    make(map[golang.FunctionID]golang.GolangFunction),
+		Structs:      make(map[golang.StructID]golang.GolangStruct),
+		Interfaces:   make(map[golang.InterfaceID]golang.GolangInterface),
+		NamedTypes:   make(map[golang.NamedTypeID]golang.GolangNamedType),
+		ExternalVars: make(map[golang.ExternalVarID]golang.GolangExternalVar),
+		Files:        make(map[golang.FileID]golang.GolangFile),
+		Packages:     make(map[golang.PackagePath]golang.GolangPackage),
+		Warnings:     make(map[string]domain.TopologyWarning),
+		Errors:       make(map[string]string),
+	}
+}
+
+// parseGoExpr parses a Go expression or small block and returns an ast.Node.
+func parseGoExpr(t *testing.T, src string) ast.Node {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "", "package p; func _() {\n"+src+"\n}", parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse error: %v\nsource:\n%s", err, src)
+	}
+	return f.Decls[0].(*ast.FuncDecl).Body
+}
+
+// TestAnalyzeFunctionBody_assignCompositeLitAndMethodCall
+// Verifies: x := MyStruct{} followed by x.Method() produces ConnCalls + ConnUsesStruct
+func TestAnalyzeFunctionBody_assignCompositeLitAndMethodCall(t *testing.T) {
+	modulePath := "example.com/test"
+	pkgPath := golang.PackagePath("example.com/test")
+	src := `
+		x := MyStruct{}
+		x.Method()
+	`
+
+	body := parseGoExpr(t, src).(*ast.BlockStmt)
+	pr := &ParseResult{
+		PkgPath:    pkgPath,
+		ModulePath: modulePath,
+		ImportMap:  make(map[string]string),
+	}
+	gt := buildTestTopology(t, modulePath, string(pkgPath))
+
+	structID := golang.StructID(string(pkgPath) + ".MyStruct")
+	methodID := golang.FunctionID(string(pkgPath) + ".(MyStruct).Method")
+	gt.Structs[structID] = golang.GolangStruct{
+		ID:   structID,
+		Name: "MyStruct",
+		Connections: map[golang.ConnectionKind][]string{
+			golang.ConnHasMethod: {string(methodID)},
+		},
+	}
+	gt.Functions[methodID] = golang.GolangFunction{
+		ID:   methodID,
+		Name: "Method",
+	}
+
+	conns := analyzeFunctionBody(body, pr, gt, nil, "", nil, "example.com/test.caller", nil)
+
+	calls := conns[golang.ConnCalls]
+	usesStruct := conns[golang.ConnUsesStruct]
+
+	if len(calls) != 1 || calls[0] != string(methodID) {
+		t.Errorf("expected ConnCalls to %q, got %v", methodID, calls)
+	}
+	if len(usesStruct) != 1 || usesStruct[0] != string(structID) {
+		t.Errorf("expected ConnUsesStruct to %q, got %v", structID, usesStruct)
+	}
+}
+
+// TestAnalyzeFunctionBody_assignConstructorAndMethodCall
+// Verifies: x := NewMyStruct() followed by x.Method() produces ConnCalls (to constructor + method) + ConnUsesStruct
+func TestAnalyzeFunctionBody_assignConstructorAndMethodCall(t *testing.T) {
+	modulePath := "example.com/test"
+	pkgPath := golang.PackagePath("example.com/test")
+	src := `
+		x := NewMyStruct()
+		x.Method()
+	`
+
+	body := parseGoExpr(t, src).(*ast.BlockStmt)
+	pr := &ParseResult{
+		PkgPath:    pkgPath,
+		ModulePath: modulePath,
+		ImportMap:  make(map[string]string),
+	}
+	gt := buildTestTopology(t, modulePath, string(pkgPath))
+
+	structID := golang.StructID(string(pkgPath) + ".MyStruct")
+	ctorID := golang.FunctionID(string(pkgPath) + ".NewMyStruct")
+	methodID := golang.FunctionID(string(pkgPath) + ".(MyStruct).Method")
+
+	gt.Structs[structID] = golang.GolangStruct{
+		ID:   structID,
+		Name: "MyStruct",
+		Connections: map[golang.ConnectionKind][]string{
+			golang.ConnHasMethod: {string(methodID)},
+		},
+	}
+	gt.Functions[ctorID] = golang.GolangFunction{
+		ID:   ctorID,
+		Name: "NewMyStruct",
+		Output: []golang.VariableDefinition{
+			{Typing: "*MyStruct"},
+		},
+	}
+	gt.Functions[methodID] = golang.GolangFunction{
+		ID:   methodID,
+		Name: "Method",
+	}
+
+	conns := analyzeFunctionBody(body, pr, gt, nil, "", nil, "example.com/test.caller", nil)
+
+	calls := conns[golang.ConnCalls]
+	usesStruct := conns[golang.ConnUsesStruct]
+
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 ConnCalls (ctor + method), got %v", calls)
+	}
+	if calls[0] != string(ctorID) && calls[1] != string(ctorID) {
+		t.Errorf("expected ConnCalls to include %q, got %v", ctorID, calls)
+	}
+	if calls[0] != string(methodID) && calls[1] != string(methodID) {
+		t.Errorf("expected ConnCalls to include %q, got %v", methodID, calls)
+	}
+	if len(usesStruct) != 1 || usesStruct[0] != string(structID) {
+		t.Errorf("expected ConnUsesStruct to %q, got %v", structID, usesStruct)
+	}
+}
+
+// TestAnalyzeFunctionBody_assignRefCompositeLitAndMethodCall
+// Verifies: x := &MyStruct{} followed by x.Method() produces ConnCalls + ConnUsesStruct
+func TestAnalyzeFunctionBody_assignRefCompositeLitAndMethodCall(t *testing.T) {
+	modulePath := "example.com/test"
+	pkgPath := golang.PackagePath("example.com/test")
+	src := `
+		x := &MyStruct{}
+		x.Method()
+	`
+
+	body := parseGoExpr(t, src).(*ast.BlockStmt)
+	pr := &ParseResult{
+		PkgPath:    pkgPath,
+		ModulePath: modulePath,
+		ImportMap:  make(map[string]string),
+	}
+	gt := buildTestTopology(t, modulePath, string(pkgPath))
+
+	structID := golang.StructID(string(pkgPath) + ".MyStruct")
+	methodID := golang.FunctionID(string(pkgPath) + ".(MyStruct).Method")
+	gt.Structs[structID] = golang.GolangStruct{
+		ID:   structID,
+		Name: "MyStruct",
+		Connections: map[golang.ConnectionKind][]string{
+			golang.ConnHasMethod: {string(methodID)},
+		},
+	}
+	gt.Functions[methodID] = golang.GolangFunction{
+		ID:   methodID,
+		Name: "Method",
+	}
+
+	conns := analyzeFunctionBody(body, pr, gt, nil, "", nil, "example.com/test.caller", nil)
+
+	calls := conns[golang.ConnCalls]
+	usesStruct := conns[golang.ConnUsesStruct]
+
+	if len(calls) != 1 || calls[0] != string(methodID) {
+		t.Errorf("expected ConnCalls to %q, got %v", methodID, calls)
+	}
+	if len(usesStruct) != 1 || usesStruct[0] != string(structID) {
+		t.Errorf("expected ConnUsesStruct to %q, got %v", structID, usesStruct)
+	}
+}
+
+// TestAnalyzeFunctionBody_varDeclAndMethodCall
+// Verifies: var x MyStruct; x.Method() produces ConnCalls + ConnUsesStruct
+func TestAnalyzeFunctionBody_varDeclAndMethodCall(t *testing.T) {
+	modulePath := "example.com/test"
+	pkgPath := golang.PackagePath("example.com/test")
+	src := `
+		var x MyStruct
+		x.Method()
+	`
+
+	body := parseGoExpr(t, src).(*ast.BlockStmt)
+	pr := &ParseResult{
+		PkgPath:    pkgPath,
+		ModulePath: modulePath,
+		ImportMap:  make(map[string]string),
+	}
+	gt := buildTestTopology(t, modulePath, string(pkgPath))
+
+	structID := golang.StructID(string(pkgPath) + ".MyStruct")
+	methodID := golang.FunctionID(string(pkgPath) + ".(MyStruct).Method")
+	gt.Structs[structID] = golang.GolangStruct{
+		ID:   structID,
+		Name: "MyStruct",
+		Connections: map[golang.ConnectionKind][]string{
+			golang.ConnHasMethod: {string(methodID)},
+		},
+	}
+	gt.Functions[methodID] = golang.GolangFunction{
+		ID:   methodID,
+		Name: "Method",
+	}
+
+	conns := analyzeFunctionBody(body, pr, gt, nil, "", nil, "example.com/test.caller", nil)
+
+	calls := conns[golang.ConnCalls]
+	usesStruct := conns[golang.ConnUsesStruct]
+
+	if len(calls) != 1 || calls[0] != string(methodID) {
+		t.Errorf("expected ConnCalls to %q, got %v", methodID, calls)
+	}
+	if len(usesStruct) != 1 || usesStruct[0] != string(structID) {
+		t.Errorf("expected ConnUsesStruct to %q, got %v", structID, usesStruct)
+	}
+}
+
+// TestAnalyzeFunctionBody_qualifiedCompositeLitAndMethodCall
+// Verifies: x := pkg.MyStruct{} + x.Method() resolves both ConnCalls + ConnUsesStruct for external pkg types
+func TestAnalyzeFunctionBody_qualifiedCompositeLitAndMethodCall(t *testing.T) {
+	modulePath := "example.com/test"
+	pkgPath := golang.PackagePath("example.com/test")
+	src := `
+		x := other.MyStruct{}
+		x.Method()
+	`
+
+	body := parseGoExpr(t, src).(*ast.BlockStmt)
+	pr := &ParseResult{
+		PkgPath:    pkgPath,
+		ModulePath: modulePath,
+		ImportMap:  map[string]string{"other": "example.com/other"},
+	}
+	gt := buildTestTopology(t, modulePath, string(pkgPath))
+
+	otherPkg := golang.PackagePath("example.com/other")
+	structID := golang.StructID(string(otherPkg) + ".MyStruct")
+	methodID := golang.FunctionID(string(otherPkg) + ".(MyStruct).Method")
+	gt.Structs[structID] = golang.GolangStruct{
+		ID:   structID,
+		Name: "MyStruct",
+		Connections: map[golang.ConnectionKind][]string{
+			golang.ConnHasMethod: {string(methodID)},
+		},
+	}
+	gt.Functions[methodID] = golang.GolangFunction{
+		ID:   methodID,
+		Name: "Method",
+	}
+	gt.Packages[otherPkg] = golang.GolangPackage{Path: otherPkg}
+
+	conns := analyzeFunctionBody(body, pr, gt, nil, "", nil, "example.com/test.caller", nil)
+
+	calls := conns[golang.ConnCalls]
+	usesStruct := conns[golang.ConnUsesStruct]
+
+	if len(calls) != 1 || calls[0] != string(methodID) {
+		t.Errorf("expected ConnCalls to %q, got %v", methodID, calls)
+	}
+	if len(usesStruct) != 1 || usesStruct[0] != string(structID) {
+		t.Errorf("expected ConnUsesStruct to %q, got %v", structID, usesStruct)
+	}
+}
+
+// TestAnalyzeFunctionBody_paramMethodCall
+// Verifies: func foo(m *MyStruct) { m.Method() } produces ConnCalls + ConnUsesStruct
+func TestAnalyzeFunctionBody_paramMethodCall(t *testing.T) {
+	modulePath := "example.com/test"
+	pkgPath := golang.PackagePath("example.com/test")
+	src := `m.Method()`
+
+	body := parseGoExpr(t, src).(*ast.BlockStmt)
+	pr := &ParseResult{
+		PkgPath:    pkgPath,
+		ModulePath: modulePath,
+		ImportMap:  make(map[string]string),
+	}
+	gt := buildTestTopology(t, modulePath, string(pkgPath))
+
+	structID := golang.StructID(string(pkgPath) + ".MyStruct")
+	methodID := golang.FunctionID(string(pkgPath) + ".(MyStruct).Method")
+	gt.Structs[structID] = golang.GolangStruct{
+		ID:   structID,
+		Name: "MyStruct",
+		Connections: map[golang.ConnectionKind][]string{
+			golang.ConnHasMethod: {string(methodID)},
+		},
+	}
+	gt.Functions[methodID] = golang.GolangFunction{
+		ID:   methodID,
+		Name: "Method",
+	}
+
+	funcInput := []golang.VariableDefinition{
+		{Name: "m", Typing: "*MyStruct"},
+	}
+	conns := analyzeFunctionBody(body, pr, gt, funcInput, "", nil, "example.com/test.caller", nil)
+
+	calls := conns[golang.ConnCalls]
+	usesStruct := conns[golang.ConnUsesStruct]
+
+	if len(calls) != 1 || calls[0] != string(methodID) {
+		t.Errorf("expected ConnCalls to %q, got %v", methodID, calls)
+	}
+	if len(usesStruct) != 1 || usesStruct[0] != string(structID) {
+		t.Errorf("expected ConnUsesStruct to %q, got %v", structID, usesStruct)
+	}
+}
+
+// TestAnalyzeFunctionBody_receiverMethodCall verifies existing receiver tracking still works
+func TestAnalyzeFunctionBody_receiverMethodCall(t *testing.T) {
+	modulePath := "example.com/test"
+	pkgPath := golang.PackagePath("example.com/test")
+	src := `m.OtherMethod()`
+
+	body := parseGoExpr(t, src).(*ast.BlockStmt)
+	pr := &ParseResult{
+		PkgPath:    pkgPath,
+		ModulePath: modulePath,
+		ImportMap:  make(map[string]string),
+	}
+	gt := buildTestTopology(t, modulePath, string(pkgPath))
+
+	structID := golang.StructID(string(pkgPath) + ".MyStruct")
+	methodID := golang.FunctionID(string(pkgPath) + ".(MyStruct).OtherMethod")
+	gt.Structs[structID] = golang.GolangStruct{
+		ID:   structID,
+		Name: "MyStruct",
+		Connections: map[golang.ConnectionKind][]string{
+			golang.ConnHasMethod: {string(methodID)},
+		},
+	}
+	gt.Functions[methodID] = golang.GolangFunction{
+		ID:   methodID,
+		Name: "OtherMethod",
+	}
+
+	receiverStruct := &structID
+	conns := analyzeFunctionBody(body, pr, gt, nil, "m", receiverStruct, "example.com/test.caller", nil)
+
+	calls := conns[golang.ConnCalls]
+	usesStruct := conns[golang.ConnUsesStruct]
+
+	if len(calls) != 1 || calls[0] != string(methodID) {
+		t.Errorf("expected ConnCalls to %q, got %v", methodID, calls)
+	}
+	if len(usesStruct) != 1 || usesStruct[0] != string(structID) {
+		t.Errorf("expected ConnUsesStruct to %q, got %v", structID, usesStruct)
+	}
+}
+
+// TestAnalyzeFunctionBody_interfaceParamMethodCall
+// Verifies: func foo(iface SomeInterface) { iface.Method() } produces ConnUsesIface
+func TestAnalyzeFunctionBody_interfaceParamMethodCall(t *testing.T) {
+	modulePath := "example.com/test"
+	pkgPath := golang.PackagePath("example.com/test")
+	src := `iface.Method()`
+
+	body := parseGoExpr(t, src).(*ast.BlockStmt)
+	pr := &ParseResult{
+		PkgPath:    pkgPath,
+		ModulePath: modulePath,
+		ImportMap:  make(map[string]string),
+	}
+	gt := buildTestTopology(t, modulePath, string(pkgPath))
+
+	ifaceID := golang.InterfaceID(string(pkgPath) + ".SomeInterface")
+	structID := golang.StructID(string(pkgPath) + ".MyStruct")
+	methodID := golang.FunctionID(string(pkgPath) + ".(MyStruct).Method")
+
+	gt.Interfaces[ifaceID] = golang.GolangInterface{
+		ID:   ifaceID,
+		Name: "SomeInterface",
+		Methods: []golang.FunctionDefinition{
+			{Name: "Method", Input: nil, Output: nil},
+		},
+		Connections: map[golang.ConnectionKind][]string{
+			golang.ConnImplBy: {string(structID)},
+		},
+	}
+	gt.Structs[structID] = golang.GolangStruct{
+		ID:   structID,
+		Name: "MyStruct",
+		Connections: map[golang.ConnectionKind][]string{
+			golang.ConnHasMethod: {string(methodID)},
+		},
+	}
+	gt.Functions[methodID] = golang.GolangFunction{
+		ID:   methodID,
+		Name: "Method",
+	}
+
+	funcInput := []golang.VariableDefinition{
+		{Name: "iface", Typing: "SomeInterface"},
+	}
+	conns := analyzeFunctionBody(body, pr, gt, funcInput, "", nil, "example.com/test.caller", nil)
+
+	usesIface := conns[golang.ConnUsesIface]
+	calls := conns[golang.ConnCalls]
+
+	if len(usesIface) != 1 || usesIface[0] != string(ifaceID) {
+		t.Errorf("expected ConnUsesIface to %q, got %v", ifaceID, usesIface)
+	}
+	if len(calls) != 1 || calls[0] != string(methodID) {
+		t.Errorf("expected ConnCalls to %q, got %v", methodID, calls)
+	}
+}
+
+// TestAnalyzeFunctionBody_structImplementsInterfaceMethod
+// Verifies: when a struct implements an interface, calling a method on the struct
+// tracks both ConnUsesStruct and ConnUsesIface
+func TestAnalyzeFunctionBody_structImplementsInterfaceMethod(t *testing.T) {
+	modulePath := "example.com/test"
+	pkgPath := golang.PackagePath("example.com/test")
+	src := `
+		x := MyStruct{}
+		x.Method()
+	`
+
+	body := parseGoExpr(t, src).(*ast.BlockStmt)
+	pr := &ParseResult{
+		PkgPath:    pkgPath,
+		ModulePath: modulePath,
+		ImportMap:  make(map[string]string),
+	}
+	gt := buildTestTopology(t, modulePath, string(pkgPath))
+
+	ifaceID := golang.InterfaceID(string(pkgPath) + ".SomeInterface")
+	structID := golang.StructID(string(pkgPath) + ".MyStruct")
+	methodID := golang.FunctionID(string(pkgPath) + ".(MyStruct).Method")
+
+	gt.Interfaces[ifaceID] = golang.GolangInterface{
+		ID:   ifaceID,
+		Name: "SomeInterface",
+		Methods: []golang.FunctionDefinition{
+			{Name: "Method", Input: nil, Output: nil},
+		},
+		Connections: map[golang.ConnectionKind][]string{
+			golang.ConnImplBy: {string(structID)},
+		},
+	}
+	gt.Structs[structID] = golang.GolangStruct{
+		ID:   structID,
+		Name: "MyStruct",
+		Connections: map[golang.ConnectionKind][]string{
+			golang.ConnHasMethod: {string(methodID)},
+		},
+	}
+	gt.Functions[methodID] = golang.GolangFunction{
+		ID:   methodID,
+		Name: "Method",
+	}
+
+	conns := analyzeFunctionBody(body, pr, gt, nil, "", nil, "example.com/test.caller", nil)
+
+	usesIface := conns[golang.ConnUsesIface]
+	usesStruct := conns[golang.ConnUsesStruct]
+	calls := conns[golang.ConnCalls]
+
+	if len(usesStruct) != 1 || usesStruct[0] != string(structID) {
+		t.Errorf("expected ConnUsesStruct to %q, got %v", structID, usesStruct)
+	}
+	if len(usesIface) != 1 || usesIface[0] != string(ifaceID) {
+		t.Errorf("expected ConnUsesIface to %q, got %v", ifaceID, usesIface)
+	}
+	if len(calls) != 1 || calls[0] != string(methodID) {
+		t.Errorf("expected ConnCalls to %q, got %v", methodID, calls)
+	}
+}
+
+// TestAnalyzeFunctionBody_qualifiedConstructorAndMethodCall
+// Verifies: x := otherpkg.NewMyStruct() + x.Method() resolves across package boundaries
+func TestAnalyzeFunctionBody_qualifiedConstructorAndMethodCall(t *testing.T) {
+	modulePath := "example.com/test"
+	pkgPath := golang.PackagePath("example.com/test")
+	src := `
+		x := other.NewMyStruct()
+		x.Method()
+	`
+
+	body := parseGoExpr(t, src).(*ast.BlockStmt)
+	pr := &ParseResult{
+		PkgPath:    pkgPath,
+		ModulePath: modulePath,
+		ImportMap:  map[string]string{"other": "example.com/other"},
+	}
+	gt := buildTestTopology(t, modulePath, string(pkgPath))
+
+	otherPkg := golang.PackagePath("example.com/other")
+	structID := golang.StructID(string(otherPkg) + ".MyStruct")
+	ctorID := golang.FunctionID(string(otherPkg) + ".NewMyStruct")
+	methodID := golang.FunctionID(string(otherPkg) + ".(MyStruct).Method")
+
+	gt.Structs[structID] = golang.GolangStruct{
+		ID:   structID,
+		Name: "MyStruct",
+		Connections: map[golang.ConnectionKind][]string{
+			golang.ConnHasMethod: {string(methodID)},
+		},
+	}
+	gt.Functions[ctorID] = golang.GolangFunction{
+		ID:   ctorID,
+		Name: "NewMyStruct",
+		Output: []golang.VariableDefinition{
+			{Typing: "*MyStruct"},
+		},
+	}
+	gt.Functions[methodID] = golang.GolangFunction{
+		ID:   methodID,
+		Name: "Method",
+	}
+	gt.Packages[otherPkg] = golang.GolangPackage{Path: otherPkg}
+
+	conns := analyzeFunctionBody(body, pr, gt, nil, "", nil, "example.com/test.caller", nil)
+
+	calls := conns[golang.ConnCalls]
+	usesStruct := conns[golang.ConnUsesStruct]
+
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 ConnCalls (ctor + method), got %v", calls)
+	}
+	if calls[0] != string(ctorID) && calls[1] != string(ctorID) {
+		t.Errorf("expected ConnCalls to include %q, got %v", ctorID, calls)
+	}
+	if calls[0] != string(methodID) && calls[1] != string(methodID) {
+		t.Errorf("expected ConnCalls to include %q, got %v", methodID, calls)
+	}
+	if len(usesStruct) != 1 || usesStruct[0] != string(structID) {
+		t.Errorf("expected ConnUsesStruct to %q, got %v", structID, usesStruct)
+	}
+}
+
+// TestAnalyzeFunctionBody_interfaceAssignAndMethodCall
+// Verifies: var iface SomeInterface; iface.Method() produces ConnUsesIface
+func TestAnalyzeFunctionBody_interfaceAssignAndMethodCall(t *testing.T) {
+	modulePath := "example.com/test"
+	pkgPath := golang.PackagePath("example.com/test")
+	src := `
+		var iface SomeInterface
+		iface.Method()
+	`
+
+	body := parseGoExpr(t, src).(*ast.BlockStmt)
+	pr := &ParseResult{
+		PkgPath:    pkgPath,
+		ModulePath: modulePath,
+		ImportMap:  make(map[string]string),
+	}
+	gt := buildTestTopology(t, modulePath, string(pkgPath))
+
+	ifaceID := golang.InterfaceID(string(pkgPath) + ".SomeInterface")
+	structID := golang.StructID(string(pkgPath) + ".MyStruct")
+	methodID := golang.FunctionID(string(pkgPath) + ".(MyStruct).Method")
+
+	gt.Interfaces[ifaceID] = golang.GolangInterface{
+		ID:   ifaceID,
+		Name: "SomeInterface",
+		Methods: []golang.FunctionDefinition{
+			{Name: "Method", Input: nil, Output: nil},
+		},
+		Connections: map[golang.ConnectionKind][]string{
+			golang.ConnImplBy: {string(structID)},
+		},
+	}
+	gt.Structs[structID] = golang.GolangStruct{
+		ID:   structID,
+		Name: "MyStruct",
+		Connections: map[golang.ConnectionKind][]string{
+			golang.ConnHasMethod: {string(methodID)},
+		},
+	}
+	gt.Functions[methodID] = golang.GolangFunction{
+		ID:   methodID,
+		Name: "Method",
+	}
+
+	conns := analyzeFunctionBody(body, pr, gt, nil, "", nil, "example.com/test.caller", nil)
+
+	usesIface := conns[golang.ConnUsesIface]
+	calls := conns[golang.ConnCalls]
+
+	if len(usesIface) != 1 || usesIface[0] != string(ifaceID) {
+		t.Errorf("expected ConnUsesIface to %q, got %v", ifaceID, usesIface)
+	}
+	if len(calls) != 1 || calls[0] != string(methodID) {
+		t.Errorf("expected ConnCalls to %q, got %v", methodID, calls)
+	}
+}
+
+// TestAnalyzeFunctionBody_noLocalVariableMethodCall ensures that a direct struct name used
+// as a call target (e.g. "MyStruct()" as a constructor call) still works correctly
+func TestAnalyzeFunctionBody_directStructCall(t *testing.T) {
+	modulePath := "example.com/test"
+	pkgPath := golang.PackagePath("example.com/test")
+	src := `MyStruct()`
+
+	body := parseGoExpr(t, src).(*ast.BlockStmt)
+	pr := &ParseResult{
+		PkgPath:    pkgPath,
+		ModulePath: modulePath,
+		ImportMap:  make(map[string]string),
+		Functions:  nil,
+	}
+	gt := buildTestTopology(t, modulePath, string(pkgPath))
+
+	structID := golang.StructID(string(pkgPath) + ".MyStruct")
+	gt.Structs[structID] = golang.GolangStruct{
+		ID:   structID,
+		Name: "MyStruct",
+	}
+
+	conns := analyzeFunctionBody(body, pr, gt, nil, "", nil, "example.com/test.caller", nil)
+
+	usesStruct := conns[golang.ConnUsesStruct]
+	if len(usesStruct) != 1 || usesStruct[0] != string(structID) {
+		t.Errorf("expected ConnUsesStruct to %q, got %v", structID, usesStruct)
+	}
+}
+
+// TestAnalyzeFunctionBody_knownNameSkipsResolution
+// Verifies that known names (like builtins, params, locals) skip resolution attempts
+func TestAnalyzeFunctionBody_knownNameSkipsResolution(t *testing.T) {
+	modulePath := "example.com/test"
+	pkgPath := golang.PackagePath("example.com/test")
+	src := `
+		x := MyStruct{}
+		x.SomeBuiltin()
+	`
+	body := parseGoExpr(t, src).(*ast.BlockStmt)
+	pr := &ParseResult{
+		PkgPath:    pkgPath,
+		ModulePath: modulePath,
+		ImportMap:  make(map[string]string),
+	}
+	gt := buildTestTopology(t, modulePath, string(pkgPath))
+
+	structID := golang.StructID(string(pkgPath) + ".MyStruct")
+	gt.Structs[structID] = golang.GolangStruct{
+		ID:   structID,
+		Name: "MyStruct",
+	}
+
+	conns := analyzeFunctionBody(body, pr, gt, nil, "", nil, "example.com/test.caller", nil)
+
+	// x is a known local, x.SomeBuiltin() should not produce any warnings or connections
+	if _, ok := conns[golang.ConnCalls]; ok {
+		t.Errorf("expected no ConnCalls for known local var, got %v", conns[golang.ConnCalls])
+	}
+}
+
+// TestAnalyzeFunctionBody_endToEndWithFullScan validates the full pipeline:
+// ParseFile -> analyzeFunctionBody for a real Go file with local var method calls
+func TestAnalyzeFunctionBody_endToEndWithFullScan(t *testing.T) {
+	dir := t.TempDir()
+	goModPath := filepath.Join(dir, "go.mod")
+	if err := os.WriteFile(goModPath, []byte("module example.com/test\n\ngo 1.22\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	code := `package test
+
+type MyStruct struct {}
+func (m MyStruct) Do() int { return 0 }
+
+func caller() int {
+	x := MyStruct{}
+	return x.Do()
+}
+`
+	filePath := filepath.Join(dir, "main.go")
+	if err := os.WriteFile(filePath, []byte(code), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	modulePath := "example.com/test"
+	pkgPath := golang.PackagePath("example.com/test")
+
+	pr, err := ParseFile(filePath, pkgPath, modulePath, dir)
+	if err != nil {
+		t.Fatalf("ParseFile failed: %v", err)
+	}
+
+	// Build topology from parse results
+	gt := buildTestTopology(t, modulePath, string(pkgPath))
+	for _, s := range pr.Structs {
+		gt.Structs[s.ID] = s
+	}
+	for _, fi := range pr.Functions {
+		gt.Functions[fi.Function.ID] = fi.Function
+	}
+
+	populateStructMethods(gt)
+
+	// Find caller function
+	var fi *FunctionParse
+	for i := range pr.Functions {
+		if pr.Functions[i].Function.Name == "caller" {
+			fi = &pr.Functions[i]
+			break
+		}
+	}
+	if fi == nil {
+		t.Fatal("caller function not found in parse results")
+	}
+
+	conns := analyzeFunctionBody(fi.Body, pr, gt, fi.Function.Input, fi.ReceiverName, fi.Function.MethodFrom, fi.Function.ID, fi.TypeParamNames)
+
+	structID := string(pkgPath) + ".MyStruct"
+	methodID := string(pkgPath) + ".(MyStruct).Do"
+
+	calls := conns[golang.ConnCalls]
+	usesStruct := conns[golang.ConnUsesStruct]
+
+	if len(calls) != 1 || calls[0] != methodID {
+		t.Errorf("expected ConnCalls to %q, got %v", methodID, calls)
+	}
+	if len(usesStruct) != 1 || usesStruct[0] != structID {
+		t.Errorf("expected ConnUsesStruct to %q, got %v", structID, usesStruct)
+	}
+}
+
+// TestAnalyzeFunctionBody_interfaceConstructorAndMethodCall
+// Verifies: x := NewMyInterface(); x.Method() where NewMyInterface returns SomeInterface
+// produces ConnUsesIface + ConnCalls (to the implementing struct's method)
+func TestAnalyzeFunctionBody_interfaceConstructorAndMethodCall(t *testing.T) {
+	modulePath := "example.com/test"
+	pkgPath := golang.PackagePath("example.com/test")
+	src := `
+		x := NewMyInterface()
+		x.Method()
+	`
+
+	body := parseGoExpr(t, src).(*ast.BlockStmt)
+	pr := &ParseResult{
+		PkgPath:    pkgPath,
+		ModulePath: modulePath,
+		ImportMap:  make(map[string]string),
+	}
+	gt := buildTestTopology(t, modulePath, string(pkgPath))
+
+	ifaceID := golang.InterfaceID(string(pkgPath) + ".SomeInterface")
+	structID := golang.StructID(string(pkgPath) + ".MyStruct")
+	ctorID := golang.FunctionID(string(pkgPath) + ".NewMyInterface")
+	methodID := golang.FunctionID(string(pkgPath) + ".(MyStruct).Method")
+
+	gt.Interfaces[ifaceID] = golang.GolangInterface{
+		ID:   ifaceID,
+		Name: "SomeInterface",
+		Methods: []golang.FunctionDefinition{
+			{Name: "Method", Input: nil, Output: nil},
+		},
+		Connections: map[golang.ConnectionKind][]string{
+			golang.ConnImplBy: {string(structID)},
+		},
+	}
+	gt.Structs[structID] = golang.GolangStruct{
+		ID:   structID,
+		Name: "MyStruct",
+		Connections: map[golang.ConnectionKind][]string{
+			golang.ConnHasMethod: {string(methodID)},
+		},
+	}
+	gt.Functions[ctorID] = golang.GolangFunction{
+		ID:   ctorID,
+		Name: "NewMyInterface",
+		Output: []golang.VariableDefinition{
+			{Typing: "SomeInterface"},
+		},
+	}
+	gt.Functions[methodID] = golang.GolangFunction{
+		ID:   methodID,
+		Name: "Method",
+	}
+
+	conns := analyzeFunctionBody(body, pr, gt, nil, "", nil, "example.com/test.caller", nil)
+
+	usesIface := conns[golang.ConnUsesIface]
+	calls := conns[golang.ConnCalls]
+
+	if len(usesIface) != 1 || usesIface[0] != string(ifaceID) {
+		t.Errorf("expected ConnUsesIface to %q, got %v", ifaceID, usesIface)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 ConnCalls (ctor + method), got %v", calls)
+	}
+	if calls[0] != string(ctorID) && calls[1] != string(ctorID) {
+		t.Errorf("expected ConnCalls to include %q, got %v", ctorID, calls)
+	}
+	if calls[0] != string(methodID) && calls[1] != string(methodID) {
+		t.Errorf("expected ConnCalls to include %q, got %v", methodID, calls)
+	}
+}
+
+// TestAnalyzeFunctionBody_qualifiedInterfaceConstructorAndMethodCall
+// Verifies: x := other.NewMyInterface(); x.Method() across package boundaries
+// produces ConnUsesIface + ConnCalls to the implementing struct's method
+func TestAnalyzeFunctionBody_qualifiedInterfaceConstructorAndMethodCall(t *testing.T) {
+	modulePath := "example.com/test"
+	pkgPath := golang.PackagePath("example.com/test")
+	src := `
+		x := other.NewMyInterface()
+		x.Method()
+	`
+
+	body := parseGoExpr(t, src).(*ast.BlockStmt)
+	pr := &ParseResult{
+		PkgPath:    pkgPath,
+		ModulePath: modulePath,
+		ImportMap:  map[string]string{"other": "example.com/other"},
+	}
+	gt := buildTestTopology(t, modulePath, string(pkgPath))
+
+	otherPkg := golang.PackagePath("example.com/other")
+	ifaceID := golang.InterfaceID(string(otherPkg) + ".SomeInterface")
+	structID := golang.StructID(string(otherPkg) + ".MyStruct")
+	ctorID := golang.FunctionID(string(otherPkg) + ".NewMyInterface")
+	methodID := golang.FunctionID(string(otherPkg) + ".(MyStruct).Method")
+
+	gt.Interfaces[ifaceID] = golang.GolangInterface{
+		ID:   ifaceID,
+		Name: "SomeInterface",
+		Methods: []golang.FunctionDefinition{
+			{Name: "Method", Input: nil, Output: nil},
+		},
+		Connections: map[golang.ConnectionKind][]string{
+			golang.ConnImplBy: {string(structID)},
+		},
+	}
+	gt.Structs[structID] = golang.GolangStruct{
+		ID:   structID,
+		Name: "MyStruct",
+		Connections: map[golang.ConnectionKind][]string{
+			golang.ConnHasMethod: {string(methodID)},
+		},
+	}
+	gt.Functions[ctorID] = golang.GolangFunction{
+		ID:   ctorID,
+		Name: "NewMyInterface",
+		Output: []golang.VariableDefinition{
+			{Typing: "*SomeInterface"},
+		},
+	}
+	gt.Functions[methodID] = golang.GolangFunction{
+		ID:   methodID,
+		Name: "Method",
+	}
+	gt.Packages[otherPkg] = golang.GolangPackage{Path: otherPkg}
+
+	conns := analyzeFunctionBody(body, pr, gt, nil, "", nil, "example.com/test.caller", nil)
+
+	usesIface := conns[golang.ConnUsesIface]
+	calls := conns[golang.ConnCalls]
+
+	if len(usesIface) != 1 || usesIface[0] != string(ifaceID) {
+		t.Errorf("expected ConnUsesIface to %q, got %v", ifaceID, usesIface)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 ConnCalls (ctor + method), got %v", calls)
+	}
+	if calls[0] != string(ctorID) && calls[1] != string(ctorID) {
+		t.Errorf("expected ConnCalls to include %q, got %v", ctorID, calls)
+	}
+	if calls[0] != string(methodID) && calls[1] != string(methodID) {
+		t.Errorf("expected ConnCalls to include %q, got %v", methodID, calls)
+	}
+}
+
+// TestAnalyzeFunctionBody_ignoresUnderscoreAssign
+// Verifies: _ = MyStruct{} does not populate varTypeMap for _
+func TestAnalyzeFunctionBody_ignoresUnderscoreAssign(t *testing.T) {
+	modulePath := "example.com/test"
+	pkgPath := golang.PackagePath("example.com/test")
+	src := `
+		_ = MyStruct{}
+		_.Method()
+	`
+
+	body := parseGoExpr(t, src).(*ast.BlockStmt)
+	pr := &ParseResult{
+		PkgPath:    pkgPath,
+		ModulePath: modulePath,
+		ImportMap:  make(map[string]string),
+	}
+	gt := buildTestTopology(t, modulePath, string(pkgPath))
+
+	conns := analyzeFunctionBody(body, pr, gt, nil, "", nil, "example.com/test.caller", nil)
+
+	// _ should not be tracked, _.Method() should not produce any valid connections
+	if _, ok := conns[golang.ConnCalls]; ok {
+		t.Errorf("expected no ConnCalls for underscore var, got %v", conns[golang.ConnCalls])
 	}
 }

@@ -42,8 +42,8 @@ func main() {
 		cli.RunUpdateFile(os.Args[2:])
 	case "read":
 		cli.RunRead()
-	case "read-resource-and-cut":
-		cli.RunReadResourceAndCut(os.Args[2:])
+	case "search":
+		cli.RunSearch(os.Args[2:])
 	case "update-description":
 		cli.RunUpdateDescription(os.Args[2:])
 	case "edit":
@@ -69,6 +69,8 @@ func main() {
 		cli.RunWarningsList(os.Args[3:])
 	case "bug":
 		cli.RunBug(os.Args[2:])
+	case "scanner":
+		cli.RunScanner(os.Args[2:])
 	case "check-updates":
 		cli.RunCheckUpdates(os.Args[2:])
 	case "analyze":
@@ -77,3 +79,9 @@ func main() {
 		cli.PrintUsage()
 	}
 }
+
+
+
+
+
+

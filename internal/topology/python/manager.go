@@ -547,6 +547,348 @@ func (m *PythonManager) UpdateDescription(id string, kind domain.ResourceKind, d
 	return helper.UpdateDescription(m.generic.DbPath(), kind, id, description)
 }
 
+func (m *PythonManager) ReadModule(id string, opts ...topology.TopologyOption) (*PythonModuleContext, error) {
+	opt := &topology.TopologyOptions{}
+	for _, o := range opts {
+		o(opt)
+	}
+
+	topo, err := m.generic.ReadAll()
+	if err != nil {
+		return nil, err
+	}
+	gt := FromGeneric(topo)
+
+	modID := ModuleID(id)
+	mod, ok := gt.Modules[modID]
+	if !ok {
+		return nil, fmt.Errorf("module %s not found in topology", id)
+	}
+
+	ctx := &PythonModuleContext{}
+	modCut, err := m.generic.Cut(domain.Location{Path: string(modID)})
+	if err != nil {
+		return nil, err
+	}
+	ctx.Module = &ModuleCut{PythonModule: mod, Cut: modCut.Cut}
+	ctx.FromPackage = mod.FromPackage
+
+	if opt.HasResource(domain.ResourceFunction) {
+		for _, fnID := range mod.Functions() {
+			fn, ok := gt.Functions[fnID]
+			if !ok {
+				continue
+			}
+			ctx.Functions = append(ctx.Functions, SimplifiedFunction{
+				ID:          fn.ID,
+				Name:        fn.Name,
+				Description: fn.Description,
+				Input:       fn.Input,
+				Output:      fn.Output,
+				Location:    fn.Loc,
+			})
+		}
+	}
+
+	if opt.HasResource(domain.ResourceType) {
+		for _, cID := range mod.Classes() {
+			c, ok := gt.Classes[cID]
+			if !ok {
+				continue
+			}
+			usage := ClassUsage{
+				ID:          c.ID,
+				Name:        c.Name,
+				Description: c.Description,
+				Location:    c.Loc,
+			}
+			for _, mID := range c.Methods() {
+				method, ok := gt.Functions[mID]
+				if !ok {
+					continue
+				}
+				usage.Methods = append(usage.Methods, SimplifiedFunction{
+					ID:          method.ID,
+					Name:        method.Name,
+					Description: method.Description,
+					Input:       method.Input,
+					Output:      method.Output,
+					Location:    method.Loc,
+				})
+			}
+			ctx.Classes = append(ctx.Classes, usage)
+		}
+	}
+
+	if opt.HasResource(domain.ResourceVariable) {
+		for _, vID := range mod.ExternalVars() {
+			v, ok := gt.ExternalVars[vID]
+			if !ok {
+				continue
+			}
+			ctx.ExtVars = append(ctx.ExtVars, SimplifiedExtVar{
+				ID:          v.ID,
+				Name:        v.Name,
+				Description: v.Description,
+				Location:    v.Location,
+			})
+		}
+	}
+
+	for _, p := range mod.PackagesImported() {
+		ctx.Imports = append(ctx.Imports, p)
+	}
+
+	var blocks []ContextBlock
+	blocks = append(blocks, ContextBlock{
+		Kind: "module", FileID: ModuleID(modID), Line: 1,
+		Title: fmt.Sprintf("module %s", modID), Cut: modCut.Cut,
+	})
+	for _, fn := range ctx.Functions {
+		blocks = append(blocks, ContextBlock{
+			Kind: "function", FileID: ModuleID(fn.Location.Path),
+			Line: fn.Location.StartsAt, Title: fmt.Sprintf("def %s", fn.Name),
+		})
+	}
+	for _, c := range ctx.Classes {
+		blocks = append(blocks, ContextBlock{
+			Kind: "class", FileID: ModuleID(c.Location.Path),
+			Line: c.Location.StartsAt, Title: fmt.Sprintf("class %s", c.Name),
+		})
+		for _, m := range c.Methods {
+			blocks = append(blocks, ContextBlock{
+				Kind: "method", FileID: ModuleID(m.Location.Path),
+				Line: m.Location.StartsAt, Title: fmt.Sprintf("%s.%s", c.Name, m.Name),
+			})
+		}
+	}
+	for _, ev := range ctx.ExtVars {
+		blocks = append(blocks, ContextBlock{
+			Kind: "extvar", FileID: ModuleID(ev.Location.Path),
+			Line: ev.Location.StartsAt, Title: fmt.Sprintf("var %s", ev.Name),
+		})
+	}
+	sort.SliceStable(blocks, func(i, j int) bool {
+		if blocks[i].FileID != blocks[j].FileID {
+			return blocks[i].FileID < blocks[j].FileID
+		}
+		return blocks[i].Line < blocks[j].Line
+	})
+	ctx.Blocks = blocks
+
+	return ctx, nil
+}
+
+func (m *PythonManager) ReadPackage(id string, opts ...topology.TopologyOption) (*PythonPackageContext, error) {
+	opt := &topology.TopologyOptions{}
+	for _, o := range opts {
+		o(opt)
+	}
+
+	topo, err := m.generic.ReadAll()
+	if err != nil {
+		return nil, err
+	}
+	gt := FromGeneric(topo)
+
+	pkgPath := PackagePath(id)
+	pkg, ok := gt.Packages[pkgPath]
+	if !ok {
+		return nil, fmt.Errorf("package %s not found in topology", id)
+	}
+
+	ctx := &PythonPackageContext{}
+	ctx.Package = &PackageCut{PythonPackage: pkg}
+
+	var blocks []ContextBlock
+
+	if opt.HasResource(domain.ResourceFile) {
+		for _, fID := range pkg.Files() {
+			ctx.Files = append(ctx.Files, fID)
+			blocks = append(blocks, ContextBlock{
+				Kind: "module", FileID: ModuleID(fID), Line: 1,
+				Title: fmt.Sprintf("module %s", fID),
+			})
+		}
+	}
+
+	if opt.HasResource(domain.ResourceFunction) {
+		for _, fnID := range pkg.HasFunctions() {
+			fn, ok := gt.Functions[fnID]
+			if !ok {
+				continue
+			}
+			ctx.Functions = append(ctx.Functions, SimplifiedFunction{
+				ID:          fn.ID,
+				Name:        fn.Name,
+				Description: fn.Description,
+				Input:       fn.Input,
+				Output:      fn.Output,
+				Location:    fn.Loc,
+			})
+			blocks = append(blocks, ContextBlock{
+				Kind: "function", FileID: ModuleID(fn.Loc.Path),
+				Line: fn.Loc.StartsAt, Title: fmt.Sprintf("def %s", fn.Name),
+			})
+		}
+	}
+
+	if opt.HasResource(domain.ResourceType) {
+		for _, cID := range pkg.HasClasses() {
+			c, ok := gt.Classes[cID]
+			if !ok {
+				continue
+			}
+			usage := ClassUsage{
+				ID:          c.ID,
+				Name:        c.Name,
+				Description: c.Description,
+				Location:    c.Loc,
+			}
+			for _, mID := range c.Methods() {
+				method, ok := gt.Functions[mID]
+				if !ok {
+					continue
+				}
+				usage.Methods = append(usage.Methods, SimplifiedFunction{
+					ID:          method.ID,
+					Name:        method.Name,
+					Description: method.Description,
+					Input:       method.Input,
+					Output:      method.Output,
+					Location:    method.Loc,
+				})
+			}
+			ctx.Classes = append(ctx.Classes, usage)
+			blocks = append(blocks, ContextBlock{
+				Kind: "class", FileID: ModuleID(c.Loc.Path),
+				Line: c.Loc.StartsAt, Title: fmt.Sprintf("class %s", c.Name),
+			})
+			for _, m := range usage.Methods {
+				blocks = append(blocks, ContextBlock{
+					Kind: "method", FileID: ModuleID(m.Location.Path),
+					Line: m.Location.StartsAt, Title: fmt.Sprintf("%s.%s", c.Name, m.Name),
+				})
+			}
+		}
+	}
+
+	if opt.HasResource(domain.ResourceVariable) {
+		for _, vID := range pkg.HasExternalVars() {
+			v, ok := gt.ExternalVars[vID]
+			if !ok {
+				continue
+			}
+			ctx.ExtVars = append(ctx.ExtVars, SimplifiedExtVar{
+				ID:          v.ID,
+				Name:        v.Name,
+				Description: v.Description,
+				Location:    v.Location,
+			})
+			blocks = append(blocks, ContextBlock{
+				Kind: "extvar", FileID: ModuleID(v.Location.Path),
+				Line: v.Location.StartsAt, Title: fmt.Sprintf("var %s", v.Name),
+			})
+		}
+	}
+
+	if opt.HasResource(domain.ResourceDependency) {
+		depSet := make(map[DependancyPath]bool)
+		for _, d := range pkg.Connections[ConnImportsDep] {
+			depSet[DependancyPath(d)] = true
+		}
+		for d := range depSet {
+			ctx.Dependencies = append(ctx.Dependencies, d)
+		}
+	}
+
+	sort.SliceStable(blocks, func(i, j int) bool {
+		if blocks[i].FileID != blocks[j].FileID {
+			return blocks[i].FileID < blocks[j].FileID
+		}
+		return blocks[i].Line < blocks[j].Line
+	})
+	ctx.Blocks = blocks
+
+	return ctx, nil
+}
+
+func (m *PythonManager) ReadDependency(id string, opts ...topology.TopologyOption) (*PythonDependencyContext, error) {
+	topo, err := m.generic.ReadAll()
+	if err != nil {
+		return nil, err
+	}
+	gt := FromGeneric(topo)
+
+	depPath := DependancyPath(id)
+	ctx := &PythonDependencyContext{Dependency: depPath}
+
+	found := false
+	for _, d := range gt.Dependencies {
+		if d.PackagePath == depPath {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("dependency %s not found in topology", id)
+	}
+
+	var blocks []ContextBlock
+
+	for fnID, fn := range gt.Functions {
+		for _, d := range fn.UsesDep() {
+			if d == depPath {
+				kind := domain.ResourceFunction
+				if fn.MethodFrom != nil {
+					kind = domain.ResourceMethod
+				}
+				ctx.UsedBy = append(ctx.UsedBy, ResourceUsage{
+					ID:          string(fnID),
+					Kind:        kind,
+					Name:        fn.Name,
+					Description: fn.Description,
+					Location:    fn.Loc,
+				})
+				blocks = append(blocks, ContextBlock{
+					Kind: string(kind), FileID: ModuleID(fn.Loc.Path),
+					Line: fn.Loc.StartsAt, Title: fn.Name,
+				})
+				break
+			}
+		}
+	}
+
+	for cID, c := range gt.Classes {
+		for _, d := range c.UsesDep() {
+			if d == depPath {
+				ctx.UsedBy = append(ctx.UsedBy, ResourceUsage{
+					ID:          string(cID),
+					Kind:        domain.ResourceType,
+					Name:        c.Name,
+					Description: c.Description,
+					Location:    c.Loc,
+				})
+				blocks = append(blocks, ContextBlock{
+					Kind: "class", FileID: ModuleID(c.Loc.Path),
+					Line: c.Loc.StartsAt, Title: c.Name,
+				})
+				break
+			}
+		}
+	}
+
+	sort.SliceStable(blocks, func(i, j int) bool {
+		if blocks[i].FileID != blocks[j].FileID {
+			return blocks[i].FileID < blocks[j].FileID
+		}
+		return blocks[i].Line < blocks[j].Line
+	})
+	ctx.Blocks = blocks
+
+	return ctx, nil
+}
+
 func (m *PythonManager) ReadResourceAndCut(id string, kind domain.ResourceKind) (*domain.CodeEntry, error) {
 	topo, err := m.generic.ReadAll()
 	if err != nil {
@@ -598,7 +940,8 @@ func (m *PythonManager) ReadResourceAndCut(id string, kind domain.ResourceKind) 
 			Cut: string(kind),
 		}, nil
 	case domain.ResourceFile:
-		return nil, fmt.Errorf("ReadResourceAndCut not supported for File")
+		loc = domain.Location{Path: id}
+		found = true
 	default:
 		return nil, fmt.Errorf("unknown resource: %s", kind)
 	}

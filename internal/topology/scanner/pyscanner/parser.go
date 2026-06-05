@@ -31,6 +31,19 @@ type pyClass struct {
 	EndLineno          int      `json:"end_lineno"`
 }
 
+type pyBodyCall struct {
+	Func       string `json:"func"`
+	ObjectName string `json:"object_name"`
+	MethodName string `json:"method_name"`
+	LineNo     int    `json:"lineno"`
+}
+
+type pyBodyAssign struct {
+	Name      string `json:"name"`
+	ValueType string `json:"value_type"`
+	LineNo    int    `json:"lineno"`
+}
+
 type pyFunc struct {
 	Name       string     `json:"name"`
 	Docstring  string     `json:"docstring"`
@@ -43,6 +56,8 @@ type pyFunc struct {
 	Lineno     int        `json:"lineno"`
 	EndLineno  int        `json:"end_lineno"`
 	Parent     *string    `json:"parent"`
+	BodyCalls  []pyBodyCall    `json:"body_calls"`
+	BodyAssign []pyBodyAssign  `json:"body_assignments"`
 }
 
 type pyVarDef struct {
@@ -105,8 +120,10 @@ type ParseResult struct {
 }
 
 type FunctionParse struct {
-	Function python.PythonFunction
-	Body     *pyFunc
+	Function    python.PythonFunction
+	Body        *pyFunc
+	BodyCalls   []pyBodyCall
+	BodyAssigns []pyBodyAssign
 }
 
 type ClassVarRef struct {
@@ -153,13 +170,13 @@ func ParseFile(filePath string, pkgPath python.PackagePath, moduleRoot string) (
 
 		for _, method := range cls.Methods {
 			f := convertFunction(method, filePath, pkgPath, &c.ID)
-			pr.Functions = append(pr.Functions, FunctionParse{Function: f, Body: &method})
+			pr.Functions = append(pr.Functions, FunctionParse{Function: f, Body: &method, BodyCalls: method.BodyCalls, BodyAssigns: method.BodyAssign})
 		}
 	}
 
 	for _, fn := range raw.Functions {
 		f := convertFunction(fn, filePath, pkgPath, nil)
-		pr.Functions = append(pr.Functions, FunctionParse{Function: f, Body: &fn})
+		pr.Functions = append(pr.Functions, FunctionParse{Function: f, Body: &fn, BodyCalls: fn.BodyCalls, BodyAssigns: fn.BodyAssign})
 	}
 
 	for _, v := range raw.Variables {

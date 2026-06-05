@@ -1,4 +1,4 @@
-package goscanner
+﻿package goscanner
 
 import (
 	"fmt"
@@ -15,6 +15,7 @@ type bodyAnalyzer struct {
 	gt         *golang.GolangTopology
 	conn       map[golang.ConnectionKind][]string
 	varTypeMap map[string]golang.StructID
+	varIfaceMap map[string]golang.InterfaceID
 	callerID   golang.FunctionID
 	warnings   *map[string]domain.TopologyWarning
 	knownNames map[string]bool
@@ -22,13 +23,14 @@ type bodyAnalyzer struct {
 
 func newBodyAnalyzer(pr *ParseResult, gt *golang.GolangTopology, funcInput []golang.VariableDefinition, receiverName string, receiverStruct *golang.StructID, callerID golang.FunctionID, extraKnownNames []string) *bodyAnalyzer {
 	ba := &bodyAnalyzer{
-		pr:         pr,
-		gt:         gt,
-		conn:       make(map[golang.ConnectionKind][]string),
-		varTypeMap: make(map[string]golang.StructID),
-		callerID:   callerID,
-		warnings:   &gt.Warnings,
-		knownNames: make(map[string]bool),
+		pr:          pr,
+		gt:          gt,
+		conn:        make(map[golang.ConnectionKind][]string),
+		varTypeMap:  make(map[string]golang.StructID),
+		varIfaceMap: make(map[string]golang.InterfaceID),
+		callerID:    callerID,
+		warnings:    &gt.Warnings,
+		knownNames:  make(map[string]bool),
 	}
 
 	for name := range goBuiltins {
@@ -47,6 +49,9 @@ func newBodyAnalyzer(pr *ParseResult, gt *golang.GolangTopology, funcInput []gol
 				ba.varTypeMap[param.Name] = *sid
 			}
 		}
+		if iid := paramTypeNameToInterface(param.Typing, pr.PkgPath, pr.ImportMap, pr.ModulePath, gt); iid != nil {
+			ba.varIfaceMap[param.Name] = *iid
+		}
 	}
 
 	if receiverName != "" && receiverStruct != nil {
@@ -54,9 +59,36 @@ func newBodyAnalyzer(pr *ParseResult, gt *golang.GolangTopology, funcInput []gol
 		if _, ok := gt.Structs[*receiverStruct]; ok {
 			ba.varTypeMap[receiverName] = *receiverStruct
 		}
+		// also check if receiver is an interface (unusual but possible)
+		ifaceID := golang.InterfaceID(string(*receiverStruct))
+		if _, ok := gt.Interfaces[ifaceID]; ok {
+			ba.varIfaceMap[receiverName] = ifaceID
+		}
 	}
 
 	return ba
+}
+
+func paramTypeNameToInterface(typing string, pkgPath golang.PackagePath, importMap map[string]string, modulePath string, gt *golang.GolangTopology) *golang.InterfaceID {
+	t := strings.TrimPrefix(typing, "*")
+
+	var candidateIDs []golang.InterfaceID
+	if idx := strings.Index(t, "."); idx > 0 {
+		alias := t[:idx]
+		typeName := t[idx+1:]
+		if impPath, ok := importMap[alias]; ok && strings.HasPrefix(impPath, modulePath) {
+			candidateIDs = append(candidateIDs, golang.InterfaceID(impPath+"."+typeName))
+		}
+	} else {
+		candidateIDs = append(candidateIDs, golang.InterfaceID(string(pkgPath)+"."+t))
+	}
+
+	for _, id := range candidateIDs {
+		if _, ok := gt.Interfaces[id]; ok {
+			return &id
+		}
+	}
+	return nil
 }
 
 func paramTypeNameToStruct(typing string, pkgPath golang.PackagePath, importMap map[string]string, modulePath string) *golang.StructID {
@@ -117,6 +149,10 @@ func analyzeFunctionBody(body *ast.BlockStmt, pr *ParseResult, gt *golang.Golang
 			ba.resolveCompositeLit(node)
 		case *ast.Ident:
 			ba.resolveIdentRef(node)
+		case *ast.AssignStmt:
+			ba.resolveAssignStmt(node)
+		case *ast.DeclStmt:
+			ba.resolveDeclStmt(node)
 		}
 		return true
 	})
@@ -277,6 +313,56 @@ func (ba *bodyAnalyzer) resolveQualifiedCall(xName, selName string) {
 				}
 			}
 		}
+		// Not found as a direct method — check if any interface this struct implements has the method
+		if _, ok := ba.gt.Structs[structID]; ok {
+			for _, iface := range ba.gt.Interfaces {
+				if !isImplementedBy(iface, structID) {
+					continue
+				}
+				for _, reqMethod := range iface.Methods {
+					if reqMethod.Name == selName {
+						ba.add(golang.ConnUsesIface, string(iface.ID))
+						for _, implStructID := range iface.ImplementedBy() {
+							implStr, ok := ba.gt.Structs[implStructID]
+							if !ok {
+								continue
+							}
+							for _, mid := range implStr.Methods() {
+								m, ok := ba.gt.Functions[mid]
+								if ok && m.Name == selName {
+									ba.add(golang.ConnCalls, string(mid))
+								}
+							}
+						}
+						return
+					}
+				}
+			}
+		}
+		return
+	}
+
+	if ifaceID, ok := ba.varIfaceMap[xName]; ok {
+		if iface, ok := ba.gt.Interfaces[ifaceID]; ok {
+			for _, reqMethod := range iface.Methods {
+				if reqMethod.Name == selName {
+					ba.add(golang.ConnUsesIface, string(ifaceID))
+					for _, implStructID := range iface.ImplementedBy() {
+						implStr, ok := ba.gt.Structs[implStructID]
+						if !ok {
+							continue
+						}
+						for _, mid := range implStr.Methods() {
+							m, ok := ba.gt.Functions[mid]
+							if ok && m.Name == selName {
+								ba.add(golang.ConnCalls, string(mid))
+							}
+						}
+					}
+					return
+				}
+			}
+		}
 		return
 	}
 
@@ -291,6 +377,15 @@ func (ba *bodyAnalyzer) resolveQualifiedCall(xName, selName string) {
 			}
 		}
 	}
+}
+
+func isImplementedBy(iface golang.GolangInterface, structID golang.StructID) bool {
+	for _, implID := range iface.ImplementedBy() {
+		if implID == structID {
+			return true
+		}
+	}
+	return false
 }
 
 func (ba *bodyAnalyzer) resolveCompositeLit(lit *ast.CompositeLit) {
@@ -358,6 +453,160 @@ func (ba *bodyAnalyzer) resolveIdentRef(ident *ast.Ident) {
 	namedTypeID := golang.NamedTypeID(string(ba.pr.PkgPath) + "." + ident.Name)
 	if _, exists := ba.gt.NamedTypes[namedTypeID]; exists {
 		ba.add(golang.ConnUsesNamedType, string(namedTypeID))
+	}
+}
+
+func (ba *bodyAnalyzer) resolveAssignStmt(stmt *ast.AssignStmt) {
+	if stmt.Tok != token.DEFINE {
+		return
+	}
+	for i, lhs := range stmt.Lhs {
+		ident, ok := lhs.(*ast.Ident)
+		if !ok || ident.Name == "_" {
+			continue
+		}
+		if ba.knownNames[ident.Name] {
+			continue
+		}
+		ba.knownNames[ident.Name] = true
+
+		if i >= len(stmt.Rhs) {
+			continue
+		}
+		switch rhs := stmt.Rhs[i].(type) {
+		case *ast.CompositeLit:
+			ba.resolveCompositeLitAssign(ident.Name, rhs)
+		case *ast.UnaryExpr:
+			if rhs.Op == token.AND {
+				if compLit, ok := rhs.X.(*ast.CompositeLit); ok {
+					ba.resolveCompositeLitAssign(ident.Name, compLit)
+				}
+			}
+		case *ast.CallExpr:
+			ba.resolveCallExprAssign(ident.Name, rhs)
+		}
+	}
+}
+
+func (ba *bodyAnalyzer) resolveCompositeLitAssign(name string, lit *ast.CompositeLit) {
+	typ := lit.Type
+	if ile, ok := typ.(*ast.IndexListExpr); ok {
+		typ = ile.X
+	}
+	switch t := typ.(type) {
+	case *ast.Ident:
+		if ba.knownNames[t.Name] {
+			return
+		}
+		structID := golang.StructID(string(ba.pr.PkgPath) + "." + t.Name)
+		if _, exists := ba.gt.Structs[structID]; exists {
+			ba.varTypeMap[name] = structID
+			return
+		}
+		ifaceID := golang.InterfaceID(string(ba.pr.PkgPath) + "." + t.Name)
+		if _, exists := ba.gt.Interfaces[ifaceID]; exists {
+			ba.varIfaceMap[name] = ifaceID
+		}
+	case *ast.SelectorExpr:
+		if x, ok := t.X.(*ast.Ident); ok {
+			if impPath, ok := ba.pr.ImportMap[x.Name]; ok && strings.HasPrefix(impPath, ba.pr.ModulePath) {
+				internalPkg := golang.PackagePath(impPath)
+				structID := golang.StructID(string(internalPkg) + "." + t.Sel.Name)
+				if _, exists := ba.gt.Structs[structID]; exists {
+					ba.varTypeMap[name] = structID
+					return
+				}
+				ifaceID := golang.InterfaceID(string(internalPkg) + "." + t.Sel.Name)
+				if _, exists := ba.gt.Interfaces[ifaceID]; exists {
+					ba.varIfaceMap[name] = ifaceID
+				}
+			}
+		}
+	}
+}
+
+func (ba *bodyAnalyzer) resolveCallExprAssign(name string, call *ast.CallExpr) {
+	fun := call.Fun
+	if ile, ok := fun.(*ast.IndexListExpr); ok {
+		fun = ile.X
+	}
+
+	var funcID golang.FunctionID
+	switch fn := fun.(type) {
+	case *ast.Ident:
+		if ba.knownNames[fn.Name] {
+			return
+		}
+		funcID = golang.FunctionID(string(ba.pr.PkgPath) + "." + fn.Name)
+	case *ast.SelectorExpr:
+		if x, ok := fn.X.(*ast.Ident); ok {
+			if impPath, ok := ba.pr.ImportMap[x.Name]; ok && strings.HasPrefix(impPath, ba.pr.ModulePath) {
+				funcID = golang.FunctionID(impPath + "." + fn.Sel.Name)
+			}
+		}
+	default:
+		return
+	}
+
+	if funcID == "" {
+		return
+	}
+
+	targetFunc, ok := ba.gt.Functions[funcID]
+	if !ok {
+		return
+	}
+	if len(targetFunc.Output) == 0 {
+		return
+	}
+
+	returnType := targetFunc.Output[0].Typing
+	if returnType == "" {
+		return
+	}
+
+	if sid := paramTypeNameToStruct(returnType, ba.pr.PkgPath, ba.pr.ImportMap, ba.pr.ModulePath); sid != nil {
+		if _, ok := ba.gt.Structs[*sid]; ok {
+			ba.varTypeMap[name] = *sid
+			return
+		}
+	}
+
+	if iid := paramTypeNameToInterface(returnType, ba.pr.PkgPath, ba.pr.ImportMap, ba.pr.ModulePath, ba.gt); iid != nil {
+		ba.varIfaceMap[name] = *iid
+	}
+}
+
+func (ba *bodyAnalyzer) resolveDeclStmt(decl *ast.DeclStmt) {
+	genDecl, ok := decl.Decl.(*ast.GenDecl)
+	if !ok || genDecl.Tok != token.VAR {
+		return
+	}
+	for _, spec := range genDecl.Specs {
+		vs, ok := spec.(*ast.ValueSpec)
+		if !ok || vs.Type == nil {
+			continue
+		}
+		typeStr := exprToString(vs.Type)
+		if typeStr == "" {
+			continue
+		}
+		for _, name := range vs.Names {
+			if name.Name == "_" || ba.knownNames[name.Name] {
+				continue
+			}
+			ba.knownNames[name.Name] = true
+
+			if sid := paramTypeNameToStruct(typeStr, ba.pr.PkgPath, ba.pr.ImportMap, ba.pr.ModulePath); sid != nil {
+				if _, ok := ba.gt.Structs[*sid]; ok {
+					ba.varTypeMap[name.Name] = *sid
+					continue
+				}
+			}
+			if iid := paramTypeNameToInterface(typeStr, ba.pr.PkgPath, ba.pr.ImportMap, ba.pr.ModulePath, ba.gt); iid != nil {
+				ba.varIfaceMap[name.Name] = *iid
+			}
+		}
 	}
 }
 

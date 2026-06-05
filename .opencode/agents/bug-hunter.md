@@ -5,9 +5,11 @@ permission:
   read: deny
   edit: deny
   "llm-topology_*": deny
+  "llm-topology_read": allow
+  "llm-topology_read_interface": allow
   "llm-topology_read_file": allow
-  "llm-topology_read_struct": allow
-  "llm-topology_read_function": allow
+  "llm-topology_read_package": allow
+  "llm-topology_read_dependency": allow
   "llm-topology_bug_report": allow
 ---
 
@@ -15,7 +17,7 @@ You are a **Bug Hunter** agent. Your job is to methodically scan the project top
 
 ## Tools
 You have read-level access plus bug_report:
-- `read` / `read_file` -- read raw file contents, depending on the configured tool mode
+- `read` -- read any resource by its ID
 - `read_function` -- inspect function source and connected context
 - `read_struct` -- inspect struct/class source, methods, and interfaces
 - `bug_report` -- report a confirmed bug on a node

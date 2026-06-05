@@ -27,10 +27,18 @@ func WriteDb(topo *domain.Topology, path string) error {
 	}
 	defer tx.Rollback()
 
-	tx.Exec("DELETE FROM info")
-	tx.Exec("DELETE FROM resources")
-	tx.Exec("DELETE FROM connections")
-	tx.Exec("DELETE FROM warnings")
+	if _, err := tx.Exec("DELETE FROM info"); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("DELETE FROM resources"); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("DELETE FROM connections"); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("DELETE FROM warnings"); err != nil {
+		return err
+	}
 
 	if _, err := tx.Exec("INSERT INTO info VALUES ('root', ?)", topo.Root); err != nil {
 		return err
@@ -160,7 +168,6 @@ func ReadDb(path string) (*domain.Topology, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	for rows.Next() {
 		var key, val string
 		err = rows.Scan(&key, &val)
@@ -175,13 +182,15 @@ func ReadDb(path string) (*domain.Topology, error) {
 			topo.Errors[key[6:]] = val
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	rows.Close()
 
 	resRows, err := db.Query("SELECT id, kind, name, description, properties_json, starts_at, ends_at, loc_path FROM resources")
 	if err != nil {
 		return nil, err
 	}
-	defer resRows.Close()
 	for resRows.Next() {
 		var id, kind, name, desc, propsJSON, locPath string
 		var startsAt, endsAt int
@@ -204,13 +213,15 @@ func ReadDb(path string) (*domain.Topology, error) {
 		}
 		topo.Resources[id] = res
 	}
+	if err := resRows.Err(); err != nil {
+		return nil, err
+	}
 	resRows.Close()
 
 	connRows, err := db.Query("SELECT source_id, conn_type, target_id FROM connections ORDER BY source_id, conn_type")
 	if err != nil {
 		return nil, err
 	}
-	defer connRows.Close()
 	for connRows.Next() {
 		var sourceID, connType, targetID string
 		err = connRows.Scan(&sourceID, &connType, &targetID)
@@ -222,24 +233,30 @@ func ReadDb(path string) (*domain.Topology, error) {
 			topo.Resources[sourceID] = res
 		}
 	}
+	if err := connRows.Err(); err != nil {
+		return nil, err
+	}
 
 	warnRows, err := db.Query("SELECT id, source_id, kind, target_id, message FROM warnings")
-	if err == nil {
-		defer warnRows.Close()
-		for warnRows.Next() {
-			var id, sourceID, kind, targetID, message string
-			err = warnRows.Scan(&id, &sourceID, &kind, &targetID, &message)
-			if err != nil {
-				continue
-			}
-			topo.Warnings[id] = domain.TopologyWarning{
-				ID:       id,
-				SourceID: sourceID,
-				Kind:     domain.WarningKind(kind),
-				TargetID: targetID,
-				Message:  message,
-			}
+	if err != nil {
+		return nil, err
+	}
+	defer warnRows.Close()
+	for warnRows.Next() {
+		var id, sourceID, kind, targetID, message string
+		if err := warnRows.Scan(&id, &sourceID, &kind, &targetID, &message); err != nil {
+			return nil, err
 		}
+		topo.Warnings[id] = domain.TopologyWarning{
+			ID:       id,
+			SourceID: sourceID,
+			Kind:     domain.WarningKind(kind),
+			TargetID: targetID,
+			Message:  message,
+		}
+	}
+	if err := warnRows.Err(); err != nil {
+		return nil, err
 	}
 
 	return topo, nil
@@ -417,7 +434,9 @@ func toJSON(v interface{}) string {
 func fromJSONMap(s string) map[string]any {
 	var v map[string]any
 	if s != "" {
-		json.Unmarshal([]byte(s), &v)
+		if err := json.Unmarshal([]byte(s), &v); err != nil {
+			v = make(map[string]any)
+		}
 	}
 	if v == nil {
 		v = make(map[string]any)
@@ -428,7 +447,7 @@ func fromJSONMap(s string) map[string]any {
 func CleanupOrphanedBugs(dbPath string, topo *domain.Topology) error {
 	bugs, err := ReadBugs(dbPath, "", "")
 	if err != nil {
-		return nil
+		return err
 	}
 	for _, bug := range bugs {
 		if _, ok := topo.Resources[bug.NodeID]; !ok {

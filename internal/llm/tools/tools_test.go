@@ -17,15 +17,15 @@ func TestNewRegistry(t *testing.T) {
 
 func TestRegisterAndGet(t *testing.T) {
 	r := NewRegistry()
-	tool := &ReadFile{}
+	tool := &Read{}
 	r.Register(tool)
 
-	got, ok := r.Get("read_file")
+	got, ok := r.Get("read")
 	if !ok {
 		t.Fatal("expected tool to be found")
 	}
-	if got.Name() != "read_file" {
-		t.Errorf("expected name 'read_file', got %q", got.Name())
+	if got.Name() != "read" {
+		t.Errorf("expected name 'read', got %q", got.Name())
 	}
 }
 
@@ -39,7 +39,7 @@ func TestGetNonexistent(t *testing.T) {
 
 func TestListTools(t *testing.T) {
 	r := NewRegistry()
-	r.Register(&ReadFile{})
+	r.Register(&Read{})
 	r.Register(&Ls{})
 
 	list := r.List()
@@ -49,19 +49,19 @@ func TestListTools(t *testing.T) {
 }
 
 func TestToolInterface(t *testing.T) {
-	var tool Tool = &ReadFile{}
-	if tool.Name() != "read_file" {
+	var tool Tool = &Read{}
+	if tool.Name() != "read" {
 		t.Errorf("unexpected name: %q", tool.Name())
 	}
 	if tool.Description() == "" {
 		t.Error("expected non-empty description")
 	}
 	params := tool.Parameters()
-	if len(params) != 1 || params[0].Name != "file_path" {
+	if len(params) != 1 || params[0].Name != "resource_id" {
 		t.Errorf("unexpected parameters: %+v", params)
 	}
 	if !params[0].Required {
-		t.Error("expected file_path to be required")
+		t.Error("expected resource_id to be required")
 	}
 }
 
@@ -95,31 +95,18 @@ func TestLsToolInterface(t *testing.T) {
 	}
 }
 
-func TestReadFileRun(t *testing.T) {
-	tool := &ReadFile{}
-
-	args, _ := json.Marshal(map[string]string{"file_path": "nonexistent_file.go"})
-	result, err := tool.Run(args)
-	if err == nil {
-		t.Error("expected error for nonexistent file")
-	}
-	if result != "" {
-		t.Errorf("expected empty result on error, got %q", result)
-	}
-}
-
-func TestReadFileRunMissingArg(t *testing.T) {
-	tool := &ReadFile{}
+func TestReadRunMissingArg(t *testing.T) {
+	tool := &Read{}
 
 	args, _ := json.Marshal(map[string]string{})
 	_, err := tool.Run(args)
 	if err == nil {
-		t.Error("expected error for missing file_path")
+		t.Error("expected error for missing resource_id")
 	}
 }
 
-func TestReadFileRunInvalidJSON(t *testing.T) {
-	tool := &ReadFile{}
+func TestReadRunInvalidJSON(t *testing.T) {
+	tool := &Read{}
 
 	_, err := tool.Run(json.RawMessage("{invalid}"))
 	if err == nil {
