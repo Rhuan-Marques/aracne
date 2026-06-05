@@ -897,6 +897,275 @@ class y:
 	// as a dep (os is external to the project)
 }
 
+// TestResolveBodyCallRefs_localAssignmentAndMethodCall
+// Verifies: x = SomeClass(); x.method() produces ConnCalls + ConnUsesClass
+func TestResolveBodyCallRefs_localAssignmentAndMethodCall(t *testing.T) {
+	pr := &ParseResult{
+		PkgPath:    "mypkg",
+		ModuleRoot: "testdata",
+	}
+	gt := &python.PythonTopology{
+		Functions: map[python.FunctionID]python.PythonFunction{
+			"mypkg.MyClass.method": {ID: "mypkg.MyClass.method", Name: "method", MethodFrom: pkgPtr("mypkg.MyClass")},
+		},
+		Classes: map[python.ClassID]python.PythonClass{
+			"mypkg.MyClass": {
+				ID:   "mypkg.MyClass",
+				Name: "MyClass",
+				Connections: map[python.ConnectionKind][]string{
+					python.ConnHasMethod: {"mypkg.MyClass.method"},
+				},
+			},
+		},
+		ExternalVars: make(map[python.ExternalVarID]python.PythonExternalVar),
+	}
+
+	var gotCalls []string
+	var gotClasses []string
+	add := func(kind python.ConnectionKind, id string) {
+		switch kind {
+		case python.ConnCalls:
+			gotCalls = append(gotCalls, id)
+		case python.ConnUsesClass:
+			gotClasses = append(gotClasses, id)
+		}
+	}
+
+	bodyCalls := []pyBodyCall{
+		{ObjectName: "x", MethodName: "method", Func: "x.method", LineNo: 2},
+	}
+	bodyAssigns := []pyBodyAssign{
+		{Name: "x", ValueType: "MyClass", LineNo: 1},
+	}
+	funcInput := []python.VariableDefinition{}
+
+	resolveBodyCallRefs(bodyCalls, bodyAssigns, pr, gt, add, funcInput)
+
+	if len(gotClasses) != 1 || gotClasses[0] != "mypkg.MyClass" {
+		t.Errorf("expected ConnUsesClass to mypkg.MyClass, got %v", gotClasses)
+	}
+	if len(gotCalls) != 1 || gotCalls[0] != "mypkg.MyClass.method" {
+		t.Errorf("expected ConnCalls to mypkg.MyClass.method, got %v", gotCalls)
+	}
+}
+
+// TestResolveBodyCallRefs_paramTypeAnnotation
+// Verifies: a parameter with type annotation resolves method calls
+func TestResolveBodyCallRefs_paramTypeAnnotation(t *testing.T) {
+	pr := &ParseResult{
+		PkgPath:    "mypkg",
+		ModuleRoot: "testdata",
+	}
+	gt := &python.PythonTopology{
+		Functions: map[python.FunctionID]python.PythonFunction{
+			"mypkg.MyService.Run": {ID: "mypkg.MyService.Run", Name: "Run", MethodFrom: pkgPtr("mypkg.MyService")},
+		},
+		Classes: map[python.ClassID]python.PythonClass{
+			"mypkg.MyService": {
+				ID:   "mypkg.MyService",
+				Name: "MyService",
+				Connections: map[python.ConnectionKind][]string{
+					python.ConnHasMethod: {"mypkg.MyService.Run"},
+				},
+			},
+		},
+		ExternalVars: make(map[python.ExternalVarID]python.PythonExternalVar),
+	}
+
+	var gotCalls []string
+	var gotClasses []string
+	add := func(kind python.ConnectionKind, id string) {
+		switch kind {
+		case python.ConnCalls:
+			gotCalls = append(gotCalls, id)
+		case python.ConnUsesClass:
+			gotClasses = append(gotClasses, id)
+		}
+	}
+
+	bodyCalls := []pyBodyCall{
+		{ObjectName: "svc", MethodName: "Run", Func: "svc.Run", LineNo: 1},
+	}
+	bodyAssigns := []pyBodyAssign{}
+	funcInput := []python.VariableDefinition{
+		{Name: "svc", Typing: "MyService"},
+	}
+
+	resolveBodyCallRefs(bodyCalls, bodyAssigns, pr, gt, add, funcInput)
+
+	if len(gotClasses) != 1 || gotClasses[0] != "mypkg.MyService" {
+		t.Errorf("expected ConnUsesClass to mypkg.MyService, got %v", gotClasses)
+	}
+	if len(gotCalls) != 1 || gotCalls[0] != "mypkg.MyService.Run" {
+		t.Errorf("expected ConnCalls to mypkg.MyService.Run, got %v", gotCalls)
+	}
+}
+
+// TestResolveBodyCallRefs_unknownVariableNoConnection
+// Verifies: calling a method on an unknown local variable produces no connections
+func TestResolveBodyCallRefs_unknownVariableNoConnection(t *testing.T) {
+	pr := &ParseResult{
+		PkgPath:    "mypkg",
+		ModuleRoot: "testdata",
+	}
+	gt := &python.PythonTopology{
+		Functions:    make(map[python.FunctionID]python.PythonFunction),
+		Classes:      make(map[python.ClassID]python.PythonClass),
+		ExternalVars: make(map[python.ExternalVarID]python.PythonExternalVar),
+	}
+
+	var count int
+	add := func(_ python.ConnectionKind, _ string) { count++ }
+
+	bodyCalls := []pyBodyCall{
+		{ObjectName: "unknown", MethodName: "nope", Func: "unknown.nope", LineNo: 1},
+	}
+	bodyAssigns := []pyBodyAssign{}
+	funcInput := []python.VariableDefinition{}
+
+	resolveBodyCallRefs(bodyCalls, bodyAssigns, pr, gt, add, funcInput)
+
+	if count != 0 {
+		t.Errorf("expected no connections for unknown variable, got %d", count)
+	}
+}
+
+// TestResolveBodyCallRefs_directFunctionCall
+// Verifies: direct function calls (no receiver) in body calls are resolved
+func TestResolveBodyCallRefs_directFunctionCall(t *testing.T) {
+	pr := &ParseResult{
+		PkgPath:    "mypkg",
+		ModuleRoot: "testdata",
+	}
+	gt := &python.PythonTopology{
+		Functions: map[python.FunctionID]python.PythonFunction{
+			"mypkg.helper": {ID: "mypkg.helper", Name: "helper"},
+		},
+		Classes:      make(map[python.ClassID]python.PythonClass),
+		ExternalVars: make(map[python.ExternalVarID]python.PythonExternalVar),
+	}
+
+	var gotCalls []string
+	add := func(kind python.ConnectionKind, id string) {
+		if kind == python.ConnCalls {
+			gotCalls = append(gotCalls, id)
+		}
+	}
+
+	bodyCalls := []pyBodyCall{
+		{ObjectName: "", MethodName: "", Func: "helper", LineNo: 1},
+	}
+	bodyAssigns := []pyBodyAssign{}
+	funcInput := []python.VariableDefinition{}
+
+	resolveBodyCallRefs(bodyCalls, bodyAssigns, pr, gt, add, funcInput)
+
+	if len(gotCalls) != 1 || gotCalls[0] != "mypkg.helper" {
+		t.Errorf("expected ConnCalls to mypkg.helper, got %v", gotCalls)
+	}
+}
+
+func pkgPtr(s string) *python.ClassID {
+	id := python.ClassID(s)
+	return &id
+}
+
+// TestBodyCallRefs_endToEnd verifies local variable method calls via ParseFile + Scan
+func TestBodyCallRefs_endToEnd(t *testing.T) {
+	if !hasPython() {
+		t.Skip("python not available")
+	}
+
+	code := `
+class MyService:
+    def run(self) -> str:
+        return "done"
+
+def process():
+    svc = MyService()
+    svc.run()
+`
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test_service.py")
+	if err := os.WriteFile(filePath, []byte(code), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	pkgName := filepath.Base(tmpDir)
+
+	s := NewPythonScanner()
+	topo, err := s.Scan(tmpDir)
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
+
+	funcID := pkgName + ".process"
+	res, ok := topo.Resources[funcID]
+	if !ok {
+		t.Fatalf("function %q not found, keys: %v", funcID, resourceKeys(topo))
+	}
+
+	calls := res.Connections["calls"]
+	usesClass := res.Connections["uses_class"]
+
+	if !containsSuffix(calls, ".MyService.run") {
+		t.Errorf("expected ConnCalls to MyService.run, got calls=%v", calls)
+	}
+	if !containsSuffix(usesClass, ".MyService") {
+		t.Errorf("expected ConnUsesClass to MyService, got uses_class=%v", usesClass)
+	}
+}
+
+// TestBodyCallRefs_chainedAssignment verifies assignment from constructor return type
+// e.g., x = some_func() where some_func returns a class instance
+func TestBodyCallRefs_chainedAssignment(t *testing.T) {
+	if !hasPython() {
+		t.Skip("python not available")
+	}
+
+	code := `
+class MyService:
+    def run(self) -> str:
+        return "done"
+
+def new_service() -> MyService:
+    return MyService()
+
+def process():
+    svc = new_service()
+    svc.run()
+`
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test_chain.py")
+	if err := os.WriteFile(filePath, []byte(code), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	pkgName := filepath.Base(tmpDir)
+
+	s := NewPythonScanner()
+	topo, err := s.Scan(tmpDir)
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
+
+	funcID := pkgName + ".process"
+	res, ok := topo.Resources[funcID]
+	if !ok {
+		t.Fatalf("function %q not found, keys: %v", funcID, resourceKeys(topo))
+	}
+
+	calls := res.Connections["calls"]
+
+	// Should resolve: new_service() as a call, and svc.run() as a method call on MyService
+	if !containsSuffix(calls, ".new_service") {
+		t.Errorf("expected ConnCalls to new_service, got calls=%v", calls)
+	}
+	if !containsSuffix(calls, ".MyService.run") {
+		t.Errorf("expected ConnCalls to MyService.run, got calls=%v", calls)
+	}
+}
+
 // helpers
 
 func hasPython() bool {

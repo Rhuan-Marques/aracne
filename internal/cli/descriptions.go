@@ -233,7 +233,7 @@ func chunkDescriptionResources(resources []descriptionResource, batchSize int) [
 func descriptionExecutorInput(batch []descriptionResource) string {
 	var b strings.Builder
 	b.WriteString("Process only the assigned resources below. Do not discover or update any other resource.\n\n")
-	b.WriteString("For each resource, call read_resource_and_cut with the exact ID and Kind shown as resource_name, manually write a concise description, then call update_description immediately.\n\n")
+	b.WriteString("For each resource, call read with the resource_id, manually write a concise description, then call update_description immediately.\n\n")
 	b.WriteString("Assigned resources:\n\n")
 	for _, res := range batch {
 		b.WriteString(fmt.Sprintf("- ID: %s\n  Name: %s\n  Kind: %s\n\n", res.ID, res.Name, res.Kind))

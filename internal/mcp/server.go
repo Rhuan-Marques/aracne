@@ -80,6 +80,9 @@ func (s *Server) handleInitialize(id *int) *Response {
 
 // Handles the MCP tools/list request: enumerates all registered tools, builds their JSON Schema parameter definitions, and returns the tool list.
 func (s *Server) handleListTools(id *int) *Response {
+	if id == nil {
+		return nil
+	}
 	allTools := s.registry.List()
 	list := make([]Tool, 0, len(allTools))
 	for _, t := range allTools {
@@ -110,6 +113,9 @@ func (s *Server) handleListTools(id *int) *Response {
 
 // Handles the MCP tools/call request: looks up the tool by name in the registry, executes it with the provided arguments, and returns the result or an error response.
 func (s *Server) handleCallTool(id *int, params json.RawMessage) *Response {
+	if id == nil {
+		return nil
+	}
 	var call CallToolParams
 	if err := json.Unmarshal(params, &call); err != nil {
 		return s.errorResponse(id, -32602, "Invalid params")

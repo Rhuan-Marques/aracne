@@ -41,11 +41,17 @@ type ToolModes struct {
 	Other OtherToolMode `json:"other"`
 }
 
+type ScannerConfig struct {
+	UpdateFrequency int `json:"update_frequency"`
+}
+
 type Config struct {
-	ScanMode        ScanMode              `json:"scan_mode"`
-	ToolModes       ToolModes             `json:"tool_modes"`
-	DescribeTargets []domain.ResourceKind `json:"describe_targets"`
-	MaxFileSize     int64                 `json:"max_file_size,omitempty"`
+	ScanMode        ScanMode                       `json:"scan_mode"`
+	ToolModes       ToolModes                      `json:"tool_modes"`
+	DescribeTargets []domain.ResourceKind          `json:"describe_targets"`
+	ReadSplit   map[domain.ResourceKind]bool   `json:"read_split,omitempty"`
+	MaxFileSize     int64                          `json:"max_file_size,omitempty"`
+	Scanner         ScannerConfig                  `json:"scanner"`
 }
 
 func (c *Config) EffectiveMaxFileSize() int64 {
@@ -74,7 +80,7 @@ func DefaultDescribeTargets() []domain.ResourceKind {
 }
 
 func DefaultConfig() *Config {
-	return &Config{ScanMode: ScanModeDefault, ToolModes: DefaultToolModes(), DescribeTargets: DefaultDescribeTargets(), MaxFileSize: 512 * 1024}
+	return &Config{ScanMode: ScanModeDefault, ToolModes: DefaultToolModes(), DescribeTargets: DefaultDescribeTargets(), MaxFileSize: 512 * 1024, Scanner: ScannerConfig{UpdateFrequency: 200}}
 }
 
 func LoadConfig(path string) *Config {
@@ -106,6 +112,12 @@ func LoadConfig(path string) *Config {
 	}
 	if loaded.MaxFileSize > 0 {
 		cfg.MaxFileSize = loaded.MaxFileSize
+	}
+	if loaded.ReadSplit != nil {
+		cfg.ReadSplit = loaded.ReadSplit
+	}
+	if loaded.Scanner.UpdateFrequency > 0 {
+		cfg.Scanner.UpdateFrequency = loaded.Scanner.UpdateFrequency
 	}
 	return cfg
 }

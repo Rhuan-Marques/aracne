@@ -38,6 +38,50 @@ def is_abstract(decorators):
             return True
     return False
 
+def extract_body_calls(body):
+    calls = []
+    for stmt in body:
+        for node in ast.walk(stmt):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                if isinstance(node.func.value, ast.Name):
+                    calls.append({
+                        'object_name': node.func.value.id,
+                        'method_name': node.func.attr,
+                        'func': expr_str(node.func),
+                        'lineno': node.lineno,
+                    })
+            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                calls.append({
+                    'object_name': '',
+                    'method_name': '',
+                    'func': node.func.id,
+                    'lineno': node.lineno,
+                })
+    return calls
+
+def extract_local_assignments(body):
+    assignments = []
+    for stmt in body:
+        t = type(stmt).__name__
+        if t == 'Assign':
+            for target in stmt.targets:
+                if isinstance(target, ast.Name):
+                    v = expr_str(stmt.value)
+                    assignments.append({
+                        'name': target.id,
+                        'value_type': v,
+                        'lineno': stmt.lineno,
+                    })
+        elif t == 'AnnAssign':
+            if stmt.target and isinstance(stmt.target, ast.Name):
+                v = expr_str(stmt.value) if stmt.value else ''
+                assignments.append({
+                    'name': stmt.target.id,
+                    'value_type': expr_str(stmt.annotation),
+                    'lineno': stmt.lineno,
+                })
+    return assignments
+
 def extract_body(body, parent, import_map):
     functions = []
     classes = []
@@ -96,6 +140,8 @@ def parse_func(node, parent, import_map):
         'lineno': node.lineno,
         'end_lineno': getattr(node, 'end_lineno', node.lineno),
         'parent': parent,
+        'body_calls': extract_body_calls(node.body),
+        'body_assignments': extract_local_assignments(node.body),
     }
 
 def parse_class(node, import_map):

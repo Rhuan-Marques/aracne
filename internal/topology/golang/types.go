@@ -144,6 +144,52 @@ type GoNamedTypeContext struct {
 	Blocks       []ContextBlock
 }
 
+// Wraps a GolangFile with its raw source code cut for context display.
+type FileCut struct {
+	GolangFile
+	Cut string
+}
+
+// Wraps a GolangPackage with its raw source code cut for context display.
+type PackageCut struct {
+	GolangPackage
+	Cut string
+}
+
+// Holds the complete enriched context of a Go file: the file source cut, its package, all functions/structs/interfaces/named types/vars defined in it, and imports.
+type GoFileContext struct {
+	File         *FileCut
+	FromPackage  PackagePath
+	Functions    []SimplifiedFunction
+	Structs      []StructUsage
+	Interfaces   []SimplifiedInterface
+	NamedTypes   []ResourceUsage
+	ExtVars      []SimplifiedExtVar
+	Imports      []PackagePath
+	Dependencies []DependancyPath
+	Blocks       []ContextBlock
+}
+
+// Holds the complete enriched context of a Go package: its path, all files/functions/structs/interfaces/named types/vars in it.
+type GoPackageContext struct {
+	Package      *PackageCut
+	Files        []FileID
+	Functions    []SimplifiedFunction
+	Structs      []StructUsage
+	Interfaces   []SimplifiedInterface
+	NamedTypes   []ResourceUsage
+	ExtVars      []SimplifiedExtVar
+	Dependencies []DependancyPath
+	Blocks       []ContextBlock
+}
+
+// Holds the complete enriched context of a Go dependency: all resources that reference it.
+type GoDependencyContext struct {
+	Dependency DependancyPath
+	UsedBy     []ResourceUsage
+	Blocks     []ContextBlock
+}
+
 // Represents a warning emitted during topology updates when functions are removed or signatures change, containing the affected resource kind, function IDs, and a human-readable message.
 type TopologyWarning struct {
 	Resource          domain.ResourceKind
