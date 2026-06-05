@@ -77,6 +77,51 @@ type PythonClassContext struct {
 	Blocks       []ContextBlock
 }
 
+type ModuleCut struct {
+	PythonModule
+	Cut string
+}
+
+type PackageCut struct {
+	PythonPackage
+	Cut string
+}
+
+type PythonModuleContext struct {
+	Module       *ModuleCut
+	FromPackage  PackagePath
+	Functions    []SimplifiedFunction
+	Classes      []ClassUsage
+	ExtVars      []SimplifiedExtVar
+	Imports      []PackagePath
+	Dependencies []DependancyPath
+	Blocks       []ContextBlock
+}
+
+type PythonPackageContext struct {
+	Package      *PackageCut
+	Files        []ModuleID
+	Functions    []SimplifiedFunction
+	Classes      []ClassUsage
+	ExtVars      []SimplifiedExtVar
+	Dependencies []DependancyPath
+	Blocks       []ContextBlock
+}
+
+type PythonDependencyContext struct {
+	Dependency DependancyPath
+	UsedBy     []ResourceUsage
+	Blocks     []ContextBlock
+}
+
+type ResourceUsage struct {
+	ID          string
+	Kind        domain.ResourceKind
+	Name        string
+	Description string
+	Location    domain.Location
+}
+
 type TopologyWarning struct {
 	Resource          domain.ResourceKind
 	AffectedFunctions []FunctionID

@@ -16,7 +16,7 @@ func TestDescriptionsExecutorProfileIsLimited(t *testing.T) {
 		allowed[tool] = true
 	}
 
-	for _, want := range []string{"read_file", "read_struct", "read_function", "read_resource_and_cut", "update_description"} {
+	for _, want := range []string{"read", "read_struct", "read_function", "update_description"} {
 		if !allowed[want] {
 			t.Fatalf("executor profile missing %q in %v", want, tools)
 		}
@@ -58,7 +58,7 @@ func TestChunkDescriptionResourcesUsesBatchesOfRequestedSize(t *testing.T) {
 
 func TestDescriptionExecutorInputConstrainsAssignedResources(t *testing.T) {
 	input := descriptionExecutorInput([]descriptionResource{{ID: "fn:one", Name: "One", Kind: domain.ResourceFunction}})
-	for _, want := range []string{"Process only the assigned resources", "read_resource_and_cut", "update_description", "fn:one", "Kind: function"} {
+	for _, want := range []string{"Process only the assigned resources", "read", "update_description", "fn:one", "Kind: function"} {
 		if !strings.Contains(input, want) {
 			t.Fatalf("executor input missing %q:\n%s", want, input)
 		}

@@ -4,7 +4,7 @@ func BugJudgePrompt() string {
 	return `You are a **Bug Judge** agent. Your job is to triage pending bugs for a specific node by comparing them against dismissed bugs (examples of false positives).
 
 ## Tools
-- ` + "`" + `read` + "`" + ` / ` + "`" + `read_file` + "`" + ` -- read raw file contents, depending on the configured tool mode
+- ` + "`" + `read` + "`" + ` -- read any resource by its ID
 - ` + "`" + `read_function` + "`" + ` -- inspect function code when you need to verify a bug claim
 - ` + "`" + `read_struct` + "`" + ` -- inspect struct/class code when you need to verify a bug claim
 - ` + "`" + `bug_list` + "`" + ` -- list bugs by node and/or state
@@ -41,6 +41,6 @@ If the bug is real and could cause incorrect behavior, security issues, or crash
 }
 
 func BugJudgeAgentContent() string {
-	return "---\nname: bug-judge\ndescription: Triages pending bugs by comparing against dismissed bug patterns\ntools: read_file, read_function, read_struct, bug_list, bug_acknowledge, bug_dismiss, bug_delete\n---\n\n" +
+	return "---\nname: bug-judge\ndescription: Triages pending bugs by comparing against dismissed bug patterns\ntools: read, read_function, read_struct, bug_list, bug_acknowledge, bug_dismiss, bug_delete\n---\n\n" +
 		BugJudgePrompt()
 }

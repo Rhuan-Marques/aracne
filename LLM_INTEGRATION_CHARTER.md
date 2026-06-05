@@ -22,7 +22,7 @@ There are three integration modes sharing the same topology engine. All must mai
 ### Mode A: Full CLI Integration
 - Direct terminal usage via `ltp` subcommands
 - No LLM involved — all topology operations via CLI flags
-- Commands: `scan`, `read_function`, `read_struct`, `read-resource-and-cut`, `update-description`, `node list`, `update-file`, `generate-descriptions`
+- Commands: `scan`, `read`, `update-description`, `node list`, `update-file`, `generate-descriptions`
 
 ### Mode B: MCP Server (`ltp serve`)
 - Exposes all topology tools as MCP (Model Context Protocol) tools over stdio
@@ -56,7 +56,6 @@ The topology is a **directed graph**. Resources have:
 1. Use `ls` to understand the project file layout
 2. Use **named lookups** (`read_function`, `read_struct`) to get a resource's full context
 3. Use `read` for raw file contents when you need to see surrounding code
-4. Use `read_resource_and_cut` to get a precise source cut for a resource by its ID
 
 **Critical: Prefer `read_function` / `read_struct` over `read`.** These tools return not just the source code but also the interconnected context: called functions, related structs, interfaces, external variables, and dependencies. This rich context is more valuable than raw file contents.
 
@@ -116,8 +115,8 @@ When asked to document the project or generate descriptions:
 2. Split the list into deterministic batches of at most 20 resources
 3. Assign each batch to a **descriptions-generation-executor** sub-agent when subagents are available. Each executor:
    - Receives only its assigned IDs, names, and kinds
-   - Calls `read_resource_and_cut` with each assigned resource's ID and kind
-   - Reads the source code and type-specific instructions
+   - Calls `read` with each assigned resource's ID
+   - Reads the source code
    - Manually generates a concise description (1-3 lines for functions/structs/interfaces, 1 line for variables/files/packages)
    - Calls `update_description` to persist it
    - Returns completed and failed IDs
@@ -138,10 +137,9 @@ When asked to document the project or generate descriptions:
 | Tool | When to Use |
 |------|-------------|
 | `ls` | Start here — explore project structure |
-| `read` | Only when you need raw file contents the topology doesn't provide |
-| `read_function` | Investigate a function by name — preferred over `read` |
-| `read_struct` | Investigate a struct by name — preferred over `read` |
-| `read_resource_and_cut` | Get precise source cut + description instructions for any resource (by ID) |
+| `read` | Read any resource by its ID — topology-aware, detects kind automatically |
+| `read_function` | Investigate a function by name — preferred over `read` for rich context |
+| `read_struct` | Investigate a struct by name — preferred over `read` for rich context |
 | `update_description` | Persist a generated description |
 | `node_list_no_description` | Before generating descriptions |
 | `edit` | Make code changes (topology auto-updates) |

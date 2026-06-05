@@ -13,7 +13,8 @@ Usage:
   ltp descriptions generate [flags]  Generate descriptions for targeted undocumented resources
   ltp descriptions apply            Write topology descriptions back into source as doc comments
   ltp descriptions clear [flags]    Clear stored topology descriptions
-  ltp read <resource-id>   Read a resource (function, struct, file, etc.) by its ID; falls back to raw file read if not in topology
+  ltp read [--kind <kind>] <resource-id>   Read a resource by ID; --kind forces exact kind (function, method, type, named_type, interface, variable, file, package, dependency)
+  ltp search <string>      Search resource IDs and names, printing matching IDs one per line
   ltp update-file <path>  Re-parse a file and update the topology database (--db to specify db path)
   ltp read-resource-and-cut <id> <kind>  Get a resource's source code cut (kind: Function, Struct, Interface, ExternalVar, File, Package)
   ltp update-description <id> <kind> <desc>  Update a resource's description in the topology DB

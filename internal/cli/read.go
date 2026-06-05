@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"ltp/internal/helper"
 	"ltp/internal/llm/languages/gotools"
@@ -18,59 +19,133 @@ import (
 
 func RunRead() {
 	args := os.Args[2:]
-	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "Usage: ltp read <resource-id>")
-		fmt.Fprintln(os.Stderr, "Examples:")
-		fmt.Fprintln(os.Stderr, "  ltp read internal/cli/read.go")
-		fmt.Fprintln(os.Stderr, "  ltp read ltp/internal/topology/golang.(GoManager).ReadFunction")
-		fmt.Fprintln(os.Stderr, "  ltp read ltp/internal/topology/golang.GoManager")
+	id, forcedKind, parseErr := parseReadArgs(args)
+	if parseErr != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", parseErr)
+		printReadUsage()
 		os.Exit(1)
 	}
-	id := args[0]
+
+	id = helper.NormalizeResourceID(id)
 
 	manager, _ := InitRegistry(".ltp/topology.db")
 
 	topo, err := manager.ReadAll()
 	if err != nil {
+		if forcedKind != "" {
+			fmt.Fprintf(os.Stderr, "Error: The %s %s does not exist\n", forcedKind, id)
+			os.Exit(1)
+		}
 		readRawFile(manager, id)
 		return
 	}
 
-	res, ok := topo.Resources[id]
+	res, resourceID, ok := findReadResource(topo, id)
 	if !ok {
-		absPath, absErr := filepath.Abs(id)
-		if absErr == nil {
-			if fr, found := topo.Resources[absPath]; found && fr.Kind == domain.ResourceFile {
-				readFileWithContext(manager, topo, &fr, absPath)
-				return
-			}
+		if forcedKind != "" {
+			fmt.Fprintf(os.Stderr, "Error: The %s %s does not exist\n", forcedKind, id)
+			os.Exit(1)
 		}
 		readRawFile(manager, id)
 		return
+	}
+
+	if forcedKind != "" && res.Kind != forcedKind {
+		fmt.Fprintf(os.Stderr, "Error: The %s %s does not exist. Did you mean to read the %s %s?\n", forcedKind, id, res.Kind, resourceID)
+		os.Exit(1)
 	}
 
 	lang := GetLanguage(manager)
 
 	switch res.Kind {
 	case domain.ResourceFunction, domain.ResourceMethod:
-		readAsFunction(manager, lang, id)
+		readAsFunction(manager, lang, resourceID)
 	case domain.ResourceType:
-		readAsStruct(manager, lang, id)
+		readAsStruct(manager, lang, resourceID)
 	case domain.ResourceInterface:
-		readAsInterface(manager, lang, id)
+		readAsInterface(manager, lang, resourceID)
 	case domain.ResourceNamedType:
-		readAsNamedType(manager, lang, id)
+		readAsNamedType(manager, lang, resourceID)
 	case domain.ResourceFile:
-		readFileWithContext(manager, topo, &res, id)
+		readFileWithContext(manager, topo, &res, resourceID)
 	case domain.ResourceVariable:
-		readAsVariable(manager, topo, lang, id)
+		readAsVariable(manager, topo, lang, resourceID)
 	case domain.ResourceDependency:
-		readAsDependency(manager, topo, lang, id)
+		readAsDependency(manager, topo, lang, resourceID)
 	case domain.ResourcePackage:
-		readPackageContext(manager, topo, lang, id)
+		readPackageContext(manager, topo, lang, resourceID)
 	default:
-		readAsCut(manager, lang, id, res.Kind)
+		readAsCut(manager, lang, resourceID, res.Kind)
 	}
+}
+
+func parseReadArgs(args []string) (string, domain.ResourceKind, error) {
+	if len(args) < 1 {
+		return "", "", fmt.Errorf("missing resource ID")
+	}
+
+	var id string
+	var forcedKind domain.ResourceKind
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--kind":
+			if i+1 >= len(args) {
+				return "", "", fmt.Errorf("--kind requires a value")
+			}
+			kind := MapResourceKind(args[i+1])
+			if kind == "" {
+				return "", "", fmt.Errorf("unknown resource kind %q", args[i+1])
+			}
+			forcedKind = kind
+			i++
+		case strings.HasPrefix(arg, "--kind="):
+			value := strings.TrimPrefix(arg, "--kind=")
+			kind := MapResourceKind(value)
+			if kind == "" {
+				return "", "", fmt.Errorf("unknown resource kind %q", value)
+			}
+			forcedKind = kind
+		case strings.HasPrefix(arg, "-"):
+			return "", "", fmt.Errorf("unknown flag %q", arg)
+		default:
+			if id != "" {
+				return "", "", fmt.Errorf("unexpected extra argument %q", arg)
+			}
+			id = arg
+		}
+	}
+
+	if id == "" {
+		return "", "", fmt.Errorf("missing resource ID")
+	}
+	return id, forcedKind, nil
+}
+
+func printReadUsage() {
+	fmt.Fprintln(os.Stderr, "Usage: ltp read [--kind <kind>] <resource-id>")
+	fmt.Fprintln(os.Stderr, "Kinds: function, method, type, named_type, interface, variable, file, package, dependency")
+	fmt.Fprintln(os.Stderr, "Examples:")
+	fmt.Fprintln(os.Stderr, "  ltp read internal/cli/read.go")
+	fmt.Fprintln(os.Stderr, "  ltp read --kind function ltp/internal/topology/golang.(GoManager).ReadFunction")
+	fmt.Fprintln(os.Stderr, "  ltp read ltp/internal/topology/golang.GoManager --kind type")
+}
+
+func findReadResource(topo *domain.Topology, id string) (domain.Resource, string, bool) {
+	res, ok := topo.Resources[id]
+	if ok {
+		return res, id, true
+	}
+
+	absPath, absErr := filepath.Abs(id)
+	if absErr == nil {
+		if fr, found := topo.Resources[absPath]; found && fr.Kind == domain.ResourceFile {
+			return fr, absPath, true
+		}
+	}
+
+	return domain.Resource{}, "", false
 }
 
 func readRawFile(mgr *topology.TopologyManager, path string) {

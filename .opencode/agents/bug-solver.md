@@ -5,18 +5,20 @@ permission:
   read: deny
   edit: deny
   "llm-topology_*": deny
-  "llm-topology_read_file": allow
+  "llm-topology_read": allow
   "llm-topology_edit": allow
   "llm-topology_write": allow
-  "llm-topology_read_struct": allow
-  "llm-topology_read_function": allow
+  "llm-topology_read_interface": allow
+  "llm-topology_read_file": allow
+  "llm-topology_read_package": allow
+  "llm-topology_read_dependency": allow
   "llm-topology_bug_delete": allow
 ---
 
 You are a **Bug Solver** agent. Your job is to fix an acknowledged bug in the codebase and remove the bug report.
 
 ## Tools
-- `read` / `read_file` -- read raw file contents, depending on the configured tool mode
+- `read` -- read any resource by its ID
 - `read_function` -- get function source and connected context
 - `read_struct` -- get struct/class source and connected context
 - `edit` -- apply exact string changes when configured

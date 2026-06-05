@@ -1,4 +1,4 @@
-package cli
+﻿package cli
 
 import (
 	"bufio"
@@ -11,6 +11,7 @@ import (
 
 	"ltp/internal/helper"
 	"ltp/internal/prompts"
+	"ltp/internal/topology/domain"
 )
 
 func promptReplace(path string) bool {
@@ -83,10 +84,10 @@ func RunInit(args []string) {
 	}
 
 	if *opencode {
-		initOpenCode(*global, cfg.ToolModes, *yes)
+		initOpenCode(*global, cfg.ToolModes, cfg.ReadSplit, *yes)
 	}
 	if *claude {
-		initClaudeCode(*global, cfg.ToolModes, *yes)
+		initClaudeCode(*global, cfg.ToolModes, cfg.ReadSplit, *yes)
 	}
 }
 
@@ -117,7 +118,7 @@ func parseOtherToolMode(value string) (helper.OtherToolMode, error) {
 	}
 }
 
-func initOpenCode(global bool, modes helper.ToolModes, autoYes bool) {
+func initOpenCode(global bool, modes helper.ToolModes, readSplit map[domain.ResourceKind]bool, autoYes bool) {
 	configPath, configDir, agentsMdPath := opencodePaths(global)
 	os.MkdirAll(configDir, 0755)
 
@@ -147,7 +148,7 @@ func initOpenCode(global bool, modes helper.ToolModes, autoYes bool) {
 	permissionMap["edit"] = nativePermission(modes.Edit == helper.EditModeNative)
 	delete(permissionMap, "write")
 	permissionMap["llm-topology_*"] = "deny"
-	for _, toolName := range allowedMCPToolNames(modes, ToolProfileDefault) {
+	for _, toolName := range allowedMCPToolNames(modes, ToolProfileDefault, readSplit) {
 		permissionMap["llm-topology_"+toolName] = "allow"
 	}
 	config["permission"] = permissionMap
@@ -166,19 +167,19 @@ func initOpenCode(global bool, modes helper.ToolModes, autoYes bool) {
 	writeOpenCodeCommand(commandsDir, "bug-judge", "Triage pending bugs by launching Bug Judge sub-agents for each node", "bug-judge", bugJudgeCommandForAgent("bug-judge"), autoYes)
 	writeOpenCodeCommand(commandsDir, "bug-solver", "Fix acknowledged bugs by launching Bug Solver sub-agents", "bug-solver", bugSolverCommandForAgent("bug-solver"), autoYes)
 
-	writeAgent(agentsDir, "descriptions-generation-executor", openCodeAgentContent("descriptions-generation-executor", "Generates descriptions for one assigned batch of undocumented topology resources", ToolProfileDescriptionsExecutor, modes, prompts.DescriptionsGenerationExecutorPrompt()), autoYes)
-	writeAgent(agentsDir, "bug-hunter", openCodeAgentContent("bug-hunter", "Scans the entire project topology looking for bugs", ToolProfileBugHunter, modes, prompts.BugHunterPrompt()), autoYes)
-	writeAgent(agentsDir, "bug-judge", openCodeAgentContent("bug-judge", "Triages pending bugs by comparing against dismissed bug patterns", ToolProfileBugJudge, modes, prompts.BugJudgePrompt()), autoYes)
-	writeAgent(agentsDir, "bug-solver", openCodeAgentContent("bug-solver", "Fixes acknowledged bugs in the codebase and removes them", ToolProfileBugSolver, modes, prompts.BugSolverPrompt()), autoYes)
+	writeAgent(agentsDir, "descriptions-generation-executor", openCodeAgentContent("descriptions-generation-executor", "Generates descriptions for one assigned batch of undocumented topology resources", ToolProfileDescriptionsExecutor, modes, readSplit, prompts.DescriptionsGenerationExecutorPrompt()), autoYes)
+	writeAgent(agentsDir, "bug-hunter", openCodeAgentContent("bug-hunter", "Scans the entire project topology looking for bugs", ToolProfileBugHunter, modes, readSplit, prompts.BugHunterPrompt()), autoYes)
+	writeAgent(agentsDir, "bug-judge", openCodeAgentContent("bug-judge", "Triages pending bugs by comparing against dismissed bug patterns", ToolProfileBugJudge, modes, readSplit, prompts.BugJudgePrompt()), autoYes)
+	writeAgent(agentsDir, "bug-solver", openCodeAgentContent("bug-solver", "Fixes acknowledged bugs in the codebase and removes them", ToolProfileBugSolver, modes, readSplit, prompts.BugSolverPrompt()), autoYes)
 
 	if modes.Edit == helper.EditModeNative {
 		writeOpenCodeNativeEditPlugin(filepath.Join(configDir, "plugins"), autoYes)
 	}
-	writeMarkdownIntegrationFile(agentsMdPath, "OpenCode AGENTS.md", prompts.AgentsMdContentForModes(modes))
+	writeMarkdownIntegrationFile(agentsMdPath, "OpenCode AGENTS.md", prompts.AgentsMdContentForModes(modes, readSplit))
 	fmt.Println("[OpenCode] Restart OpenCode to activate the topology workflow.")
 }
 
-func initClaudeCode(global bool, modes helper.ToolModes, autoYes bool) {
+func initClaudeCode(global bool, modes helper.ToolModes, readSplit map[domain.ResourceKind]bool, autoYes bool) {
 	mcpConfigPath, commandsDir, agentsDir, claudeMdPath := claudePaths(global)
 
 	if anyMCPMode(modes) {
@@ -210,10 +211,10 @@ func initClaudeCode(global bool, modes helper.ToolModes, autoYes bool) {
 	writeCommand(commandsDir, "bug-judge", "Triage pending bugs by launching Bug Judge sub-agents for each node", bugJudgeCommandForAgent(".claude/agents/bug-judge.md"), autoYes)
 	writeCommand(commandsDir, "bug-solver", "Fix acknowledged bugs by launching Bug Solver sub-agents", bugSolverCommandForAgent(".claude/agents/bug-solver.md"), autoYes)
 
-	writeAgent(agentsDir, "descriptions-generation-executor", claudeAgentContent("descriptions-generation-executor", "Generates descriptions for one assigned batch of undocumented topology resources", ToolProfileDescriptionsExecutor, modes, prompts.DescriptionsGenerationExecutorPrompt()), autoYes)
-	writeAgent(agentsDir, "bug-hunter", claudeAgentContent("bug-hunter", "Scans the entire project topology looking for bugs", ToolProfileBugHunter, modes, prompts.BugHunterPrompt()), autoYes)
-	writeAgent(agentsDir, "bug-judge", claudeAgentContent("bug-judge", "Triages pending bugs by comparing against dismissed bug patterns", ToolProfileBugJudge, modes, prompts.BugJudgePrompt()), autoYes)
-	writeAgent(agentsDir, "bug-solver", claudeAgentContent("bug-solver", "Fixes acknowledged bugs in the codebase and removes them", ToolProfileBugSolver, modes, prompts.BugSolverPrompt()), autoYes)
+	writeAgent(agentsDir, "descriptions-generation-executor", claudeAgentContent("descriptions-generation-executor", "Generates descriptions for one assigned batch of undocumented topology resources", ToolProfileDescriptionsExecutor, modes, readSplit, prompts.DescriptionsGenerationExecutorPrompt()), autoYes)
+	writeAgent(agentsDir, "bug-hunter", claudeAgentContent("bug-hunter", "Scans the entire project topology looking for bugs", ToolProfileBugHunter, modes, readSplit, prompts.BugHunterPrompt()), autoYes)
+	writeAgent(agentsDir, "bug-judge", claudeAgentContent("bug-judge", "Triages pending bugs by comparing against dismissed bug patterns", ToolProfileBugJudge, modes, readSplit, prompts.BugJudgePrompt()), autoYes)
+	writeAgent(agentsDir, "bug-solver", claudeAgentContent("bug-solver", "Fixes acknowledged bugs in the codebase and removes them", ToolProfileBugSolver, modes, readSplit, prompts.BugSolverPrompt()), autoYes)
 
 	if modes.Edit == helper.EditModeNative {
 		settingsPath := filepath.Join(filepath.Dir(commandsDir), "settings.json")
@@ -221,7 +222,7 @@ func initClaudeCode(global bool, modes helper.ToolModes, autoYes bool) {
 		writeClaudeNativeEditHook(settingsPath, hooksDir, autoYes)
 	}
 
-	writeMarkdownIntegrationFile(claudeMdPath, "Claude Code CLAUDE.md", prompts.ClaudeMdContentForModes(modes))
+	writeMarkdownIntegrationFile(claudeMdPath, "Claude Code CLAUDE.md", prompts.ClaudeMdContentForModes(modes, readSplit))
 	fmt.Println("[Claude Code] Restart Claude Code to activate the topology workflow.")
 }
 
@@ -314,12 +315,12 @@ func bugSolverCommandForAgent(agentRef string) string {
 	return "Use the " + agentRef + " agent to fix acknowledged bugs. It must inspect each acknowledged bug, apply the minimal fix, and delete the bug report after the fix is complete."
 }
 
-func claudeAgentContent(name, description string, profile ToolProfile, modes helper.ToolModes, prompt string) string {
-	return fmt.Sprintf("---\nname: %s\ndescription: %s\ntools: %s\n%s---\n\n%s\n\n%s", name, description, strings.Join(claudeToolsForProfile(modes, profile), ", "), claudeMCPServersFrontmatter(modes, profile), prompt, terminalGuidance(modes, profile))
+func claudeAgentContent(name, description string, profile ToolProfile, modes helper.ToolModes, readSplit map[domain.ResourceKind]bool, prompt string) string {
+	return fmt.Sprintf("---\nname: %s\ndescription: %s\ntools: %s\n%s---\n\n%s\n\n%s", name, description, strings.Join(claudeToolsForProfile(modes, profile, readSplit), ", "), claudeMCPServersFrontmatter(modes, profile), prompt, terminalGuidance(modes, profile, readSplit))
 }
 
-func openCodeAgentContent(name, description string, profile ToolProfile, modes helper.ToolModes, prompt string) string {
-	return fmt.Sprintf("---\ndescription: %s\nmode: subagent\npermission:\n%s---\n\n%s\n\n%s", description, openCodePermissions(modes, profile), prompt, terminalGuidance(modes, profile))
+func openCodeAgentContent(name, description string, profile ToolProfile, modes helper.ToolModes, readSplit map[domain.ResourceKind]bool, prompt string) string {
+	return fmt.Sprintf("---\ndescription: %s\nmode: subagent\npermission:\n%s---\n\n%s\n\n%s", description, openCodePermissions(modes, profile, readSplit), prompt, terminalGuidance(modes, profile, readSplit))
 }
 
 func claudeMCPServersFrontmatter(modes helper.ToolModes, profile ToolProfile) string {
@@ -329,12 +330,24 @@ func claudeMCPServersFrontmatter(modes helper.ToolModes, profile ToolProfile) st
 	return fmt.Sprintf("mcpServers:\n  - llm-topology:\n      type: stdio\n      command: ltp\n      args: [\"serve\", \"--tool-profile\", \"%s\"]\n", profile)
 }
 
-func claudeToolsForProfile(modes helper.ToolModes, profile ToolProfile) []string {
+func claudeToolsForProfile(modes helper.ToolModes, profile ToolProfile, readSplit map[domain.ResourceKind]bool) []string {
+	useSplit := len(readSplit) > 0 && profile != ToolProfileDescriptionsExecutor
+	splitKinds := readSplit
+
 	var result []string
 	if modes.Read == helper.ReadModeNative {
 		result = append(result, "Read")
-	} else if modes.Read == helper.ReadModeMCP && profileAllows(profile, "read_file") {
-		result = append(result, "mcp__llm-topology__read_file")
+	} else if modes.Read == helper.ReadModeMCP {
+		if useSplit {
+			if profileAllows(profile, "read_function") && (splitKinds[domain.ResourceFunction] || splitKinds[domain.ResourceMethod]) {
+				result = append(result, "mcp__llm-topology__read_function")
+			}
+			if profileAllows(profile, "read_struct") && splitKinds[domain.ResourceType] {
+				result = append(result, "mcp__llm-topology__read_struct")
+			}
+		} else if profileAllows(profile, "read") {
+			result = append(result, "mcp__llm-topology__read")
+		}
 	}
 	if modes.Edit == helper.EditModeNative {
 		if profileAllows(profile, "edit") {
@@ -352,9 +365,10 @@ func claudeToolsForProfile(modes helper.ToolModes, profile ToolProfile) []string
 	}
 	if modes.Other == helper.OtherModeMCP {
 		for _, name := range profileTools(profile) {
-			if name != "read_file" && name != "edit" && name != "write" {
-				result = append(result, "mcp__llm-topology__"+name)
+			if name == "read" || name == "edit" || name == "write" || name == "read_function" || name == "read_struct" {
+				continue
 			}
+			result = append(result, "mcp__llm-topology__"+name)
 		}
 	}
 	if needsTerminal(modes) {
@@ -363,7 +377,7 @@ func claudeToolsForProfile(modes helper.ToolModes, profile ToolProfile) []string
 	return result
 }
 
-func openCodePermissions(modes helper.ToolModes, profile ToolProfile) string {
+func openCodePermissions(modes helper.ToolModes, profile ToolProfile, readSplit map[domain.ResourceKind]bool) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("  read: %s\n", nativePermission(modes.Read == helper.ReadModeNative)))
 	canEditNatively := modes.Edit == helper.EditModeNative && (profileAllows(profile, "edit") || profileAllows(profile, "write"))
@@ -372,18 +386,29 @@ func openCodePermissions(modes helper.ToolModes, profile ToolProfile) string {
 		b.WriteString("  bash: allow\n")
 	}
 	b.WriteString("  \"llm-topology_*\": deny\n")
-	for _, toolName := range allowedMCPToolNames(modes, profile) {
+	for _, toolName := range allowedMCPToolNames(modes, profile, readSplit) {
 		b.WriteString(fmt.Sprintf("  \"llm-topology_%s\": allow\n", toolName))
 	}
 	return b.String()
 }
 
-func allowedMCPToolNames(modes helper.ToolModes, profile ToolProfile) []string {
+func allowedMCPToolNames(modes helper.ToolModes, profile ToolProfile, readSplit map[domain.ResourceKind]bool) []string {
+	useSplit := len(readSplit) > 0 && profile != ToolProfileDescriptionsExecutor
+	splitKinds := readSplit
+
 	var result []string
 	for _, name := range profileTools(profile) {
 		switch name {
-		case "read_file":
-			if modes.Read == helper.ReadModeMCP {
+		case "read":
+			if modes.Read == helper.ReadModeMCP && !useSplit {
+				result = append(result, name)
+			}
+		case "read_function":
+			if modes.Read == helper.ReadModeMCP && useSplit && (splitKinds[domain.ResourceFunction] || splitKinds[domain.ResourceMethod]) {
+				result = append(result, name)
+			}
+		case "read_struct":
+			if modes.Read == helper.ReadModeMCP && useSplit && splitKinds[domain.ResourceType] {
 				result = append(result, name)
 			}
 		case "edit", "write":
@@ -412,16 +437,25 @@ func needsTerminal(modes helper.ToolModes) bool {
 	return modes.Read == helper.ReadModeTerminal || modes.Edit == helper.EditModeTerminal || modes.Other == helper.OtherModeTerminal
 }
 
-func terminalGuidance(modes helper.ToolModes, profile ToolProfile) string {
+func terminalGuidance(modes helper.ToolModes, profile ToolProfile, readSplit map[domain.ResourceKind]bool) string {
 	if !needsTerminal(modes) {
 		return ""
 	}
+	useSplit := len(readSplit) > 0 && profile != ToolProfileDescriptionsExecutor
 	var lines []string
 	for _, name := range profileTools(profile) {
 		switch name {
-		case "read_file":
-			if modes.Read == helper.ReadModeTerminal {
+		case "read":
+			if modes.Read == helper.ReadModeTerminal && !useSplit {
 				lines = append(lines, "- `ltp read <resource-id>` to read resources or files")
+			}
+		case "read_function":
+			if modes.Read == helper.ReadModeTerminal && useSplit {
+				lines = append(lines, "- `ltp read <resource-id>` to read a function")
+			}
+		case "read_struct":
+			if modes.Read == helper.ReadModeTerminal && useSplit {
+				lines = append(lines, "- `ltp read <resource-id>` to read a struct/type")
 			}
 		case "edit":
 			if modes.Edit == helper.EditModeTerminal {
@@ -449,7 +483,7 @@ func terminalCommandForTool(name string) string {
 		return "ltp read <resource-id>"
 	case "read_struct":
 		return "ltp read <resource-id>"
-	case "read_file":
+	case "read":
 		return "ltp read <resource-id>"
 	case "warnings_list":
 		return "ltp warnings list"
@@ -465,8 +499,6 @@ func terminalCommandForTool(name string) string {
 		return "ltp bug delete <bugID>"
 	case "node_list_no_description":
 		return "ltp node list --no-description"
-	case "read_resource_and_cut":
-		return "ltp read-resource-and-cut <id> <kind>"
 	case "update_description":
 		return "ltp update-description <id> <kind> <desc>"
 	default:
@@ -514,7 +546,7 @@ func writeMarkdownFile(path, label, content string, autoYes bool) {
 
 const (
 	ltpIntegrationStart = "# LTP Integration"
-	ltpIntegrationEnd   = "This is it for ltp integration"
+	ltpIntegrationEnd   = "Good Luck in your task."
 )
 
 func writeMarkdownIntegrationFile(path, label, segment string) {

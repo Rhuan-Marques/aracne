@@ -124,11 +124,11 @@ func TestToolCall(t *testing.T) {
 		ID:   "call_1",
 		Type: "function",
 		Function: llm.ToolCallFunction{
-			Name:      "read_file",
-			Arguments: `{"file_path": "test.go"}`,
+			Name:      "mock_tool",
+			Arguments: `{"input": "test"}`,
 		},
 	}
-	if tc.ID != "call_1" || tc.Function.Name != "read_file" {
+	if tc.ID != "call_1" || tc.Function.Name != "mock_tool" {
 		t.Errorf("unexpected ToolCall: %+v", tc)
 	}
 }

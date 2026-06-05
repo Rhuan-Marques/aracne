@@ -26,7 +26,103 @@ func analyzeFunctionBody(body *pyFunc, pr *ParseResult, gt *python.PythonTopolog
 
 	resolveBodyReferences(body, pr, gt, add)
 
+	bodyCalls := body.BodyCalls
+	if bodyCalls == nil {
+		bodyCalls = []pyBodyCall{}
+	}
+	bodyAssigns := body.BodyAssign
+	if bodyAssigns == nil {
+		bodyAssigns = []pyBodyAssign{}
+	}
+	resolveBodyCallRefs(bodyCalls, bodyAssigns, pr, gt, add, funcInput)
+
 	return conn
+}
+
+func resolveBodyCallRefs(bodyCalls []pyBodyCall, bodyAssigns []pyBodyAssign, pr *ParseResult, gt *python.PythonTopology, add func(kind python.ConnectionKind, id string), funcInput []python.VariableDefinition) {
+	varTypeMap := make(map[string]python.ClassID)
+
+	// Build from parameters with type annotations
+	for _, param := range funcInput {
+		if param.Typing == "" || param.Name == "" || param.Name == "self" || param.Name == "cls" {
+			continue
+		}
+		classID := python.ClassID(string(pr.PkgPath) + "." + param.Typing)
+		if _, exists := gt.Classes[classID]; exists {
+			varTypeMap[param.Name] = classID
+		} else if strings.Contains(param.Typing, ".") {
+			parts := strings.SplitN(param.Typing, ".", 2)
+			if impPath, ok := pr.ImportMap[parts[0]]; ok {
+				classID = python.ClassID(impPath + "." + parts[1])
+				if _, exists := gt.Classes[classID]; exists {
+					varTypeMap[param.Name] = classID
+				}
+			}
+		}
+	}
+
+	// Build from local assignments
+	for _, assign := range bodyAssigns {
+		if assign.ValueType == "" || assign.Name == "" {
+			continue
+		}
+		classID := python.ClassID(string(pr.PkgPath) + "." + assign.ValueType)
+		if _, exists := gt.Classes[classID]; exists {
+			varTypeMap[assign.Name] = classID
+		} else if strings.Contains(assign.ValueType, ".") {
+			parts := strings.SplitN(assign.ValueType, ".", 2)
+			if impPath, ok := pr.ImportMap[parts[0]]; ok {
+				classID = python.ClassID(impPath + "." + parts[1])
+				if _, exists := gt.Classes[classID]; exists {
+					varTypeMap[assign.Name] = classID
+				}
+			}
+		} else {
+			funcID := python.FunctionID(string(pr.PkgPath) + "." + assign.ValueType)
+			if fn, exists := gt.Functions[funcID]; exists && len(fn.Output) > 0 {
+				retType := fn.Output[0].Typing
+				if retType != "" {
+					retClassID := python.ClassID(string(pr.PkgPath) + "." + retType)
+					if _, ok := gt.Classes[retClassID]; ok {
+						varTypeMap[assign.Name] = retClassID
+					}
+				}
+			}
+		}
+	}
+
+	// Resolve method calls
+	for _, call := range bodyCalls {
+		if call.ObjectName == "" || call.MethodName == "" {
+			// Direct function call - try to resolve
+			funcID := python.FunctionID(string(pr.PkgPath) + "." + call.Func)
+			if _, exists := gt.Functions[funcID]; exists {
+				add(python.ConnCalls, string(funcID))
+			}
+			continue
+		}
+
+		classID, ok := varTypeMap[call.ObjectName]
+		if !ok {
+			continue
+		}
+
+		cls, ok := gt.Classes[classID]
+		if !ok {
+			continue
+		}
+
+		add(python.ConnUsesClass, string(classID))
+
+		// Find the method on the class
+		for _, mid := range cls.Methods() {
+			m, ok := gt.Functions[mid]
+			if ok && m.Name == call.MethodName {
+				add(python.ConnCalls, string(mid))
+				break
+			}
+		}
+	}
 }
 
 func resolveBodyReferences(body *pyFunc, pr *ParseResult, gt *python.PythonTopology, add func(kind python.ConnectionKind, id string)) {

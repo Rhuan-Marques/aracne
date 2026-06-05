@@ -5,10 +5,11 @@ permission:
   read: deny
   edit: deny
   "llm-topology_*": deny
+  "llm-topology_read": allow
+  "llm-topology_read_interface": allow
   "llm-topology_read_file": allow
-  "llm-topology_read_struct": allow
-  "llm-topology_read_function": allow
-  "llm-topology_read_resource_and_cut": allow
+  "llm-topology_read_package": allow
+  "llm-topology_read_dependency": allow
   "llm-topology_update_description": allow
 ---
 
@@ -22,8 +23,8 @@ You are not the orchestrator. Do not discover additional resources. Do not call 
 
 1. Read the assigned resource list from the task prompt
 2. For each assigned resource, one at a time:
-   a. Call **read_resource_and_cut** with its `id` and `resource_name`
-   b. Study the returned source code and type-specific instructions
+   a. Call **read** with its `resource_id`
+   b. Study the returned source code
    c. Manually write a description based on what the resource actually does
    d. Immediately call **update_description** with `id`, `resource_name`, and your generated description
 3. Continue until every assigned resource has either been updated or has a clear failure reason
@@ -49,3 +50,5 @@ completed:
 
 failed:
 - <id>: <reason>
+
+
