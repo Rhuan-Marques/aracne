@@ -28,6 +28,7 @@ Usage:
   ltp edit                 Edit a file (reads JSON from stdin: {"file_path", "old_string", "new_string"})
   ltp write                Write a file (reads JSON from stdin: {"file_path", "content"})
   ltp check-updates        Check which files were added, modified, or deleted since last scan
+  ltp analyze dead-code [flags]  Find unused functions, structs, interfaces, named types, and variables
 
 Flags for "scan":
   -root <path>    Root folder of the project (default ".")
@@ -81,6 +82,14 @@ Flags for "init":
     tool_modes.edit:  "native", "mcp", or "terminal"
     tool_modes.other: "mcp" or "terminal"
     describe_targets: ["function", "type", "method", "interface", "file"]
+
+Flags for "analyze dead-code":
+  --db <path>           Topology database path (default ".ltp/topology.db")
+  --kind <kind>         Resource kind filter: function, type, interface, named_type, variable
+  --package <path>      Package path filter (e.g. ltp/internal/cli)
+  --certain-only        Only report unexported dead code (safe to delete)
+  --exported-only       Only report exported dead code (may have external users)
+  --json                Output as JSON
 
   Examples:
     ltp scan -root ./myproject -output myproject.db

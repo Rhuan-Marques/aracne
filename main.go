@@ -71,6 +71,8 @@ func main() {
 		cli.RunBug(os.Args[2:])
 	case "check-updates":
 		cli.RunCheckUpdates(os.Args[2:])
+	case "analyze":
+		cli.RunAnalyze(os.Args[2:])
 	default:
 		cli.PrintUsage()
 	}
