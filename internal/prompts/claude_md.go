@@ -34,6 +34,7 @@ func agentInstructionsContent(modes helper.ToolModes, mcpToolPrefix string, read
 	b.WriteString(introductionSection())
 	b.WriteString(navigationModelSection(modes))
 	b.WriteString(lookupToolsSection(modes, mcpToolPrefix, readSplit))
+	b.WriteString(grepSection(modes, mcpToolPrefix))
 	b.WriteString(resourceContextSection(modes))
 	b.WriteString(editWriteSection(modes, mcpToolPrefix))
 	b.WriteString(otherSection(modes, mcpToolPrefix))
@@ -142,7 +143,22 @@ func lookupToolsSection(modes helper.ToolModes, mcpToolPrefix string, readSplit 
 		b.WriteString("\n")
 	}
 
+	b.WriteString("Note: Do *not* use \"cat\", \"Get-Content\" or any other OS command to read files")
+
 	return b.String()
+}
+
+func grepSection(modes helper.ToolModes, mcpToolPrefix string) string {
+	switch modes.Grep {
+	case helper.GrepModeNative:
+		return "## Grep/Search\n\nUse your native `grep`/`Grep` search tool for content search. When you need topology metadata in results, use `ltp grep <pattern> [path]`; it returns `path:line:match` plus `ResourceID` and `Description` when a match maps to a topology resource.\n\n"
+	case helper.GrepModeMCP:
+		return fmt.Sprintf("## Grep/Search\n\nUse the MCP tool %s for content search. It returns `path:line:match` plus `ResourceID` and `Description` when a match maps to a topology resource.\n\nDo *not* use your native `grep` tool.\nDo not use `grep`, `Select-String` or `rg` in the terminal", bt(mcpToolPrefix+"grep"))
+	case helper.GrepModeTerminal:
+		return "## Grep/Search\n\nUse `ltp grep <pattern> [path]` for content search. It returns `path:line:match` plus `ResourceID` and `Description` when a match maps to a topology resource.\n\nDo *not* use your native `grep` tool.\nDo not use `grep`, `Select-String` or `rg` in the terminal"
+	default:
+		return ""
+	}
 }
 
 func resourceContextSection(modes helper.ToolModes) string {

@@ -17,6 +17,7 @@
     "llm-topology_*": "deny",
     "llm-topology_bug_report": "allow",
     "llm-topology_edit": "allow",
+    "llm-topology_grep": "allow",
     "llm-topology_read": "allow",
     "llm-topology_read_dependency": "allow",
     "llm-topology_read_file": "allow",

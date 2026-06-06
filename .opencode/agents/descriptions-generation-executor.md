@@ -6,6 +6,7 @@ permission:
   edit: deny
   "llm-topology_*": deny
   "llm-topology_read": allow
+  "llm-topology_grep": allow
   "llm-topology_read_interface": allow
   "llm-topology_read_file": allow
   "llm-topology_read_package": allow

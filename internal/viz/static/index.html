@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LTP Topology Visualization</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="panel left">
+      <div class="brand">
+        <span class="mark"></span>
+        <div>
+          <h1>LTP Viz</h1>
+          <p id="subtitle">Topology graph explorer</p>
+        </div>
+      </div>
+
+      <label>Visualization</label>
+      <select id="mode">
+        <option value="packages">Packages</option>
+        <option value="data_flow">Data Flow</option>
+        <option value="custom">Custom</option>
+      </select>
+      <p id="modeHelp" class="modeHelp"></p>
+
+      <label>Search</label>
+      <input id="query" placeholder="function, path, description">
+
+      <div class="actions">
+        <button id="loadGraph">Load View</button>
+        <button id="clear">Clear</button>
+      </div>
+
+      <section id="depthControls" class="depthControls disabled" aria-label="Neighborhood depth">
+        <div class="depthLabel">
+          <span id="depthIcon"></span>
+          <span>Depht:</span>
+        </div>
+        <div class="depthButtons">
+          <button type="button" class="depthButton active" data-depth="1" disabled>1</button>
+          <button type="button" class="depthButton" data-depth="2" disabled>2</button>
+          <button type="button" class="depthButton" data-depth="3" disabled>3</button>
+          <button type="button" class="depthButton" data-depth="4" disabled>4</button>
+        </div>
+      </section>
+
+      <button id="graphOptimizationToggle" class="sidebarTool" type="button">
+        <span>Graph Optimization</span>
+      </button>
+      <div id="optimizationMenu" class="optimizationMenu hidden">
+        <div class="optimizationMenuHeader">
+          <div>
+            <strong>Optimization Rules</strong>
+            <p class="fieldHint">Matching nodes collapse into their incoming resources.</p>
+          </div>
+          <button id="addOptimizationRule" type="button">Add Rule</button>
+        </div>
+        <div id="optimizationRules" class="optimizationRules"></div>
+      </div>
+
+      <div id="customControls" class="customControls hidden">
+        <label>Kinds</label>
+        <select id="kind" class="nativeMulti" multiple size="8">
+          <option value="package">package</option>
+          <option value="file">file</option>
+          <option value="function">function</option>
+          <option value="method">method</option>
+          <option value="type">type</option>
+          <option value="named_type">named_type</option>
+          <option value="interface">interface</option>
+          <option value="variable">variable</option>
+          <option value="dependency">dependency</option>
+        </select>
+        <p class="fieldHint">Leave empty for all kinds, or pick the node families you want.</p>
+
+        <label>Edge Types</label>
+        <select id="edgeKind" class="nativeMulti" multiple size="10"></select>
+        <p class="fieldHint">Leave empty for all relationships, or narrow the graph by connection type.</p>
+
+        <label><input type="checkbox" id="strictEdges"> Strict Edges</label>
+        <p class="fieldHint">Only show nodes that have at least one connection of the selected edge types.</p>
+
+        <div class="grid2">
+          <div>
+            <label>Path contains</label>
+            <input id="path" placeholder="internal/topology">
+          </div>
+          <div>
+            <label>Limit</label>
+            <input id="limit" type="number" min="1" max="3000" value="300">
+          </div>
+        </div>
+      </div>
+
+    </aside>
+
+    <main class="canvasWrap">
+      <div class="toolbar">
+        <span id="status">Loading topology summary...</span>
+        <div>
+          <button id="zoomIn">+</button>
+          <button id="zoomOut">-</button>
+          <button id="fit">Fit</button>
+        </div>
+      </div>
+      <canvas id="graph"></canvas>
+      <div class="hint">Click a node to inspect. Double-click to expand. Drag to pan, wheel to zoom.</div>
+    </main>
+
+    <aside class="panel right">
+      <div class="tabBar">
+        <button class="tab active" id="inspectorTab">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+          Inspector
+        </button>
+        <button class="tab disabled" id="codeTab">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+          Code
+        </button>
+      </div>
+      <div id="inspector" class="empty">Select a node.</div>
+      <div id="codePanel" class="empty hidden">No source available.</div>
+    </aside>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>

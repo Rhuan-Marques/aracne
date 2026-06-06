@@ -13,9 +13,17 @@ The topology is a directed graph can enhance your information about the reposito
 **Note: Never try to use `read` native tool, use MCP lookups instead**
 
 ## MCP Lookup tools:
-- `llm-topology_read`: This command will give you the code and full context for any resource you want. These include: Files, Functions, Structs, etc. The tool receives a Resource ID, which can be the file's path or the ID of any resource.
+- `llm-topology_read_interface`: Reads the interface and context for which resources it is implemented by, receives an interface ID.
+- `llm-topology_read_file`: Reads the content of a file, receives the file path.
+- `llm-topology_read_struct`: Reads the struct and context for resources it uses, receives a struct ID.
+- `llm-topology_read_function`: Reads the function and context for resources it uses, receives a function ID.
 
-## Resource Context
+Note: Do *not* use "cat", "Get-Content" or any other OS command to read files## Grep/Search
+
+Use the MCP tool `llm-topology_grep` for content search. It returns `path:line:match` plus `ResourceID` and `Description` when a match maps to a topology resource.
+
+Do *not* use your native `grep` tool.
+Do not use `grep`, `Select-String` or `rg` in the terminal## Resource Context
 
 When you call a MCP Lookup Tool, the output has two sections:
 

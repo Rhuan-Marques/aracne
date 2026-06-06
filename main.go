@@ -21,6 +21,8 @@ func main() {
 		cli.RunAgent(os.Args[2:])
 	case "serve":
 		cli.RunServe(os.Args[2:])
+	case "viz":
+		cli.RunViz(os.Args[2:])
 	case "init":
 		cli.RunInit(os.Args[2:])
 	case "descriptions":
@@ -44,6 +46,8 @@ func main() {
 		cli.RunRead()
 	case "search":
 		cli.RunSearch(os.Args[2:])
+	case "grep":
+		cli.RunGrep(os.Args[2:])
 	case "update-description":
 		cli.RunUpdateDescription(os.Args[2:])
 	case "edit":
@@ -79,9 +83,3 @@ func main() {
 		cli.PrintUsage()
 	}
 }
-
-
-
-
-
-

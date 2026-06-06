@@ -650,7 +650,7 @@ func TestAnalyzeFunctionBody_qualifiedConstructorAndMethodCall(t *testing.T) {
 		ID:   ctorID,
 		Name: "NewMyStruct",
 		Output: []golang.VariableDefinition{
-			{Typing: "*MyStruct"},
+			{Typing: "*other.MyStruct"},
 		},
 	}
 	gt.Functions[methodID] = golang.GolangFunction{
@@ -985,7 +985,7 @@ func TestAnalyzeFunctionBody_qualifiedInterfaceConstructorAndMethodCall(t *testi
 		ID:   ctorID,
 		Name: "NewMyInterface",
 		Output: []golang.VariableDefinition{
-			{Typing: "*SomeInterface"},
+			{Typing: "*other.SomeInterface"},
 		},
 	}
 	gt.Functions[methodID] = golang.GolangFunction{

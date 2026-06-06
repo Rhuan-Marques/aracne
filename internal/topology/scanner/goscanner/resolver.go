@@ -76,7 +76,7 @@ func paramTypeNameToInterface(typing string, pkgPath golang.PackagePath, importM
 	if idx := strings.Index(t, "."); idx > 0 {
 		alias := t[:idx]
 		typeName := t[idx+1:]
-		if impPath, ok := importMap[alias]; ok && strings.HasPrefix(impPath, modulePath) {
+		if impPath, ok := importMap[alias]; ok {
 			candidateIDs = append(candidateIDs, golang.InterfaceID(impPath+"."+typeName))
 		}
 	} else {
@@ -97,7 +97,7 @@ func paramTypeNameToStruct(typing string, pkgPath golang.PackagePath, importMap 
 	if idx := strings.Index(t, "."); idx > 0 {
 		alias := t[:idx]
 		typeName := t[idx+1:]
-		if impPath, ok := importMap[alias]; ok && strings.HasPrefix(impPath, modulePath) {
+		if impPath, ok := importMap[alias]; ok {
 			sid := golang.StructID(impPath + "." + typeName)
 			return &sid
 		}
@@ -276,45 +276,40 @@ func (ba *bodyAnalyzer) resolveCallExpr(call *ast.CallExpr) {
 
 func (ba *bodyAnalyzer) resolveQualifiedCall(xName, selName string) {
 	if impPath, ok := ba.pr.ImportMap[xName]; ok {
-		if strings.HasPrefix(impPath, ba.pr.ModulePath) {
-			internalPkg := golang.PackagePath(impPath)
+		internalPkg := golang.PackagePath(impPath)
 
-			fnTargetID := golang.FunctionID(string(internalPkg) + "." + selName)
-			if _, exists := ba.gt.Functions[fnTargetID]; exists {
-				ba.add(golang.ConnCalls, string(fnTargetID))
-				ba.add(golang.ConnUsesPkg, string(internalPkg))
-				return
-			}
-
-			namedTargetID := golang.NamedTypeID(string(internalPkg) + "." + selName)
-			if _, exists := ba.gt.NamedTypes[namedTargetID]; exists {
-				ba.add(golang.ConnUsesNamedType, string(namedTargetID))
-				ba.add(golang.ConnUsesPkg, string(internalPkg))
-				return
-			}
-
-			ba.addWarning(domain.WarnUseMissingNode, string(fnTargetID),
-				fmt.Sprintf("function %s calls %s which does not exist", ba.callerID, fnTargetID))
-			return
-		} else {
-			ba.add(golang.ConnUsesDep, string(impPath))
+		fnTargetID := golang.FunctionID(string(internalPkg) + "." + selName)
+		if _, exists := ba.gt.Functions[fnTargetID]; exists {
+			ba.add(golang.ConnCalls, string(fnTargetID))
+			ba.add(golang.ConnUsesPkg, string(internalPkg))
 			return
 		}
+
+		namedTargetID := golang.NamedTypeID(string(internalPkg) + "." + selName)
+		if _, exists := ba.gt.NamedTypes[namedTargetID]; exists {
+			ba.add(golang.ConnUsesNamedType, string(namedTargetID))
+			ba.add(golang.ConnUsesPkg, string(internalPkg))
+			return
+		}
+
+		ba.addWarning(domain.WarnUseMissingNode, string(fnTargetID),
+			fmt.Sprintf("function %s calls %s which does not exist", ba.callerID, fnTargetID))
+		return
 	}
 
 	if structID, ok := ba.varTypeMap[xName]; ok {
 		if str, ok := ba.gt.Structs[structID]; ok {
+			foundDirect := false
 			for _, mid := range str.Methods() {
 				m, ok := ba.gt.Functions[mid]
 				if ok && m.Name == selName {
 					ba.add(golang.ConnCalls, string(mid))
 					ba.add(golang.ConnUsesStruct, string(structID))
-					return
+					foundDirect = true
+					break
 				}
 			}
-		}
-		// Not found as a direct method — check if any interface this struct implements has the method
-		if _, ok := ba.gt.Structs[structID]; ok {
+			// Always check interfaces for ConnUsesIface tracking
 			for _, iface := range ba.gt.Interfaces {
 				if !isImplementedBy(iface, structID) {
 					continue
@@ -322,21 +317,26 @@ func (ba *bodyAnalyzer) resolveQualifiedCall(xName, selName string) {
 				for _, reqMethod := range iface.Methods {
 					if reqMethod.Name == selName {
 						ba.add(golang.ConnUsesIface, string(iface.ID))
-						for _, implStructID := range iface.ImplementedBy() {
-							implStr, ok := ba.gt.Structs[implStructID]
-							if !ok {
-								continue
-							}
-							for _, mid := range implStr.Methods() {
-								m, ok := ba.gt.Functions[mid]
-								if ok && m.Name == selName {
-									ba.add(golang.ConnCalls, string(mid))
+						if !foundDirect {
+							for _, implStructID := range iface.ImplementedBy() {
+								implStr, ok := ba.gt.Structs[implStructID]
+								if !ok {
+									continue
+								}
+								for _, mid := range implStr.Methods() {
+									m, ok := ba.gt.Functions[mid]
+									if ok && m.Name == selName {
+										ba.add(golang.ConnCalls, string(mid))
+									}
 								}
 							}
 						}
 						return
 					}
 				}
+			}
+			if foundDirect {
+				return
 			}
 		}
 		return
@@ -465,9 +465,6 @@ func (ba *bodyAnalyzer) resolveAssignStmt(stmt *ast.AssignStmt) {
 		if !ok || ident.Name == "_" {
 			continue
 		}
-		if ba.knownNames[ident.Name] {
-			continue
-		}
 		ba.knownNames[ident.Name] = true
 
 		if i >= len(stmt.Rhs) {
@@ -509,7 +506,7 @@ func (ba *bodyAnalyzer) resolveCompositeLitAssign(name string, lit *ast.Composit
 		}
 	case *ast.SelectorExpr:
 		if x, ok := t.X.(*ast.Ident); ok {
-			if impPath, ok := ba.pr.ImportMap[x.Name]; ok && strings.HasPrefix(impPath, ba.pr.ModulePath) {
+			if impPath, ok := ba.pr.ImportMap[x.Name]; ok {
 				internalPkg := golang.PackagePath(impPath)
 				structID := golang.StructID(string(internalPkg) + "." + t.Sel.Name)
 				if _, exists := ba.gt.Structs[structID]; exists {
@@ -540,7 +537,7 @@ func (ba *bodyAnalyzer) resolveCallExprAssign(name string, call *ast.CallExpr) {
 		funcID = golang.FunctionID(string(ba.pr.PkgPath) + "." + fn.Name)
 	case *ast.SelectorExpr:
 		if x, ok := fn.X.(*ast.Ident); ok {
-			if impPath, ok := ba.pr.ImportMap[x.Name]; ok && strings.HasPrefix(impPath, ba.pr.ModulePath) {
+			if impPath, ok := ba.pr.ImportMap[x.Name]; ok {
 				funcID = golang.FunctionID(impPath + "." + fn.Sel.Name)
 			}
 		}

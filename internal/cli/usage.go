@@ -9,12 +9,14 @@ Usage:
   ltp scan    [flags]    Incremental scan (changed files only); --all for full re-scan, --hard for full rebuild
   ltp agent   [prompt]   Run the AI coding agent
   ltp serve   [flags]    Start MCP server (for OpenCode / Claude Code integration)
+  ltp viz serve [flags]  Start local topology graph visualization UI
   ltp init    [flags]    Initialize topology integration (--claude, --opencode, --global)
   ltp descriptions generate [flags]  Generate descriptions for targeted undocumented resources
   ltp descriptions apply            Write topology descriptions back into source as doc comments
   ltp descriptions clear [flags]    Clear stored topology descriptions
   ltp read [--kind <kind>] <resource-id>   Read a resource by ID; --kind forces exact kind (function, method, type, named_type, interface, variable, file, package, dependency)
   ltp search <string>      Search resource IDs and names, printing matching IDs one per line
+  ltp grep [flags] <pattern> [path]  Search file contents and annotate topology resource matches
   ltp update-file <path>  Re-parse a file and update the topology database (--db to specify db path)
   ltp read-resource-and-cut <id> <kind>  Get a resource's source code cut (kind: Function, Struct, Interface, ExternalVar, File, Package)
   ltp update-description <id> <kind> <desc>  Update a resource's description in the topology DB
@@ -41,6 +43,13 @@ Flags for "scan":
 
 Flags for "serve":
   --tool-profile <profile>  Tool profile: default, descriptions-executor, bug-hunter, bug-judge, bug-solver, or all
+
+Flags for "viz serve":
+  --db <path>      Topology database path (default ".ltp/topology.db")
+  --addr <addr>    HTTP listen address (default "127.0.0.1:7331")
+
+Flags for "grep":
+  --db <path>      Topology database path (default ".ltp/topology.db")
 
 Flags for "descriptions generate":
   --targets <kinds>       Comma-separated resource kinds overriding config describe_targets (default: function,type,method,interface,file)
@@ -74,6 +83,7 @@ Flags for "init":
   --read-mode <mode>    native, mcp, or terminal (default from config: mcp)
   --edit-mode <mode>    native, mcp, or terminal; governs edit and write (default from config: native)
   --other-mode <mode>   mcp or terminal (default from config: mcp)
+  --grep-mode <mode>    native, mcp, or terminal (default from config: native)
   -y                    Auto-confirm all replacement prompts
 
   Without flags, initializes both Claude Code and OpenCode.
@@ -82,6 +92,7 @@ Flags for "init":
     tool_modes.read:  "native", "mcp", or "terminal"
     tool_modes.edit:  "native", "mcp", or "terminal"
     tool_modes.other: "mcp" or "terminal"
+    tool_modes.grep:  "native", "mcp", or "terminal"
     describe_targets: ["function", "type", "method", "interface", "file"]
 
 Flags for "analyze dead-code":
@@ -98,6 +109,7 @@ Flags for "analyze dead-code":
     ltp init --read-mode mcp --edit-mode native --other-mode mcp
     ltp init --claude
     ltp init --opencode
+    ltp viz serve
     ltp serve --tool-profile descriptions-executor
     ltp descriptions generate
     ltp descriptions clear --target function,type

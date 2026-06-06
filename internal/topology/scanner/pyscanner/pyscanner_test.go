@@ -1086,7 +1086,7 @@ def process():
     svc.run()
 `
 	tmpDir := t.TempDir()
-	filePath := filepath.Join(tmpDir, "test_service.py")
+	filePath := filepath.Join(tmpDir, "service.py")
 	if err := os.WriteFile(filePath, []byte(code), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -1136,7 +1136,7 @@ def process():
     svc.run()
 `
 	tmpDir := t.TempDir()
-	filePath := filepath.Join(tmpDir, "test_chain.py")
+	filePath := filepath.Join(tmpDir, "chain.py")
 	if err := os.WriteFile(filePath, []byte(code), 0644); err != nil {
 		t.Fatal(err)
 	}

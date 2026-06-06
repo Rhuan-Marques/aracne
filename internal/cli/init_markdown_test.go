@@ -3,7 +3,7 @@ package cli
 import "testing"
 
 func TestUpdateMarkdownIntegrationSegmentWritesEmptyFile(t *testing.T) {
-	segment := "# LTP Integration\n\nnew\n\nThis is it for ltp integration\n"
+	segment := "# LTP Integration\n\nnew\n\nGood Luck in your task.\n"
 	got := updateMarkdownIntegrationSegment("", segment)
 	if got != segment {
 		t.Fatalf("updated content = %q, want %q", got, segment)
@@ -33,9 +33,9 @@ func TestUpdateMarkdownIntegrationSegmentInsertsAfterFrontmatterAndTitle(t *test
 }
 
 func TestUpdateMarkdownIntegrationSegmentReplacesOnlyLTPBlock(t *testing.T) {
-	segment := "# LTP Integration\n\nnew\n\nThis is it for ltp integration\n"
-	existing := "# CLAUDE.md\n\nBefore.\n\n# LTP Integration\n\nold\n\nThis is it for ltp integration\n\nAfter.\n"
-	want := "# CLAUDE.md\n\nBefore.\n\n# LTP Integration\n\nnew\n\nThis is it for ltp integration\n\nAfter.\n"
+	segment := "# LTP Integration\n\nnew\n\nGood Luck in your task.\n"
+	existing := "# CLAUDE.md\n\nBefore.\n\n# LTP Integration\n\nold\n\nGood Luck in your task.\n\nAfter.\n"
+	want := "# CLAUDE.md\n\nBefore.\n\n# LTP Integration\n\nnew\n\nGood Luck in your task.\n\nAfter.\n"
 
 	got := updateMarkdownIntegrationSegment(existing, segment)
 	if got != want {

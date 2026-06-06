@@ -1,4 +1,4 @@
-﻿package cli
+package cli
 
 import (
 	"bufio"
@@ -38,6 +38,7 @@ func RunInit(args []string) {
 	readMode := fs.String("read-mode", "", "Read tool mode: native, mcp, or terminal")
 	editMode := fs.String("edit-mode", "", "Edit/write tool mode: native, mcp, or terminal")
 	otherMode := fs.String("other-mode", "", "Other topology tool mode: mcp or terminal")
+	grepMode := fs.String("grep-mode", "", "Grep/search tool mode: native, mcp, or terminal")
 	yes := fs.Bool("y", false, "Auto-confirm all replacement prompts")
 	fs.Parse(args)
 
@@ -74,6 +75,15 @@ func RunInit(args []string) {
 			os.Exit(1)
 		}
 		cfg.ToolModes.Other = mode
+		changed = true
+	}
+	if *grepMode != "" {
+		mode, err := parseGrepToolMode(*grepMode)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		cfg.ToolModes.Grep = mode
 		changed = true
 	}
 	if changed {
@@ -115,6 +125,15 @@ func parseOtherToolMode(value string) (helper.OtherToolMode, error) {
 		return helper.OtherToolMode(value), nil
 	default:
 		return "", fmt.Errorf("invalid --other-mode: %s (must be mcp or terminal)", value)
+	}
+}
+
+func parseGrepToolMode(value string) (helper.GrepToolMode, error) {
+	switch helper.GrepToolMode(value) {
+	case helper.GrepModeNative, helper.GrepModeMCP, helper.GrepModeTerminal:
+		return helper.GrepToolMode(value), nil
+	default:
+		return "", fmt.Errorf("invalid --grep-mode: %s (must be native, mcp, or terminal)", value)
 	}
 }
 
@@ -227,7 +246,7 @@ func initClaudeCode(global bool, modes helper.ToolModes, readSplit map[domain.Re
 }
 
 func anyMCPMode(modes helper.ToolModes) bool {
-	return modes.Read == helper.ReadModeMCP || modes.Edit == helper.EditModeMCP || modes.Other == helper.OtherModeMCP
+	return modes.Read == helper.ReadModeMCP || modes.Edit == helper.EditModeMCP || modes.Other == helper.OtherModeMCP || modes.Grep == helper.GrepModeMCP
 }
 
 func nativePermission(allowed bool) string {
@@ -365,11 +384,16 @@ func claudeToolsForProfile(modes helper.ToolModes, profile ToolProfile, readSpli
 	}
 	if modes.Other == helper.OtherModeMCP {
 		for _, name := range profileTools(profile) {
-			if name == "read" || name == "edit" || name == "write" || name == "read_function" || name == "read_struct" {
+			if name == "read" || name == "edit" || name == "write" || name == "grep" || name == "read_function" || name == "read_struct" {
 				continue
 			}
 			result = append(result, "mcp__llm-topology__"+name)
 		}
+	}
+	if modes.Grep == helper.GrepModeNative && profileAllows(profile, "grep") {
+		result = append(result, "Grep")
+	} else if modes.Grep == helper.GrepModeMCP && profileAllows(profile, "grep") {
+		result = append(result, "mcp__llm-topology__grep")
 	}
 	if needsTerminal(modes) {
 		result = append(result, "Bash")
@@ -415,6 +439,10 @@ func allowedMCPToolNames(modes helper.ToolModes, profile ToolProfile, readSplit 
 			if modes.Edit == helper.EditModeMCP {
 				result = append(result, name)
 			}
+		case "grep":
+			if modes.Grep == helper.GrepModeMCP {
+				result = append(result, name)
+			}
 		default:
 			if modes.Other == helper.OtherModeMCP {
 				result = append(result, name)
@@ -434,7 +462,7 @@ func profileAllows(profile ToolProfile, toolName string) bool {
 }
 
 func needsTerminal(modes helper.ToolModes) bool {
-	return modes.Read == helper.ReadModeTerminal || modes.Edit == helper.EditModeTerminal || modes.Other == helper.OtherModeTerminal
+	return modes.Read == helper.ReadModeTerminal || modes.Edit == helper.EditModeTerminal || modes.Other == helper.OtherModeTerminal || modes.Grep == helper.GrepModeTerminal
 }
 
 func terminalGuidance(modes helper.ToolModes, profile ToolProfile, readSplit map[domain.ResourceKind]bool) string {
@@ -465,6 +493,10 @@ func terminalGuidance(modes helper.ToolModes, profile ToolProfile, readSplit map
 			if modes.Edit == helper.EditModeTerminal {
 				lines = append(lines, "- `ltp write` with JSON stdin for file writes")
 			}
+		case "grep":
+			if modes.Grep == helper.GrepModeTerminal {
+				lines = append(lines, "- `ltp grep <pattern> [path]` to search file contents with topology resource metadata")
+			}
 		default:
 			if modes.Other == helper.OtherModeTerminal {
 				lines = append(lines, "- `"+terminalCommandForTool(name)+"`")
@@ -485,6 +517,8 @@ func terminalCommandForTool(name string) string {
 		return "ltp read <resource-id>"
 	case "read":
 		return "ltp read <resource-id>"
+	case "grep":
+		return "ltp grep <pattern> [path]"
 	case "warnings_list":
 		return "ltp warnings list"
 	case "bug_report":

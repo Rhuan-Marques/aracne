@@ -21,6 +21,7 @@ const (
 type ReadToolMode string
 type EditToolMode string
 type OtherToolMode string
+type GrepToolMode string
 
 const (
 	ReadModeNative   ReadToolMode = "native"
@@ -33,12 +34,17 @@ const (
 
 	OtherModeMCP      OtherToolMode = "mcp"
 	OtherModeTerminal OtherToolMode = "terminal"
+
+	GrepModeNative   GrepToolMode = "native"
+	GrepModeMCP      GrepToolMode = "mcp"
+	GrepModeTerminal GrepToolMode = "terminal"
 )
 
 type ToolModes struct {
 	Read  ReadToolMode  `json:"read"`
 	Edit  EditToolMode  `json:"edit"`
 	Other OtherToolMode `json:"other"`
+	Grep  GrepToolMode  `json:"grep"`
 }
 
 type ScannerConfig struct {
@@ -46,12 +52,12 @@ type ScannerConfig struct {
 }
 
 type Config struct {
-	ScanMode        ScanMode                       `json:"scan_mode"`
-	ToolModes       ToolModes                      `json:"tool_modes"`
-	DescribeTargets []domain.ResourceKind          `json:"describe_targets"`
-	ReadSplit   map[domain.ResourceKind]bool   `json:"read_split,omitempty"`
-	MaxFileSize     int64                          `json:"max_file_size,omitempty"`
-	Scanner         ScannerConfig                  `json:"scanner"`
+	ScanMode        ScanMode                     `json:"scan_mode"`
+	ToolModes       ToolModes                    `json:"tool_modes"`
+	DescribeTargets []domain.ResourceKind        `json:"describe_targets"`
+	ReadSplit       map[domain.ResourceKind]bool `json:"read_split,omitempty"`
+	MaxFileSize     int64                        `json:"max_file_size,omitempty"`
+	Scanner         ScannerConfig                `json:"scanner"`
 }
 
 func (c *Config) EffectiveMaxFileSize() int64 {
@@ -66,7 +72,7 @@ func ConfigPath(dbPath string) string {
 }
 
 func DefaultToolModes() ToolModes {
-	return ToolModes{Read: ReadModeMCP, Edit: EditModeNative, Other: OtherModeMCP}
+	return ToolModes{Read: ReadModeMCP, Edit: EditModeNative, Other: OtherModeMCP, Grep: GrepModeNative}
 }
 
 func DefaultDescribeTargets() []domain.ResourceKind {
@@ -104,6 +110,9 @@ func LoadConfig(path string) *Config {
 	}
 	if loaded.ToolModes.Other == OtherModeMCP || loaded.ToolModes.Other == OtherModeTerminal {
 		cfg.ToolModes.Other = loaded.ToolModes.Other
+	}
+	if loaded.ToolModes.Grep == GrepModeNative || loaded.ToolModes.Grep == GrepModeMCP || loaded.ToolModes.Grep == GrepModeTerminal {
+		cfg.ToolModes.Grep = loaded.ToolModes.Grep
 	}
 	if loaded.DescribeTargets != nil {
 		if targets, err := NormalizeDescribeTargets(loaded.DescribeTargets); err == nil {

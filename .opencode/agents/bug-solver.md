@@ -5,9 +5,11 @@ permission:
   read: deny
   edit: deny
   "llm-topology_*": deny
-  "llm-topology_read": allow
+  "llm-topology_grep": allow
   "llm-topology_edit": allow
   "llm-topology_write": allow
+  "llm-topology_read_struct": allow
+  "llm-topology_read_function": allow
   "llm-topology_read_interface": allow
   "llm-topology_read_file": allow
   "llm-topology_read_package": allow

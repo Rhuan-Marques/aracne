@@ -1,6 +1,8 @@
 package goscanner
 
 import (
+	"regexp"
+
 	"ltp/internal/topology/golang"
 )
 
@@ -68,6 +70,12 @@ func implements(str golang.GolangStruct, iface golang.GolangInterface, gt *golan
 	return true
 }
 
+var importPrefixRE = regexp.MustCompile(`\b\w+\.(\w+)\b`)
+
+func stripImportPrefix(t string) string {
+	return importPrefixRE.ReplaceAllString(t, "$1")
+}
+
 func signaturesMatch(method golang.GolangFunction, ifaceMethod golang.FunctionDefinition) bool {
 	if method.Name != ifaceMethod.Name {
 		return false
@@ -80,12 +88,12 @@ func signaturesMatch(method golang.GolangFunction, ifaceMethod golang.FunctionDe
 	}
 
 	for i := range method.Input {
-		if method.Input[i].Typing != ifaceMethod.Input[i].Typing {
+		if stripImportPrefix(method.Input[i].Typing) != stripImportPrefix(ifaceMethod.Input[i].Typing) {
 			return false
 		}
 	}
 	for i := range method.Output {
-		if method.Output[i].Typing != ifaceMethod.Output[i].Typing {
+		if stripImportPrefix(method.Output[i].Typing) != stripImportPrefix(ifaceMethod.Output[i].Typing) {
 			return false
 		}
 	}

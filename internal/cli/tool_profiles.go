@@ -1,4 +1,4 @@
-﻿package cli
+package cli
 
 import (
 	"fmt"
@@ -118,6 +118,9 @@ func BuildToolRegistry(manager *topology.TopologyManager, scannerReg *scanner.Re
 			registry.Register(tools.NewWrite(manager, scannerReg))
 		}
 	}
+	if cfg.ToolModes.Grep == helper.GrepModeMCP && allowed["grep"] {
+		registry.Register(tools.NewGrep(manager))
+	}
 	if cfg.ToolModes.Other != helper.OtherModeMCP {
 		return registry
 	}
@@ -161,17 +164,17 @@ func allowedToolsForProfile(profile ToolProfile) map[string]bool {
 func profileTools(profile ToolProfile) []string {
 	switch profile {
 	case ToolProfileAll:
-		return []string{"read", "edit", "write", "read_struct", "read_function", "read_interface", "read_named_type", "read_file", "read_package", "read_dependency", "warnings_list", "bug_report", "bug_list", "bug_acknowledge", "bug_dismiss", "bug_delete", "node_list_no_description", "update_description"}
+		return []string{"read", "grep", "edit", "write", "read_struct", "read_function", "read_interface", "read_named_type", "read_file", "read_package", "read_dependency", "warnings_list", "bug_report", "bug_list", "bug_acknowledge", "bug_dismiss", "bug_delete", "node_list_no_description", "update_description"}
 	case ToolProfileDescriptionsExecutor:
-		return []string{"read", "read_struct", "read_function", "read_interface", "read_file", "read_package", "read_dependency", "update_description"}
+		return []string{"read", "grep", "read_struct", "read_function", "read_interface", "read_file", "read_package", "read_dependency", "update_description"}
 	case ToolProfileBugHunter:
-		return []string{"read", "read_struct", "read_function", "read_interface", "read_file", "read_package", "read_dependency", "bug_report"}
+		return []string{"read", "grep", "read_struct", "read_function", "read_interface", "read_file", "read_package", "read_dependency", "bug_report"}
 	case ToolProfileBugJudge:
-		return []string{"read", "read_struct", "read_function", "read_interface", "read_file", "read_package", "read_dependency", "bug_list", "bug_acknowledge", "bug_dismiss", "bug_delete"}
+		return []string{"read", "grep", "read_struct", "read_function", "read_interface", "read_file", "read_package", "read_dependency", "bug_list", "bug_acknowledge", "bug_dismiss", "bug_delete"}
 	case ToolProfileBugSolver:
-		return []string{"read", "edit", "write", "read_struct", "read_function", "read_interface", "read_file", "read_package", "read_dependency", "bug_delete"}
+		return []string{"read", "grep", "edit", "write", "read_struct", "read_function", "read_interface", "read_file", "read_package", "read_dependency", "bug_delete"}
 	default:
-		return []string{"read", "edit", "write", "read_struct", "read_function", "read_interface", "read_named_type", "read_file", "read_package", "read_dependency", "warnings_list", "bug_report"}
+		return []string{"read", "grep", "edit", "write", "read_struct", "read_function", "read_interface", "read_named_type", "read_file", "read_package", "read_dependency", "warnings_list", "bug_report"}
 	}
 }
 
