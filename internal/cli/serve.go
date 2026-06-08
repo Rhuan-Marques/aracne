@@ -24,7 +24,7 @@ func RunServe(args []string) {
 	cfg := helper.EnsureConfig(helper.ConfigPath(".ltp/topology.db"))
 	registry := BuildToolRegistry(manager, reg, cfg, profile)
 
-	server := mcp.NewServer(registry)
+	server := mcp.NewServerWithAgentRoutes(registry, ".ltp/topology.db", cfg.EffectiveAgentRouteTTL())
 	if err := server.Serve(); err != nil {
 		fmt.Fprintf(os.Stderr, "MCP server error: %v\n", err)
 		os.Exit(1)

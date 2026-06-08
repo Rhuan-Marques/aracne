@@ -13,6 +13,9 @@
     relationshipClickTimer: null,
     inspectorTab: 'inspector',
     optimizationRules: [],
+    agentRoutes: [],
+    agentRouteID: '',
+    agentRouteSocket: null,
     scale: 1,
     ox: 0,
     oy: 0,
@@ -32,6 +35,12 @@
     dependency: '#94a3b8',
     missing: '#fb7185'
   };
+  function routeNodeColor(n) {
+    if (n.agent_route_access === 'full_cut') return '#facc15';
+    if (n.agent_route_access === 'description') return '#ffffff';
+    return '';
+  }
+
   var modeHelp = {
     packages: 'Packages view aggregates package import relationships only.',
     data_flow: 'Data Flow shows functions, methods, structs/classes, named types, and interfaces with call/use/type relationships.',
@@ -137,6 +146,54 @@
       favorite: false,
       operations: [{kind: 'non_exported', value: ''}]
     };
+  }
+
+  function connectAgentRouteSocket() {
+    if (!('WebSocket' in window) || state.agentRouteSocket) return;
+    var protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+    var socket = new WebSocket(protocol + window.location.host + '/api/ws');
+    state.agentRouteSocket = socket;
+    socket.onmessage = function (event) {
+      var message;
+      try {
+        message = JSON.parse(event.data);
+      } catch (e) {
+        return;
+      }
+      if (message.type === 'agent_routes_changed' || message.type === 'agent_route_updated') {
+        loadAgentRoutes().then(function () {
+          if (state.agentRouteID) loadGraph();
+        });
+      }
+    };
+    socket.onclose = function () {
+      state.agentRouteSocket = null;
+      setTimeout(connectAgentRouteSocket, 1500);
+    };
+  }
+
+  function loadAgentRoutes() {
+    return api('/api/agent-routes').then(function (routes) {
+      state.agentRoutes = Array.isArray(routes) ? routes : [];
+      renderAgentRoutes();
+    }).catch(function (err) {
+      showError(err);
+      renderAgentRoutes();
+    });
+  }
+
+  function renderAgentRoutes() {
+    var select = el('agentRoute');
+    if (!select) return;
+    var active = state.agentRoutes.some(function (route) { return route.session_id === state.agentRouteID; });
+    if (!active) state.agentRouteID = '';
+    select.innerHTML = '<option value="">None</option>' + state.agentRoutes.map(function (route) {
+      var label = route.label || (route.platform + ':' + route.session_id);
+      label += ' (' + route.node_count + ')';
+      return '<option value="' + esc(route.session_id) + '"' + (route.session_id === state.agentRouteID ? ' selected' : '') + '>' + esc(label) + '</option>';
+    }).join('');
+    var hint = el('agentRouteHint');
+    if (hint) hint.textContent = state.agentRouteID ? 'Showing only nodes known by the selected agent route.' : 'Show what an active Claude/OpenCode session has seen.';
   }
 
   function loadOptimizationRules() {
@@ -354,6 +411,7 @@
   function withOptimizationRules(filter) {
     var rules = optimizationRulesParam();
     if (rules) filter.optimization_rules = rules;
+    if (state.agentRouteID) filter.agent_route = state.agentRouteID;
     return filter;
   }
 
@@ -403,7 +461,8 @@
       kind: mode === 'custom' ? selectedValues(el('kind')) : [],
       edge_kind: edgeKinds,
       limit: '700',
-      optimization_rules: optimizationRulesParam()
+      optimization_rules: optimizationRulesParam(),
+      agent_route: state.agentRouteID
     });
     api('/api/neighborhood?' + q).then(function (data) {
       setGraph(data);
@@ -549,10 +608,16 @@
       var p = state.pos.get(n.id);
       if (!p) return;
       var r = radius(n);
-      ctx.fillStyle = colors[n.kind] || '#e2e8f0';
+      var routeColor = routeNodeColor(n);
+      ctx.fillStyle = routeColor || colors[n.kind] || '#e2e8f0';
       ctx.beginPath();
       ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
       ctx.fill();
+      if (routeColor) {
+        ctx.strokeStyle = n.agent_route_access === 'full_cut' ? '#fde68a' : '#cbd5e1';
+        ctx.lineWidth = 2 / state.scale;
+        ctx.stroke();
+      }
       if (n.warning_count > 0 || n.bug_count > 0) {
         ctx.strokeStyle = n.bug_count > 0 ? '#fb7185' : '#facc15';
         ctx.lineWidth = 3 / state.scale;
@@ -821,6 +886,11 @@
     loadGraph();
   });
   el('loadGraph').onclick = loadGraph;
+  el('agentRoute').addEventListener('change', function () {
+    state.agentRouteID = el('agentRoute').value;
+    renderAgentRoutes();
+    loadGraph();
+  });
   el('depthControls').addEventListener('click', function (e) {
     var button = e.target.closest('.depthButton');
     if (!button || button.disabled || !state.selected) return;
@@ -877,5 +947,6 @@
     color: edgeColor
   });
   loadSummary();
-  loadOptimizationRules().then(loadGraph);
+  connectAgentRouteSocket();
+  Promise.all([loadOptimizationRules(), loadAgentRoutes()]).then(loadGraph);
 })();

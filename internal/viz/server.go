@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"ltp/internal/helper"
@@ -20,7 +21,9 @@ import (
 )
 
 type Server struct {
-	dbPath string
+	dbPath      string
+	ws          *WebSocketManager
+	watcherOnce sync.Once
 }
 
 type Summary struct {
@@ -36,19 +39,20 @@ type Summary struct {
 }
 
 type GraphNode struct {
-	ID           string              `json:"id"`
-	Name         string              `json:"name"`
-	Kind         string              `json:"kind"`
-	Path         string              `json:"path"`
-	StartsAt     int                 `json:"starts_at"`
-	EndsAt       int                 `json:"ends_at"`
-	Description  string              `json:"description,omitempty"`
-	Properties   map[string]any      `json:"properties,omitempty"`
-	InDegree     int                 `json:"in_degree"`
-	OutDegree    int                 `json:"out_degree"`
-	WarningCount int                 `json:"warning_count"`
-	BugCount     int                 `json:"bug_count"`
-	Includes     []CollapsedResource `json:"includes,omitempty"`
+	ID               string              `json:"id"`
+	Name             string              `json:"name"`
+	Kind             string              `json:"kind"`
+	Path             string              `json:"path"`
+	StartsAt         int                 `json:"starts_at"`
+	EndsAt           int                 `json:"ends_at"`
+	Description      string              `json:"description,omitempty"`
+	Properties       map[string]any      `json:"properties,omitempty"`
+	InDegree         int                 `json:"in_degree"`
+	OutDegree        int                 `json:"out_degree"`
+	WarningCount     int                 `json:"warning_count"`
+	BugCount         int                 `json:"bug_count"`
+	AgentRouteAccess string              `json:"agent_route_access,omitempty"`
+	Includes         []CollapsedResource `json:"includes,omitempty"`
 }
 
 type CollapsedResource struct {
@@ -98,7 +102,7 @@ type graphIndex struct {
 }
 
 func NewServer(dbPath string) *Server {
-	return &Server{dbPath: dbPath}
+	return &Server{dbPath: dbPath, ws: NewWebSocketManager()}
 }
 
 func Listen(addr, dbPath string) error {
@@ -112,14 +116,17 @@ func Listen(addr, dbPath string) error {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.ensureRouteWatcher()
 	mux := http.NewServeMux()
 	mux.Handle("/", staticFileServer())
+	mux.HandleFunc("/api/ws", s.handleWebSocket)
 	mux.HandleFunc("/api/summary", s.handleSummary)
 	mux.HandleFunc("/api/graph", s.handleGraph)
 	mux.HandleFunc("/api/neighborhood", s.handleNeighborhood)
 	mux.HandleFunc("/api/search", s.handleSearch)
 	mux.HandleFunc("/api/node/", s.handleNode)
 	mux.HandleFunc("/api/optimization-rules", s.handleOptimizationRules)
+	mux.HandleFunc("/api/agent-routes", s.handleAgentRoutes)
 	mux.HandleFunc("/api/warnings", s.handleWarnings)
 	mux.HandleFunc("/api/bugs", s.handleBugs)
 	mux.ServeHTTP(w, r)
@@ -211,16 +218,35 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 	limit := queryInt(r.URL.Query(), "limit", 300, 1, 3000)
 
 	var graph GraphResponse
-	switch strings.TrimSpace(r.URL.Query().Get("mode")) {
-	case "packages":
-		graph = idx.packageGraph(query, limit)
-	case "data_flow":
-		graph = idx.resourceGraph(query, dataFlowKinds(), path, dataFlowEdges(), limit, false)
-	default:
+	agentRoute := strings.TrimSpace(r.URL.Query().Get("agent_route"))
+	if agentRoute != "" {
 		kindSet := parseSet(r.URL.Query(), "kind")
 		edgeSet := parseSet(r.URL.Query(), "edge_kind")
-		strictEdges := r.URL.Query().Get("strict_edges") == "true"
-		graph = idx.resourceGraph(query, kindSet, path, edgeSet, limit, strictEdges)
+		switch strings.TrimSpace(r.URL.Query().Get("mode")) {
+		case "packages":
+			kindSet = packageKinds()
+			edgeSet = packageEdges()
+		case "data_flow":
+			kindSet = dataFlowKinds()
+			edgeSet = dataFlowEdges()
+		}
+		graph, err = s.agentRouteGraph(idx, agentRoute, query, kindSet, path, edgeSet, limit)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+	} else {
+		switch strings.TrimSpace(r.URL.Query().Get("mode")) {
+		case "packages":
+			graph = idx.packageGraph(query, limit)
+		case "data_flow":
+			graph = idx.resourceGraph(query, dataFlowKinds(), path, dataFlowEdges(), limit, false)
+		default:
+			kindSet := parseSet(r.URL.Query(), "kind")
+			edgeSet := parseSet(r.URL.Query(), "edge_kind")
+			strictEdges := r.URL.Query().Get("strict_edges") == "true"
+			graph = idx.resourceGraph(query, kindSet, path, edgeSet, limit, strictEdges)
+		}
 	}
 	writeJSON(w, idx.optimizedGraph(graph, rules))
 }
@@ -264,10 +290,27 @@ func (s *Server) handleNeighborhood(w http.ResponseWriter, r *http.Request) {
 	limit := queryInt(r.URL.Query(), "limit", 500, 1, 3000)
 
 	selected, truncated := idx.neighborhood(id, depth, direction, kindSet, edgeSet, limit)
+	routeResources := map[string]helper.AgentRouteResource(nil)
+	if agentRoute := strings.TrimSpace(r.URL.Query().Get("agent_route")); agentRoute != "" {
+		routeResources, err = helper.ReadAgentRouteResources(s.dbPath, agentRoute, s.agentRouteTTL())
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		for nodeID := range selected {
+			if _, ok := routeResources[nodeID]; !ok {
+				delete(selected, nodeID)
+			}
+		}
+	}
 	ids := setIDs(selected)
 	nodes := make([]GraphNode, 0, len(ids))
 	for _, nodeID := range ids {
-		nodes = append(nodes, idx.nodeDTO(nodeID))
+		node := idx.nodeDTO(nodeID)
+		if routeResources != nil {
+			node.AgentRouteAccess = normalizeRouteAccessForGraph(routeResources[nodeID].AccessKind)
+		}
+		nodes = append(nodes, node)
 	}
 	edges := idx.edgesWithin(selected, edgeSet)
 	graph := GraphResponse{Nodes: nodes, Edges: edges, Truncated: truncated, Limit: limit, TotalMatch: len(nodes)}

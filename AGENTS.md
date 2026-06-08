@@ -13,10 +13,10 @@ The topology is a directed graph can enhance your information about the reposito
 **Note: Never try to use `read` native tool, use MCP lookups instead**
 
 ## MCP Lookup tools:
-- `llm-topology_read_interface`: Reads the interface and context for which resources it is implemented by, receives an interface ID.
 - `llm-topology_read_file`: Reads the content of a file, receives the file path.
 - `llm-topology_read_struct`: Reads the struct and context for resources it uses, receives a struct ID.
 - `llm-topology_read_function`: Reads the function and context for resources it uses, receives a function ID.
+- `llm-topology_read_interface`: Reads the interface and context for which resources it is implemented by, receives an interface ID.
 
 Note: Do *not* use "cat", "Get-Content" or any other OS command to read files## Grep/Search
 

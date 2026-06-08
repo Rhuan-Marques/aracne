@@ -148,7 +148,10 @@ func createSchema(db *sql.DB) error {
 	CREATE INDEX IF NOT EXISTS idx_bugs_state ON bugs(state);
 	`
 	_, err := db.Exec(ddl)
-	return err
+	if err != nil {
+		return err
+	}
+	return createAgentRouteSchema(db)
 }
 
 func ReadDb(path string) (*domain.Topology, error) {

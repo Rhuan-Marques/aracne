@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"time"
 
 	"ltp/internal/llm/tools"
 )
@@ -12,11 +13,17 @@ import (
 // MCP JSON-RPC server that listens on stdin/stdout and dispatches requests to the registered tool handlers.
 type Server struct {
 	registry *tools.Registry
+	dbPath   string
+	routeTTL time.Duration
 }
 
 // Creates a new MCP Server instance with the given tool registry, used to handle JSON-RPC requests over stdio.
 func NewServer(registry *tools.Registry) *Server {
 	return &Server{registry: registry}
+}
+
+func NewServerWithAgentRoutes(registry *tools.Registry, dbPath string, routeTTL time.Duration) *Server {
+	return &Server{registry: registry, dbPath: dbPath, routeTTL: routeTTL}
 }
 
 // Starts the MCP server's stdio event loop. Reads JSON-RPC 2.0 messages line by line from stdin, dispatches them to the appropriate handler, and writes responses to stdout. Returns any scanner error encountered.
@@ -137,6 +144,7 @@ func (s *Server) handleCallTool(id *int, params json.RawMessage) *Response {
 			},
 		}
 	}
+	s.recordAgentRouteForTool(call.Name, call.Arguments, result)
 
 	return &Response{
 		JSONRPC: "2.0",

@@ -19,6 +19,8 @@ func main() {
 		cli.RunScan(os.Args[2:])
 	case "agent":
 		cli.RunAgent(os.Args[2:])
+	case "agent-route":
+		cli.RunAgentRoute(os.Args[2:])
 	case "serve":
 		cli.RunServe(os.Args[2:])
 	case "viz":

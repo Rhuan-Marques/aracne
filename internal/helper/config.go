@@ -58,6 +58,7 @@ type Config struct {
 	ReadSplit       map[domain.ResourceKind]bool `json:"read_split,omitempty"`
 	MaxFileSize     int64                        `json:"max_file_size,omitempty"`
 	Scanner         ScannerConfig                `json:"scanner"`
+	AgentRoutes     AgentRoutesConfig            `json:"agent_routes"`
 }
 
 func (c *Config) EffectiveMaxFileSize() int64 {
@@ -86,7 +87,7 @@ func DefaultDescribeTargets() []domain.ResourceKind {
 }
 
 func DefaultConfig() *Config {
-	return &Config{ScanMode: ScanModeDefault, ToolModes: DefaultToolModes(), DescribeTargets: DefaultDescribeTargets(), MaxFileSize: 512 * 1024, Scanner: ScannerConfig{UpdateFrequency: 200}}
+	return &Config{ScanMode: ScanModeDefault, ToolModes: DefaultToolModes(), DescribeTargets: DefaultDescribeTargets(), MaxFileSize: 512 * 1024, Scanner: ScannerConfig{UpdateFrequency: 200}, AgentRoutes: AgentRoutesConfig{TTLSeconds: DefaultAgentRouteTTLSeconds}}
 }
 
 func LoadConfig(path string) *Config {
@@ -127,6 +128,9 @@ func LoadConfig(path string) *Config {
 	}
 	if loaded.Scanner.UpdateFrequency > 0 {
 		cfg.Scanner.UpdateFrequency = loaded.Scanner.UpdateFrequency
+	}
+	if loaded.AgentRoutes.TTLSeconds > 0 {
+		cfg.AgentRoutes.TTLSeconds = loaded.AgentRoutes.TTLSeconds
 	}
 	return cfg
 }

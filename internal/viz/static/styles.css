@@ -595,6 +595,22 @@ pre {
   color: var(--accent);
 }
 
+.agentRouteControls {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.025);
+  margin: 12px 0;
+  padding: 10px;
+}
+
+.agentRouteControls label {
+  margin-top: 0;
+}
+
+.agentRouteControls select {
+  background: linear-gradient(180deg, #252d3f, #1f2635);
+}
+
 .sidebarTool {
   display: flex;
   align-items: center;
