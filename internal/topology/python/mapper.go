@@ -21,6 +21,9 @@ func FromGeneric(topo *domain.Topology) *PythonTopology {
 	}
 
 	for id, res := range topo.Resources {
+		if res.Language != "" && res.Language != "python" {
+			continue
+		}
 		switch res.Kind {
 		case domain.ResourceFunction, domain.ResourceMethod:
 			f := PythonFunction{
@@ -131,6 +134,7 @@ func ToGeneric(gt *PythonTopology) *domain.Topology {
 	topo := &domain.Topology{
 		Root:      gt.Root,
 		Language:  "python",
+		Languages: []string{"python"},
 		Resources: make(map[string]domain.Resource),
 		Errors:    gt.Errors,
 	}
@@ -233,6 +237,11 @@ func ToGeneric(gt *PythonTopology) *domain.Topology {
 				Name: did,
 			}
 		}
+	}
+
+	for id, res := range topo.Resources {
+		res.Language = "python"
+		topo.Resources[id] = res
 	}
 
 	return topo

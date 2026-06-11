@@ -45,7 +45,7 @@ func RunScannerRun(args []string) {
 	// avoiding concurrent SQLite access with IncrementalScan.
 	manifestPath := helper.ManifestPath(dbPath)
 
-	// Read the topology once up front to get root and language.
+	// Read the topology once up front to get root.
 	topo, err := helper.ReadDb(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error reading topology: %v\n", err)
@@ -55,7 +55,6 @@ func RunScannerRun(args []string) {
 	if root == "" {
 		root = "."
 	}
-	language := topo.Language
 
 	reg := NewScannerRegistry()
 	manager := topology.New()
@@ -75,13 +74,23 @@ func RunScannerRun(args []string) {
 		time.Sleep(time.Duration(frequency) * time.Millisecond)
 	}
 
+	diffChanged := func() (added, modified, deleted []string) {
+		for _, ls := range reg.DetectAll(root) {
+			a, m, d := helper.DiffScanFiles(root, ls.Name(), manifestPath)
+			added = append(added, a...)
+			modified = append(modified, m...)
+			deleted = append(deleted, d...)
+		}
+		return
+	}
+
 	for {
 		if !scanMu.TryLock() {
 			sleep()
 			continue
 		}
 
-		added, modified, deleted := helper.DiffScanFiles(root, language, manifestPath)
+		added, modified, deleted := diffChanged()
 		changed := len(added) + len(modified) + len(deleted)
 
 		if changed == 0 {

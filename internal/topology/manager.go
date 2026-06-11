@@ -30,12 +30,7 @@ func (m *TopologyManager) DbPath() string {
 }
 
 func (m *TopologyManager) FullScan(root string, reg *scanner.Registry) error {
-	langScanner := reg.Detect(root)
-	if langScanner == nil {
-		return fmt.Errorf("no language scanner detected for %s", root)
-	}
-
-	topo, err := langScanner.Scan(root)
+	topo, err := scanAllLanguages(root, reg)
 	if err != nil {
 		return err
 	}
@@ -47,8 +42,7 @@ func (m *TopologyManager) FullScan(root string, reg *scanner.Registry) error {
 }
 
 func (m *TopologyManager) IncrementalScan(root string, reg *scanner.Registry) ([]domain.TopologyWarning, error) {
-	langScanner := reg.Detect(root)
-	if langScanner == nil {
+	if len(reg.DetectAll(root)) == 0 {
 		return nil, fmt.Errorf("no language scanner detected for %s", root)
 	}
 
@@ -62,7 +56,14 @@ func (m *TopologyManager) IncrementalScan(root string, reg *scanner.Registry) ([
 		return m.FullReScan(root, reg)
 	}
 
-	added, modified, deleted := helper.DiffScanFiles(root, topo.Language, manifestPath)
+	langScanners := reg.DetectAll(root)
+	var added, modified, deleted []string
+	for _, ls := range langScanners {
+		a, m, d := helper.DiffScanFiles(root, ls.Name(), manifestPath)
+		added = append(added, a...)
+		modified = append(modified, m...)
+		deleted = append(deleted, d...)
+	}
 
 	if len(added) == 0 && len(modified) == 0 && len(deleted) == 0 {
 		helper.SyncManifest(topo, m.dbPath)
@@ -72,7 +73,11 @@ func (m *TopologyManager) IncrementalScan(root string, reg *scanner.Registry) ([
 	var allWarnings []domain.TopologyWarning
 
 	for _, path := range append(added, modified...) {
-		warnings, err := langScanner.UpdateFile(topo, path)
+		langScanner := reg.DetectFile(path)
+		if langScanner == nil {
+			continue
+		}
+		warnings, err := updateFileWithScanner(topo, langScanner, path)
 		if err != nil {
 			allWarnings = append(allWarnings, domain.TopologyWarning{
 				ID:       "error:" + path,
@@ -95,6 +100,7 @@ func (m *TopologyManager) IncrementalScan(root string, reg *scanner.Registry) ([
 	}
 
 	helper.CleanupOrphanedWarnings(topo)
+	normalizeTopologyLanguages(topo)
 
 	if err := helper.WriteDb(topo, m.dbPath); err != nil {
 		return allWarnings, fmt.Errorf("write topology db: %w", err)
@@ -107,12 +113,7 @@ func (m *TopologyManager) IncrementalScan(root string, reg *scanner.Registry) ([
 }
 
 func (m *TopologyManager) FullReScan(root string, reg *scanner.Registry) ([]domain.TopologyWarning, error) {
-	langScanner := reg.Detect(root)
-	if langScanner == nil {
-		return nil, fmt.Errorf("no language scanner detected for %s", root)
-	}
-
-	newTopo, err := langScanner.Scan(root)
+	newTopo, err := scanAllLanguages(root, reg)
 	if err != nil {
 		return nil, err
 	}
@@ -176,6 +177,10 @@ func (m *TopologyManager) Cut(loc domain.Location) (*domain.CodeEntry, error) {
 	if len(lines) > 0 && lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
 	}
+	if loc.StartsAt == 0 && loc.EndsAt == 0 {
+		loc.StartsAt = 1
+		loc.EndsAt = len(lines)
+	}
 	if loc.EndsAt < loc.StartsAt {
 		return nil, fmt.Errorf("EndsAt %d < StartsAt %d", loc.EndsAt, loc.StartsAt)
 	}
@@ -212,40 +217,236 @@ func (m *TopologyManager) UpdateFile(path string, reg *scanner.Registry) ([]doma
 		return warnings, nil
 	}
 
-	if !helper.IsSourceFile(absPath, topo.Language) {
-		return finish(helper.RemoveFileResources(topo, absPath))
-	}
 	if _, err := os.Stat(absPath); os.IsNotExist(err) {
 		return finish(helper.RemoveFileResources(topo, absPath))
 	} else if err != nil {
 		return nil, err
 	}
 
-	var langScanner scanner.LanguageScanner
-	if topo.Language != "" {
-		for _, s := range reg.All() {
-			if s.Name() == topo.Language {
-				langScanner = s
-				break
-			}
-		}
-	}
+	langScanner := reg.DetectFile(absPath)
 	if langScanner == nil {
-		langScanner = reg.Detect(topo.Root)
+		return finish(helper.RemoveFileResources(topo, absPath))
 	}
-	if langScanner == nil {
-		return nil, fmt.Errorf("no language scanner found")
+	if !helper.IsSourceFile(absPath, langScanner.Name()) {
+		return finish(helper.RemoveFileResources(topo, absPath))
 	}
 
 	beforeWarnings := cloneWarnings(topo.Warnings)
 
-	_, err = langScanner.UpdateFile(topo, absPath)
+	_, err = updateFileWithScanner(topo, langScanner, absPath)
 	if err != nil {
 		return nil, err
 	}
 
 	warnings := addedWarnings(beforeWarnings, topo.Warnings)
 	return finish(warnings)
+}
+
+func scanAllLanguages(root string, reg *scanner.Registry) (*domain.Topology, error) {
+	langScanners := reg.DetectAll(root)
+	if len(langScanners) == 0 {
+		return nil, fmt.Errorf("no language scanner detected for %s", root)
+	}
+
+	merged := &domain.Topology{
+		Resources: make(map[string]domain.Resource),
+		Warnings:  make(map[string]domain.TopologyWarning),
+		Errors:    make(map[string]string),
+	}
+	for _, langScanner := range langScanners {
+		topo, err := langScanner.Scan(root)
+		if err != nil {
+			return nil, fmt.Errorf("scan %s: %w", langScanner.Name(), err)
+		}
+		tagTopologyLanguage(topo, langScanner.Name())
+		mergeTopology(merged, topo)
+	}
+	normalizeTopologyLanguages(merged)
+	return merged, nil
+}
+
+func updateFileWithScanner(topo *domain.Topology, langScanner scanner.LanguageScanner, path string) ([]domain.TopologyWarning, error) {
+	lang := langScanner.Name()
+	subTopo := languageSubTopology(topo, lang)
+	warnings, err := langScanner.UpdateFile(subTopo, path)
+	if err != nil {
+		return nil, err
+	}
+	tagTopologyLanguage(subTopo, lang)
+	topo.Warnings = cloneWarnings(subTopo.Warnings)
+	removeLanguageResources(topo, lang)
+	mergeTopology(topo, subTopo)
+	normalizeTopologyLanguages(topo)
+	return warnings, nil
+}
+
+func languageSubTopology(topo *domain.Topology, language string) *domain.Topology {
+	sub := &domain.Topology{
+		Root:      topo.Root,
+		Language:  language,
+		Languages: []string{language},
+		Resources: make(map[string]domain.Resource),
+		Warnings:  make(map[string]domain.TopologyWarning),
+		Errors:    make(map[string]string),
+	}
+	for id, res := range topo.Resources {
+		if resourceLanguage(res, topo.Language) == language {
+			sub.Resources[id] = cloneResource(res)
+		}
+	}
+	for id, warning := range topo.Warnings {
+		sub.Warnings[id] = warning
+	}
+	for path, msg := range topo.Errors {
+		if helper.IsSourceFile(path, language) {
+			sub.Errors[path] = msg
+		}
+	}
+	return sub
+}
+
+func tagTopologyLanguage(topo *domain.Topology, language string) {
+	if topo == nil {
+		return
+	}
+	if topo.Resources == nil {
+		topo.Resources = make(map[string]domain.Resource)
+	}
+	if topo.Warnings == nil {
+		topo.Warnings = make(map[string]domain.TopologyWarning)
+	}
+	if topo.Errors == nil {
+		topo.Errors = make(map[string]string)
+	}
+	for id, res := range topo.Resources {
+		if res.Language == "" {
+			res.Language = language
+			topo.Resources[id] = res
+		}
+	}
+	if len(topo.Languages) == 0 && language != "" {
+		topo.Languages = []string{language}
+	}
+	if topo.Language == "" {
+		topo.Language = language
+	}
+}
+
+func mergeTopology(dst, src *domain.Topology) {
+	if src == nil {
+		return
+	}
+	if dst.Root == "" {
+		dst.Root = src.Root
+	}
+	if dst.Resources == nil {
+		dst.Resources = make(map[string]domain.Resource)
+	}
+	if dst.Warnings == nil {
+		dst.Warnings = make(map[string]domain.TopologyWarning)
+	}
+	if dst.Errors == nil {
+		dst.Errors = make(map[string]string)
+	}
+	for id, res := range src.Resources {
+		if existing, exists := dst.Resources[id]; exists && resourceLanguage(existing, dst.Language) != resourceLanguage(res, src.Language) {
+			dst.Errors["resource-collision:"+id] = fmt.Sprintf("resource id %s exists in both %s and %s", id, resourceLanguage(existing, dst.Language), resourceLanguage(res, src.Language))
+			continue
+		}
+		dst.Resources[id] = cloneResource(res)
+	}
+	for id, warning := range src.Warnings {
+		dst.Warnings[id] = warning
+	}
+	for path, msg := range src.Errors {
+		dst.Errors[path] = msg
+	}
+}
+
+func removeLanguageResources(topo *domain.Topology, language string) {
+	removed := make(map[string]bool)
+	for id, res := range topo.Resources {
+		if resourceLanguage(res, topo.Language) == language {
+			removed[id] = true
+			delete(topo.Resources, id)
+		}
+	}
+	if len(removed) == 0 {
+		return
+	}
+	for id, res := range topo.Resources {
+		for connType, targets := range res.Connections {
+			kept := targets[:0]
+			for _, target := range targets {
+				if !removed[target] {
+					kept = append(kept, target)
+				}
+			}
+			if len(kept) == 0 {
+				delete(res.Connections, connType)
+			} else {
+				res.Connections[connType] = kept
+			}
+		}
+		topo.Resources[id] = res
+	}
+	for path := range topo.Errors {
+		if helper.IsSourceFile(path, language) {
+			delete(topo.Errors, path)
+		}
+	}
+}
+
+func normalizeTopologyLanguages(topo *domain.Topology) {
+	if topo == nil {
+		return
+	}
+	seen := make(map[string]bool)
+	for id, res := range topo.Resources {
+		lang := resourceLanguage(res, topo.Language)
+		if lang == "" {
+			continue
+		}
+		if res.Language == "" {
+			res.Language = lang
+			topo.Resources[id] = res
+		}
+		seen[lang] = true
+	}
+	languages := make([]string, 0, len(seen))
+	for lang := range seen {
+		languages = append(languages, lang)
+	}
+	sort.Strings(languages)
+	topo.Languages = languages
+	if len(languages) == 1 {
+		topo.Language = languages[0]
+	} else if len(languages) > 1 {
+		topo.Language = "multi"
+	}
+}
+
+func resourceLanguage(res domain.Resource, fallback string) string {
+	if res.Language != "" {
+		return res.Language
+	}
+	if fallback != "multi" {
+		return fallback
+	}
+	return ""
+}
+
+func cloneResource(res domain.Resource) domain.Resource {
+	clone := res
+	clone.Properties = make(map[string]any, len(res.Properties))
+	for key, value := range res.Properties {
+		clone.Properties[key] = value
+	}
+	clone.Connections = make(map[string][]string, len(res.Connections))
+	for kind, targets := range res.Connections {
+		clone.Connections[kind] = append([]string(nil), targets...)
+	}
+	return clone
 }
 
 func cloneWarnings(warnings map[string]domain.TopologyWarning) map[string]domain.TopologyWarning {
@@ -360,3 +561,5 @@ func (m *TopologyManager) ListWarnings(sourceID, targetID string, kind domain.Wa
 	}
 	return results, nil
 }
+
+

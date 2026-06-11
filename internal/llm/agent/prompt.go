@@ -11,6 +11,8 @@ func BuildPrompt(language string) string {
 		return gotools.BuildGoSystemPrompt()
 	case "python":
 		return pythontools.BuildPythonSystemPrompt()
+	case "multi":
+		return gotools.BuildGoSystemPrompt() + "\n\n" + pythontools.BuildPythonSystemPrompt()
 	default:
 		return gotools.BuildGoSystemPrompt()
 	}

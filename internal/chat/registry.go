@@ -4,6 +4,7 @@ import (
 	"aracne/internal/helper"
 	"aracne/internal/llm/languages/gotools"
 	"aracne/internal/llm/languages/pythontools"
+	"aracne/internal/llm/languages/universaltools"
 	"aracne/internal/llm/tools"
 	"aracne/internal/topology"
 	"aracne/internal/topology/domain"
@@ -48,45 +49,19 @@ func BuildToolRegistry(manager *topology.TopologyManager, scannerReg *scanner.Re
 	for kind := range cfg.ReadSplit {
 		switch kind {
 		case domain.ResourceFunction, domain.ResourceMethod:
-			if lang == "python" {
-				registry.Register(pythontools.NewReadFunction(python.NewPythonManager(manager)))
-			} else {
-				registry.Register(gotools.NewReadFunction(golang.NewGoManager(manager)))
-			}
+			registry.Register(universaltools.NewReadFunction(manager))
 		case domain.ResourceType:
-			if lang == "python" {
-				registry.Register(pythontools.NewReadStruct(python.NewPythonManager(manager)))
-			} else {
-				registry.Register(gotools.NewReadStruct(golang.NewGoManager(manager)))
-			}
+			registry.Register(universaltools.NewReadStruct(manager))
 		case domain.ResourceInterface:
-			if lang == "python" {
-				registry.Register(pythontools.NewReadInterface(python.NewPythonManager(manager)))
-			} else {
-				registry.Register(gotools.NewReadInterface(golang.NewGoManager(manager)))
-			}
+			registry.Register(universaltools.NewReadInterface(manager))
 		case domain.ResourceNamedType:
-			if lang != "python" {
-				registry.Register(gotools.NewReadNamedType(golang.NewGoManager(manager)))
-			}
+			registry.Register(universaltools.NewReadNamedType(manager))
 		case domain.ResourceFile:
-			if lang == "python" {
-				registry.Register(pythontools.NewReadFile(python.NewPythonManager(manager)))
-			} else {
-				registry.Register(gotools.NewReadFile(golang.NewGoManager(manager)))
-			}
+			registry.Register(universaltools.NewReadFile(manager))
 		case domain.ResourcePackage:
-			if lang == "python" {
-				registry.Register(pythontools.NewReadPackage(python.NewPythonManager(manager)))
-			} else {
-				registry.Register(gotools.NewReadPackage(golang.NewGoManager(manager)))
-			}
+			registry.Register(universaltools.NewReadPackage(manager))
 		case domain.ResourceDependency:
-			if lang == "python" {
-				registry.Register(pythontools.NewReadDependency(python.NewPythonManager(manager)))
-			} else {
-				registry.Register(gotools.NewReadDependency(golang.NewGoManager(manager)))
-			}
+			registry.Register(universaltools.NewReadDependency(manager))
 		}
 	}
 	registerLanguageMaintenanceTools(registry, manager, lang, cfg.DescribeTargets)

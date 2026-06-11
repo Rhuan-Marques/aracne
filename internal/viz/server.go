@@ -22,17 +22,17 @@ import (
 )
 
 type Server struct {
-	dbPath      string
-	ws          *WebSocketManager
-	watcherOnce sync.Once
-	chatOnce    sync.Once
-	chatMgr     *chat.Manager
-	chatErr     error
+	dbPath   string
+	ws       *WebSocketManager
+	chatOnce sync.Once
+	chatMgr  *chat.Manager
+	chatErr  error
 }
 
 type Summary struct {
 	Root         string         `json:"root"`
 	Language     string         `json:"language"`
+	Languages    []string       `json:"languages"`
 	NodeCount    int            `json:"node_count"`
 	EdgeCount    int            `json:"edge_count"`
 	WarningCount int            `json:"warning_count"`
@@ -46,6 +46,7 @@ type GraphNode struct {
 	ID               string              `json:"id"`
 	Name             string              `json:"name"`
 	Kind             string              `json:"kind"`
+	Language         string              `json:"language"`
 	Path             string              `json:"path"`
 	StartsAt         int                 `json:"starts_at"`
 	EndsAt           int                 `json:"ends_at"`
@@ -55,7 +56,6 @@ type GraphNode struct {
 	OutDegree        int                 `json:"out_degree"`
 	WarningCount     int                 `json:"warning_count"`
 	BugCount         int                 `json:"bug_count"`
-	AgentRouteAccess string              `json:"agent_route_access,omitempty"`
 	Includes         []CollapsedResource `json:"includes,omitempty"`
 }
 
@@ -120,7 +120,6 @@ func Listen(addr, dbPath string) error {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	s.ensureRouteWatcher()
 	mux := http.NewServeMux()
 	mux.Handle("/", staticFileServer())
 	mux.HandleFunc("/api/ws", s.handleWebSocket)
@@ -130,7 +129,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	mux.HandleFunc("/api/search", s.handleSearch)
 	mux.HandleFunc("/api/node/", s.handleNode)
 	mux.HandleFunc("/api/optimization-rules", s.handleOptimizationRules)
-	mux.HandleFunc("/api/agent-routes", s.handleAgentRoutes)
 	mux.HandleFunc("/api/chat", s.handleChat)
 	mux.HandleFunc("/api/chat/", s.handleChat)
 	mux.HandleFunc("/api/warnings", s.handleWarnings)
@@ -182,6 +180,10 @@ func (s *Server) loadIndex() (*graphIndex, error) {
 	return idx, nil
 }
 
+func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	s.ws.ServeHTTP(w, r)
+}
+
 func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	idx, err := s.loadIndex()
 	if err != nil {
@@ -191,6 +193,7 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	summary := Summary{
 		Root:         idx.topo.Root,
 		Language:     idx.topo.Language,
+		Languages:    idx.languages(),
 		NodeCount:    len(idx.topo.Resources),
 		WarningCount: len(idx.topo.Warnings),
 		BugCount:     len(idx.bugs),
@@ -221,38 +224,20 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 	}
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
 	path := strings.TrimSpace(r.URL.Query().Get("path"))
+	language := normalizeLanguageFilter(r.URL.Query().Get("language"))
 	limit := queryInt(r.URL.Query(), "limit", 300, 1, 3000)
 
 	var graph GraphResponse
-	agentRoute := strings.TrimSpace(r.URL.Query().Get("agent_route"))
-	if agentRoute != "" {
+	switch strings.TrimSpace(r.URL.Query().Get("mode")) {
+	case "packages":
+		graph = idx.packageGraph(query, language, limit)
+	case "data_flow":
+		graph = idx.resourceGraph(query, dataFlowKinds(), path, language, dataFlowEdges(), limit, false)
+	default:
 		kindSet := parseSet(r.URL.Query(), "kind")
 		edgeSet := parseSet(r.URL.Query(), "edge_kind")
-		switch strings.TrimSpace(r.URL.Query().Get("mode")) {
-		case "packages":
-			kindSet = packageKinds()
-			edgeSet = packageEdges()
-		case "data_flow":
-			kindSet = dataFlowKinds()
-			edgeSet = dataFlowEdges()
-		}
-		graph, err = s.agentRouteGraph(idx, agentRoute, query, kindSet, path, edgeSet, limit)
-		if err != nil {
-			writeError(w, err)
-			return
-		}
-	} else {
-		switch strings.TrimSpace(r.URL.Query().Get("mode")) {
-		case "packages":
-			graph = idx.packageGraph(query, limit)
-		case "data_flow":
-			graph = idx.resourceGraph(query, dataFlowKinds(), path, dataFlowEdges(), limit, false)
-		default:
-			kindSet := parseSet(r.URL.Query(), "kind")
-			edgeSet := parseSet(r.URL.Query(), "edge_kind")
-			strictEdges := r.URL.Query().Get("strict_edges") == "true"
-			graph = idx.resourceGraph(query, kindSet, path, edgeSet, limit, strictEdges)
-		}
+		strictEdges := r.URL.Query().Get("strict_edges") == "true"
+		graph = idx.resourceGraph(query, kindSet, path, language, edgeSet, limit, strictEdges)
 	}
 	writeJSON(w, idx.optimizedGraph(graph, rules))
 }
@@ -296,26 +281,10 @@ func (s *Server) handleNeighborhood(w http.ResponseWriter, r *http.Request) {
 	limit := queryInt(r.URL.Query(), "limit", 500, 1, 3000)
 
 	selected, truncated := idx.neighborhood(id, depth, direction, kindSet, edgeSet, limit)
-	routeResources := map[string]helper.AgentRouteResource(nil)
-	if agentRoute := strings.TrimSpace(r.URL.Query().Get("agent_route")); agentRoute != "" {
-		routeResources, err = helper.ReadAgentRouteResources(s.dbPath, agentRoute, s.agentRouteTTL())
-		if err != nil {
-			writeError(w, err)
-			return
-		}
-		for nodeID := range selected {
-			if _, ok := routeResources[nodeID]; !ok {
-				delete(selected, nodeID)
-			}
-		}
-	}
 	ids := setIDs(selected)
 	nodes := make([]GraphNode, 0, len(ids))
 	for _, nodeID := range ids {
 		node := idx.nodeDTO(nodeID)
-		if routeResources != nil {
-			node.AgentRouteAccess = normalizeRouteAccessForGraph(routeResources[nodeID].AccessKind)
-		}
 		nodes = append(nodes, node)
 	}
 	edges := idx.edgesWithin(selected, edgeSet)
@@ -332,8 +301,9 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
 	kindSet := parseSet(r.URL.Query(), "kind")
 	path := strings.TrimSpace(r.URL.Query().Get("path"))
+	language := normalizeLanguageFilter(r.URL.Query().Get("language"))
 	limit := queryInt(r.URL.Query(), "limit", 50, 1, 500)
-	ids := idx.filteredIDs(query, kindSet, path)
+	ids := idx.filteredIDs(query, kindSet, path, language)
 	if len(ids) > limit {
 		ids = ids[:limit]
 	}
@@ -809,8 +779,8 @@ func sourceCut(root string, loc domain.Location) (string, error) {
 	return strings.Join(lines[loc.StartsAt-1:loc.EndsAt], "\n"), nil
 }
 
-func (idx *graphIndex) resourceGraph(query string, kindSet map[string]bool, path string, edgeSet map[string]bool, limit int, strictEdges bool) GraphResponse {
-	ids := idx.filteredIDs(query, kindSet, path)
+func (idx *graphIndex) resourceGraph(query string, kindSet map[string]bool, path string, language string, edgeSet map[string]bool, limit int, strictEdges bool) GraphResponse {
+	ids := idx.filteredIDs(query, kindSet, path, language)
 	total := len(ids)
 
 	if strictEdges && hasSet(edgeSet) {
@@ -852,12 +822,15 @@ func (idx *graphIndex) resourceGraph(query string, kindSet map[string]bool, path
 	return GraphResponse{Nodes: nodes, Edges: edges, Truncated: truncated, Limit: limit, TotalMatch: total}
 }
 
-func (idx *graphIndex) packageGraph(query string, limit int) GraphResponse {
+func (idx *graphIndex) packageGraph(query string, language string, limit int) GraphResponse {
 	query = strings.ToLower(query)
 	membership := idx.packageMembership()
 	packageIDs := make([]string, 0)
 	for id, res := range idx.topo.Resources {
 		if res.Kind != domain.ResourcePackage {
+			continue
+		}
+		if language != "" && idx.resourceLanguage(res) != language {
 			continue
 		}
 		if query != "" && !strings.Contains(strings.ToLower(id), query) && !strings.Contains(strings.ToLower(res.Name), query) && !strings.Contains(strings.ToLower(res.Description), query) {
@@ -956,11 +929,14 @@ func (idx *graphIndex) targetPackage(targetID string, membership map[string]stri
 	return ""
 }
 
-func (idx *graphIndex) filteredIDs(query string, kindSet map[string]bool, path string) []string {
+func (idx *graphIndex) filteredIDs(query string, kindSet map[string]bool, path string, language string) []string {
 	query = strings.ToLower(query)
 	path = strings.ToLower(path)
 	ids := make([]string, 0, len(idx.topo.Resources))
 	for id, res := range idx.topo.Resources {
+		if language != "" && idx.resourceLanguage(res) != language {
+			continue
+		}
 		if hasSet(kindSet) && !kindSet[strings.ToLower(string(res.Kind))] {
 			continue
 		}
@@ -986,6 +962,36 @@ func (idx *graphIndex) filteredIDs(query string, kindSet map[string]bool, path s
 	return ids
 }
 
+func (idx *graphIndex) languages() []string {
+	seen := make(map[string]bool)
+	for _, lang := range idx.topo.Languages {
+		if lang != "" {
+			seen[lang] = true
+		}
+	}
+	for _, res := range idx.topo.Resources {
+		if lang := idx.resourceLanguage(res); lang != "" {
+			seen[lang] = true
+		}
+	}
+	languages := make([]string, 0, len(seen))
+	for lang := range seen {
+		languages = append(languages, lang)
+	}
+	sort.Strings(languages)
+	return languages
+}
+
+func (idx *graphIndex) resourceLanguage(res domain.Resource) string {
+	if res.Language != "" {
+		return res.Language
+	}
+	if idx.topo.Language != "multi" {
+		return idx.topo.Language
+	}
+	return ""
+}
+
 func (idx *graphIndex) nodeDTO(id string) GraphNode {
 	res, ok := idx.topo.Resources[id]
 	if !ok {
@@ -995,6 +1001,7 @@ func (idx *graphIndex) nodeDTO(id string) GraphNode {
 		ID:           id,
 		Name:         res.Name,
 		Kind:         string(res.Kind),
+		Language:     idx.resourceLanguage(res),
 		Path:         relativePath(idx.topo.Root, res.Location.Path),
 		StartsAt:     res.Location.StartsAt,
 		EndsAt:       res.Location.EndsAt,
@@ -1184,6 +1191,14 @@ func dataFlowEdges() map[string]bool {
 		"uses_named_type": true,
 		"uses_struct":     true,
 	}
+}
+
+func normalizeLanguageFilter(language string) string {
+	language = strings.ToLower(strings.TrimSpace(language))
+	if language == "" || language == "all" {
+		return ""
+	}
+	return language
 }
 
 func parseSet(values url.Values, key string) map[string]bool {

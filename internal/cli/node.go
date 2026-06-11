@@ -55,3 +55,36 @@ func RunNodeListNoDescription() {
 		fmt.Println(id)
 	}
 }
+
+func RunNodeCount() {
+	manager, _ := InitRegistry(".aracne/topology.db")
+
+	topo, err := manager.ReadAll()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println(len(topo.Resources))
+}
+
+func RunNodeCountNoDescription() {
+	manager, _ := InitRegistry(".aracne/topology.db")
+	cfg := helper.EnsureConfig(helper.ConfigPath(".aracne/topology.db"))
+	targetSet := helper.DescribeTargetSet(cfg.DescribeTargets)
+
+	topo, err := manager.ReadAll()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	var count int
+	for _, res := range topo.Resources {
+		if res.Description == "" && targetSet[res.Kind] {
+			count++
+		}
+	}
+
+	fmt.Println(count)
+}

@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
-	"time"
 
 	"aracne/internal/topology/domain"
 )
@@ -42,12 +41,6 @@ func TestConcurrentSQLiteAccessDoesNotLock(t *testing.T) {
 				}
 				if err := CreateBug(dbPath, domain.KnownBug{ID: fmt.Sprintf("bug_%d_%d", worker, i), NodeID: "f1", Description: "test", State: domain.BugPending}); err != nil {
 					errs <- fmt.Errorf("CreateBug: %w", err)
-				}
-				if err := RecordAgentRouteAccess(dbPath, fmt.Sprintf("session_%d", worker), "test", "worker", AgentRouteAccessDescription, []string{"f1", "f2"}, time.Minute); err != nil {
-					errs <- fmt.Errorf("RecordAgentRouteAccess: %w", err)
-				}
-				if _, err := ReadAgentRoutes(dbPath, time.Minute); err != nil {
-					errs <- fmt.Errorf("ReadAgentRoutes: %w", err)
 				}
 			}
 		}()

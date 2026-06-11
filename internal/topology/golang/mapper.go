@@ -24,6 +24,9 @@ func FromGeneric(topo *domain.Topology) *GolangTopology {
 	}
 
 	for id, res := range topo.Resources {
+		if res.Language != "" && res.Language != "go" {
+			continue
+		}
 		switch res.Kind {
 		case domain.ResourceFunction, domain.ResourceMethod:
 			f := GolangFunction{
@@ -152,6 +155,7 @@ func ToGeneric(gt *GolangTopology) *domain.Topology {
 	topo := &domain.Topology{
 		Root:      gt.Root,
 		Language:  "go",
+		Languages: []string{"go"},
 		Resources: make(map[string]domain.Resource),
 		Warnings:  gt.Warnings,
 		Errors:    gt.Errors,
@@ -278,6 +282,11 @@ func ToGeneric(gt *GolangTopology) *domain.Topology {
 				Name: did,
 			}
 		}
+	}
+
+	for id, res := range topo.Resources {
+		res.Language = "go"
+		topo.Resources[id] = res
 	}
 
 	return topo

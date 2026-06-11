@@ -41,8 +41,15 @@ func WriteDb(topo *domain.Topology, path string) error {
 		if _, err := tx.Exec("INSERT INTO info VALUES ('language', ?)", topo.Language); err != nil {
 			return err
 		}
+		languagesJSON, err := json.Marshal(topo.Languages)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec("INSERT INTO info VALUES ('languages', ?)", string(languagesJSON)); err != nil {
+			return err
+		}
 
-		resStmt, err := tx.Prepare("INSERT INTO resources VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+		resStmt, err := tx.Prepare("INSERT INTO resources (id, kind, name, language, description, properties_json, starts_at, ends_at, loc_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
 		if err != nil {
 			return err
 		}
@@ -70,7 +77,7 @@ func WriteDb(topo *domain.Topology, path string) error {
 				endsAt = res.Location.EndsAt
 				locPath = res.Location.Path
 			}
-			if _, err := resStmt.Exec(id, string(res.Kind), res.Name, res.Description, propsJSON, startsAt, endsAt, locPath); err != nil {
+			if _, err := resStmt.Exec(id, string(res.Kind), res.Name, res.Language, res.Description, propsJSON, startsAt, endsAt, locPath); err != nil {
 				return err
 			}
 			for kind, targets := range res.Connections {
@@ -106,6 +113,7 @@ func createSchema(db *sql.DB) error {
 		id TEXT PRIMARY KEY,
 		kind TEXT NOT NULL,
 		name TEXT NOT NULL,
+		language TEXT DEFAULT '',
 		description TEXT,
 		properties_json TEXT,
 		starts_at INT NOT NULL DEFAULT 0,
@@ -144,7 +152,45 @@ func createSchema(db *sql.DB) error {
 	if err != nil {
 		return err
 	}
-	return createAgentRouteSchema(db)
+	if err := ensureResourceLanguageColumn(db); err != nil {
+		return err
+	}
+	return nil
+}
+
+func ensureResourceLanguageColumn(db *sql.DB) error {
+	hasColumn, err := resourceLanguageColumnExists(db)
+	if err != nil {
+		return err
+	}
+	if hasColumn {
+		return nil
+	}
+	_, err = db.Exec("ALTER TABLE resources ADD COLUMN language TEXT DEFAULT ''")
+	return err
+}
+
+func resourceLanguageColumnExists(db *sql.DB) (bool, error) {
+	rows, err := db.Query("PRAGMA table_info(resources)")
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name string
+		var typ string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return false, err
+		}
+		if name == "language" {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 func ReadDb(path string) (*domain.Topology, error) {
@@ -171,6 +217,8 @@ func ReadDb(path string) (*domain.Topology, error) {
 				read.Root = val
 			} else if key == "language" {
 				read.Language = val
+			} else if key == "languages" {
+				_ = json.Unmarshal([]byte(val), &read.Languages)
 			} else if len(key) > 6 && key[:6] == "error:" {
 				read.Errors[key[6:]] = val
 			}
@@ -181,22 +229,38 @@ func ReadDb(path string) (*domain.Topology, error) {
 		}
 		rows.Close()
 
-		resRows, err := db.Query("SELECT id, kind, name, description, properties_json, starts_at, ends_at, loc_path FROM resources")
+		hasResourceLanguage, err := resourceLanguageColumnExists(db)
+		if err != nil {
+			return err
+		}
+		resourceQuery := "SELECT id, kind, name, description, properties_json, starts_at, ends_at, loc_path FROM resources"
+		if hasResourceLanguage {
+			resourceQuery = "SELECT id, kind, name, language, description, properties_json, starts_at, ends_at, loc_path FROM resources"
+		}
+		resRows, err := db.Query(resourceQuery)
 		if err != nil {
 			return err
 		}
 		for resRows.Next() {
-			var id, kind, name, desc, propsJSON, locPath string
+			var id, kind, name, language, desc, propsJSON, locPath string
 			var startsAt, endsAt int
-			err = resRows.Scan(&id, &kind, &name, &desc, &propsJSON, &startsAt, &endsAt, &locPath)
+			if hasResourceLanguage {
+				err = resRows.Scan(&id, &kind, &name, &language, &desc, &propsJSON, &startsAt, &endsAt, &locPath)
+			} else {
+				err = resRows.Scan(&id, &kind, &name, &desc, &propsJSON, &startsAt, &endsAt, &locPath)
+			}
 			if err != nil {
 				resRows.Close()
 				return err
+			}
+			if language == "" {
+				language = read.Language
 			}
 			res := domain.Resource{
 				ID:          id,
 				Kind:        domain.ResourceKind(kind),
 				Name:        name,
+				Language:    language,
 				Description: desc,
 				Location: domain.Location{
 					StartsAt: startsAt,
@@ -256,6 +320,22 @@ func ReadDb(path string) (*domain.Topology, error) {
 		}
 		if err := warnRows.Err(); err != nil {
 			return err
+		}
+
+		if len(read.Languages) == 0 && read.Language != "" {
+			read.Languages = []string{read.Language}
+		}
+		seenLanguages := make(map[string]bool, len(read.Languages))
+		for _, lang := range read.Languages {
+			if lang != "" {
+				seenLanguages[lang] = true
+			}
+		}
+		for _, res := range read.Resources {
+			if res.Language != "" && !seenLanguages[res.Language] {
+				read.Languages = append(read.Languages, res.Language)
+				seenLanguages[res.Language] = true
+			}
 		}
 
 		topo = read
@@ -320,19 +400,15 @@ func GetCallers(dbPath string, targetID string, connType string) ([]string, erro
 }
 
 func CreateBug(dbPath string, bug domain.KnownBug) error {
-	db, err := sql.Open("sqlite", dbPath+"?cache=shared&_journal_mode=WAL")
-	if err != nil {
-		return err
-	}
-	defer db.Close()
+	return withSQLiteWrite(dbPath, func(db *sql.DB) error {
+		if err := createSchema(db); err != nil {
+			return err
+		}
 
-	if err := createSchema(db); err != nil {
+		_, err := db.Exec("INSERT INTO bugs (id, node_id, description, state) VALUES (?, ?, ?, ?)",
+			bug.ID, bug.NodeID, bug.Description, string(bug.State))
 		return err
-	}
-
-	_, err = db.Exec("INSERT INTO bugs (id, node_id, description, state) VALUES (?, ?, ?, ?)",
-		bug.ID, bug.NodeID, bug.Description, string(bug.State))
-	return err
+	})
 }
 
 func ReadBugs(dbPath string, nodeID string, state domain.BugState) ([]domain.KnownBug, error) {

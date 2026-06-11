@@ -10,7 +10,7 @@
 <body>
   <header class="appHeader">
     <a class="appBrand" href="/graph" data-route="/graph" aria-label="Aracne Viz home">
-      <img class="mark" src="/aracne.svg" alt="">
+      <img class="mark" src="/aracne.png" alt="">
       <span>Aracne Viz</span>
     </a>
     <nav class="appNav" aria-label="Screens">
@@ -40,6 +40,11 @@
           </select>
           <p id="modeHelp" class="modeHelp"></p>
 
+          <label>Language</label>
+          <select id="language">
+            <option value="all">All</option>
+          </select>
+
           <label>Search</label>
           <input id="query" placeholder="function, path, description">
 
@@ -59,14 +64,6 @@
               <button type="button" class="depthButton" data-depth="3" disabled>3</button>
               <button type="button" class="depthButton" data-depth="4" disabled>4</button>
             </div>
-          </section>
-
-          <section class="agentRouteControls" aria-label="Agent route">
-            <label for="agentRoute">Agent Route</label>
-            <select id="agentRoute">
-              <option value="">None</option>
-            </select>
-            <p id="agentRouteHint" class="fieldHint">Show what an active Claude/OpenCode session has seen.</p>
           </section>
 
           <button id="graphOptimizationToggle" class="sidebarTool" type="button">

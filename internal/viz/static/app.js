@@ -13,9 +13,7 @@
     relationshipClickTimer: null,
     inspectorTab: 'inspector',
     optimizationRules: [],
-    agentRoutes: [],
-    agentRouteID: '',
-    agentRouteSocket: null,
+    languages: [],
     chatSessions: [],
     chatSession: null,
     chatAgents: [],
@@ -47,12 +45,7 @@
     dependency: '#94a3b8',
     missing: '#fb7185'
   };
-  function routeNodeColor(n) {
-    if (n.agent_route_access === 'full_cut') return '#facc15';
-    if (n.agent_route_access === 'description') return '#ffffff';
-    return '';
-  }
-
+  function routeNodeColor(n) {}
   var modeHelp = {
     packages: 'Packages view aggregates package import relationships only.',
     data_flow: 'Data Flow shows functions, methods, structs/classes, named types, and interfaces with call/use/type relationships.',
@@ -256,64 +249,6 @@
     return path === '/graph' || path.indexOf('/chat/') === 0 || state.chatThinking;
   }
 
-  function disconnectAgentRouteSocket() {
-    if (!state.agentRouteSocket) return;
-    state.agentRouteSocket.onclose = null;
-    state.agentRouteSocket.close();
-    state.agentRouteSocket = null;
-  }
-
-  function connectAgentRouteSocket() {
-    if (!('WebSocket' in window) || state.agentRouteSocket || !chatSocketNeeded()) return;
-    var protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
-    var socket = new WebSocket(protocol + window.location.host + '/api/ws');
-    state.agentRouteSocket = socket;
-    socket.onmessage = function (event) {
-      var message;
-      try {
-        message = JSON.parse(event.data);
-      } catch (e) {
-        return;
-      }
-      if (message.type === 'agent_routes_changed' || message.type === 'agent_route_updated') {
-        loadAgentRoutes().then(function () {
-          if (state.agentRouteID) loadGraph();
-        });
-      }
-      if (message.type === 'chat_event') {
-        handleChatEvent(message.payload || {});
-      }
-    };
-    socket.onclose = function () {
-      state.agentRouteSocket = null;
-      if (chatSocketNeeded()) setTimeout(connectAgentRouteSocket, 1500);
-    };
-  }
-
-  function loadAgentRoutes() {
-    return api('/api/agent-routes').then(function (routes) {
-      state.agentRoutes = Array.isArray(routes) ? routes : [];
-      renderAgentRoutes();
-    }).catch(function (err) {
-      showError(err);
-      renderAgentRoutes();
-    });
-  }
-
-  function renderAgentRoutes() {
-    var select = el('agentRoute');
-    if (!select) return;
-    var active = state.agentRoutes.some(function (route) { return route.session_id === state.agentRouteID; });
-    if (!active) state.agentRouteID = '';
-    select.innerHTML = '<option value="">None</option>' + state.agentRoutes.map(function (route) {
-      var label = route.label || (route.platform + ':' + route.session_id);
-      label += ' (' + route.node_count + ')';
-      return '<option value="' + esc(route.session_id) + '"' + (route.session_id === state.agentRouteID ? ' selected' : '') + '>' + esc(label) + '</option>';
-    }).join('');
-    var hint = el('agentRouteHint');
-    if (hint) hint.textContent = state.agentRouteID ? 'Showing only nodes known by the selected agent route.' : 'Show what an active Claude/OpenCode session has seen.';
-  }
-
   function loadOptimizationRules() {
     return api('/api/optimization-rules').then(function (rules) {
       state.optimizationRules = Array.isArray(rules) ? rules : [];
@@ -510,9 +445,23 @@
   function loadSummary() {
     api('/api/summary').then(function (s) {
       el('subtitle').textContent = (s.language || 'unknown') + ' topology';
+      state.languages = s.languages || [];
+      populateLanguages(state.languages);
       populateEdgeTypes(s.edge_types || {});
       el('status').textContent = 'Ready. Load a standard view or customize a slice.';
     }).catch(showError);
+  }
+
+  function populateLanguages(languages) {
+    var select = el('language');
+    if (!select) return;
+    var current = select.value || 'all';
+    var options = ['<option value="all">All</option>'];
+    (languages || []).forEach(function (language) {
+      options.push('<option value="' + esc(language) + '">' + esc(language) + '</option>');
+    });
+    select.innerHTML = options.join('');
+    select.value = (current !== 'all' && (languages || []).indexOf(current) === -1) ? 'all' : current;
   }
 
   function populateEdgeTypes(edgeCounts) {
@@ -529,7 +478,6 @@
   function withOptimizationRules(filter) {
     var rules = optimizationRulesParam();
     if (rules) filter.optimization_rules = rules;
-    if (state.agentRouteID) filter.agent_route = state.agentRouteID;
     return filter;
   }
 
@@ -537,7 +485,8 @@
     var mode = el('mode').value;
     var filter = {
       mode: mode,
-      q: el('query').value.trim()
+      q: el('query').value.trim(),
+      language: el('language') ? el('language').value : 'all'
     };
     if (mode === 'packages') {
       filter.limit = '1000';
@@ -576,11 +525,11 @@
       depth: String(targetDepth),
       direction: 'both',
       mode: mode,
+      language: el('language') ? el('language').value : 'all',
       kind: mode === 'custom' ? selectedValues(el('kind')) : [],
       edge_kind: edgeKinds,
       limit: '700',
-      optimization_rules: optimizationRulesParam(),
-      agent_route: state.agentRouteID
+      optimization_rules: optimizationRulesParam()
     });
     api('/api/neighborhood?' + q).then(function (data) {
       setGraph(data);
@@ -630,12 +579,48 @@
 
   function seedPositions() {
     var rect = canvas.getBoundingClientRect();
-    var radius = Math.max(80, Math.min(rect.width, rect.height) * 0.34);
-    state.nodes.forEach(function (n, i) {
-      var a = (Math.PI * 2 * i) / Math.max(1, state.nodes.length);
-      state.pos.set(n.id, {x: Math.cos(a) * radius, y: Math.sin(a) * radius});
+    var centers = languageCenters();
+    var grouped = new Map();
+    state.nodes.forEach(function (n) {
+      var lang = n.language || 'unknown';
+      if (!grouped.has(lang)) grouped.set(lang, []);
+      grouped.get(lang).push(n);
+    });
+    state.nodes.forEach(function (n) {
+      var langNodes = grouped.get(n.language || 'unknown') || state.nodes;
+      var i = langNodes.indexOf(n);
+      var center = centers.get(n.language || 'unknown') || {x: 0, y: 0};
+      var radius = Math.max(70, Math.min(rect.width, rect.height) * (centers.size > 1 ? 0.16 : 0.34));
+      var a = (Math.PI * 2 * i) / Math.max(1, langNodes.length);
+      state.pos.set(n.id, {x: center.x + Math.cos(a) * radius, y: center.y + Math.sin(a) * radius});
       state.vel.set(n.id, {x: 0, y: 0});
     });
+  }
+
+  function languageCenters() {
+    var selected = el('language') ? el('language').value : 'all';
+    var langs = [];
+    var seen = new Set();
+    state.nodes.forEach(function (n) {
+      var lang = n.language || 'unknown';
+      if (!seen.has(lang)) {
+        seen.add(lang);
+        langs.push(lang);
+      }
+    });
+    langs.sort();
+    var centers = new Map();
+    if (selected !== 'all' || langs.length <= 1) {
+      langs.forEach(function (lang) { centers.set(lang, {x: 0, y: 0}); });
+      return centers;
+    }
+    var rect = canvas.getBoundingClientRect();
+    var spread = Math.max(260, Math.min(rect.width, rect.height) * 0.44);
+    langs.forEach(function (lang, i) {
+      var a = (Math.PI * 2 * i) / Math.max(1, langs.length);
+      centers.set(lang, {x: Math.cos(a) * spread, y: Math.sin(a) * spread});
+    });
+    return centers;
   }
 
   function runSimulation(ticks) {
@@ -683,11 +668,13 @@
       push(e.source, dx / d * f, dy / d * f);
       push(e.target, -dx / d * f, -dy / d * f);
     });
+    var centers = languageCenters();
     nodes.forEach(function (n) {
       var p = state.pos.get(n.id);
       var v = state.vel.get(n.id);
-      v.x += -p.x * 0.001;
-      v.y += -p.y * 0.001;
+      var center = centers.get(n.language || 'unknown') || {x: 0, y: 0};
+      v.x += (center.x - p.x) * 0.001;
+      v.y += (center.y - p.y) * 0.001;
       v.x *= 0.82;
       v.y *= 0.82;
       p.x += v.x;
@@ -726,16 +713,10 @@
       var p = state.pos.get(n.id);
       if (!p) return;
       var r = radius(n);
-      var routeColor = routeNodeColor(n);
-      ctx.fillStyle = routeColor || colors[n.kind] || '#e2e8f0';
+      ctx.fillStyle = colors[n.kind] || '#e2e8f0';
       ctx.beginPath();
       ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
       ctx.fill();
-      if (routeColor) {
-        ctx.strokeStyle = n.agent_route_access === 'full_cut' ? '#fde68a' : '#cbd5e1';
-        ctx.lineWidth = 2 / state.scale;
-        ctx.stroke();
-      }
       if (n.warning_count > 0 || n.bug_count > 0) {
         ctx.strokeStyle = n.bug_count > 0 ? '#fb7185' : '#facc15';
         ctx.lineWidth = 3 / state.scale;
@@ -963,8 +944,6 @@
     if (route === 'settings') loadChatProvider();
     if (route === 'history') loadChatHistory();
     if (route === 'chat') enterChatRoute(path);
-    if (path === '/chat') disconnectAgentRouteSocket();
-    else if (route === 'graph' || route === 'chat') connectAgentRouteSocket();
   }
 
   var sessionIDRe = /^chat_\d+_[0-9a-f]+$/;
@@ -1425,7 +1404,6 @@
     state.chatThinking = true;
     state.chatStreaming = null;
     renderChatThinking();
-    connectAgentRouteSocket();
     function sent(session) {
       input.value = '';
       state.chatSession = session;
@@ -1538,7 +1516,6 @@
     el('agentMenu').classList.add('hidden');
     state.chatThinking = true;
     renderChatThinking();
-    connectAgentRouteSocket();
     createChatSession('default', name).then(function (session) {
       if (!session) return;
       return apiJSON('/api/chat/workflows', 'POST', {session_id: session.id, type: taskID, batch_size: 5, parallel: 2}).catch(showChatError);
@@ -1547,7 +1524,6 @@
 
   function startWorkflow(kind) {
     function run() {
-      connectAgentRouteSocket();
       return apiJSON('/api/chat/workflows', 'POST', {session_id: state.chatSession.id, type: kind, batch_size: 5, parallel: 2}).catch(showChatError);
     }
     if (state.chatSession) run(); else createChatSession('default', agentName(kind)).then(run);
@@ -1639,12 +1615,8 @@
     updateModeControls();
     loadGraph();
   });
+  el('language').addEventListener('change', loadGraph);
   el('loadGraph').onclick = loadGraph;
-  el('agentRoute').addEventListener('change', function () {
-    state.agentRouteID = el('agentRoute').value;
-    renderAgentRoutes();
-    loadGraph();
-  });
   el('depthControls').addEventListener('click', function (e) {
     var button = e.target.closest('.depthButton');
     if (!button || button.disabled || !state.selected) return;
@@ -1807,6 +1779,5 @@
     color: edgeColor
   });
   loadSummary();
-  connectAgentRouteSocket();
-  Promise.all([loadOptimizationRules(), loadAgentRoutes()]).then(loadGraph);
+  Promise.all([loadOptimizationRules()]).then(loadGraph);
 })();

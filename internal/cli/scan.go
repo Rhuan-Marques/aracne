@@ -14,7 +14,7 @@ import (
 
 func RunScan(args []string) {
 	fs := flag.NewFlagSet("scan", flag.ExitOnError)
-	root := fs.String("root", ".", "Root folder of the Go project to analyze")
+	root := fs.String("root", ".", "Root folder of the project to analyze")
 	output := fs.String("output", ".aracne/topology.db", "Output SQLite database path")
 	allFlag := fs.Bool("all", false, "Re-scan all files (preserves existing descriptions)")
 	hardFlag := fs.Bool("hard", false, "Force full rebuild from scratch (clears descriptions and bugs)")
@@ -43,7 +43,7 @@ func RunScan(args []string) {
 		}
 	}
 
-	fmt.Printf("Analyzing Go project at: %s\n", *root)
+	fmt.Printf("Analyzing project at: %s\n", *root)
 
 	start := time.Now()
 	reg := NewScannerRegistry()

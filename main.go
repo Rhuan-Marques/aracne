@@ -19,8 +19,6 @@ func main() {
 		cli.RunScan(os.Args[2:])
 	case "agent":
 		cli.RunAgent(os.Args[2:])
-	case "agent-route":
-		cli.RunAgentRoute(os.Args[2:])
 	case "serve":
 		cli.RunServe(os.Args[2:])
 	case "viz":
@@ -57,15 +55,25 @@ func main() {
 	case "write":
 		cli.RunWrite()
 	case "node":
-		if len(os.Args) < 3 || os.Args[2] != "list" {
+		if len(os.Args) < 3 || (os.Args[2] != "list" && os.Args[2] != "count") {
 			fmt.Fprintln(os.Stderr, "Usage: arac node list [--no-description]")
+			fmt.Fprintln(os.Stderr, "       arac node count [--no-description]")
 			os.Exit(1)
 		}
 		noDesc := len(os.Args) > 3 && os.Args[3] == "--no-description"
-		if noDesc {
-			cli.RunNodeListNoDescription()
-		} else {
-			cli.RunNodeList()
+		switch os.Args[2] {
+		case "list":
+			if noDesc {
+				cli.RunNodeListNoDescription()
+			} else {
+				cli.RunNodeList()
+			}
+		case "count":
+			if noDesc {
+				cli.RunNodeCountNoDescription()
+			} else {
+				cli.RunNodeCount()
+			}
 		}
 	case "warnings":
 		if len(os.Args) < 3 || os.Args[2] != "list" {

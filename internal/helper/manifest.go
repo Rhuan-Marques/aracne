@@ -55,7 +55,11 @@ func SyncManifest(topo *domain.Topology, dbPath string) {
 
 	currentFiles := make(map[string]bool)
 	for _, res := range topo.Resources {
-		if res.Kind == domain.ResourceFile && IsSourceFile(res.ID, topo.Language) {
+		language := res.Language
+		if language == "" {
+			language = topo.Language
+		}
+		if res.Kind == domain.ResourceFile && IsSourceFile(res.ID, language) {
 			currentFiles[res.ID] = true
 		}
 	}

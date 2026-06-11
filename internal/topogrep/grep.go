@@ -137,16 +137,16 @@ func searchFile(path string, re *regexp.Regexp, index map[string][]resourceLocat
 			continue
 		}
 		resource := bestResource(resources, lineNo)
-		if resource == nil {
-			continue
+		m := Match{
+			Path: displayPath(path),
+			Line: lineNo,
+			Text: line,
 		}
-		matches = append(matches, Match{
-			Path:        displayPath(path),
-			Line:        lineNo,
-			Text:        line,
-			ResourceID:  resource.id,
-			Description: resource.description,
-		})
+		if resource != nil {
+			m.ResourceID = resource.id
+			m.Description = resource.description
+		}
+		matches = append(matches, m)
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, nil

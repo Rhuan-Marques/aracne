@@ -46,7 +46,7 @@ func TestSearchAnnotatesResourceMatch(t *testing.T) {
 	}
 }
 
-func TestSearchIgnoresMatchesOutsideTopology(t *testing.T) {
+func TestSearchReturnsTopologyAndRawMatches(t *testing.T) {
 	dir := t.TempDir()
 	topoFile := filepath.Join(dir, "topo.go")
 	rawFile := filepath.Join(dir, "raw.go")
@@ -71,15 +71,27 @@ func TestSearchIgnoresMatchesOutsideTopology(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
-	if len(matches) != 1 {
-		t.Fatalf("expected only topology-backed match, got %d: %+v", len(matches), matches)
+	if len(matches) != 2 {
+		t.Fatalf("expected 2 matches (topology + raw), got %d: %+v", len(matches), matches)
 	}
-	if matches[0].ResourceID != "example.Target" || !strings.HasSuffix(matches[0].Path, "topo.go") {
-		t.Fatalf("unexpected match: %+v", matches[0])
+
+	var topoMatch, rawMatch *Match
+	for i, m := range matches {
+		if strings.HasSuffix(m.Path, "topo.go") {
+			topoMatch = &matches[i]
+		} else if strings.HasSuffix(m.Path, "raw.go") {
+			rawMatch = &matches[i]
+		}
+	}
+	if topoMatch == nil || topoMatch.ResourceID != "example.Target" {
+		t.Fatalf("topology file missing annotation: %+v", topoMatch)
+	}
+	if rawMatch == nil || rawMatch.ResourceID != "" {
+		t.Fatalf("raw file should have no annotation: %+v", rawMatch)
 	}
 }
 
-func TestSearchReturnsNoMatchesWithoutTopology(t *testing.T) {
+func TestSearchReturnsAllMatchesWithoutTopology(t *testing.T) {
 	dir := t.TempDir()
 	filePath := filepath.Join(dir, "sample.go")
 	if err := os.WriteFile(filePath, []byte("package main\n\nfunc Target() {\n\tfmt.Println(\"needle\")\n}\n"), 0644); err != nil {
@@ -90,7 +102,10 @@ func TestSearchReturnsNoMatchesWithoutTopology(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
-	if len(matches) != 0 {
-		t.Fatalf("expected no matches without topology, got %d: %+v", len(matches), matches)
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 match without topology, got %d: %+v", len(matches), matches)
+	}
+	if matches[0].ResourceID != "" {
+		t.Fatalf("expected no annotation without topology, got ResourceID=%q", matches[0].ResourceID)
 	}
 }

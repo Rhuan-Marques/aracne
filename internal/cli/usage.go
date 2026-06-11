@@ -8,7 +8,6 @@ func PrintUsage() {
 Usage:
   Aracne scan    [flags]    Incremental scan (changed files only); --all for full re-scan, --hard for full rebuild
   Aracne agent   [prompt]   Run the AI coding agent
-  Aracne agent-route record [flags]  Record Claude/OpenCode agent route access
   Aracne serve   [flags]    Start MCP server (for OpenCode / Claude Code integration)
   Aracne viz serve [flags]  Start local topology graph visualization UI
   Aracne init    [flags]    Initialize topology integration (--claude, --opencode, --global)
@@ -23,6 +22,8 @@ Usage:
   arac update-description <id> <kind> <desc>  Update a resource's description in the topology DB
   arac node list             List all nodes (IDs only)
   arac node list --no-description  List undocumented nodes (IDs only)
+  arac node count            Print total node count
+  arac node count --no-description  Print count of undocumented nodes
   arac warnings list [flags] List outstanding topology warnings
   arac bug report  [flags] Report a bug on a resource node
   arac bug list    [flags] List known bugs (filterable by node or state)
@@ -44,14 +45,6 @@ Flags for "scan":
 
 Flags for "serve":
   --tool-profile <profile>  Tool profile: default, descriptions-executor, bug-hunter, bug-judge, bug-solver, or all
-
-Flags for "agent-route record":
-  --db <path>          Topology database path (default ".aracne/topology.db")
-  --session <id>       Claude/OpenCode session ID
-  --platform <name>    claude or opencode
-  --label <text>       Optional display label
-  --kind <kind>        full_cut or description
-  --resource <id>      Resource ID; repeat for multiple resources
 
 Flags for "viz serve":
   --db <path>      Topology database path (default ".aracne/topology.db")
