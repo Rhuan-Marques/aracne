@@ -8,13 +8,13 @@ import (
 
 func RunUpdateDescription(args []string) {
 	if len(args) < 3 {
-		fmt.Fprintln(os.Stderr, "Usage: ltp update-description <id> <kind> <description>")
+		fmt.Fprintln(os.Stderr, "Usage: arac update-description <id> <kind> <description>")
 		os.Exit(1)
 	}
 	id, resourceName := args[0], args[1]
 	description := strings.Join(args[2:], " ")
 
-	manager, _ := InitRegistry(".ltp/topology.db")
+	manager, _ := InitRegistry(".aracne/topology.db")
 
 	kind := MapResourceKind(resourceName)
 	if kind == "" {

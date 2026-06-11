@@ -65,15 +65,12 @@ func createAgentRouteSchema(db *sql.DB) error {
 }
 
 func CleanupStaleAgentRoutes(dbPath string, ttl time.Duration) error {
-	db, err := sql.Open("sqlite", dbPath+"?cache=shared&_journal_mode=WAL")
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	if err := createSchema(db); err != nil {
-		return err
-	}
-	return cleanupStaleAgentRoutesDB(db, ttl)
+	return withSQLiteWrite(dbPath, func(db *sql.DB) error {
+		if err := createSchema(db); err != nil {
+			return err
+		}
+		return cleanupStaleAgentRoutesDB(db, ttl)
+	})
 }
 
 func cleanupStaleAgentRoutesDB(db *sql.DB, ttl time.Duration) error {
@@ -114,71 +111,61 @@ func RecordAgentRouteAccess(dbPath, sessionID, platform, label, accessKind strin
 		return fmt.Errorf("missing resource id")
 	}
 
-	db, err := sql.Open("sqlite", dbPath+"?cache=shared&_journal_mode=WAL")
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	if err := createSchema(db); err != nil {
-		return err
-	}
-	if err := cleanupStaleAgentRoutesDB(db, ttl); err != nil {
-		return err
-	}
-
-	now := time.Now().UnixMilli()
-	tx, err := db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err := tx.Exec(`INSERT INTO agent_routes (session_id, platform, label, started_at, last_seen_at)
-		VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT(session_id) DO UPDATE SET platform = excluded.platform, label = excluded.label, last_seen_at = excluded.last_seen_at`, sessionID, platform, label, now, now); err != nil {
-		return err
-	}
-	for _, id := range ids {
-		if _, err := tx.Exec(`INSERT INTO agent_route_resources (session_id, resource_id, access_kind, last_seen_at)
-			VALUES (?, ?, ?, ?)
-			ON CONFLICT(session_id, resource_id) DO UPDATE SET
-				access_kind = CASE WHEN agent_route_resources.access_kind = ? THEN agent_route_resources.access_kind ELSE excluded.access_kind END,
-				last_seen_at = excluded.last_seen_at`, sessionID, id, accessKind, now, AgentRouteAccessFullCut); err != nil {
+	return withSQLiteWrite(dbPath, func(db *sql.DB) error {
+		if err := createSchema(db); err != nil {
 			return err
 		}
-	}
-	return tx.Commit()
+		if err := cleanupStaleAgentRoutesDB(db, ttl); err != nil {
+			return err
+		}
+
+		now := time.Now().UnixMilli()
+		tx, err := db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if _, err := tx.Exec(`INSERT INTO agent_routes (session_id, platform, label, started_at, last_seen_at)
+			VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT(session_id) DO UPDATE SET platform = excluded.platform, label = excluded.label, last_seen_at = excluded.last_seen_at`, sessionID, platform, label, now, now); err != nil {
+			return err
+		}
+		for _, id := range ids {
+			if _, err := tx.Exec(`INSERT INTO agent_route_resources (session_id, resource_id, access_kind, last_seen_at)
+				VALUES (?, ?, ?, ?)
+				ON CONFLICT(session_id, resource_id) DO UPDATE SET
+					access_kind = CASE WHEN agent_route_resources.access_kind = ? THEN agent_route_resources.access_kind ELSE excluded.access_kind END,
+					last_seen_at = excluded.last_seen_at`, sessionID, id, accessKind, now, AgentRouteAccessFullCut); err != nil {
+				return err
+			}
+		}
+		return tx.Commit()
+	})
 }
 
 func ReadAgentRoutes(dbPath string, ttl time.Duration) ([]AgentRouteSummary, error) {
-	db, err := sql.Open("sqlite", dbPath+"?cache=shared&_journal_mode=WAL")
-	if err != nil {
-		return nil, err
-	}
-	defer db.Close()
-	if err := createSchema(db); err != nil {
-		return nil, err
-	}
-	if err := cleanupStaleAgentRoutesDB(db, ttl); err != nil {
-		return nil, err
-	}
-	rows, err := db.Query(`SELECT r.session_id, r.platform, r.label, r.started_at, r.last_seen_at, COUNT(rr.resource_id)
-		FROM agent_routes r
-		LEFT JOIN agent_route_resources rr ON rr.session_id = r.session_id
-		GROUP BY r.session_id, r.platform, r.label, r.started_at, r.last_seen_at
-		ORDER BY r.last_seen_at DESC`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	routes := make([]AgentRouteSummary, 0)
-	for rows.Next() {
-		var route AgentRouteSummary
-		if err := rows.Scan(&route.SessionID, &route.Platform, &route.Label, &route.StartedAt, &route.LastSeenAt, &route.NodeCount); err != nil {
-			return nil, err
+	var routes []AgentRouteSummary
+	err := withSQLiteRead(dbPath, func(db *sql.DB) error {
+		rows, err := db.Query(`SELECT r.session_id, r.platform, r.label, r.started_at, r.last_seen_at, COUNT(rr.resource_id)
+			FROM agent_routes r
+			LEFT JOIN agent_route_resources rr ON rr.session_id = r.session_id
+			GROUP BY r.session_id, r.platform, r.label, r.started_at, r.last_seen_at
+			ORDER BY r.last_seen_at DESC`)
+		if err != nil {
+			return err
 		}
-		routes = append(routes, route)
-	}
-	return routes, rows.Err()
+		defer rows.Close()
+		routes = make([]AgentRouteSummary, 0)
+		for rows.Next() {
+			var route AgentRouteSummary
+			if err := rows.Scan(&route.SessionID, &route.Platform, &route.Label, &route.StartedAt, &route.LastSeenAt, &route.NodeCount); err != nil {
+				return err
+			}
+			routes = append(routes, route)
+		}
+		return rows.Err()
+	})
+	return routes, err
 }
 
 func ReadAgentRouteResources(dbPath, sessionID string, ttl time.Duration) (map[string]AgentRouteResource, error) {
@@ -186,51 +173,38 @@ func ReadAgentRouteResources(dbPath, sessionID string, ttl time.Duration) (map[s
 	if sessionID == "" {
 		return nil, fmt.Errorf("missing session id")
 	}
-	db, err := sql.Open("sqlite", dbPath+"?cache=shared&_journal_mode=WAL")
-	if err != nil {
-		return nil, err
-	}
-	defer db.Close()
-	if err := createSchema(db); err != nil {
-		return nil, err
-	}
-	if err := cleanupStaleAgentRoutesDB(db, ttl); err != nil {
-		return nil, err
-	}
-	rows, err := db.Query("SELECT resource_id, access_kind, last_seen_at FROM agent_route_resources WHERE session_id = ?", sessionID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
 	resources := make(map[string]AgentRouteResource)
-	for rows.Next() {
-		var res AgentRouteResource
-		if err := rows.Scan(&res.ResourceID, &res.AccessKind, &res.LastSeenAt); err != nil {
-			return nil, err
+	err := withSQLiteRead(dbPath, func(db *sql.DB) error {
+		rows, err := db.Query("SELECT resource_id, access_kind, last_seen_at FROM agent_route_resources WHERE session_id = ?", sessionID)
+		if err != nil {
+			return err
 		}
-		resources[res.ResourceID] = res
-	}
-	return resources, rows.Err()
+		defer rows.Close()
+		for rows.Next() {
+			var res AgentRouteResource
+			if err := rows.Scan(&res.ResourceID, &res.AccessKind, &res.LastSeenAt); err != nil {
+				return err
+			}
+			resources[res.ResourceID] = res
+		}
+		return rows.Err()
+	})
+	return resources, err
 }
 
 func AgentRoutesVersion(dbPath string, ttl time.Duration) (string, error) {
-	db, err := sql.Open("sqlite", dbPath+"?cache=shared&_journal_mode=WAL")
-	if err != nil {
-		return "", err
-	}
-	defer db.Close()
-	if err := createSchema(db); err != nil {
-		return "", err
-	}
-	if err := cleanupStaleAgentRoutesDB(db, ttl); err != nil {
-		return "", err
-	}
 	var routeCount, resourceCount int
 	var maxRouteSeen, maxResourceSeen sql.NullInt64
-	if err := db.QueryRow("SELECT COUNT(*), MAX(last_seen_at) FROM agent_routes").Scan(&routeCount, &maxRouteSeen); err != nil {
-		return "", err
-	}
-	if err := db.QueryRow("SELECT COUNT(*), MAX(last_seen_at) FROM agent_route_resources").Scan(&resourceCount, &maxResourceSeen); err != nil {
+	err := withSQLiteRead(dbPath, func(db *sql.DB) error {
+		if err := db.QueryRow("SELECT COUNT(*), MAX(last_seen_at) FROM agent_routes").Scan(&routeCount, &maxRouteSeen); err != nil {
+			return err
+		}
+		if err := db.QueryRow("SELECT COUNT(*), MAX(last_seen_at) FROM agent_route_resources").Scan(&resourceCount, &maxResourceSeen); err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("%d:%d:%d:%d", routeCount, nullInt64(maxRouteSeen), resourceCount, nullInt64(maxResourceSeen)), nil

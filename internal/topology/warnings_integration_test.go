@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"ltp/internal/topology"
-	"ltp/internal/topology/domain"
-	"ltp/internal/topology/scanner"
-	"ltp/internal/topology/scanner/goscanner"
+	"aracne/internal/topology"
+	"aracne/internal/topology/domain"
+	"aracne/internal/topology/scanner"
+	"aracne/internal/topology/scanner/goscanner"
 )
 
 type warnProj struct {
@@ -17,7 +17,7 @@ type warnProj struct {
 }
 
 func newWarnProj(t *testing.T) *warnProj {
-	dir, err := os.MkdirTemp("", "ltp-warn-*")
+	dir, err := os.MkdirTemp("", "Aracne-warn-*")
 	if err != nil {
 		t.Fatal(err)
 	}

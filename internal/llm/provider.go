@@ -19,7 +19,7 @@ type ToolDefinition struct {
 type Parameters struct {
 	Type       string              `json:"type"`
 	Properties map[string]Property `json:"properties"`
-	Required   []string            `json:"required"`
+	Required   []string            `json:"required,omitempty"`
 }
 
 // Describes a JSON Schema property with its type and description, used for LLM tool parameter definitions.
@@ -44,10 +44,19 @@ type ToolCallFunction struct {
 // ChatResponse represents the response from an LLM provider. It contains the generated text content (Content) and any tool calls (ToolCalls) the model requested to execute.
 type ChatResponse struct {
 	Content   string
+	Reasoning string
 	ToolCalls []ToolCall
 }
 
 // Interface that LLM provider implementations must satisfy. Defines a Chat method that takes conversation messages and tool definitions, returning a ChatResponse with content and optional tool calls.
+type StreamEvent struct {
+	Content   string
+	Reasoning string
+}
+
+type StreamCallback func(StreamEvent)
+
 type Provider interface {
 	Chat(messages []Message, tools []ToolDefinition) (*ChatResponse, error)
+	StreamChat(messages []Message, tools []ToolDefinition, emit StreamCallback) (*ChatResponse, error)
 }

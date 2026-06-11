@@ -7,11 +7,11 @@ import (
 	"sort"
 	"time"
 
-	"ltp/internal/helper"
+	"aracne/internal/helper"
 )
 
 func RunCheckUpdates(args []string) {
-	dbPath := ".ltp/topology.db"
+	dbPath := ".aracne/topology.db"
 	root := ""
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -115,4 +115,3 @@ func RunCheckUpdates(args []string) {
 		fmt.Println()
 	}
 }
-

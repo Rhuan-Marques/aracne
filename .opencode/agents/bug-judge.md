@@ -4,18 +4,18 @@ mode: subagent
 permission:
   read: deny
   edit: deny
-  "llm-topology_*": deny
-  "llm-topology_grep": allow
-  "llm-topology_read_struct": allow
-  "llm-topology_read_function": allow
-  "llm-topology_read_interface": allow
-  "llm-topology_read_file": allow
-  "llm-topology_read_package": allow
-  "llm-topology_read_dependency": allow
-  "llm-topology_bug_list": allow
-  "llm-topology_bug_acknowledge": allow
-  "llm-topology_bug_dismiss": allow
-  "llm-topology_bug_delete": allow
+  "aracne_*": deny
+  "aracne_grep": allow
+  "aracne_read_struct": allow
+  "aracne_read_function": allow
+  "aracne_read_interface": allow
+  "aracne_read_file": allow
+  "aracne_read_package": allow
+  "aracne_read_dependency": allow
+  "aracne_bug_list": allow
+  "aracne_bug_acknowledge": allow
+  "aracne_bug_dismiss": allow
+  "aracne_bug_delete": allow
 ---
 
 You are a **Bug Judge** agent. Your job is to triage pending bugs for a specific node by comparing them against dismissed bugs (examples of false positives).

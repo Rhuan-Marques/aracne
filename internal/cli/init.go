@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"ltp/internal/helper"
-	"ltp/internal/prompts"
-	"ltp/internal/topology/domain"
+	"aracne/internal/helper"
+	"aracne/internal/prompts"
+	"aracne/internal/topology/domain"
 )
 
 func promptReplace(path string) bool {
@@ -47,7 +47,7 @@ func RunInit(args []string) {
 		*opencode = true
 	}
 
-	cfgPath := helper.ConfigPath(".ltp/topology.db")
+	cfgPath := helper.ConfigPath(".aracne/topology.db")
 	cfg := helper.EnsureConfig(cfgPath)
 	changed := false
 	if *readMode != "" {
@@ -148,15 +148,15 @@ func initOpenCode(global bool, modes helper.ToolModes, readSplit map[domain.Reso
 			if mcpMap == nil {
 				mcpMap = make(map[string]interface{})
 			}
-			mcpMap["llm-topology"] = map[string]interface{}{
+			mcpMap["arac"] = map[string]interface{}{
 				"type":    "local",
-				"command": []string{"ltp", "serve", "--tool-profile", "all"},
+				"command": []string{"arac", "serve", "--tool-profile", "all"},
 				"enabled": true,
 			}
 			config["mcp"] = mcpMap
 		}
 	} else {
-		fmt.Println("[OpenCode] Terminal/native mode: no llm-topology MCP server needed")
+		fmt.Println("[OpenCode] Terminal/native mode: no aracne MCP server needed")
 	}
 
 	permissionMap, _ := config["permission"].(map[string]interface{})
@@ -166,9 +166,9 @@ func initOpenCode(global bool, modes helper.ToolModes, readSplit map[domain.Reso
 	permissionMap["read"] = nativePermission(modes.Read == helper.ReadModeNative)
 	permissionMap["edit"] = nativePermission(modes.Edit == helper.EditModeNative)
 	delete(permissionMap, "write")
-	permissionMap["llm-topology_*"] = "deny"
+	permissionMap["aracne_*"] = "deny"
 	for _, toolName := range allowedMCPToolNames(modes, ToolProfileDefault, readSplit) {
-		permissionMap["llm-topology_"+toolName] = "allow"
+		permissionMap["aracne_"+toolName] = "allow"
 	}
 	config["permission"] = permissionMap
 	writeJSONConfig(configPath, config)
@@ -208,8 +208,8 @@ func initClaudeCode(global bool, modes helper.ToolModes, readSplit map[domain.Re
 			if mcpServers == nil {
 				mcpServers = make(map[string]interface{})
 			}
-			mcpServers["llm-topology"] = map[string]interface{}{
-				"command": "ltp",
+			mcpServers["arac"] = map[string]interface{}{
+				"command": "arac",
 				"args":    []string{"serve", "--tool-profile", string(ToolProfileDefault)},
 			}
 			claudeConfig["mcpServers"] = mcpServers
@@ -217,7 +217,7 @@ func initClaudeCode(global bool, modes helper.ToolModes, readSplit map[domain.Re
 			fmt.Printf("[Claude Code] MCP server configured in %s\n", mcpConfigPath)
 		}
 	} else {
-		fmt.Println("[Claude Code] Terminal/native mode: no llm-topology MCP server needed")
+		fmt.Println("[Claude Code] Terminal/native mode: no aracne MCP server needed")
 	}
 
 	os.MkdirAll(commandsDir, 0755)
@@ -346,7 +346,7 @@ func claudeMCPServersFrontmatter(modes helper.ToolModes, profile ToolProfile) st
 	if !anyMCPMode(modes) {
 		return ""
 	}
-	return fmt.Sprintf("mcpServers:\n  - llm-topology:\n      type: stdio\n      command: ltp\n      args: [\"serve\", \"--tool-profile\", \"%s\"]\n", profile)
+	return fmt.Sprintf("mcpServers:\n  - aracne:\n      type: stdio\n      command: arac\n      args: [\"serve\", \"--tool-profile\", \"%s\"]\n", profile)
 }
 
 func claudeToolsForProfile(modes helper.ToolModes, profile ToolProfile, readSplit map[domain.ResourceKind]bool) []string {
@@ -359,13 +359,13 @@ func claudeToolsForProfile(modes helper.ToolModes, profile ToolProfile, readSpli
 	} else if modes.Read == helper.ReadModeMCP {
 		if useSplit {
 			if profileAllows(profile, "read_function") && (splitKinds[domain.ResourceFunction] || splitKinds[domain.ResourceMethod]) {
-				result = append(result, "mcp__llm-topology__read_function")
+				result = append(result, "mcp__aracne__read_function")
 			}
 			if profileAllows(profile, "read_struct") && splitKinds[domain.ResourceType] {
-				result = append(result, "mcp__llm-topology__read_struct")
+				result = append(result, "mcp__aracne__read_struct")
 			}
 		} else if profileAllows(profile, "read") {
-			result = append(result, "mcp__llm-topology__read")
+			result = append(result, "mcp__aracne__read")
 		}
 	}
 	if modes.Edit == helper.EditModeNative {
@@ -378,7 +378,7 @@ func claudeToolsForProfile(modes helper.ToolModes, profile ToolProfile, readSpli
 	} else if modes.Edit == helper.EditModeMCP {
 		for _, name := range []string{"edit", "write"} {
 			if profileAllows(profile, name) {
-				result = append(result, "mcp__llm-topology__"+name)
+				result = append(result, "mcp__aracne__"+name)
 			}
 		}
 	}
@@ -387,13 +387,13 @@ func claudeToolsForProfile(modes helper.ToolModes, profile ToolProfile, readSpli
 			if name == "read" || name == "edit" || name == "write" || name == "grep" || name == "read_function" || name == "read_struct" {
 				continue
 			}
-			result = append(result, "mcp__llm-topology__"+name)
+			result = append(result, "mcp__aracne__"+name)
 		}
 	}
 	if modes.Grep == helper.GrepModeNative && profileAllows(profile, "grep") {
 		result = append(result, "Grep")
 	} else if modes.Grep == helper.GrepModeMCP && profileAllows(profile, "grep") {
-		result = append(result, "mcp__llm-topology__grep")
+		result = append(result, "mcp__aracne__grep")
 	}
 	if needsTerminal(modes) {
 		result = append(result, "Bash")
@@ -409,9 +409,9 @@ func openCodePermissions(modes helper.ToolModes, profile ToolProfile, readSplit 
 	if needsTerminal(modes) {
 		b.WriteString("  bash: allow\n")
 	}
-	b.WriteString("  \"llm-topology_*\": deny\n")
+	b.WriteString("  \"aracne_*\": deny\n")
 	for _, toolName := range allowedMCPToolNames(modes, profile, readSplit) {
-		b.WriteString(fmt.Sprintf("  \"llm-topology_%s\": allow\n", toolName))
+		b.WriteString(fmt.Sprintf("  \"aracne_%s\": allow\n", toolName))
 	}
 	return b.String()
 }
@@ -475,27 +475,27 @@ func terminalGuidance(modes helper.ToolModes, profile ToolProfile, readSplit map
 		switch name {
 		case "read":
 			if modes.Read == helper.ReadModeTerminal && !useSplit {
-				lines = append(lines, "- `ltp read <resource-id>` to read resources or files")
+				lines = append(lines, "- `arac read <resource-id>` to read resources or files")
 			}
 		case "read_function":
 			if modes.Read == helper.ReadModeTerminal && useSplit {
-				lines = append(lines, "- `ltp read <resource-id>` to read a function")
+				lines = append(lines, "- `arac read <resource-id>` to read a function")
 			}
 		case "read_struct":
 			if modes.Read == helper.ReadModeTerminal && useSplit {
-				lines = append(lines, "- `ltp read <resource-id>` to read a struct/type")
+				lines = append(lines, "- `arac read <resource-id>` to read a struct/type")
 			}
 		case "edit":
 			if modes.Edit == helper.EditModeTerminal {
-				lines = append(lines, "- `ltp edit` with JSON stdin for exact string replacement")
+				lines = append(lines, "- `arac edit` with JSON stdin for exact string replacement")
 			}
 		case "write":
 			if modes.Edit == helper.EditModeTerminal {
-				lines = append(lines, "- `ltp write` with JSON stdin for file writes")
+				lines = append(lines, "- `arac write` with JSON stdin for file writes")
 			}
 		case "grep":
 			if modes.Grep == helper.GrepModeTerminal {
-				lines = append(lines, "- `ltp grep <pattern> [path]` to search file contents with topology resource metadata")
+				lines = append(lines, "- `arac grep <pattern> [path]` to search file contents with topology resource metadata")
 			}
 		default:
 			if modes.Other == helper.OtherModeTerminal {
@@ -506,37 +506,37 @@ func terminalGuidance(modes helper.ToolModes, profile ToolProfile, readSplit map
 	if len(lines) == 0 {
 		return ""
 	}
-	return "## Terminal llm-topology Commands\n\nUse only these ltp commands for terminal-mode topology operations:\n" + strings.Join(lines, "\n") + "\n"
+	return "## Terminal arac Commands\n\nUse only these arac commands for terminal-mode topology operations:\n" + strings.Join(lines, "\n") + "\n"
 }
 
 func terminalCommandForTool(name string) string {
 	switch name {
 	case "read_function":
-		return "ltp read <resource-id>"
+		return "arac read <resource-id>"
 	case "read_struct":
-		return "ltp read <resource-id>"
+		return "arac read <resource-id>"
 	case "read":
-		return "ltp read <resource-id>"
+		return "arac read <resource-id>"
 	case "grep":
-		return "ltp grep <pattern> [path]"
+		return "arac grep <pattern> [path]"
 	case "warnings_list":
-		return "ltp warnings list"
+		return "arac warnings list"
 	case "bug_report":
-		return "ltp bug report --node <id> --description <text>"
+		return "arac bug report --node <id> --description <text>"
 	case "bug_list":
-		return "ltp bug list [--node <id>] [--state <state>]"
+		return "arac bug list [--node <id>] [--state <state>]"
 	case "bug_acknowledge":
-		return "ltp bug acknowledge <bugID>"
+		return "arac bug acknowledge <bugID>"
 	case "bug_dismiss":
-		return "ltp bug dismiss <bugID>"
+		return "arac bug dismiss <bugID>"
 	case "bug_delete":
-		return "ltp bug delete <bugID>"
+		return "arac bug delete <bugID>"
 	case "node_list_no_description":
-		return "ltp node list --no-description"
+		return "arac node list --no-description"
 	case "update_description":
-		return "ltp update-description <id> <kind> <desc>"
+		return "arac update-description <id> <kind> <desc>"
 	default:
-		return "ltp " + name
+		return "Aracne " + name
 	}
 }
 
@@ -579,8 +579,8 @@ func writeMarkdownFile(path, label, content string, autoYes bool) {
 }
 
 const (
-	ltpIntegrationStart = "# LTP Integration"
-	ltpIntegrationEnd   = "Good Luck in your task."
+	AracIntegrationStart = "# Aracne Project Integration"
+	AracIntegrationEnd   = "Good Luck in your task."
 )
 
 func writeMarkdownIntegrationFile(path, label, segment string) {
@@ -618,11 +618,11 @@ func updateMarkdownIntegrationSegment(existing, segment string) string {
 		return segment
 	}
 
-	start := findMarkdownLine(existing, ltpIntegrationStart, 0)
+	start := findMarkdownLine(existing, AracIntegrationStart, 0)
 	if start >= 0 {
-		end := findMarkdownLine(existing, ltpIntegrationEnd, start)
+		end := findMarkdownLine(existing, AracIntegrationEnd, start)
 		if end >= 0 {
-			end += len(ltpIntegrationEnd)
+			end += len(AracIntegrationEnd)
 			if strings.HasPrefix(existing[end:], "\r\n") {
 				end += 2
 			} else if strings.HasPrefix(existing[end:], "\n") {

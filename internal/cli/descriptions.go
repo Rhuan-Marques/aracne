@@ -8,14 +8,14 @@ import (
 	"strings"
 	"sync"
 
-	"ltp/internal/helper"
-	"ltp/internal/llm"
-	"ltp/internal/llm/agent"
-	"ltp/internal/llm/providers"
-	"ltp/internal/llm/tools"
-	"ltp/internal/prompts"
-	"ltp/internal/topology"
-	"ltp/internal/topology/domain"
+	"aracne/internal/helper"
+	"aracne/internal/llm"
+	"aracne/internal/llm/agent"
+	"aracne/internal/llm/providers"
+	"aracne/internal/llm/tools"
+	"aracne/internal/prompts"
+	"aracne/internal/topology"
+	"aracne/internal/topology/domain"
 )
 
 const (
@@ -50,9 +50,9 @@ func RunGenerateDescriptions(args []string) {
 		os.Exit(1)
 	}
 
-	manager, reg := InitRegistry(".ltp/topology.db")
+	manager, reg := InitRegistry(".aracne/topology.db")
 	provider := providers.NewDeepSeek()
-	cfg := helper.EnsureConfig(helper.ConfigPath(".ltp/topology.db"))
+	cfg := helper.EnsureConfig(helper.ConfigPath(".aracne/topology.db"))
 	if *targetsFlag != "" {
 		targets, err := helper.ParseDescribeTargets(*targetsFlag)
 		if err != nil {
@@ -263,7 +263,7 @@ func formatDescriptionFailures(failed map[string]string) string {
 }
 
 func RunDescriptionApply(args []string) {
-	manager, _ := InitRegistry(".ltp/topology.db")
+	manager, _ := InitRegistry(".aracne/topology.db")
 
 	topo, err := manager.ReadAll()
 	if err != nil {
@@ -295,7 +295,7 @@ func RunClearDescriptions(args []string) {
 	targetValue := strings.TrimSpace(*targetFlag)
 	if fs.NArg() > 0 {
 		if targetValue == "" {
-			fmt.Fprintln(os.Stderr, "Usage: ltp descriptions clear [--target <kinds>]")
+			fmt.Fprintln(os.Stderr, "Usage: arac descriptions clear [--target <kinds>]")
 			os.Exit(1)
 		}
 		targetValue = strings.TrimSpace(targetValue + " " + strings.Join(fs.Args(), " "))
@@ -307,7 +307,7 @@ func RunClearDescriptions(args []string) {
 		os.Exit(1)
 	}
 
-	manager, _ := InitRegistry(".ltp/topology.db")
+	manager, _ := InitRegistry(".aracne/topology.db")
 	count, err := manager.ClearDescriptions(targets)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

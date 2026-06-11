@@ -5,7 +5,7 @@ import (
 	"io"
 	"os"
 
-	"ltp/internal/llm/tools"
+	"aracne/internal/llm/tools"
 )
 
 func RunWrite() {
@@ -15,11 +15,11 @@ func RunWrite() {
 		os.Exit(1)
 	}
 	if len(data) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: echo '{\"file_path\":\"...\",\"content\":\"...\"}' | ltp write")
+		fmt.Fprintln(os.Stderr, "Usage: echo '{\"file_path\":\"...\",\"content\":\"...\"}' | arac write")
 		os.Exit(1)
 	}
 
-	manager, reg := InitRegistry(".ltp/topology.db")
+	manager, reg := InitRegistry(".aracne/topology.db")
 	result, err := tools.NewWrite(manager, reg).Run(data)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

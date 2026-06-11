@@ -14,7 +14,7 @@ var (
 func loadLLMCharter() {
 	candidates := []string{
 		"LLM_INTEGRATION_CHARTER.md",
-		filepath.Join(".ltp", "LLM_INTEGRATION_CHARTER.md"),
+		filepath.Join(".aracne", "LLM_INTEGRATION_CHARTER.md"),
 	}
 	for _, path := range candidates {
 		data, err := os.ReadFile(path)

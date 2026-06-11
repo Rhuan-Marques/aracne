@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"os"
 
-	"ltp/internal/helper"
+	"aracne/internal/helper"
 )
 
 func RunNodeList() {
-	manager, _ := InitRegistry(".ltp/topology.db")
+	manager, _ := InitRegistry(".aracne/topology.db")
 
 	topo, err := manager.ReadAll()
 	if err != nil {
@@ -28,8 +28,8 @@ func RunNodeList() {
 }
 
 func RunNodeListNoDescription() {
-	manager, _ := InitRegistry(".ltp/topology.db")
-	cfg := helper.EnsureConfig(helper.ConfigPath(".ltp/topology.db"))
+	manager, _ := InitRegistry(".aracne/topology.db")
+	cfg := helper.EnsureConfig(helper.ConfigPath(".aracne/topology.db"))
 	targetSet := helper.DescribeTargetSet(cfg.DescribeTargets)
 
 	topo, err := manager.ReadAll()

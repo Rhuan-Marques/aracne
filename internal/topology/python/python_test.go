@@ -3,7 +3,7 @@ package python
 import (
 	"testing"
 
-	"ltp/internal/topology/domain"
+	"aracne/internal/topology/domain"
 )
 
 func TestPythonConnectionKindValues(t *testing.T) {
@@ -39,11 +39,11 @@ func TestPythonFunctionAccessors(t *testing.T) {
 		ID:   "mod.func",
 		Name: "func",
 		Connections: map[ConnectionKind][]string{
-			ConnCalls:     {"mod.bar", "mod.baz"},
-			ConnUsesClass: {"mod.MyClass"},
+			ConnCalls:      {"mod.bar", "mod.baz"},
+			ConnUsesClass:  {"mod.MyClass"},
 			ConnUsesExtVar: {"mod.GlobalVar"},
-			ConnUsesPkg:   {"os"},
-			ConnUsesDep:   {"requests"},
+			ConnUsesPkg:    {"os"},
+			ConnUsesDep:    {"requests"},
 		},
 	}
 
@@ -84,11 +84,11 @@ func TestPythonClassAccessors(t *testing.T) {
 		ID:   "mod.MyClass",
 		Name: "MyClass",
 		Connections: map[ConnectionKind][]string{
-			ConnHasMethod: {"mod.Method1", "mod.Method2"},
-			ConnInherits:  {"mod.BaseClass"},
+			ConnHasMethod:   {"mod.Method1", "mod.Method2"},
+			ConnInherits:    {"mod.BaseClass"},
 			ConnInheritedBy: {"mod.SubClass"},
-			ConnUsesPkg:   {"os"},
-			ConnUsesDep:   {"requests"},
+			ConnUsesPkg:     {"os"},
+			ConnUsesDep:     {"requests"},
 		},
 	}
 
@@ -239,9 +239,9 @@ func TestPythonFromGeneric(t *testing.T) {
 		Language: "python",
 		Resources: map[string]domain.Resource{
 			"mod.func": {
-				ID:   "mod.func",
-				Kind: domain.ResourceFunction,
-				Name: "func",
+				ID:       "mod.func",
+				Kind:     domain.ResourceFunction,
+				Name:     "func",
 				Location: domain.Location{StartsAt: 1, EndsAt: 3, Path: "mod.py"},
 				Properties: map[string]any{
 					"input":      []any{map[string]any{"Name": "x", "Typing": "int"}},
@@ -252,9 +252,9 @@ func TestPythonFromGeneric(t *testing.T) {
 				Connections: map[string][]string{"calls": {"mod.bar"}},
 			},
 			"mod.MyClass": {
-				ID:   "mod.MyClass",
-				Kind: domain.ResourceType,
-				Name: "MyClass",
+				ID:       "mod.MyClass",
+				Kind:     domain.ResourceType,
+				Name:     "MyClass",
 				Location: domain.Location{StartsAt: 10, EndsAt: 20, Path: "mod.py"},
 				Properties: map[string]any{
 					"params":               []any{map[string]any{"Name": "x", "Typing": "int"}},
@@ -265,17 +265,17 @@ func TestPythonFromGeneric(t *testing.T) {
 				},
 			},
 			"mod.GlobalVar": {
-				ID:   "mod.GlobalVar",
-				Kind: domain.ResourceVariable,
-				Name: "GlobalVar",
-				Location: domain.Location{StartsAt: 30, EndsAt: 30, Path: "mod.py"},
+				ID:         "mod.GlobalVar",
+				Kind:       domain.ResourceVariable,
+				Name:       "GlobalVar",
+				Location:   domain.Location{StartsAt: 30, EndsAt: 30, Path: "mod.py"},
 				Properties: map[string]any{"typing": "str", "value": "\"hello\""},
 			},
 			"mod.py": {
-				ID:   "mod.py",
-				Kind: domain.ResourceFile,
-				Name: "mod.py",
-				Properties: map[string]any{"from_package": "mypackage"},
+				ID:          "mod.py",
+				Kind:        domain.ResourceFile,
+				Name:        "mod.py",
+				Properties:  map[string]any{"from_package": "mypackage"},
 				Connections: map[string][]string{"has_function": {"mod.func"}, "has_class": {"mod.MyClass"}},
 			},
 			"mypackage": {
@@ -403,4 +403,3 @@ func TestPythonFunctionDefinition(t *testing.T) {
 		t.Errorf("unexpected FunctionDefinition: %+v", fd)
 	}
 }
-

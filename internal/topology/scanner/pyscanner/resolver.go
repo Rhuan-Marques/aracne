@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"ltp/internal/topology/python"
+	"aracne/internal/topology/python"
 )
 
 func analyzeFunctionBody(body *pyFunc, pr *ParseResult, gt *python.PythonTopology, funcInput []python.VariableDefinition, receiverClass *python.ClassID) map[python.ConnectionKind][]string {

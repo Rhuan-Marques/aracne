@@ -21,12 +21,12 @@ if ($toolInput.PSObject.Properties.Name -contains "edits") {
   }
 }
 foreach ($file in ($paths | Select-Object -Unique)) {
-  $out = & ltp update-file $file 2>&1 | Out-String
+  $out = & arac update-file $file 2>&1 | Out-String
   if ($LASTEXITCODE -ne 0) {
-    Write-Output "llm-topology update-file failed for ${file}:`n$out"
+    Write-Output "Aracne update-file failed for ${file}:`n$out"
     continue
   }
   if ($out -notmatch "Warning number\s+0") {
-    Write-Output "llm-topology warnings for ${file}:`n$out"
+    Write-Output "Aracne warnings for ${file}:`n$out"
   }
 }

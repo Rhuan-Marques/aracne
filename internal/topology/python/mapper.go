@@ -3,7 +3,7 @@ package python
 import (
 	"encoding/json"
 
-	"ltp/internal/topology/domain"
+	"aracne/internal/topology/domain"
 )
 
 func FromGeneric(topo *domain.Topology) *PythonTopology {

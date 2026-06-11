@@ -7,15 +7,15 @@ import (
 	"path/filepath"
 	"time"
 
-	"ltp/internal/helper"
-	"ltp/internal/topology"
-	"ltp/internal/topology/domain"
+	"aracne/internal/helper"
+	"aracne/internal/topology"
+	"aracne/internal/topology/domain"
 )
 
 func RunScan(args []string) {
 	fs := flag.NewFlagSet("scan", flag.ExitOnError)
 	root := fs.String("root", ".", "Root folder of the Go project to analyze")
-	output := fs.String("output", ".ltp/topology.db", "Output SQLite database path")
+	output := fs.String("output", ".aracne/topology.db", "Output SQLite database path")
 	allFlag := fs.Bool("all", false, "Re-scan all files (preserves existing descriptions)")
 	hardFlag := fs.Bool("hard", false, "Force full rebuild from scratch (clears descriptions and bugs)")
 	defaultFlag := fs.Bool("default", false, "Force default incremental scan (overrides config)")

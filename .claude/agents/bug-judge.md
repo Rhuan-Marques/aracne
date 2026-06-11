@@ -1,11 +1,11 @@
 ---
 name: bug-judge
 description: Triages pending bugs by comparing against dismissed bug patterns
-tools: mcp__llm-topology__read, mcp__llm-topology__read_interface, mcp__llm-topology__read_file, mcp__llm-topology__read_package, mcp__llm-topology__read_dependency, mcp__llm-topology__bug_list, mcp__llm-topology__bug_acknowledge, mcp__llm-topology__bug_dismiss, mcp__llm-topology__bug_delete
+tools: mcp__aracne__read, mcp__aracne__read_interface, mcp__aracne__read_file, mcp__aracne__read_package, mcp__aracne__read_dependency, mcp__aracne__bug_list, mcp__aracne__bug_acknowledge, mcp__aracne__bug_dismiss, mcp__aracne__bug_delete
 mcpServers:
-  - llm-topology:
+  - aracne:
       type: stdio
-      command: ltp
+      command: arac
       args: ["serve", "--tool-profile", "bug-judge"]
 ---
 

@@ -24,7 +24,7 @@ func RunEdit() {
 		os.Exit(1)
 	}
 	if input.FilePath == "" || input.OldString == "" || input.NewString == "" {
-		fmt.Fprintln(os.Stderr, "Usage: echo '{\"file_path\":\"...\",\"old_string\":\"...\",\"new_string\":\"...\"}' | ltp edit")
+		fmt.Fprintln(os.Stderr, "Usage: echo '{\"file_path\":\"...\",\"old_string\":\"...\",\"new_string\":\"...\"}' | arac edit")
 		os.Exit(1)
 	}
 
@@ -46,7 +46,7 @@ func RunEdit() {
 		os.Exit(1)
 	}
 
-	manager, reg := InitRegistry(".ltp/topology.db")
+	manager, reg := InitRegistry(".aracne/topology.db")
 	warnings, err := manager.UpdateFile(input.FilePath, reg)
 	if err == nil && len(warnings) > 0 {
 		for _, w := range warnings {

@@ -8,13 +8,13 @@ import (
 	"path/filepath"
 	"strings"
 
-	"ltp/internal/topology/domain"
-	"ltp/internal/topology/golang"
+	"aracne/internal/topology/domain"
+	"aracne/internal/topology/golang"
 )
 
 func RunAnalyze(args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "Usage: ltp analyze <dead-code> [flags]")
+		fmt.Fprintln(os.Stderr, "Usage: arac analyze <dead-code> [flags]")
 		os.Exit(1)
 	}
 	switch args[0] {
@@ -22,7 +22,7 @@ func RunAnalyze(args []string) {
 		RunAnalyzeDeadCode(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown analyze subcommand: %s\n", args[0])
-		fmt.Fprintln(os.Stderr, "Usage: ltp analyze <dead-code> [flags]")
+		fmt.Fprintln(os.Stderr, "Usage: arac analyze <dead-code> [flags]")
 		os.Exit(1)
 	}
 }
@@ -30,11 +30,11 @@ func RunAnalyze(args []string) {
 func RunAnalyzeDeadCode(args []string) {
 	fs := flag.NewFlagSet("analyze dead-code", flag.ExitOnError)
 	kindFilter := fs.String("kind", "", "Resource kind to filter (function, type, interface, named_type, variable)")
-	pkgFilter := fs.String("package", "", "Package path to filter (e.g. ltp/internal/cli)")
+	pkgFilter := fs.String("package", "", "Package path to filter (e.g. aracne/internal/cli)")
 	exportedOnly := fs.Bool("exported-only", false, "Only report exported dead code (possible external users)")
 	certainOnly := fs.Bool("certain-only", false, "Only report unexported dead code (safe to delete)")
 	jsonOutput := fs.Bool("json", false, "Output as JSON")
-	dbPath := fs.String("db", ".ltp/topology.db", "Topology database path")
+	dbPath := fs.String("db", ".aracne/topology.db", "Topology database path")
 	fs.Parse(args)
 
 	mgr, _ := InitRegistry(*dbPath)

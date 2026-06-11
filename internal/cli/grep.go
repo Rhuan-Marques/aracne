@@ -5,15 +5,15 @@ import (
 	"fmt"
 	"os"
 
-	"ltp/internal/topogrep"
+	"aracne/internal/topogrep"
 )
 
 func RunGrep(args []string) {
 	fs := flag.NewFlagSet("grep", flag.ExitOnError)
-	dbPath := fs.String("db", ".ltp/topology.db", "Topology database path")
+	dbPath := fs.String("db", ".aracne/topology.db", "Topology database path")
 	fs.Parse(args)
 	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "Usage: ltp grep [--db <path>] <pattern> [path]")
+		fmt.Fprintln(os.Stderr, "Usage: arac grep [--db <path>] <pattern> [path]")
 		os.Exit(1)
 	}
 

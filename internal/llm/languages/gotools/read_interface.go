@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"ltp/internal/topology/golang"
+	"aracne/internal/topology/golang"
 )
 
 type ReadInterface struct {

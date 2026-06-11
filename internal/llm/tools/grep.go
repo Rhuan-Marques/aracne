@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"ltp/internal/topogrep"
-	"ltp/internal/topology"
+	"aracne/internal/topogrep"
+	"aracne/internal/topology"
 )
 
 type Grep struct {

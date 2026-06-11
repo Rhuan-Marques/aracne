@@ -1,12 +1,12 @@
 {
   "mcpServers": {
-    "llm-topology": {
+    "arac": {
       "args": [
         "serve",
         "--tool-profile",
         "default"
       ],
-      "command": "ltp"
+      "command": "arac"
     }
   }
 }

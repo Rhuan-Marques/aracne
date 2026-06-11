@@ -1,4 +1,4 @@
-﻿package goscanner
+package goscanner
 
 import (
 	"fmt"
@@ -6,19 +6,19 @@ import (
 	"go/token"
 	"strings"
 
-	"ltp/internal/topology/domain"
-	"ltp/internal/topology/golang"
+	"aracne/internal/topology/domain"
+	"aracne/internal/topology/golang"
 )
 
 type bodyAnalyzer struct {
-	pr         *ParseResult
-	gt         *golang.GolangTopology
-	conn       map[golang.ConnectionKind][]string
-	varTypeMap map[string]golang.StructID
+	pr          *ParseResult
+	gt          *golang.GolangTopology
+	conn        map[golang.ConnectionKind][]string
+	varTypeMap  map[string]golang.StructID
 	varIfaceMap map[string]golang.InterfaceID
-	callerID   golang.FunctionID
-	warnings   *map[string]domain.TopologyWarning
-	knownNames map[string]bool
+	callerID    golang.FunctionID
+	warnings    *map[string]domain.TopologyWarning
+	knownNames  map[string]bool
 }
 
 func newBodyAnalyzer(pr *ParseResult, gt *golang.GolangTopology, funcInput []golang.VariableDefinition, receiverName string, receiverStruct *golang.StructID, callerID golang.FunctionID, extraKnownNames []string) *bodyAnalyzer {
@@ -292,8 +292,10 @@ func (ba *bodyAnalyzer) resolveQualifiedCall(xName, selName string) {
 			return
 		}
 
-		ba.addWarning(domain.WarnUseMissingNode, string(fnTargetID),
-			fmt.Sprintf("function %s calls %s which does not exist", ba.callerID, fnTargetID))
+		if ba.pr.ModulePath != "" && strings.HasPrefix(impPath, ba.pr.ModulePath) {
+			ba.addWarning(domain.WarnUseMissingNode, string(fnTargetID),
+				fmt.Sprintf("function %s calls %s which does not exist", ba.callerID, fnTargetID))
+		}
 		return
 	}
 

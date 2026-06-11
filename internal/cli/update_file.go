@@ -14,11 +14,11 @@ func RunUpdateFile(args []string) {
 		return
 	}
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "Usage: ltp update-file <path> [--db <dbpath>]\n       ltp update-file --claude-hook")
+		fmt.Fprintln(os.Stderr, "Usage: arac update-file <path> [--db <dbpath>]\n       arac update-file --claude-hook")
 		os.Exit(1)
 	}
 	path := args[0]
-	dbPath := ".ltp/topology.db"
+	dbPath := ".aracne/topology.db"
 	for i := 1; i < len(args); i++ {
 		if args[i] == "--db" && i+1 < len(args) {
 			dbPath = args[i+1]
@@ -57,15 +57,15 @@ func runClaudeUpdateFileHook(input io.Reader, output io.Writer) {
 		return
 	}
 
-	manager, reg := InitRegistry(".ltp/topology.db")
+	manager, reg := InitRegistry(".aracne/topology.db")
 	for _, path := range paths {
 		warnings, err := manager.UpdateFile(path, reg)
 		if err != nil {
-			fmt.Fprintf(output, "llm-topology update-file failed for %s:\n%v\n", path, err)
+			fmt.Fprintf(output, "Aracne update-file failed for %s:\n%v\n", path, err)
 			continue
 		}
 		if len(warnings) > 0 {
-			fmt.Fprintf(output, "llm-topology warnings for %s:\nWarning number %d", path, len(warnings))
+			fmt.Fprintf(output, "Aracne warnings for %s:\nWarning number %d", path, len(warnings))
 			for _, w := range warnings {
 				fmt.Fprintf(output, "Warning: [%s] %s (source: %s, target: %s)\n", w.Kind, w.Message, w.SourceID, w.TargetID)
 			}

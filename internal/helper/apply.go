@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"ltp/internal/topology/domain"
+	"aracne/internal/topology/domain"
 )
 
 type resourceEntry struct {

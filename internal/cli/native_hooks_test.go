@@ -16,23 +16,23 @@ func TestClaudeNativeEditHookForOS(t *testing.T) {
 		{
 			name:       "windows uses powershell hook",
 			goos:       "windows",
-			scriptName: "ltp-update-file.ps1",
+			scriptName: "arac-update-file.ps1",
 			shell:      "powershell",
-			command:    "${CLAUDE_PROJECT_DIR}/.claude/hooks/ltp-update-file.ps1",
+			command:    "${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-update-file.ps1",
 		},
 		{
 			name:       "linux uses shell hook",
 			goos:       "linux",
-			scriptName: "ltp-update-file.sh",
+			scriptName: "arac-update-file.sh",
 			shell:      "sh",
-			command:    "${CLAUDE_PROJECT_DIR}/.claude/hooks/ltp-update-file.sh",
+			command:    "${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-update-file.sh",
 		},
 		{
 			name:       "macos uses shell hook",
 			goos:       "darwin",
-			scriptName: "ltp-update-file.sh",
+			scriptName: "arac-update-file.sh",
 			shell:      "sh",
-			command:    "${CLAUDE_PROJECT_DIR}/.claude/hooks/ltp-update-file.sh",
+			command:    "${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-update-file.sh",
 		},
 	}
 

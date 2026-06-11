@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"ltp/internal/topology/domain"
+	"aracne/internal/topology/domain"
 )
 
 type DeadConfidence string
@@ -17,12 +17,12 @@ const (
 )
 
 type DeadResource struct {
-	ID          string
-	Kind        domain.ResourceKind
-	Name        string
-	Location    domain.Location
-	Confidence  DeadConfidence
-	Reason      string
+	ID         string
+	Kind       domain.ResourceKind
+	Name       string
+	Location   domain.Location
+	Confidence DeadConfidence
+	Reason     string
 }
 
 type DeadCodeReport struct {

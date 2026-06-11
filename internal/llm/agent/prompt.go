@@ -1,8 +1,8 @@
 package agent
 
 import (
-	"ltp/internal/llm/languages/gotools"
-	"ltp/internal/llm/languages/pythontools"
+	"aracne/internal/llm/languages/gotools"
+	"aracne/internal/llm/languages/pythontools"
 )
 
 func BuildPrompt(language string) string {

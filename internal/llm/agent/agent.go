@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"ltp/internal/llm"
-	"ltp/internal/llm/tools"
+	"aracne/internal/llm"
+	"aracne/internal/llm/tools"
 )
 
 // Default maximum number of tool-calling iterations (20) the agent loop can execute before returning.

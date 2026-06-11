@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"ltp/internal/topology/domain"
+	"aracne/internal/topology/domain"
 )
 
 func TestAgentRouteAccessLifecycle(t *testing.T) {
@@ -68,6 +68,9 @@ func TestAgentRouteCleanupUsesTTL(t *testing.T) {
 		t.Fatalf("record route: %v", err)
 	}
 	time.Sleep(5 * time.Millisecond)
+	if err := CleanupStaleAgentRoutes(dbPath, time.Millisecond); err != nil {
+		t.Fatalf("cleanup routes: %v", err)
+	}
 	routes, err := ReadAgentRoutes(dbPath, time.Millisecond)
 	if err != nil {
 		t.Fatalf("read routes: %v", err)

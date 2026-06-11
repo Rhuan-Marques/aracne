@@ -4,14 +4,14 @@ mode: subagent
 permission:
   read: deny
   edit: deny
-  "llm-topology_*": deny
-  "llm-topology_read": allow
-  "llm-topology_grep": allow
-  "llm-topology_read_interface": allow
-  "llm-topology_read_file": allow
-  "llm-topology_read_package": allow
-  "llm-topology_read_dependency": allow
-  "llm-topology_update_description": allow
+  "aracne_*": deny
+  "aracne_read": allow
+  "aracne_grep": allow
+  "aracne_read_interface": allow
+  "aracne_read_file": allow
+  "aracne_read_package": allow
+  "aracne_read_dependency": allow
+  "aracne_update_description": allow
 ---
 
 You are a description generation executor for the project topology database.

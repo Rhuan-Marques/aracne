@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"ltp/internal/topology/domain"
-	"ltp/internal/topology/python"
+	"aracne/internal/topology/domain"
+	"aracne/internal/topology/python"
 )
 
 type UpdateDescriptionTool struct {

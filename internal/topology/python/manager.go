@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"sort"
 
-	"ltp/internal/helper"
-	"ltp/internal/topology"
-	"ltp/internal/topology/domain"
+	"aracne/internal/helper"
+	"aracne/internal/topology"
+	"aracne/internal/topology/domain"
 )
 
 type PythonManager struct {

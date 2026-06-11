@@ -1,6 +1,6 @@
-# LTP Integration
+# Aracne Project Integration
 
-This project uses **llm-topology** for codebase navigation. The topology database provides a pre-analyzed graph of all functions, structs/classes, interfaces, variables, and their relationships.
+This project uses **aracne** for codebase navigation. The topology database provides a pre-analyzed graph of all functions, structs/classes, interfaces, variables, and their relationships.
 
 ## Navigation Model
 
@@ -13,14 +13,14 @@ The topology is a directed graph can enhance your information about the reposito
 **Note: Never try to use `read` native tool, use MCP lookups instead**
 
 ## MCP Lookup tools:
-- `llm-topology_read_file`: Reads the content of a file, receives the file path.
-- `llm-topology_read_struct`: Reads the struct and context for resources it uses, receives a struct ID.
-- `llm-topology_read_function`: Reads the function and context for resources it uses, receives a function ID.
-- `llm-topology_read_interface`: Reads the interface and context for which resources it is implemented by, receives an interface ID.
+- `aracne_read_file`: Reads the content of a file, receives the file path.
+- `aracne_read_struct`: Reads the struct and context for resources it uses, receives a struct ID.
+- `aracne_read_function`: Reads the function and context for resources it uses, receives a function ID.
+- `aracne_read_interface`: Reads the interface and context for which resources it is implemented by, receives an interface ID.
 
 Note: Do *not* use "cat", "Get-Content" or any other OS command to read files## Grep/Search
 
-Use the MCP tool `llm-topology_grep` for content search. It returns `path:line:match` plus `ResourceID` and `Description` when a match maps to a topology resource.
+Use the MCP tool `aracne_grep` for content search. It returns `path:line:match` plus `ResourceID` and `Description` when a match maps to a topology resource.
 
 Do *not* use your native `grep` tool.
 Do not use `grep`, `Select-String` or `rg` in the terminal## Resource Context
@@ -46,16 +46,16 @@ Use the CONTEXT section to understand relationships **without making additional 
 
 ## Edit and Write:
 
-You can edit files using the MCP tool `llm-topology_edit`.
-You can write files using the MCP tool `llm-topology_write`.
+You can edit files using the MCP tool `aracne_edit`.
+You can write files using the MCP tool `aracne_write`.
 After editing or writing, the context for the topology will be automatically updated to reflect your actions.
 
 **Note: NEVER try to edit or write using your native tools**
 
 ## Other:
 
-- If you find a bug that is not relevant to your task, *do not fix it*. Instead, report it using `llm-topology_bug_report`
-- If you want to check for any topology warnings, you can do it using `llm-topology_warnings_list`
+- If you find a bug that is not relevant to your task, *do not fix it*. Instead, report it using `aracne_bug_report`
+- If you want to check for any topology warnings, you can do it using `aracne_warnings_list`
 
 ## How to Navigate:
 

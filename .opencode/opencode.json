@@ -1,9 +1,9 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
-    "llm-topology": {
+    "arac": {
       "command": [
-        "ltp",
+        "arac",
         "serve",
         "--tool-profile",
         "all"
@@ -14,20 +14,20 @@
   },
   "permission": {
     "edit": "deny",
-    "llm-topology_*": "deny",
-    "llm-topology_bug_report": "allow",
-    "llm-topology_edit": "allow",
-    "llm-topology_grep": "allow",
-    "llm-topology_read": "allow",
-    "llm-topology_read_dependency": "allow",
-    "llm-topology_read_file": "allow",
-    "llm-topology_read_function": "allow",
-    "llm-topology_read_interface": "allow",
-    "llm-topology_read_named_type": "allow",
-    "llm-topology_read_package": "allow",
-    "llm-topology_read_struct": "allow",
-    "llm-topology_warnings_list": "allow",
-    "llm-topology_write": "allow",
+    "aracne_*": "deny",
+    "aracne_bug_report": "allow",
+    "aracne_edit": "allow",
+    "aracne_grep": "allow",
+    "aracne_read": "allow",
+    "aracne_read_dependency": "allow",
+    "aracne_read_file": "allow",
+    "aracne_read_function": "allow",
+    "aracne_read_interface": "allow",
+    "aracne_read_named_type": "allow",
+    "aracne_read_package": "allow",
+    "aracne_read_struct": "allow",
+    "aracne_warnings_list": "allow",
+    "aracne_write": "allow",
     "read": "deny"
   }
 }

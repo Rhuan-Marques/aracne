@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"ltp/internal/topology/python"
+	"aracne/internal/topology/python"
 )
 
 type ReadFunction struct {

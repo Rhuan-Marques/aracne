@@ -1,8 +1,8 @@
 package pythontools
 
 import (
-	"ltp/internal/llm/tools"
-	"ltp/internal/topology/python"
+	"aracne/internal/llm/tools"
+	"aracne/internal/topology/python"
 )
 
 type Parameter = tools.Parameter

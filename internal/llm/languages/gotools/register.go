@@ -1,8 +1,8 @@
 package gotools
 
 import (
-	"ltp/internal/llm/tools"
-	"ltp/internal/topology/golang"
+	"aracne/internal/llm/tools"
+	"aracne/internal/topology/golang"
 )
 
 type Parameter = tools.Parameter

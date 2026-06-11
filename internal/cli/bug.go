@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"os"
 
-	"ltp/internal/topology/domain"
+	"aracne/internal/topology/domain"
 )
 
 func RunBug(args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "Usage: ltp bug <report|list|acknowledge|dismiss|delete> [args...]")
+		fmt.Fprintln(os.Stderr, "Usage: arac bug <report|list|acknowledge|dismiss|delete> [args...]")
 		os.Exit(1)
 	}
 	switch args[0] {
@@ -25,13 +25,13 @@ func RunBug(args []string) {
 		RunBugDelete(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown bug command: %s\n", args[0])
-		fmt.Fprintln(os.Stderr, "Usage: ltp bug <report|list|acknowledge|dismiss|delete> [args...]")
+		fmt.Fprintln(os.Stderr, "Usage: arac bug <report|list|acknowledge|dismiss|delete> [args...]")
 		os.Exit(1)
 	}
 }
 
 func RunBugReport(args []string) {
-	dbPath := ".ltp/topology.db"
+	dbPath := ".aracne/topology.db"
 	nodeID := ""
 	description := ""
 	for i := 0; i < len(args); i++ {
@@ -55,7 +55,7 @@ func RunBugReport(args []string) {
 	}
 
 	if nodeID == "" || description == "" {
-		fmt.Fprintln(os.Stderr, "Usage: ltp bug report --node <id> --description <text>")
+		fmt.Fprintln(os.Stderr, "Usage: arac bug report --node <id> --description <text>")
 		os.Exit(1)
 	}
 
@@ -69,7 +69,7 @@ func RunBugReport(args []string) {
 }
 
 func RunBugList(args []string) {
-	dbPath := ".ltp/topology.db"
+	dbPath := ".aracne/topology.db"
 	nodeID := ""
 	var state domain.BugState
 	for i := 0; i < len(args); i++ {
@@ -113,7 +113,7 @@ func RunBugList(args []string) {
 }
 
 func RunBugAcknowledge(args []string) {
-	dbPath := ".ltp/topology.db"
+	dbPath := ".aracne/topology.db"
 	bugID := ""
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -130,7 +130,7 @@ func RunBugAcknowledge(args []string) {
 	}
 
 	if bugID == "" {
-		fmt.Fprintln(os.Stderr, "Usage: ltp bug acknowledge <bugID>")
+		fmt.Fprintln(os.Stderr, "Usage: arac bug acknowledge <bugID>")
 		os.Exit(1)
 	}
 
@@ -143,7 +143,7 @@ func RunBugAcknowledge(args []string) {
 }
 
 func RunBugDismiss(args []string) {
-	dbPath := ".ltp/topology.db"
+	dbPath := ".aracne/topology.db"
 	bugID := ""
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -160,7 +160,7 @@ func RunBugDismiss(args []string) {
 	}
 
 	if bugID == "" {
-		fmt.Fprintln(os.Stderr, "Usage: ltp bug dismiss <bugID>")
+		fmt.Fprintln(os.Stderr, "Usage: arac bug dismiss <bugID>")
 		os.Exit(1)
 	}
 
@@ -173,7 +173,7 @@ func RunBugDismiss(args []string) {
 }
 
 func RunBugDelete(args []string) {
-	dbPath := ".ltp/topology.db"
+	dbPath := ".aracne/topology.db"
 	bugID := ""
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -190,7 +190,7 @@ func RunBugDelete(args []string) {
 	}
 
 	if bugID == "" {
-		fmt.Fprintln(os.Stderr, "Usage: ltp bug delete <bugID>")
+		fmt.Fprintln(os.Stderr, "Usage: arac bug delete <bugID>")
 		os.Exit(1)
 	}
 

@@ -3,7 +3,7 @@ package scanner
 import (
 	"testing"
 
-	"ltp/internal/topology/domain"
+	"aracne/internal/topology/domain"
 )
 
 type mockScanner struct {
@@ -12,11 +12,13 @@ type mockScanner struct {
 	detectVal  bool
 }
 
-func (m *mockScanner) Name() string { return m.name }
-func (m *mockScanner) Extensions() []string { return m.extensions }
-func (m *mockScanner) Detect(root string) bool { return m.detectVal }
+func (m *mockScanner) Name() string                               { return m.name }
+func (m *mockScanner) Extensions() []string                       { return m.extensions }
+func (m *mockScanner) Detect(root string) bool                    { return m.detectVal }
 func (m *mockScanner) Scan(root string) (*domain.Topology, error) { return &domain.Topology{}, nil }
-func (m *mockScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.TopologyWarning, error) { return nil, nil }
+func (m *mockScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.TopologyWarning, error) {
+	return nil, nil
+}
 
 func TestNewRegistry(t *testing.T) {
 	r := NewRegistry()

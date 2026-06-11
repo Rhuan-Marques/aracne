@@ -6,9 +6,9 @@ import (
 	"sort"
 	"strings"
 
-	"ltp/internal/llm/tools"
-	"ltp/internal/topology/domain"
-	"ltp/internal/topology/golang"
+	"aracne/internal/llm/tools"
+	"aracne/internal/topology/domain"
+	"aracne/internal/topology/golang"
 )
 
 type ListWarnings struct {

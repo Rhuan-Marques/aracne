@@ -48,7 +48,7 @@ func PlainName() {}
 	if !strings.Contains(out, "segmenttest.PlainName") {
 		t.Fatalf("expected ID segment match, got:\n%s", out)
 	}
-	if strings.Contains(out, string(os.PathSeparator)+".ltp") {
+	if strings.Contains(out, string(os.PathSeparator)+".aracne") {
 		t.Fatalf("expected resource IDs only, got:\n%s", out)
 	}
 }

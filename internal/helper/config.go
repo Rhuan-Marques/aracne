@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"ltp/internal/topology/domain"
+	"aracne/internal/topology/domain"
 )
 
 type ScanMode string

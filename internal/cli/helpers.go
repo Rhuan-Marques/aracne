@@ -7,11 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"ltp/internal/topology"
-	"ltp/internal/topology/domain"
-	"ltp/internal/topology/scanner"
-	"ltp/internal/topology/scanner/goscanner"
-	"ltp/internal/topology/scanner/pyscanner"
+	"aracne/internal/topology"
+	"aracne/internal/topology/domain"
+	"aracne/internal/topology/scanner"
+	"aracne/internal/topology/scanner/goscanner"
+	"aracne/internal/topology/scanner/pyscanner"
 )
 
 func NewScannerRegistry() *scanner.Registry {

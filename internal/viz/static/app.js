@@ -16,10 +16,22 @@
     agentRoutes: [],
     agentRouteID: '',
     agentRouteSocket: null,
+    chatSessions: [],
+    chatSession: null,
+    chatAgents: [],
+    providerConfig: null,
+    selectedChatProvider: '',
+    selectedChatModel: '',
+    providerEditorID: null,
+    providerEditorType: 'supported',
+    chatView: 'graph',
+    chatThinking: false,
+    chatStreaming: null,
     scale: 1,
     ox: 0,
     oy: 0,
     dragging: false,
+    dragMoved: false,
     dragStart: null,
     running: false
   };
@@ -61,6 +73,91 @@
       return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c];
     });
   }
+
+  function renderInlineMarkdown(s) {
+    return esc(s)
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/__([^_]+)__/g, '<strong>$1</strong>')
+      .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+      .replace(/_([^_]+)_/g, '<em>$1</em>');
+  }
+
+  function renderMarkdown(text) {
+    var lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
+    var html = [];
+    var inCode = false;
+    var codeLines = [];
+    var listType = '';
+
+    function closeList() {
+      if (listType) {
+        html.push('</' + listType + '>');
+        listType = '';
+      }
+    }
+
+    lines.forEach(function (line) {
+      var fence = line.match(/^\s*```/);
+      if (fence) {
+        closeList();
+        if (inCode) {
+          html.push('<pre><code>' + esc(codeLines.join('\n')) + '</code></pre>');
+          codeLines = [];
+          inCode = false;
+        } else {
+          inCode = true;
+        }
+        return;
+      }
+      if (inCode) {
+        codeLines.push(line);
+        return;
+      }
+
+      if (!line.trim()) {
+        closeList();
+        return;
+      }
+
+      var heading = line.match(/^(#{1,6})\s+(.+)$/);
+      if (heading) {
+        closeList();
+        var level = heading[1].length;
+        html.push('<h' + level + '>' + renderInlineMarkdown(heading[2]) + '</h' + level + '>');
+        return;
+      }
+
+      var unordered = line.match(/^\s*[-*]\s+(.+)$/);
+      if (unordered) {
+        if (listType !== 'ul') {
+          closeList();
+          html.push('<ul>');
+          listType = 'ul';
+        }
+        html.push('<li>' + renderInlineMarkdown(unordered[1]) + '</li>');
+        return;
+      }
+
+      var ordered = line.match(/^\s*\d+\.\s+(.+)$/);
+      if (ordered) {
+        if (listType !== 'ol') {
+          closeList();
+          html.push('<ol>');
+          listType = 'ol';
+        }
+        html.push('<li>' + renderInlineMarkdown(ordered[1]) + '</li>');
+        return;
+      }
+
+      closeList();
+      html.push('<p>' + renderInlineMarkdown(line) + '</p>');
+    });
+
+    if (inCode) html.push('<pre><code>' + esc(codeLines.join('\n')) + '</code></pre>');
+    closeList();
+    return html.join('');
+  }
   function icon(name) {
     var paths = {
       'check': '<path d="M20 6 9 17l-5-5"/>',
@@ -75,6 +172,12 @@
       'toggle-right': '<rect width="20" height="12" x="2" y="6" rx="6" ry="6"/><circle cx="16" cy="12" r="2"/>',
       'trash': '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="m19 6-1 14H6L5 6"/>',
       'waves-arrow-down': '<path d="M3 6c2 0 2-2 4-2s2 2 4 2 2-2 4-2 2 2 4 2 2-2 4-2"/><path d="M3 12c2 0 2-2 4-2s2 2 4 2 2-2 4-2 2 2 4 2 2-2 4-2"/><path d="M12 14v7"/><path d="m8 17 4 4 4-4"/>',
+      'bot': '<path d="M12 8V4"/><path d="M8 4h8"/><rect x="5" y="8" width="14" height="12" rx="3"/><path d="M9 13h.01"/><path d="M15 13h.01"/><path d="M10 17h4"/>',
+      'bug': '<path d="m8 2 1.88 1.88"/><path d="M14.12 3.88 16 2"/><path d="M9 7.13v-1a3 3 0 0 1 6 0v1"/><path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6"/><path d="M6 13H2"/><path d="M22 13h-4"/><path d="M6.7 17 3 20"/><path d="M20.9 20 17.3 17"/>',
+      'file-text': '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/>',
+      'scale': '<path d="m16 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1"/><path d="m2 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1"/><path d="M7 21h10"/><path d="M12 3v18"/><path d="M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2"/>',
+      'sparkles': '<path d="m12 3-1.9 5.8L4 11l6.1 2.2L12 19l1.9-5.8L20 11l-6.1-2.2Z"/><path d="M19 3v4"/><path d="M21 5h-4"/>',
+      'wrench': '<path d="M14.7 6.3a4 4 0 0 0-5.1 5.1L3 18v3h3l6.6-6.6a4 4 0 0 0 5.1-5.1l-2.8 2.8-2.1-2.1z"/>',
       'x': '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>'
     };
     return '<svg class="icon icon-' + esc(name) + '" viewBox="0 0 24 24" aria-hidden="true">' + (paths[name] || '') + '</svg>';
@@ -148,8 +251,20 @@
     };
   }
 
+  function chatSocketNeeded() {
+    var path = window.location.pathname;
+    return path === '/graph' || path.indexOf('/chat/') === 0 || state.chatThinking;
+  }
+
+  function disconnectAgentRouteSocket() {
+    if (!state.agentRouteSocket) return;
+    state.agentRouteSocket.onclose = null;
+    state.agentRouteSocket.close();
+    state.agentRouteSocket = null;
+  }
+
   function connectAgentRouteSocket() {
-    if (!('WebSocket' in window) || state.agentRouteSocket) return;
+    if (!('WebSocket' in window) || state.agentRouteSocket || !chatSocketNeeded()) return;
     var protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
     var socket = new WebSocket(protocol + window.location.host + '/api/ws');
     state.agentRouteSocket = socket;
@@ -165,10 +280,13 @@
           if (state.agentRouteID) loadGraph();
         });
       }
+      if (message.type === 'chat_event') {
+        handleChatEvent(message.payload || {});
+      }
     };
     socket.onclose = function () {
       state.agentRouteSocket = null;
-      setTimeout(connectAgentRouteSocket, 1500);
+      if (chatSocketNeeded()) setTimeout(connectAgentRouteSocket, 1500);
     };
   }
 
@@ -805,6 +923,642 @@
     state.oy = 0;
     draw();
   }
+  function navigate(path, replace) {
+    if (replace) window.history.replaceState({}, '', path);
+    else window.history.pushState({}, '', path);
+    renderRoute();
+  }
+
+  function bindRouteClick(node, path) {
+    if (!node) return;
+    node.addEventListener('click', function (e) {
+      e.preventDefault();
+      if (path === '/chat' && sessionIDRe.test(window.location.pathname.replace(/^\/chat\//, ''))) return;
+      if (window.location.pathname !== path) navigate(path);
+    });
+  }
+
+  function renderRoute() {
+    var path = window.location.pathname;
+    if (path === '/') {
+      navigate('/graph', true);
+      return;
+    }
+    var route = 'graph';
+    if (path === '/settings') route = 'settings';
+    else if (path === '/chat/history') route = 'history';
+    else if (path === '/chat' || path.indexOf('/chat/') === 0) route = 'chat';
+
+    document.body.dataset.route = route;
+    ['graphPage', 'chatPage', 'historyPage', 'settingsPage'].forEach(function (id) {
+      var node = el(id);
+      if (node) node.classList.add('hidden');
+    });
+    el(route === 'graph' ? 'graphPage' : route === 'settings' ? 'settingsPage' : route === 'history' ? 'historyPage' : 'chatPage').classList.remove('hidden');
+    el('navGraph').classList.toggle('active', route === 'graph');
+    el('navChat').classList.toggle('active', route === 'chat' || route === 'history');
+    el('navSettings').classList.toggle('active', route === 'settings');
+
+    if (route === 'graph') resize();
+    if (route === 'settings') loadChatProvider();
+    if (route === 'history') loadChatHistory();
+    if (route === 'chat') enterChatRoute(path);
+    if (path === '/chat') disconnectAgentRouteSocket();
+    else if (route === 'graph' || route === 'chat') connectAgentRouteSocket();
+  }
+
+  var sessionIDRe = /^chat_\d+_[0-9a-f]+$/;
+  function enterChatRoute(path) {
+    if (path === '/chat') {
+      state.chatSession = null;
+      state.chatThinking = false;
+      renderChat();
+      renderChatThinking();
+      return;
+    }
+    var id = path.replace(/^\/chat\//, '');
+    if (id && id !== 'history' && sessionIDRe.test(id)) loadChatSession(id);
+    else if (id && id !== 'history') navigate('/chat', true);
+  }
+
+  function emptyProviderConfig() {
+    return {defaults: {}, providers: {supported: {}, custom: {}}, supported_models: {}};
+  }
+
+  function normalizeProviderConfig(config) {
+    config = config || emptyProviderConfig();
+    config.defaults = config.defaults || {};
+    config.providers = config.providers || {};
+    config.providers.supported = config.providers.supported || {};
+    config.providers.custom = config.providers.custom || {};
+    config.supported_models = config.supported_models || {};
+    return config;
+  }
+
+  function loadChatProvider() {
+    return api('/api/chat/provider').then(function (config) {
+      state.providerConfig = normalizeProviderConfig(config);
+      ensureSelectedChatModel();
+      renderProviderSettings();
+      renderChatModelControls();
+      renderChoiceControls();
+    }).catch(showError);
+  }
+
+  function saveProviderConfig(config) {
+    return apiJSON('/api/chat/provider', 'PUT', config).then(function (saved) {
+      state.providerConfig = normalizeProviderConfig(saved);
+      ensureSelectedChatModel();
+      renderProviderSettings();
+      renderChatModelControls();
+      return saved;
+    }).catch(showError);
+  }
+
+  function cloneProviderConfig() {
+    return normalizeProviderConfig(JSON.parse(JSON.stringify(state.providerConfig || emptyProviderConfig())));
+  }
+
+  function supportedProviderIDs() {
+    return ['anthropic', 'openai', 'deepseek'];
+  }
+
+  function configuredProviderIDs() {
+    var config = normalizeProviderConfig(state.providerConfig);
+    var ids = supportedProviderIDs().filter(function (id) { return !!config.providers.supported[id]; });
+    return ids.concat(Object.keys(config.providers.custom).sort());
+  }
+
+  function hasConfiguredProviders() {
+    return configuredProviderIDs().length > 0;
+  }
+
+  function providerDisplayName(id) {
+    var config = normalizeProviderConfig(state.providerConfig);
+    if (config.supported_models[id] && config.supported_models[id].display_name) return config.supported_models[id].display_name;
+    return id.replace(/[-_]/g, ' ').replace(/^./, function (c) { return c.toUpperCase(); });
+  }
+
+  function providerModels(id) {
+    var config = normalizeProviderConfig(state.providerConfig);
+    if (config.providers.supported[id] && config.supported_models[id]) return config.supported_models[id].models || [];
+    var custom = config.providers.custom[id];
+    if (!custom) return [];
+    return (custom.possible_models || []).map(function (model) { return {true_name: model, display_name: model}; });
+  }
+
+  function findModel(modelName) {
+    var ids = configuredProviderIDs();
+    for (var i = 0; i < ids.length; i++) {
+      var models = providerModels(ids[i]);
+      for (var j = 0; j < models.length; j++) {
+        if (models[j].true_name === modelName) return {provider: ids[i], model: models[j]};
+      }
+    }
+    return null;
+  }
+
+  function firstAvailableModel() {
+    var ids = configuredProviderIDs();
+    for (var i = 0; i < ids.length; i++) {
+      var models = providerModels(ids[i]);
+      if (models.length) return {provider: ids[i], model: models[0]};
+    }
+    return null;
+  }
+
+  function ensureSelectedChatModel() {
+    var config = normalizeProviderConfig(state.providerConfig);
+    var selected = (state.selectedChatModel ? findModel(state.selectedChatModel) : null) || (state.chatSession && state.chatSession.model ? findModel(state.chatSession.model) : null) || findModel(config.defaults.main) || firstAvailableModel();
+    state.selectedChatProvider = selected ? selected.provider : '';
+    state.selectedChatModel = selected ? selected.model.true_name : '';
+    if (el('chatProvider')) el('chatProvider').value = state.selectedChatProvider;
+    if (el('chatModel')) el('chatModel').value = state.selectedChatModel;
+  }
+
+  function selectChatModel(provider, model) {
+    state.selectedChatProvider = provider || '';
+    state.selectedChatModel = model || '';
+    if (el('chatProvider')) el('chatProvider').value = state.selectedChatProvider;
+    if (el('chatModel')) el('chatModel').value = state.selectedChatModel;
+    renderChatModelControls();
+  }
+
+  function modelLabel(modelName) {
+    var found = findModel(modelName);
+    return found ? found.model.display_name : (modelName || 'Select model');
+  }
+
+  function modelMenuHTML(selectedModel, providerAttr, modelAttr) {
+    var ids = configuredProviderIDs();
+    if (!ids.length) return '<div class="agentMenuCard"><strong>No providers</strong><small>Add a provider in Settings first.</small></div>';
+    return '<div class="agentMenuCard modelMenuCard">' + ids.map(function (id) {
+      var models = providerModels(id);
+      if (!models.length) return '';
+      return '<strong>' + esc(providerDisplayName(id)) + '</strong>' + models.map(function (model) {
+        var selected = model.true_name === selectedModel ? ' selected' : '';
+        return '<button class="modelOption' + selected + '" type="button" ' + providerAttr + '="' + esc(id) + '" ' + modelAttr + '="' + esc(model.true_name) + '"><span><b>' + esc(model.display_name) + '</b><small>' + esc(model.true_name) + '</small></span></button>';
+      }).join('');
+    }).join('') + '</div>';
+  }
+
+  function renderChatModelControls() {
+    ensureSelectedChatModel();
+    var button = el('chatModelButton');
+    if (button) button.textContent = state.selectedChatModel ? modelLabel(state.selectedChatModel) : 'Select model';
+    var menu = el('chatModelMenu');
+    if (menu) menu.innerHTML = modelMenuHTML(state.selectedChatModel, 'data-model-provider', 'data-model');
+    var defaultButton = el('mainModelDefaultButton');
+    if (defaultButton) defaultButton.textContent = normalizeProviderConfig(state.providerConfig).defaults.main ? modelLabel(normalizeProviderConfig(state.providerConfig).defaults.main) : 'Select default model';
+    var defaultMenu = el('mainModelDefaultMenu');
+    if (defaultMenu) defaultMenu.innerHTML = modelMenuHTML(normalizeProviderConfig(state.providerConfig).defaults.main, 'data-default-provider', 'data-default-model');
+  }
+
+  function renderChoiceControls() {
+    renderChoiceControl('chatMode', 'chatModeButton', 'chatModeMenu', {plan: 'Plan Mode', build: 'Build Mode'});
+    renderChoiceControl('chatApprovalMode', 'chatApprovalModeButton', 'chatApprovalModeMenu', {manual: 'Manual Approval', auto: 'Auto Judge', always: "Don't Ask"});
+  }
+
+  function renderChoiceControl(selectID, buttonID, menuID, labels) {
+    var select = el(selectID);
+    var button = el(buttonID);
+    var menu = el(menuID);
+    if (!select || !button || !menu) return;
+    button.textContent = labels[select.value] || select.value;
+    menu.innerHTML = '<div class="agentMenuCard compactMenuCard">' + Object.keys(labels).map(function (value) {
+      var selected = select.value === value ? ' selected' : '';
+      return '<button class="modelOption' + selected + '" type="button" data-choice-select="' + esc(selectID) + '" data-choice-value="' + esc(value) + '"><span><b>' + esc(labels[value]) + '</b></span></button>';
+    }).join('') + '</div>';
+  }
+
+  function openProviderEditor(type, id) {
+    state.providerEditorType = type || 'supported';
+    state.providerEditorID = id || null;
+    var config = normalizeProviderConfig(state.providerConfig);
+    var entry = id && type === 'custom' ? config.providers.custom[id] : id ? config.providers.supported[id] : null;
+    var custom = state.providerEditorType === 'custom';
+    el('providerEditor').classList.remove('hidden');
+    el('providerChoice').value = custom ? 'custom' : (id || 'openai');
+    el('providerCustomID').value = custom && id ? id : '';
+    var credentialType = entry && entry.key_env ? 'env' : 'key';
+    el('providerCredentialType').value = credentialType;
+    el('providerCredentialValue').type = credentialType === 'env' ? 'text' : 'password';
+    el('providerCredentialValue').placeholder = credentialType === 'env' ? 'OPENAI_API_KEY' : (entry && entry.key_configured ? 'saved key (leave blank to keep)' : 'API key');
+    el('providerCredentialValue').value = entry && entry.key_env ? entry.key_env : '';
+    el('providerBaseURL').value = entry ? (entry.base_url || '') : '';
+    el('providerChatContract').value = entry ? (entry.chat_contract || 'openai') : 'openai';
+    renderPossibleModels(entry && entry.possible_models ? entry.possible_models : []);
+    renderProviderEditorFields();
+  }
+
+  function closeProviderEditor() {
+    state.providerEditorID = null;
+    el('providerEditor').classList.add('hidden');
+  }
+
+  function renderProviderEditorFields() {
+    var choice = el('providerChoice').value;
+    var custom = choice === 'custom';
+    state.providerEditorType = custom ? 'custom' : 'supported';
+    el('providerCustomWrap').classList.toggle('hidden', !custom);
+    el('providerCustomFields').classList.toggle('hidden', !custom);
+    el('saveProviderEntry').textContent = state.providerEditorID ? 'Save Provider' : 'Create';
+    renderCredentialField();
+    if (custom && !el('providerPossibleModels').children.length) renderPossibleModels([]);
+  }
+
+  function renderCredentialField() {
+    var type = el('providerCredentialType').value;
+    var input = el('providerCredentialValue');
+    input.type = type === 'env' ? 'text' : 'password';
+    input.placeholder = type === 'env' ? 'OPENAI_API_KEY' : 'API key';
+  }
+
+  function renderPossibleModels(models) {
+    var list = el('providerPossibleModels');
+    if (!list) return;
+    list.innerHTML = (models || []).map(renderPossibleModelRow).join('');
+    if (!list.innerHTML) list.innerHTML = '<div class="empty possibleModelsEmpty">No models added yet.</div>';
+  }
+
+  function renderPossibleModelRow(model) {
+    return '<div class="possibleModelRow"><input value="' + esc(model || '') + '" placeholder="model true name"><button class="trashButton" type="button" data-remove-model aria-label="Remove model">' + icon('trash') + '</button></div>';
+  }
+
+  function addPossibleModel(value) {
+    var list = el('providerPossibleModels');
+    var empty = list.querySelector('.possibleModelsEmpty');
+    if (empty) empty.remove();
+    list.insertAdjacentHTML('beforeend', renderPossibleModelRow(value || ''));
+    var input = list.querySelector('.possibleModelRow:last-child input');
+    if (input) input.focus();
+  }
+
+  function possibleModelValues() {
+    var values = [];
+    el('providerPossibleModels').querySelectorAll('.possibleModelRow input').forEach(function (input) {
+      var value = input.value.trim();
+      if (value && values.indexOf(value) === -1) values.push(value);
+    });
+    return values;
+  }
+
+  function saveProviderEntry() {
+    var config = cloneProviderConfig();
+    var choice = el('providerChoice').value;
+    var type = choice === 'custom' ? 'custom' : 'supported';
+    var id = type === 'custom' ? el('providerCustomID').value.trim() : choice;
+    if (!id) return showError(new Error('Provider name is required'));
+    var credentialType = el('providerCredentialType').value;
+    var credentialValue = el('providerCredentialValue').value.trim();
+    var entry = {
+      key_env: credentialType === 'env' ? credentialValue : '',
+      key: credentialType === 'key' ? credentialValue : ''
+    };
+    if (type === 'custom') {
+      entry.base_url = el('providerBaseURL').value.trim();
+      entry.chat_contract = el('providerChatContract').value;
+      entry.possible_models = possibleModelValues();
+    }
+    if (type === 'custom') {
+      if (state.providerEditorID && state.providerEditorID !== id) delete config.providers.custom[state.providerEditorID];
+      config.providers.custom[id] = entry;
+    } else config.providers.supported[id] = entry;
+    closeProviderEditor();
+    return saveProviderConfig(config);
+  }
+
+  function deleteProvider(type, id) {
+    if (!window.confirm('Delete provider "' + providerDisplayName(id) + '"?')) return;
+    var config = cloneProviderConfig();
+    if (type === 'custom') delete config.providers.custom[id];
+    else delete config.providers.supported[id];
+    if (config.defaults.main && !findModel(config.defaults.main)) config.defaults.main = '';
+    return saveProviderConfig(config);
+  }
+
+  function renderProviderSettings() {
+    var config = normalizeProviderConfig(state.providerConfig);
+    var list = el('providerList');
+    if (!list) return;
+    var ids = configuredProviderIDs();
+    list.innerHTML = ids.length ? ids.map(function (id) {
+      var type = config.providers.custom[id] ? 'custom' : 'supported';
+      var entry = type === 'custom' ? config.providers.custom[id] : config.providers.supported[id];
+      var detail = [];
+      if (entry.key_env) detail.push('env ' + entry.key_env);
+      if (entry.key_configured) detail.push('saved key');
+      if (entry.base_url) detail.push(entry.base_url);
+      return '<div class="providerRow"><button type="button" data-provider-edit="' + esc(type) + '" data-provider-id="' + esc(id) + '"><strong>' + esc(providerDisplayName(id)) + '</strong><span>' + esc(detail.join(' / ') || 'configured') + '</span></button><button class="trashButton" type="button" data-provider-delete="' + esc(type) + '" data-provider-id="' + esc(id) + '" aria-label="Delete provider">' + icon('trash') + '</button></div>';
+    }).join('') : '<div class="empty">No providers configured yet.</div>';
+    el('modelDefaults').classList.toggle('hidden', !hasConfiguredProviders());
+    renderChatModelControls();
+  }
+
+  function loadAgents() {
+    return api('/api/chat/agents').then(function (agents) {
+      state.chatAgents = Array.isArray(agents) ? agents : [];
+      renderAgentMenu();
+    }).catch(showError);
+  }
+
+  function loadChatSessions() {
+    return api('/api/chat/sessions').then(function (sessions) {
+      state.chatSessions = Array.isArray(sessions) ? sessions : [];
+      renderHistoryList();
+    }).catch(showError);
+  }
+
+  function loadChatHistory() {
+    return loadChatSessions().then(renderHistoryList);
+  }
+
+  function createChatSession(agent, title) {
+    var body = {agent: agent || 'default'};
+    if (title) body.title = title;
+    return apiJSON('/api/chat/sessions', 'POST', body).then(function (session) {
+      state.chatSession = session;
+      navigate('/chat/' + encodeURIComponent(session.id));
+      return session;
+    }).catch(showError);
+  }
+
+  function loadChatSession(id) {
+    if (!id) return Promise.resolve();
+    return api('/api/chat/sessions/' + encodeURIComponent(id)).then(function (session) {
+      if (state.chatSession && state.chatSession.id !== session.id) state.chatStreaming = null;
+      state.chatSession = session;
+      el('chatMode').value = session.mode || 'build';
+      el('chatApprovalMode').value = session.approval_mode || 'manual';
+      if (session.model) selectChatModel(session.provider || state.selectedChatProvider, session.model);
+      else ensureSelectedChatModel();
+      renderChoiceControls();
+      renderChat();
+      loadChatSessions();
+    }).catch(showError);
+  }
+
+  function renderChat() {
+    var box = el('chatMessages');
+    if (!box) return;
+    var openKeys = new Set();
+    box.querySelectorAll('details.tool[open]').forEach(function (d) {
+      var strong = d.querySelector('summary strong');
+      if (strong) openKeys.add(strong.textContent);
+    });
+    var session = state.chatSession;
+    el('chatTitle').textContent = session ? (session.title || 'New chat') : 'New chat';
+    el('chatAgentLabel').textContent = session && session.agent !== 'default' ? agentName(session.agent) + ' Task' : 'Default Chat';
+    if (!session) {
+      box.innerHTML = '<div class="chatWelcome"><h2>Welcome</h2><p>Ask Aracne to inspect topology, plan changes, run tools, or build features.</p></div>';
+      el('chatPending').innerHTML = '';
+      return;
+    }
+    var messages = session.messages || [];
+    var html = messages.length ? messages.map(renderChatMessage).join('') : '<div class="chatWelcome"><h2>' + esc(session.title || 'New chat') + '</h2><p>This session is ready.</p></div>';
+    if (state.chatStreaming && state.chatStreaming.sessionID === session.id && (state.chatStreaming.content || state.chatStreaming.reasoning)) {
+      html += renderChatStreaming();
+    }
+    box.innerHTML = html;
+    if (openKeys.size) {
+      box.querySelectorAll('details.tool').forEach(function (d) {
+        var strong = d.querySelector('summary strong');
+        if (strong && openKeys.has(strong.textContent)) d.open = true;
+      });
+    }
+    box.scrollTop = box.scrollHeight;
+    renderChatPending();
+  }
+
+  function formatToolInput(obj) {
+    if (!obj) return '';
+    var parts = [];
+    for (var key in obj) {
+      var val = obj[key];
+      var str;
+      if (typeof val === 'string') {
+        str = key + '="' + val + '"';
+      } else if (typeof val === 'boolean' || typeof val === 'number') {
+        str = key + '=' + val;
+      } else {
+        str = key + '=' + JSON.stringify(val);
+      }
+      parts.push(str);
+    }
+    return parts.join(' ');
+  }
+  function renderChatMessage(msg) {
+    var role = msg.role || 'assistant';
+    var status = msg.status || '';
+    if (role === 'tool') {
+      var input = msg.tool_input ? JSON.stringify(msg.tool_input, null, 2) : '{}';
+      var output = msg.tool_output || '';
+      var inputStr = formatToolInput(msg.tool_input);
+      var displayName = esc(msg.tool_name || 'tool');
+      if (inputStr) {
+        var maxLen = 60;
+        if (inputStr.length > maxLen) {
+          inputStr = inputStr.substring(0, maxLen) + '...';
+        }
+        displayName += ' ' + esc(inputStr);
+      }
+      return '<details class="chatMessage tool ' + esc(status) + '">' +
+        '<summary class="toolCallSummary"><strong>' + displayName + '</strong><span>' + esc(status || 'pending') + '</span></summary>' +
+        '<div class="toolDetails"><label>Input</label><pre>' + esc(input) + '</pre><label>Output</label><div class="toolDetailsMarkdown">' + renderMarkdown(output) + '</div></div>' +
+        '</details>';
+    }
+    return '<div class="chatMessage ' + esc(role) + ' ' + esc(status) + '">' +
+      '<span class="chatRole">' + esc(role) + '</span>' +
+      (msg.reasoning ? '<div class="reasoningBlock"><label>Reasoning</label><div>' + esc(msg.reasoning) + '</div></div>' : '') +
+      '<div class="messageMarkdown">' + renderMarkdown(msg.content || '') + '</div>' +
+      '</div>';
+  }
+
+  function renderChatStreaming() {
+    return renderChatMessage({
+      role: 'assistant',
+      status: 'streaming',
+      content: state.chatStreaming.content,
+      reasoning: state.chatStreaming.reasoning
+    });
+  }
+
+  function renderChatPending() {
+    var session = state.chatSession;
+    var panel = el('chatPending');
+    if (!panel || !session) return;
+    var html = [];
+    var workflowEvents = (session.events || []).filter(function (event) {
+      return event.type && event.type.indexOf('workflow_') === 0;
+    }).slice(-8);
+    workflowEvents.forEach(function (event) {
+      var payload = event.payload || {};
+      var label = (payload.type ? agentName(payload.type) : 'Task') + ' ' + event.type.replace('workflow_', '').replace(/_/g, ' ');
+      var detail = '';
+      if (payload.total) detail = 'Batch ' + esc(payload.completed || 0) + ' of ' + esc(payload.total);
+      else if (payload.queued !== undefined) detail = esc(payload.queued) + ' item(s) queued';
+      if (payload.error) detail += (detail ? ' - ' : '') + esc(payload.error);
+      html.push('<div class="pendingCard"><strong>' + esc(label) + '</strong>' + (detail ? '<p>' + detail + '</p>' : '') + (payload.text ? '<pre>' + esc(payload.text) + '</pre>' : '') + '</div>');
+    });
+    (session.pending_approvals || []).forEach(function (approval) {
+      html.push('<div class="pendingCard"><strong>Approve tool call?</strong><p>' + esc(approval.reason || '') + '</p><code>' + esc(approval.tool_call && approval.tool_call.function ? approval.tool_call.function.name : '') + '</code><div class="pendingActions"><button data-approval="' + esc(approval.id) + '" data-approved="true" type="button">Allow</button><button data-approval="' + esc(approval.id) + '" data-approved="false" type="button">Decline</button></div></div>');
+    });
+    (session.pending_questions || []).forEach(function (question) {
+      var options = (question.options || []).map(function (option) { return '<button data-question="' + esc(question.id) + '" data-answer="' + esc(option) + '" type="button">' + esc(option) + '</button>'; }).join('');
+      html.push('<div class="pendingCard"><strong>Question</strong><p>' + esc(question.question || '') + '</p><div class="pendingActions">' + options + '</div><form class="questionForm" data-question="' + esc(question.id) + '"><input placeholder="Answer"><button type="submit">Answer</button></form></div>');
+    });
+    panel.innerHTML = html.join('');
+  }
+
+  function sendChatMessage(e) {
+    e.preventDefault();
+    var input = el('chatInput');
+    var content = input.value.trim();
+    if (!content) return;
+    ensureSelectedChatModel();
+    var payload = {
+      content: content,
+      mode: el('chatMode').value,
+      approval_mode: el('chatApprovalMode').value,
+      provider: {provider: state.selectedChatProvider, model: state.selectedChatModel}
+    };
+    state.chatThinking = true;
+    state.chatStreaming = null;
+    renderChatThinking();
+    connectAgentRouteSocket();
+    function sent(session) {
+      input.value = '';
+      state.chatSession = session;
+      renderChat();
+      loadChatSessions();
+    }
+    function failed(err) {
+      state.chatThinking = false;
+      input.value = content;
+      renderChatThinking();
+      showChatError(err);
+    }
+    if (!state.chatSession) {
+      return apiJSON('/api/chat/sessions', 'POST', payload).then(function (session) {
+        sent(session);
+        navigate('/chat/' + encodeURIComponent(session.id));
+      }).catch(failed);
+    }
+    return apiJSON('/api/chat/sessions/' + encodeURIComponent(state.chatSession.id) + '/messages', 'POST', payload).then(sent).catch(failed);
+  }
+
+  function handleChatEvent(event) {
+    if (!event || !event.type) return;
+    if (event.type === 'delta' && state.chatSession && event.session_id === state.chatSession.id) {
+      var payload = event.payload || {};
+      if (!state.chatStreaming || state.chatStreaming.sessionID !== event.session_id) {
+        state.chatStreaming = {sessionID: event.session_id, content: '', reasoning: ''};
+      }
+      state.chatStreaming.content += payload.content || '';
+      state.chatStreaming.reasoning += payload.reasoning || '';
+      state.chatThinking = true;
+      renderChat();
+      renderChatThinking();
+      return;
+    }
+    if (event.type === 'thinking' && state.chatSession && event.session_id === state.chatSession.id) {
+      state.chatThinking = !!(event.payload && event.payload.active);
+      renderChatThinking();
+      return;
+    }
+    if ((event.type === 'message' || event.type === 'error') && state.chatSession && event.session_id === state.chatSession.id) {
+      state.chatStreaming = null;
+    }
+    if ((event.type === 'workflow_completed' || event.type === 'workflow_failed') && state.chatSession && event.session_id === state.chatSession.id) {
+      state.chatThinking = false;
+      renderChatThinking();
+    }
+    if (event.type === 'session_title_updated') loadChatSessions();
+    if (state.chatSession && event.session_id === state.chatSession.id) loadChatSession(state.chatSession.id);
+    else loadChatSessions();
+  }
+
+  function renderChatThinking() {
+    var thinking = el('chatThinking');
+    if (thinking) thinking.classList.toggle('hidden', !state.chatThinking);
+  }
+
+  function resolveApproval(approvalID, approved) {
+    if (!state.chatSession) return;
+    apiJSON('/api/chat/sessions/' + encodeURIComponent(state.chatSession.id) + '/approvals/' + encodeURIComponent(approvalID), 'POST', {approved: approved}).then(function (session) {
+      state.chatSession = session;
+      renderChat();
+    }).catch(showError);
+  }
+
+  function answerQuestion(questionID, answer) {
+    if (!state.chatSession) return;
+    apiJSON('/api/chat/sessions/' + encodeURIComponent(state.chatSession.id) + '/questions/' + encodeURIComponent(questionID), 'POST', {answer: answer}).then(function (session) {
+      state.chatSession = session;
+      renderChat();
+    }).catch(showError);
+  }
+
+  function renderHistoryList() {
+    var list = el('chatHistoryList');
+    if (!list) return;
+    if (!state.chatSessions.length) {
+      list.innerHTML = '<div class="empty">No chats yet.</div>';
+      return;
+    }
+    list.innerHTML = state.chatSessions.map(function (session) {
+      return '<a class="historyItem" href="/chat/' + esc(session.id) + '" data-route="/chat/' + esc(session.id) + '"><strong>' + esc(session.title || 'New chat') + '</strong><span>' + esc(agentName(session.agent)) + ' · ' + esc(session.updated_at || '') + '</span></a>';
+    }).join('');
+  }
+
+  function renderAgentMenu() {
+    var menu = el('agentMenu');
+    if (!menu) return;
+    menu.innerHTML = '<div class="agentMenuCard"><strong>Start task</strong>' + state.chatAgents.map(function (agent) {
+      return '<button type="button" data-task="' + esc(agent.id) + '">' + icon(agent.icon || 'bot') + '<span><b>' + esc(agent.name) + '</b><small>' + esc(agent.description || '') + '</small></span></button>';
+    }).join('') + '</div>';
+  }
+
+  function positionMenu(button, menu) {
+    var rect = button.getBoundingClientRect();
+    menu.style.left = rect.left + 'px';
+    menu.style.bottom = (window.innerHeight - rect.top + 8) + 'px';
+  }
+
+  function agentName(id) {
+    id = id || 'default';
+    if (id === 'default') return 'Default Chat';
+    var agent = (state.chatAgents || []).find(function (item) { return item.id === id; });
+    return agent ? agent.name : id.replace(/_/g, ' ').replace(/^./, function (c) { return c.toUpperCase(); });
+  }
+
+  function startTask(taskID) {
+    var name = agentName(taskID);
+    if (!window.confirm('Start the ' + name + ' task?')) return;
+    el('agentMenu').classList.add('hidden');
+    state.chatThinking = true;
+    renderChatThinking();
+    connectAgentRouteSocket();
+    createChatSession('default', name).then(function (session) {
+      if (!session) return;
+      return apiJSON('/api/chat/workflows', 'POST', {session_id: session.id, type: taskID, batch_size: 5, parallel: 2}).catch(showChatError);
+    });
+  }
+
+  function startWorkflow(kind) {
+    function run() {
+      connectAgentRouteSocket();
+      return apiJSON('/api/chat/workflows', 'POST', {session_id: state.chatSession.id, type: kind, batch_size: 5, parallel: 2}).catch(showChatError);
+    }
+    if (state.chatSession) run(); else createChatSession('default', agentName(kind)).then(run);
+  }
+
+  function showChatError(err) {
+    showError(err);
+    var panel = el('chatPending');
+    if (panel) panel.innerHTML = '<div class="pendingCard error"><strong>Chat request failed</strong><p>' + esc(err.message || err) + '</p></div>';
+  }
+
   function showError(err) {
     el('status').textContent = 'Error: ' + err.message;
   }
@@ -817,6 +1571,7 @@
 
   canvas.addEventListener('mousedown', function (e) {
     state.dragging = true;
+    state.dragMoved = false;
     state.dragStart = {x: e.clientX, y: e.clientY, ox: state.ox, oy: state.oy};
   });
   window.addEventListener('mouseup', function () { state.dragging = false; });
@@ -832,21 +1587,20 @@
   });
   window.addEventListener('mousemove', function (e) {
     if (!state.dragging) return;
+    if (Math.abs(e.clientX - state.dragStart.x) > 3 || Math.abs(e.clientY - state.dragStart.y) > 3) state.dragMoved = true;
     state.ox = state.dragStart.ox + e.clientX - state.dragStart.x;
     state.oy = state.dragStart.oy + e.clientY - state.dragStart.y;
     draw();
   });
   canvas.addEventListener('click', function (e) {
+    if (state.dragMoved) return;
     var n = nearest(e.clientX, e.clientY);
     if (n) selectNode(n.id);
+    else loadGraph();
   });
   canvas.addEventListener('dblclick', function (e) {
     var n = nearest(e.clientX, e.clientY);
-    if (n) {
-      loadNeighborhood(n.id);
-    } else {
-      loadGraph();
-    }
+    if (n) loadNeighborhood(n.id);
   });
   canvas.addEventListener('wheel', function (e) {
     e.preventDefault();
@@ -925,9 +1679,115 @@
     if (e.key === 'Enter') loadGraph();
   });
   window.addEventListener('resize', resize);
+  bindRouteClick(document.querySelector('.appBrand'), '/graph');
+  bindRouteClick(el('navGraph'), '/graph');
+  bindRouteClick(el('navChat'), '/chat');
+  bindRouteClick(el('navSettings'), '/settings');
+  el('chatHistoryList').addEventListener('click', function (e) {
+    var routeLink = e.target.closest('[data-route]');
+    if (!routeLink || !el('chatHistoryList').contains(routeLink)) return;
+    e.preventDefault();
+    navigate(routeLink.getAttribute('href') || routeLink.dataset.route);
+  });
   document.addEventListener('click', function (e) {
     if (!e.target.closest('.multiPicker')) closeMultiPickers();
+    document.querySelectorAll('.agentMenu:not(.hidden)').forEach(function (menu) {
+      var buttonID = menu.id.replace('Menu', 'Button');
+      var button = document.getElementById(buttonID);
+      if (!menu.contains(e.target) && (!button || !button.contains(e.target))) {
+        menu.classList.add('hidden');
+      }
+    });
   });
+  window.addEventListener('popstate', renderRoute);
+  el('addProvider').onclick = function () { openProviderEditor('supported'); };
+  el('cancelProviderEntry').onclick = closeProviderEditor;
+  el('saveProviderEntry').onclick = saveProviderEntry;
+  el('providerChoice').onchange = renderProviderEditorFields;
+  el('providerCredentialType').onchange = renderCredentialField;
+  el('addPossibleModel').onclick = function () { addPossibleModel(''); };
+  el('providerPossibleModels').addEventListener('click', function (e) {
+    var remove = e.target.closest('[data-remove-model]');
+    if (!remove) return;
+    remove.closest('.possibleModelRow').remove();
+    if (!el('providerPossibleModels').querySelector('.possibleModelRow')) renderPossibleModels([]);
+  });
+  el('providerList').addEventListener('click', function (e) {
+    var edit = e.target.closest('[data-provider-edit]');
+    if (edit) {
+      openProviderEditor(edit.dataset.providerEdit, edit.dataset.providerId);
+      return;
+    }
+    var del = e.target.closest('[data-provider-delete]');
+    if (del) deleteProvider(del.dataset.providerDelete, del.dataset.providerId);
+  });
+  el('chatModelButton').onclick = function () { positionMenu(this, el('chatModelMenu')); el('chatModelMenu').classList.toggle('hidden'); };
+  el('chatModelMenu').addEventListener('click', function (e) {
+    var option = e.target.closest('[data-model]');
+    if (!option) return;
+    selectChatModel(option.dataset.modelProvider, option.dataset.model);
+    el('chatModelMenu').classList.add('hidden');
+  });
+  el('mainModelDefaultButton').onclick = function () { el('mainModelDefaultMenu').classList.toggle('hidden'); };
+  el('mainModelDefaultMenu').addEventListener('click', function (e) {
+    var option = e.target.closest('[data-default-model]');
+    if (!option) return;
+    var config = cloneProviderConfig();
+    config.defaults.main = option.dataset.defaultModel;
+    el('mainModelDefaultMenu').classList.add('hidden');
+    saveProviderConfig(config);
+  });
+  ['chatMode', 'chatApprovalMode'].forEach(function (selectID) {
+    var buttonID = selectID === 'chatMode' ? 'chatModeButton' : 'chatApprovalModeButton';
+    var menuID = selectID === 'chatMode' ? 'chatModeMenu' : 'chatApprovalModeMenu';
+    el(buttonID).onclick = function () { positionMenu(this, el(menuID)); el(menuID).classList.toggle('hidden'); };
+    el(menuID).addEventListener('click', function (e) {
+      var choice = e.target.closest('[data-choice-value]');
+      if (!choice) return;
+      el(choice.dataset.choiceSelect).value = choice.dataset.choiceValue;
+      el(menuID).classList.add('hidden');
+      renderChoiceControls();
+    });
+  });
+  el('chatInput').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      el('chatComposer').requestSubmit();
+    }
+  });
+  el('chatComposer').addEventListener('submit', sendChatMessage);
+  document.querySelector('.sendButton').addEventListener('click', function (e) {
+    e.preventDefault();
+    el('chatComposer').requestSubmit();
+  });
+  el('historyButton').onclick = function () { navigate('/chat/history'); };
+  el('newChatFromHistory').onclick = function () { navigate('/chat'); };
+  el('agentButton').onclick = function () {
+    positionMenu(this, el('agentMenu'));
+    el('agentMenu').classList.toggle('hidden');
+  };
+  el('agentMenu').addEventListener('click', function (e) {
+    var button = e.target.closest('[data-task]');
+    if (button) startTask(button.dataset.task);
+  });
+  el('chatPending').addEventListener('click', function (e) {
+    var approval = e.target.closest('[data-approval]');
+    if (approval) {
+      resolveApproval(approval.dataset.approval, approval.dataset.approved === 'true');
+      return;
+    }
+    var question = e.target.closest('[data-question][data-answer]');
+    if (question) answerQuestion(question.dataset.question, question.dataset.answer);
+  });
+  el('chatPending').addEventListener('submit', function (e) {
+    var form = e.target.closest('.questionForm');
+    if (!form) return;
+    e.preventDefault();
+    var input = form.querySelector('input');
+    answerQuestion(form.dataset.question, input ? input.value : '');
+  });
+  loadChatProvider();
+  loadAgents().then(loadChatSessions).then(renderRoute);
   resize();
   el('depthIcon').innerHTML = icon('waves-arrow-down');
   updateDepthControls();

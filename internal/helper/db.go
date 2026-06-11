@@ -6,107 +6,100 @@ import (
 	"fmt"
 	"strings"
 
-	"ltp/internal/topology/domain"
+	"aracne/internal/topology/domain"
 	_ "modernc.org/sqlite"
 )
 
 func WriteDb(topo *domain.Topology, path string) error {
-	db, err := sql.Open("sqlite", path+"?cache=shared&_journal_mode=WAL")
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
-	if err := createSchema(db); err != nil {
-		return err
-	}
-
-	tx, err := db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	if _, err := tx.Exec("DELETE FROM info"); err != nil {
-		return err
-	}
-	if _, err := tx.Exec("DELETE FROM resources"); err != nil {
-		return err
-	}
-	if _, err := tx.Exec("DELETE FROM connections"); err != nil {
-		return err
-	}
-	if _, err := tx.Exec("DELETE FROM warnings"); err != nil {
-		return err
-	}
-
-	if _, err := tx.Exec("INSERT INTO info VALUES ('root', ?)", topo.Root); err != nil {
-		return err
-	}
-	if _, err := tx.Exec("INSERT INTO info VALUES ('language', ?)", topo.Language); err != nil {
-		return err
-	}
-
-	resStmt, err := tx.Prepare("INSERT INTO resources VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-	if err != nil {
-		return err
-	}
-	defer resStmt.Close()
-
-	connStmt, err := tx.Prepare("INSERT INTO connections VALUES (?, ?, ?)")
-	if err != nil {
-		return err
-	}
-	defer connStmt.Close()
-
-	warnStmt, err := tx.Prepare("INSERT INTO warnings VALUES (?, ?, ?, ?, ?)")
-	if err != nil {
-		return err
-	}
-	defer warnStmt.Close()
-
-	for id, res := range topo.Resources {
-		propsJSON := toJSON(res.Properties)
-		startsAt := 0
-		endsAt := 0
-		locPath := ""
-		if res.Location.Path != "" {
-			startsAt = res.Location.StartsAt
-			endsAt = res.Location.EndsAt
-			locPath = res.Location.Path
-		}
-		if _, err := resStmt.Exec(id, string(res.Kind), res.Name, res.Description, propsJSON, startsAt, endsAt, locPath); err != nil {
+	return withSQLiteWrite(path, func(db *sql.DB) error {
+		if err := createSchema(db); err != nil {
 			return err
 		}
-		for kind, targets := range res.Connections {
-			for _, target := range targets {
-				if _, err := connStmt.Exec(id, kind, target); err != nil {
-					return err
+
+		tx, err := db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+
+		if _, err := tx.Exec("DELETE FROM info"); err != nil {
+			return err
+		}
+		if _, err := tx.Exec("DELETE FROM resources"); err != nil {
+			return err
+		}
+		if _, err := tx.Exec("DELETE FROM connections"); err != nil {
+			return err
+		}
+		if _, err := tx.Exec("DELETE FROM warnings"); err != nil {
+			return err
+		}
+
+		if _, err := tx.Exec("INSERT INTO info VALUES ('root', ?)", topo.Root); err != nil {
+			return err
+		}
+		if _, err := tx.Exec("INSERT INTO info VALUES ('language', ?)", topo.Language); err != nil {
+			return err
+		}
+
+		resStmt, err := tx.Prepare("INSERT INTO resources VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+		if err != nil {
+			return err
+		}
+		defer resStmt.Close()
+
+		connStmt, err := tx.Prepare("INSERT INTO connections VALUES (?, ?, ?)")
+		if err != nil {
+			return err
+		}
+		defer connStmt.Close()
+
+		warnStmt, err := tx.Prepare("INSERT INTO warnings VALUES (?, ?, ?, ?, ?)")
+		if err != nil {
+			return err
+		}
+		defer warnStmt.Close()
+
+		for id, res := range topo.Resources {
+			propsJSON := toJSON(res.Properties)
+			startsAt := 0
+			endsAt := 0
+			locPath := ""
+			if res.Location.Path != "" {
+				startsAt = res.Location.StartsAt
+				endsAt = res.Location.EndsAt
+				locPath = res.Location.Path
+			}
+			if _, err := resStmt.Exec(id, string(res.Kind), res.Name, res.Description, propsJSON, startsAt, endsAt, locPath); err != nil {
+				return err
+			}
+			for kind, targets := range res.Connections {
+				for _, target := range targets {
+					if _, err := connStmt.Exec(id, kind, target); err != nil {
+						return err
+					}
 				}
 			}
 		}
-	}
 
-	for id, w := range topo.Warnings {
-		if _, err := warnStmt.Exec(id, w.SourceID, string(w.Kind), w.TargetID, w.Message); err != nil {
-			return err
+		for id, w := range topo.Warnings {
+			if _, err := warnStmt.Exec(id, w.SourceID, string(w.Kind), w.TargetID, w.Message); err != nil {
+				return err
+			}
 		}
-	}
 
-	for pat, msg := range topo.Errors {
-		if _, err := tx.Exec("INSERT INTO info VALUES (?, ?)", "error:"+pat, msg); err != nil {
-			return err
+		for pat, msg := range topo.Errors {
+			if _, err := tx.Exec("INSERT INTO info VALUES (?, ?)", "error:"+pat, msg); err != nil {
+				return err
+			}
 		}
-	}
 
-	return tx.Commit()
+		return tx.Commit()
+	})
 }
 
 func createSchema(db *sql.DB) error {
 	ddl := `
-	PRAGMA journal_mode=WAL;
-	PRAGMA synchronous=OFF;
-
 	CREATE TABLE IF NOT EXISTS info (key TEXT PRIMARY KEY, value TEXT);
 
 	CREATE TABLE IF NOT EXISTS resources (
@@ -155,154 +148,151 @@ func createSchema(db *sql.DB) error {
 }
 
 func ReadDb(path string) (*domain.Topology, error) {
-	db, err := sql.Open("sqlite", path+"?cache=shared&_journal_mode=WAL")
-	if err != nil {
-		return nil, err
-	}
-	defer db.Close()
+	var topo *domain.Topology
+	err := withSQLiteRead(path, func(db *sql.DB) error {
+		read := &domain.Topology{
+			Resources: make(map[string]domain.Resource),
+			Warnings:  make(map[string]domain.TopologyWarning),
+			Errors:    make(map[string]string),
+		}
 
-	topo := &domain.Topology{
-		Resources: make(map[string]domain.Resource),
-		Warnings:  make(map[string]domain.TopologyWarning),
-		Errors:    make(map[string]string),
-	}
-
-	rows, err := db.Query("SELECT key, value FROM info")
-	if err != nil {
-		return nil, err
-	}
-	for rows.Next() {
-		var key, val string
-		err = rows.Scan(&key, &val)
+		rows, err := db.Query("SELECT key, value FROM info")
 		if err != nil {
-			return nil, err
+			return err
 		}
-		if key == "root" {
-			topo.Root = val
-		} else if key == "language" {
-			topo.Language = val
-		} else if len(key) > 6 && key[:6] == "error:" {
-			topo.Errors[key[6:]] = val
+		for rows.Next() {
+			var key, val string
+			err = rows.Scan(&key, &val)
+			if err != nil {
+				rows.Close()
+				return err
+			}
+			if key == "root" {
+				read.Root = val
+			} else if key == "language" {
+				read.Language = val
+			} else if len(key) > 6 && key[:6] == "error:" {
+				read.Errors[key[6:]] = val
+			}
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	rows.Close()
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		rows.Close()
 
-	resRows, err := db.Query("SELECT id, kind, name, description, properties_json, starts_at, ends_at, loc_path FROM resources")
-	if err != nil {
-		return nil, err
-	}
-	for resRows.Next() {
-		var id, kind, name, desc, propsJSON, locPath string
-		var startsAt, endsAt int
-		err = resRows.Scan(&id, &kind, &name, &desc, &propsJSON, &startsAt, &endsAt, &locPath)
+		resRows, err := db.Query("SELECT id, kind, name, description, properties_json, starts_at, ends_at, loc_path FROM resources")
 		if err != nil {
-			return nil, err
+			return err
 		}
-		res := domain.Resource{
-			ID:          id,
-			Kind:        domain.ResourceKind(kind),
-			Name:        name,
-			Description: desc,
-			Location: domain.Location{
-				StartsAt: startsAt,
-				EndsAt:   endsAt,
-				Path:     locPath,
-			},
-			Properties:  fromJSONMap(propsJSON),
-			Connections: make(map[string][]string),
+		for resRows.Next() {
+			var id, kind, name, desc, propsJSON, locPath string
+			var startsAt, endsAt int
+			err = resRows.Scan(&id, &kind, &name, &desc, &propsJSON, &startsAt, &endsAt, &locPath)
+			if err != nil {
+				resRows.Close()
+				return err
+			}
+			res := domain.Resource{
+				ID:          id,
+				Kind:        domain.ResourceKind(kind),
+				Name:        name,
+				Description: desc,
+				Location: domain.Location{
+					StartsAt: startsAt,
+					EndsAt:   endsAt,
+					Path:     locPath,
+				},
+				Properties:  fromJSONMap(propsJSON),
+				Connections: make(map[string][]string),
+			}
+			read.Resources[id] = res
 		}
-		topo.Resources[id] = res
-	}
-	if err := resRows.Err(); err != nil {
-		return nil, err
-	}
-	resRows.Close()
+		if err := resRows.Err(); err != nil {
+			resRows.Close()
+			return err
+		}
+		resRows.Close()
 
-	connRows, err := db.Query("SELECT source_id, conn_type, target_id FROM connections ORDER BY source_id, conn_type")
-	if err != nil {
-		return nil, err
-	}
-	for connRows.Next() {
-		var sourceID, connType, targetID string
-		err = connRows.Scan(&sourceID, &connType, &targetID)
+		connRows, err := db.Query("SELECT source_id, conn_type, target_id FROM connections ORDER BY source_id, conn_type")
 		if err != nil {
-			return nil, err
+			return err
 		}
-		if res, ok := topo.Resources[sourceID]; ok {
-			res.Connections[connType] = append(res.Connections[connType], targetID)
-			topo.Resources[sourceID] = res
+		for connRows.Next() {
+			var sourceID, connType, targetID string
+			err = connRows.Scan(&sourceID, &connType, &targetID)
+			if err != nil {
+				connRows.Close()
+				return err
+			}
+			if res, ok := read.Resources[sourceID]; ok {
+				res.Connections[connType] = append(res.Connections[connType], targetID)
+				read.Resources[sourceID] = res
+			}
 		}
-	}
-	if err := connRows.Err(); err != nil {
-		return nil, err
-	}
+		if err := connRows.Err(); err != nil {
+			connRows.Close()
+			return err
+		}
+		connRows.Close()
 
-	warnRows, err := db.Query("SELECT id, source_id, kind, target_id, message FROM warnings")
-	if err != nil {
-		return nil, err
-	}
-	defer warnRows.Close()
-	for warnRows.Next() {
-		var id, sourceID, kind, targetID, message string
-		if err := warnRows.Scan(&id, &sourceID, &kind, &targetID, &message); err != nil {
-			return nil, err
+		warnRows, err := db.Query("SELECT id, source_id, kind, target_id, message FROM warnings")
+		if err != nil {
+			return err
 		}
-		topo.Warnings[id] = domain.TopologyWarning{
-			ID:       id,
-			SourceID: sourceID,
-			Kind:     domain.WarningKind(kind),
-			TargetID: targetID,
-			Message:  message,
+		defer warnRows.Close()
+		for warnRows.Next() {
+			var id, sourceID, kind, targetID, message string
+			if err := warnRows.Scan(&id, &sourceID, &kind, &targetID, &message); err != nil {
+				return err
+			}
+			read.Warnings[id] = domain.TopologyWarning{
+				ID:       id,
+				SourceID: sourceID,
+				Kind:     domain.WarningKind(kind),
+				TargetID: targetID,
+				Message:  message,
+			}
 		}
-	}
-	if err := warnRows.Err(); err != nil {
-		return nil, err
-	}
+		if err := warnRows.Err(); err != nil {
+			return err
+		}
 
-	return topo, nil
+		topo = read
+		return nil
+	})
+	return topo, err
 }
 
 func UpdateDescription(dbPath string, kind domain.ResourceKind, id string, description string) error {
-	db, err := sql.Open("sqlite", dbPath+"?cache=shared&_journal_mode=WAL")
-	if err != nil {
+	return withSQLiteWrite(dbPath, func(db *sql.DB) error {
+		_, err := db.Exec("UPDATE resources SET description = ? WHERE id = ?", description, id)
 		return err
-	}
-	defer db.Close()
-
-	_, err = db.Exec("UPDATE resources SET description = ? WHERE id = ?", description, id)
-	return err
+	})
 }
 
 func ClearDescriptions(dbPath string, targets []domain.ResourceKind) (int64, error) {
-	db, err := sql.Open("sqlite", dbPath+"?cache=shared&_journal_mode=WAL")
-	if err != nil {
-		return 0, err
-	}
-	defer db.Close()
-
-	query := "UPDATE resources SET description = '' WHERE COALESCE(description, '') <> ''"
-	args := make([]interface{}, 0, len(targets))
-	if len(targets) > 0 {
-		placeholders := make([]string, 0, len(targets))
-		for _, target := range targets {
-			placeholders = append(placeholders, "?")
-			args = append(args, string(target))
+	var count int64
+	err := withSQLiteWrite(dbPath, func(db *sql.DB) error {
+		query := "UPDATE resources SET description = '' WHERE COALESCE(description, '') <> ''"
+		args := make([]interface{}, 0, len(targets))
+		if len(targets) > 0 {
+			placeholders := make([]string, 0, len(targets))
+			for _, target := range targets {
+				placeholders = append(placeholders, "?")
+				args = append(args, string(target))
+			}
+			query += " AND kind IN (" + strings.Join(placeholders, ", ") + ")"
 		}
-		query += " AND kind IN (" + strings.Join(placeholders, ", ") + ")"
-	}
 
-	result, err := db.Exec(query, args...)
-	if err != nil {
-		return 0, err
-	}
-	count, err := result.RowsAffected()
-	if err != nil {
-		return 0, err
-	}
-	return count, nil
+		result, err := db.Exec(query, args...)
+		if err != nil {
+			return err
+		}
+		count, err = result.RowsAffected()
+		return err
+	})
+	return count, err
 }
 
 func GetCallers(dbPath string, targetID string, connType string) ([]string, error) {
@@ -402,25 +392,17 @@ func UpdateBugState(dbPath string, bugID string, state domain.BugState) error {
 }
 
 func DeleteBug(dbPath string, bugID string) error {
-	db, err := sql.Open("sqlite", dbPath+"?cache=shared&_journal_mode=WAL")
-	if err != nil {
+	return withSQLiteWrite(dbPath, func(db *sql.DB) error {
+		_, err := db.Exec("DELETE FROM bugs WHERE id = ?", bugID)
 		return err
-	}
-	defer db.Close()
-
-	_, err = db.Exec("DELETE FROM bugs WHERE id = ?", bugID)
-	return err
+	})
 }
 
 func DeleteAllBugs(dbPath string) error {
-	db, err := sql.Open("sqlite", dbPath+"?cache=shared&_journal_mode=WAL")
-	if err != nil {
+	return withSQLiteWrite(dbPath, func(db *sql.DB) error {
+		_, err := db.Exec("DELETE FROM bugs")
 		return err
-	}
-	defer db.Close()
-
-	_, err = db.Exec("DELETE FROM bugs")
-	return err
+	})
 }
 
 func toJSON(v interface{}) string {

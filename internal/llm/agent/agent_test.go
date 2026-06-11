@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"ltp/internal/llm"
-	"ltp/internal/llm/tools"
+	"aracne/internal/llm"
+	"aracne/internal/llm/tools"
 )
 
 type mockProvider struct {
@@ -16,9 +16,13 @@ func (m *mockProvider) Chat(messages []llm.Message, toolDefs []llm.ToolDefinitio
 	return m.response, nil
 }
 
+func (m *mockProvider) StreamChat(messages []llm.Message, toolDefs []llm.ToolDefinition, emit llm.StreamCallback) (*llm.ChatResponse, error) {
+	return m.response, nil
+}
+
 type mockTool struct{}
 
-func (m *mockTool) Name() string { return "mock_tool" }
+func (m *mockTool) Name() string        { return "mock_tool" }
 func (m *mockTool) Description() string { return "A mock tool" }
 func (m *mockTool) Parameters() []tools.Parameter {
 	return []tools.Parameter{

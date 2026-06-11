@@ -52,16 +52,16 @@ func writeClaudeNativeEditHook(settingsPath, hooksDir string, autoYes bool) {
 func claudeNativeEditHookForOS(goos string) claudeNativeEditHook {
 	if goos == "windows" {
 		return claudeNativeEditHook{
-			scriptName: "ltp-update-file.ps1",
+			scriptName: "arac-update-file.ps1",
 			content:    claudeUpdateFileHookPowerShellScript(),
-			command:    "${CLAUDE_PROJECT_DIR}/.claude/hooks/ltp-update-file.ps1",
+			command:    "${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-update-file.ps1",
 			shell:      "powershell",
 		}
 	}
 	return claudeNativeEditHook{
-		scriptName: "ltp-update-file.sh",
+		scriptName: "arac-update-file.sh",
 		content:    claudeUpdateFileHookShellScript(),
-		command:    "${CLAUDE_PROJECT_DIR}/.claude/hooks/ltp-update-file.sh",
+		command:    "${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-update-file.sh",
 		shell:      "sh",
 	}
 }
@@ -70,7 +70,7 @@ func claudeUpdateFileHookPowerShellScript() string {
 	return strings.Join([]string{
 		"$inputJson = [Console]::In.ReadToEnd()",
 		"if ([string]::IsNullOrWhiteSpace($inputJson)) { exit 0 }",
-		"$inputJson | & ltp update-file --claude-hook",
+		"$inputJson | & arac update-file --claude-hook",
 		"",
 	}, "\n")
 }
@@ -78,14 +78,14 @@ func claudeUpdateFileHookPowerShellScript() string {
 func claudeUpdateFileHookShellScript() string {
 	return strings.Join([]string{
 		"#!/bin/sh",
-		"exec ltp update-file --claude-hook",
+		"exec arac update-file --claude-hook",
 		"",
 	}, "\n")
 }
 
 func writeOpenCodeNativeEditPlugin(pluginsDir string, autoYes bool) {
 	os.MkdirAll(pluginsDir, 0755)
-	writeMarkdownFile(filepath.Join(pluginsDir, "ltp-native-edit-sync.js"), "OpenCode native edit sync plugin", openCodeNativeEditPlugin(), autoYes)
+	writeMarkdownFile(filepath.Join(pluginsDir, "arac-native-edit-sync.js"), "OpenCode native edit sync plugin", openCodeNativeEditPlugin(), autoYes)
 }
 
 func openCodeNativeEditPlugin() string {
@@ -93,7 +93,7 @@ func openCodeNativeEditPlugin() string {
 import { execFileSync } from "node:child_process"
 import path from "node:path"
 
-export const LtpNativeEditSync = async ({ directory, worktree }) => {
+export const AracNativeEditSync = async ({ directory, worktree }) => {
   const root = worktree ?? directory ?? process.cwd()
 
   function normalizeFile(file) {
@@ -105,19 +105,19 @@ export const LtpNativeEditSync = async ({ directory, worktree }) => {
 
   function shouldSkip(file) {
     const parts = file.split(/[\\/]+/)
-    return parts[0] === ".git" || parts[0] === ".ltp" || parts.includes("node_modules")
+    return parts[0] === ".git" || parts[0] === ".aracne" || parts.includes("node_modules")
   }
 
   function updateFile(file) {
     file = normalizeFile(file)
     if (!file || shouldSkip(file)) return ""
     try {
-      const text = execFileSync("ltp", ["update-file", file], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })
+      const text = execFileSync("arac", ["update-file", file], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })
       if (/Warning number\s+0/.test(text)) return ""
-      return `+"`"+`llm-topology warnings for ${file}:\n${text}`+"`"+`
+      return `+"`"+`Aracne warnings for ${file}:\n${text}`+"`"+`
     } catch (error) {
       const text = `+"`"+`${error.stdout?.toString?.() ?? ""}${error.stderr?.toString?.() ?? ""}`+"`"+`
-      return `+"`"+`llm-topology update-file failed for ${file}:\n${text}`+"`"+`
+      return `+"`"+`arac update-file failed for ${file}:\n${text}`+"`"+`
     }
   }
 

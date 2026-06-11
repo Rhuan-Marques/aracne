@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"ltp/internal/topology/domain"
+	"aracne/internal/topology/domain"
 )
 
 func TestJSONRoundtrip(t *testing.T) {

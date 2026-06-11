@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"ltp/internal/topology/domain"
+	"aracne/internal/topology/domain"
 )
 
 func TestDescriptionsExecutorProfileIsLimited(t *testing.T) {

@@ -10,9 +10,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"ltp/internal/helper"
-	"ltp/internal/topology/domain"
-	"ltp/internal/topology/scanner"
+	"aracne/internal/helper"
+	"aracne/internal/topology/domain"
+	"aracne/internal/topology/scanner"
 )
 
 var bugIDCounter int64

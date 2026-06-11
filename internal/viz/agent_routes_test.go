@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"ltp/internal/helper"
-	"ltp/internal/topology/domain"
+	"aracne/internal/helper"
+	"aracne/internal/topology/domain"
 )
 
 func TestAgentRouteGraphShowsKnownNodesAndEdges(t *testing.T) {

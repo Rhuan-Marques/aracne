@@ -8,13 +8,13 @@ import (
 	"sync"
 	"time"
 
-	"ltp/internal/helper"
-	"ltp/internal/topology"
+	"aracne/internal/helper"
+	"aracne/internal/topology"
 )
 
 func RunScanner(args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "Usage: ltp scanner <run> [--db <path>]")
+		fmt.Fprintln(os.Stderr, "Usage: arac scanner <run> [--db <path>]")
 		os.Exit(1)
 	}
 	switch args[0] {
@@ -22,13 +22,13 @@ func RunScanner(args []string) {
 		RunScannerRun(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown scanner command: %s\n", args[0])
-		fmt.Fprintln(os.Stderr, "Usage: ltp scanner <run> [--db <path>]")
+		fmt.Fprintln(os.Stderr, "Usage: arac scanner <run> [--db <path>]")
 		os.Exit(1)
 	}
 }
 
 func RunScannerRun(args []string) {
-	dbPath := ".ltp/topology.db"
+	dbPath := ".aracne/topology.db"
 	for i := 0; i < len(args); i++ {
 		if args[i] == "--db" && i+1 < len(args) {
 			dbPath = args[i+1]
@@ -37,7 +37,7 @@ func RunScannerRun(args []string) {
 	}
 
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		fmt.Fprintf(os.Stderr, "Error: no topology database found at %s. Run 'ltp scan' first.\n", dbPath)
+		fmt.Fprintf(os.Stderr, "Error: no topology database found at %s. Run 'Aracne scan' first.\n", dbPath)
 		os.Exit(1)
 	}
 
@@ -95,6 +95,20 @@ func RunScannerRun(args []string) {
 
 		if scanErr != nil {
 			fmt.Fprintf(os.Stderr, "[%s] Scan error: %v\n", time.Now().Format("15:04:05"), scanErr)
+
+			if len(deleted) > 0 {
+				topo, readErr := helper.ReadDb(dbPath)
+				if readErr == nil {
+					for _, path := range deleted {
+						helper.RemoveFileResources(topo, path)
+					}
+					helper.CleanupOrphanedWarnings(topo)
+					if writeErr := helper.WriteDb(topo, dbPath); writeErr == nil {
+						helper.SyncManifest(topo, dbPath)
+					}
+				}
+			}
+
 			sleep()
 			continue
 		}

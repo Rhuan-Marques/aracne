@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
-	"ltp/internal/llm/tools"
+	"aracne/internal/llm/tools"
 )
 
 // MCP JSON-RPC server that listens on stdin/stdout and dispatches requests to the registered tool handlers.
@@ -32,7 +33,7 @@ func (s *Server) Serve() error {
 	sc.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024)
 
 	for sc.Scan() {
-		line := sc.Text()
+		line := strings.TrimRight(sc.Text(), "\r")
 		if len(line) == 0 {
 			continue
 		}
@@ -46,7 +47,8 @@ func (s *Server) Serve() error {
 		resp := s.dispatch(&req)
 		if resp != nil {
 			b, _ := json.Marshal(resp)
-			fmt.Println(string(b))
+			os.Stdout.Write(b)
+			os.Stdout.Write([]byte{'\n'})
 		}
 	}
 	return sc.Err()
@@ -80,7 +82,7 @@ func (s *Server) handleInitialize(id *int) *Response {
 		Result: InitializeResult{
 			ProtocolVersion: "2024-11-05",
 			Capabilities:    Capabilities{Tools: &struct{}{}},
-			ServerInfo:      ServerInfo{Name: "llm-topology", Version: "1.0.0"},
+			ServerInfo:      ServerInfo{Name: "aracne", Version: "1.0.0"},
 		},
 	}
 }
@@ -159,7 +161,8 @@ func (s *Server) handleCallTool(id *int, params json.RawMessage) *Response {
 func (s *Server) writeError(id *int, code int, message string) {
 	resp := s.errorResponse(id, code, message)
 	b, _ := json.Marshal(resp)
-	fmt.Println(string(b))
+	os.Stdout.Write(b)
+	os.Stdout.Write([]byte{'\n'})
 }
 
 // Constructs a JSON-RPC 2.0 error response with the given request ID, error code, and message. Returns a Response pointer containing the error payload.

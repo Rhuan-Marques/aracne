@@ -6,13 +6,13 @@ import (
 	"os"
 	"strings"
 
-	"ltp/internal/helper"
-	"ltp/internal/llm/agent"
-	"ltp/internal/llm/providers"
+	"aracne/internal/helper"
+	"aracne/internal/llm/agent"
+	"aracne/internal/llm/providers"
 )
 
 func RunAgent(args []string) {
-	manager, reg := InitRegistry(".ltp/topology.db")
+	manager, reg := InitRegistry(".aracne/topology.db")
 
 	apiKey := os.Getenv("DEEPSEEK_API_KEY")
 	if apiKey == "" {
@@ -21,7 +21,7 @@ func RunAgent(args []string) {
 	}
 
 	provider := providers.NewDeepSeek()
-	cfg := helper.EnsureConfig(helper.ConfigPath(".ltp/topology.db"))
+	cfg := helper.EnsureConfig(helper.ConfigPath(".aracne/topology.db"))
 	toolReg := BuildToolRegistry(manager, reg, cfg, ToolProfileDefault)
 
 	lang := GetLanguage(manager)

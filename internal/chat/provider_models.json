@@ -1,0 +1,28 @@
+{
+  "supported": {
+    "anthropic": {
+      "display_name": "Anthropic",
+      "models": [
+        {"true_name": "fable-5", "display_name": "Fable 5"},
+        {"true_name": "claude-opus-4-8", "display_name": "Opus 4.8"},
+        {"true_name": "claude-sonnet-4-6", "display_name": "Sonnet 4.6"},
+        {"true_name": "claude-haiku-4-5", "display_name": "Haiku 4.5"}
+      ]
+    },
+    "openai": {
+      "display_name": "OpenAI",
+      "models": [
+        {"true_name": "gpt-5.5", "display_name": "GPT 5.5"},
+        {"true_name": "gpt-5.4-mini", "display_name": "GPT 5.4 Mini"},
+        {"true_name": "gpt-5.5-codex", "display_name": "GPT 5.5 Codex"}
+      ]
+    },
+    "deepseek": {
+      "display_name": "DeepSeek",
+      "models": [
+        {"true_name": "deepseek-v4-pro", "display_name": "Deepseek V4 Pro"},
+        {"true_name": "deepseek-v4-flash", "display_name": "Deepseek V4 Flash"}
+      ]
+    }
+  }
+}

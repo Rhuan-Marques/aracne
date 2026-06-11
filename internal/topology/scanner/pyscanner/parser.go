@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"ltp/internal/topology/domain"
-	"ltp/internal/topology/python"
+	"aracne/internal/topology/domain"
+	"aracne/internal/topology/python"
 )
 
 type pyImport struct {
@@ -45,19 +45,19 @@ type pyBodyAssign struct {
 }
 
 type pyFunc struct {
-	Name       string     `json:"name"`
-	Docstring  string     `json:"docstring"`
-	Decorators []string   `json:"decorators"`
-	IsAsync    bool       `json:"is_async"`
-	IsProperty bool       `json:"is_property"`
-	IsAbstract bool       `json:"is_abstract"`
-	Params     []pyVarDef `json:"params"`
-	Results    []pyVarDef `json:"results"`
-	Lineno     int        `json:"lineno"`
-	EndLineno  int        `json:"end_lineno"`
-	Parent     *string    `json:"parent"`
-	BodyCalls  []pyBodyCall    `json:"body_calls"`
-	BodyAssign []pyBodyAssign  `json:"body_assignments"`
+	Name       string         `json:"name"`
+	Docstring  string         `json:"docstring"`
+	Decorators []string       `json:"decorators"`
+	IsAsync    bool           `json:"is_async"`
+	IsProperty bool           `json:"is_property"`
+	IsAbstract bool           `json:"is_abstract"`
+	Params     []pyVarDef     `json:"params"`
+	Results    []pyVarDef     `json:"results"`
+	Lineno     int            `json:"lineno"`
+	EndLineno  int            `json:"end_lineno"`
+	Parent     *string        `json:"parent"`
+	BodyCalls  []pyBodyCall   `json:"body_calls"`
+	BodyAssign []pyBodyAssign `json:"body_assignments"`
 }
 
 type pyVarDef struct {

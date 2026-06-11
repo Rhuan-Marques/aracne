@@ -7,15 +7,15 @@ import (
 	"strings"
 	"testing"
 
-	"ltp/internal/helper"
-	"ltp/internal/llm/languages/gotools"
-	"ltp/internal/topology"
-	"ltp/internal/topology/domain"
-	"ltp/internal/topology/golang"
-	"ltp/internal/topology/python"
-	"ltp/internal/topology/scanner"
-	"ltp/internal/topology/scanner/goscanner"
-	"ltp/internal/topology/scanner/pyscanner"
+	"aracne/internal/helper"
+	"aracne/internal/llm/languages/gotools"
+	"aracne/internal/topology"
+	"aracne/internal/topology/domain"
+	"aracne/internal/topology/golang"
+	"aracne/internal/topology/python"
+	"aracne/internal/topology/scanner"
+	"aracne/internal/topology/scanner/goscanner"
+	"aracne/internal/topology/scanner/pyscanner"
 )
 
 func newTestRegistry() *scanner.Registry {

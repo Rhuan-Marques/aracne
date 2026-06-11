@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"ltp/internal/topology"
-	"ltp/internal/topology/scanner"
+	"aracne/internal/topology"
+	"aracne/internal/topology/scanner"
 )
 
 type Write struct {

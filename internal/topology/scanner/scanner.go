@@ -1,6 +1,6 @@
 package scanner
 
-import "ltp/internal/topology/domain"
+import "aracne/internal/topology/domain"
 
 // Defines the contract for scanning a codebase in a specific language. Requires methods to return the scanner name, supported file extensions, detect whether a root applies, perform a full scan returning a Topology, and incrementally update a single file.
 type LanguageScanner interface {

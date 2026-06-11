@@ -1,6 +1,6 @@
 package python
 
-import "ltp/internal/topology/domain"
+import "aracne/internal/topology/domain"
 
 type FunctionID = string
 type ClassID = string

@@ -1,4 +1,4 @@
-﻿package tests_test
+package tests_test
 
 import (
 	"bytes"
@@ -10,18 +10,18 @@ import (
 	"testing"
 )
 
-var ltpBin string
+var AracBin string
 
 func TestMain(m *testing.M) {
-	bin := filepath.Join(os.TempDir(), "ltp_test_"+randSuffix()+".exe")
+	bin := filepath.Join(os.TempDir(), "Arac_test_"+randSuffix()+".exe")
 	cmd := exec.Command("go", "build", "-o", bin, ".")
 	cmd.Dir = projectRoot()
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "build ltp: %v\n", err)
+		fmt.Fprintf(os.Stderr, "build Aracne: %v\n", err)
 		os.Exit(1)
 	}
-	ltpBin = bin
+	AracBin = bin
 	defer os.Remove(bin)
 	os.Exit(m.Run())
 }
@@ -47,7 +47,7 @@ func randSuffix() string {
 
 func runLtp(t *testing.T, dir string, args ...string) (string, error) {
 	t.Helper()
-	cmd := exec.Command(ltpBin, args...)
+	cmd := exec.Command(AracBin, args...)
 	cmd.Dir = dir
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -55,7 +55,7 @@ func runLtp(t *testing.T, dir string, args ...string) (string, error) {
 	err := cmd.Run()
 	out := stdout.String() + stderr.String()
 	if err != nil {
-		return out, fmt.Errorf("ltp %v: %w\n%s", args, err, out)
+		return out, fmt.Errorf("Aracne %v: %w\n%s", args, err, out)
 	}
 	return out, nil
 }
@@ -64,7 +64,7 @@ func mustRun(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	out, err := runLtp(t, dir, args...)
 	if err != nil {
-		t.Fatalf("ltp %v failed: %v\n%s", args, err, out)
+		t.Fatalf("Aracne %v failed: %v\n%s", args, err, out)
 	}
 	return out
 }

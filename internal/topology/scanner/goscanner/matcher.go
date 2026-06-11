@@ -3,7 +3,7 @@ package goscanner
 import (
 	"regexp"
 
-	"ltp/internal/topology/golang"
+	"aracne/internal/topology/golang"
 )
 
 func matchStructsToInterfaces(gt *golang.GolangTopology) {

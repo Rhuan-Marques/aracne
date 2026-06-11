@@ -3,15 +3,15 @@ package cli
 import (
 	"fmt"
 
-	"ltp/internal/helper"
-	"ltp/internal/llm/languages/gotools"
-	"ltp/internal/llm/languages/pythontools"
-	"ltp/internal/llm/tools"
-	"ltp/internal/topology"
-	"ltp/internal/topology/domain"
-	"ltp/internal/topology/golang"
-	"ltp/internal/topology/python"
-	"ltp/internal/topology/scanner"
+	"aracne/internal/helper"
+	"aracne/internal/llm/languages/gotools"
+	"aracne/internal/llm/languages/pythontools"
+	"aracne/internal/llm/tools"
+	"aracne/internal/topology"
+	"aracne/internal/topology/domain"
+	"aracne/internal/topology/golang"
+	"aracne/internal/topology/python"
+	"aracne/internal/topology/scanner"
 )
 
 type ToolProfile string

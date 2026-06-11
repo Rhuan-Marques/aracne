@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	"ltp/internal/helper"
-	"ltp/internal/topology/domain"
+	"aracne/internal/helper"
+	"aracne/internal/topology/domain"
 )
 
 var resourceIDLineRE = regexp.MustCompile(`(?m)^\s*(?:ResourceID|ID):\s*(\S+)`)
@@ -40,9 +40,9 @@ func (s *Server) agentRouteContext() (routeContext, bool) {
 		return routeContext{}, false
 	}
 	ctx := routeContext{
-		sessionID: firstEnv("LTP_AGENT_ROUTE_SESSION", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "OPENCODE_SESSION_ID", "OPENCODE_SESSION"),
-		platform:  firstEnv("LTP_AGENT_ROUTE_PLATFORM"),
-		label:     firstEnv("LTP_AGENT_ROUTE_LABEL"),
+		sessionID: firstEnv("Arac_AGENT_ROUTE_SESSION", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "OPENCODE_SESSION_ID", "OPENCODE_SESSION"),
+		platform:  firstEnv("Arac_AGENT_ROUTE_PLATFORM"),
+		label:     firstEnv("Arac_AGENT_ROUTE_LABEL"),
 	}
 	if ctx.sessionID == "" {
 		return routeContext{}, false

@@ -1,0 +1,210 @@
+package viz
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strings"
+
+	"aracne/internal/chat"
+)
+
+func (s *Server) chatManager() (*chat.Manager, error) {
+	s.chatOnce.Do(func() {
+		s.chatMgr, s.chatErr = chat.NewManager(s.dbPath, ".", func(event chat.Event) {
+			s.ws.Broadcast(WebSocketEvent{Type: "chat_event", Payload: event})
+		})
+	})
+	return s.chatMgr, s.chatErr
+}
+
+func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
+	mgr, err := s.chatManager()
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	path := strings.TrimPrefix(r.URL.Path, "/api/chat")
+	path = strings.Trim(path, "/")
+	parts := []string{}
+	if path != "" {
+		parts = strings.Split(path, "/")
+	}
+
+	if len(parts) == 0 {
+		writeJSON(w, map[string]string{"status": "ok"})
+		return
+	}
+
+	switch parts[0] {
+	case "provider":
+		s.handleChatProvider(w, r, mgr)
+	case "agents":
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		writeJSON(w, chat.AgentProfiles())
+	case "sessions":
+		s.handleChatSessions(w, r, mgr, parts[1:])
+	case "workflows":
+		s.handleChatWorkflow(w, r, mgr)
+	default:
+		writeError(w, fmt.Errorf("unknown chat route: %s", parts[0]))
+	}
+}
+
+func (s *Server) handleChatProvider(w http.ResponseWriter, r *http.Request, mgr *chat.Manager) {
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, mgr.ProviderSettings())
+	case http.MethodPost, http.MethodPut:
+		var raw map[string]json.RawMessage
+		if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+			writeError(w, err)
+			return
+		}
+		if _, ok := raw["providers"]; ok {
+			var config chat.ProviderConfig
+			data, _ := json.Marshal(raw)
+			if err := json.Unmarshal(data, &config); err != nil {
+				writeError(w, err)
+				return
+			}
+			state, err := mgr.SetProviderConfig(config)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			writeJSON(w, state)
+			return
+		}
+		var settings chat.ProviderSettings
+		data, _ := json.Marshal(raw)
+		if err := json.Unmarshal(data, &settings); err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, mgr.SetProvider(settings))
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleChatSessions(w http.ResponseWriter, r *http.Request, mgr *chat.Manager, parts []string) {
+	if len(parts) == 0 {
+		switch r.Method {
+		case http.MethodGet:
+			writeJSON(w, mgr.ListSessions())
+		case http.MethodPost:
+			var req chat.CreateSessionRequest
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			session, err := mgr.CreateSession(req.Agent, req.Title)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			if strings.TrimSpace(req.Content) != "" {
+				session, err = mgr.Send(session.ID, chat.SendRequest{Content: req.Content, Mode: req.Mode, ApprovalMode: req.ApprovalMode, Provider: req.Provider})
+				if err != nil {
+					writeError(w, err)
+					return
+				}
+			}
+			writeJSON(w, session)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+		return
+	}
+
+	sessionID := parts[0]
+	if len(parts) == 1 {
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		session, err := mgr.GetSession(sessionID)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, session)
+		return
+	}
+
+	switch parts[1] {
+	case "messages":
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		var req chat.SendRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, err)
+			return
+		}
+		session, err := mgr.Send(sessionID, req)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, session)
+	case "approvals":
+		if r.Method != http.MethodPost || len(parts) < 3 {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		var body struct {
+			Approved bool `json:"approved"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, err)
+			return
+		}
+		session, err := mgr.ResolveApproval(sessionID, parts[2], body.Approved)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, session)
+	case "questions":
+		if r.Method != http.MethodPost || len(parts) < 3 {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		var body struct {
+			Answer string `json:"answer"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, err)
+			return
+		}
+		session, err := mgr.AnswerQuestion(sessionID, parts[2], body.Answer)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, session)
+	default:
+		writeError(w, fmt.Errorf("unknown chat session route: %s", parts[1]))
+	}
+}
+
+func (s *Server) handleChatWorkflow(w http.ResponseWriter, r *http.Request, mgr *chat.Manager) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var req chat.WorkflowRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, err)
+		return
+	}
+	jobID, err := mgr.StartWorkflow(req)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, map[string]string{"job_id": jobID})
+}

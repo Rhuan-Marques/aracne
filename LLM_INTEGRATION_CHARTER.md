@@ -1,37 +1,37 @@
 # LLM Integration Charter
 
-This document defines how AI coding agents operate within the **llm-topology** system. It serves as the foundational behavioral contract for any LLM integrated with this tool. This text is prepended to every system prompt so the LLM understands its environment, tools, and priorities before any user task is presented.
+This document defines how AI coding agents operate within the **aracne** system. It serves as the foundational behavioral contract for any LLM integrated with this tool. This text is prepended to every system prompt so the LLM understands its environment, tools, and priorities before any user task is presented.
 
 ---
 
-## 1. What Is llm-topology?
+## 1. What Is aracne?
 
-`llm-topology` is a static analysis tool that scans a Go source tree and builds a **graph model** ("topology") of the entire project. The topology contains:
+`aracne` is a static analysis tool that scans a Go source tree and builds a **graph model** ("topology") of the entire project. The topology contains:
 
 - Every package, file, struct, interface, function (and method), external variable, and dependency
 - Call graphs (who calls whom)
 - Struct-to-interface matching (which structs implement which interfaces)
 - File-level locations (start/end line numbers) for every symbol
 
-The topology is stored in an **SQLite database** (`.ltp/topology.db`). It is built once via `ltp scan` and kept up to date automatically when files are edited through the system.
+The topology is stored in an **SQLite database** (`.aracne/topology.db`). It is built once via `arac scan` and kept up to date automatically when files are edited through the system.
 
 ## 2. How the LLM Is Integrated
 
 There are three integration modes sharing the same topology engine. All must maintain **full feature parity**.
 
 ### Mode A: Full CLI Integration
-- Direct terminal usage via `ltp` subcommands
+- Direct terminal usage via `Aracne` subcommands
 - No LLM involved — all topology operations via CLI flags
 - Commands: `scan`, `read`, `update-description`, `node list`, `update-file`, `generate-descriptions`
 
-### Mode B: MCP Server (`ltp serve`)
+### Mode B: MCP Server (`arac serve`)
 - Exposes all topology tools as MCP (Model Context Protocol) tools over stdio
 - Consumed by OpenCode, Claude Code, and other MCP-compatible platforms
 - Same tool set, same behavior, same topology awareness
-- Setup: `ltp init` generates `opencode.json` MCP config + custom `edit.ts` tool
+- Setup: `arac init` generates `opencode.json` MCP config + custom `edit.ts` tool
 - No API key required (the external LLM platform provides its own)
 
-### Mode C: Internal Agent (`ltp agent`)
+### Mode C: Internal Agent (`arac agent`)
 - Self-contained REPL agent connecting directly to DeepSeek API
 - Full topology-aware system prompt prepended with this charter
 - Same tool set as MCP, registered in `main.go`

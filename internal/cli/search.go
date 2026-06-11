@@ -9,12 +9,12 @@ import (
 
 func RunSearch(args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "Usage: ltp search <string>")
+		fmt.Fprintln(os.Stderr, "Usage: arac search <string>")
 		os.Exit(1)
 	}
 
 	query := strings.ToLower(args[0])
-	manager, _ := InitRegistry(".ltp/topology.db")
+	manager, _ := InitRegistry(".aracne/topology.db")
 
 	topo, err := manager.ReadAll()
 	if err != nil {

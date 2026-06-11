@@ -13,13 +13,13 @@ var (
 	llmCharter     string
 )
 
-// Loads the LLM_INTEGRATION_CHARTER.md file from the project root or .ltp/ subdirectory into a global variable for inclusion in the system prompt. Silently falls back if the file is not found.
+// Loads the LLM_INTEGRATION_CHARTER.md file from the project root or .aracne/ subdirectory into a global variable for inclusion in the system prompt. Silently falls back if the file is not found.
 func loadLLMCharter() {
 	// Look for LLM_INTEGRATION_CHARTER.md relative to the working directory
-	// (project root), which is where ltp scan / agent / serve are invoked.
+	// (project root), which is where Aracne scan / agent / serve are invoked.
 	candidates := []string{
 		"LLM_INTEGRATION_CHARTER.md",
-		filepath.Join(".ltp", "LLM_INTEGRATION_CHARTER.md"),
+		filepath.Join(".aracne", "LLM_INTEGRATION_CHARTER.md"),
 	}
 	for _, path := range candidates {
 		data, err := os.ReadFile(path)

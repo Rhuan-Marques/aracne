@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"ltp/internal/topology/golang"
+	"aracne/internal/topology/golang"
 )
 
 // Tool implementation wrapping GoManager to expose the "read_struct" MCP/agent tool. Holds a reference to GoManager for looking up struct context by name.

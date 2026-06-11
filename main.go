@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"os"
 
-	"ltp/internal/cli"
+	"aracne/internal/cli"
 )
 
-// main dispatches ltp subcommands
+// main dispatches Aracne subcommands
 func main() {
 	if len(os.Args) < 2 {
 		cli.PrintUsage()
@@ -58,7 +58,7 @@ func main() {
 		cli.RunWrite()
 	case "node":
 		if len(os.Args) < 3 || os.Args[2] != "list" {
-			fmt.Fprintln(os.Stderr, "Usage: ltp node list [--no-description]")
+			fmt.Fprintln(os.Stderr, "Usage: arac node list [--no-description]")
 			os.Exit(1)
 		}
 		noDesc := len(os.Args) > 3 && os.Args[3] == "--no-description"
@@ -69,7 +69,7 @@ func main() {
 		}
 	case "warnings":
 		if len(os.Args) < 3 || os.Args[2] != "list" {
-			fmt.Fprintln(os.Stderr, "Usage: ltp warnings list [--source <id>] [--target <id>] [--kind <kind>]")
+			fmt.Fprintln(os.Stderr, "Usage: arac warnings list [--source <id>] [--target <id>] [--kind <kind>]")
 			os.Exit(1)
 		}
 		cli.RunWarningsList(os.Args[3:])

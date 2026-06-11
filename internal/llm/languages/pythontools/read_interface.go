@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"ltp/internal/topology/python"
+	"aracne/internal/topology/python"
 )
 
 type ReadInterface struct {

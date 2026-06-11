@@ -6,9 +6,9 @@ import (
 	"sort"
 	"strings"
 
-	"ltp/internal/helper"
-	"ltp/internal/topology/domain"
-	"ltp/internal/topology/golang"
+	"aracne/internal/helper"
+	"aracne/internal/topology/domain"
+	"aracne/internal/topology/golang"
 )
 
 type NodeListNoDescription struct {

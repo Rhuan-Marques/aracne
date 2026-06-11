@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"ltp/internal/helper"
-	"ltp/internal/mcp"
+	"aracne/internal/helper"
+	"aracne/internal/mcp"
 )
 
 func RunServe(args []string) {
@@ -20,11 +20,11 @@ func RunServe(args []string) {
 		os.Exit(1)
 	}
 
-	manager, reg := InitRegistry(".ltp/topology.db")
-	cfg := helper.EnsureConfig(helper.ConfigPath(".ltp/topology.db"))
+	manager, reg := InitRegistry(".aracne/topology.db")
+	cfg := helper.EnsureConfig(helper.ConfigPath(".aracne/topology.db"))
 	registry := BuildToolRegistry(manager, reg, cfg, profile)
 
-	server := mcp.NewServerWithAgentRoutes(registry, ".ltp/topology.db", cfg.EffectiveAgentRouteTTL())
+	server := mcp.NewServerWithAgentRoutes(registry, ".aracne/topology.db", cfg.EffectiveAgentRouteTTL())
 	if err := server.Serve(); err != nil {
 		fmt.Fprintf(os.Stderr, "MCP server error: %v\n", err)
 		os.Exit(1)

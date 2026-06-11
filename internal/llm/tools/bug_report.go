@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"ltp/internal/topology"
+	"aracne/internal/topology"
 )
 
 type BugReport struct {

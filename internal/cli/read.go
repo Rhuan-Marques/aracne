@@ -8,13 +8,13 @@ import (
 	"sort"
 	"strings"
 
-	"ltp/internal/helper"
-	"ltp/internal/llm/languages/gotools"
-	"ltp/internal/llm/languages/pythontools"
-	"ltp/internal/topology"
-	"ltp/internal/topology/domain"
-	"ltp/internal/topology/golang"
-	"ltp/internal/topology/python"
+	"aracne/internal/helper"
+	"aracne/internal/llm/languages/gotools"
+	"aracne/internal/llm/languages/pythontools"
+	"aracne/internal/topology"
+	"aracne/internal/topology/domain"
+	"aracne/internal/topology/golang"
+	"aracne/internal/topology/python"
 )
 
 func RunRead() {
@@ -28,7 +28,7 @@ func RunRead() {
 
 	id = helper.NormalizeResourceID(id)
 
-	manager, _ := InitRegistry(".ltp/topology.db")
+	manager, _ := InitRegistry(".aracne/topology.db")
 
 	topo, err := manager.ReadAll()
 	if err != nil {
@@ -124,12 +124,12 @@ func parseReadArgs(args []string) (string, domain.ResourceKind, error) {
 }
 
 func printReadUsage() {
-	fmt.Fprintln(os.Stderr, "Usage: ltp read [--kind <kind>] <resource-id>")
+	fmt.Fprintln(os.Stderr, "Usage: arac read [--kind <kind>] <resource-id>")
 	fmt.Fprintln(os.Stderr, "Kinds: function, method, type, named_type, interface, variable, file, package, dependency")
 	fmt.Fprintln(os.Stderr, "Examples:")
-	fmt.Fprintln(os.Stderr, "  ltp read internal/cli/read.go")
-	fmt.Fprintln(os.Stderr, "  ltp read --kind function ltp/internal/topology/golang.(GoManager).ReadFunction")
-	fmt.Fprintln(os.Stderr, "  ltp read ltp/internal/topology/golang.GoManager --kind type")
+	fmt.Fprintln(os.Stderr, "  arac read internal/cli/read.go")
+	fmt.Fprintln(os.Stderr, "  arac read --kind function aracne/internal/topology/golang.(GoManager).ReadFunction")
+	fmt.Fprintln(os.Stderr, "  arac read aracne/internal/topology/golang.GoManager --kind type")
 }
 
 func findReadResource(topo *domain.Topology, id string) (domain.Resource, string, bool) {

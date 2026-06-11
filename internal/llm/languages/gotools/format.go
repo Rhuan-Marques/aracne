@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"ltp/internal/topology/domain"
-	"ltp/internal/topology/golang"
+	"aracne/internal/topology/domain"
+	"aracne/internal/topology/golang"
 )
 
 func desc(s string) string {

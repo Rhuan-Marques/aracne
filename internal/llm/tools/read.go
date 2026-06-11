@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"ltp/internal/helper"
-	"ltp/internal/topology"
+	"aracne/internal/helper"
+	"aracne/internal/topology"
 )
 
 type Read struct {
@@ -22,7 +22,7 @@ func (r *Read) Name() string {
 }
 
 func (r *Read) Description() string {
-	return "Read any resource by its ID (function, struct, interface, file, package, variable, etc.) and return its source code. Same behavior as `ltp read {resource_id}`."
+	return "Read any resource by its ID (function, struct, interface, file, package, variable, etc.) and return its source code. Same behavior as `arac read {resource_id}`."
 }
 
 func (r *Read) Parameters() []Parameter {

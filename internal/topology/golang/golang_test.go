@@ -3,7 +3,7 @@ package golang
 import (
 	"testing"
 
-	"ltp/internal/topology/domain"
+	"aracne/internal/topology/domain"
 )
 
 func TestConnectionKindValues(t *testing.T) {
@@ -43,13 +43,13 @@ func TestGolangFunctionAccessors(t *testing.T) {
 		ID:   "pkg.Func",
 		Name: "Func",
 		Connections: map[ConnectionKind][]string{
-			ConnCalls:      {"pkg.Bar", "pkg.Baz"},
-			ConnUsesStruct: {"pkg.MyStruct"},
+			ConnCalls:         {"pkg.Bar", "pkg.Baz"},
+			ConnUsesStruct:    {"pkg.MyStruct"},
 			ConnUsesNamedType: {"pkg.MyType"},
-			ConnUsesIface:  {"pkg.MyInterface"},
-			ConnUsesExtVar: {"pkg.GlobalVar"},
-			ConnUsesPkg:    {"fmt"},
-			ConnUsesDep:    {"github.com/foo/bar"},
+			ConnUsesIface:     {"pkg.MyInterface"},
+			ConnUsesExtVar:    {"pkg.GlobalVar"},
+			ConnUsesPkg:       {"fmt"},
+			ConnUsesDep:       {"github.com/foo/bar"},
 		},
 	}
 
@@ -139,13 +139,13 @@ func TestGolangFileAccessors(t *testing.T) {
 		ID:   "main.go",
 		Name: "main.go",
 		Connections: map[ConnectionKind][]string{
-			ConnHasFunc:    {"pkg.Func1", "pkg.Func2"},
-			ConnHasStruct:  {"pkg.MyStruct"},
+			ConnHasFunc:      {"pkg.Func1", "pkg.Func2"},
+			ConnHasStruct:    {"pkg.MyStruct"},
 			ConnHasNamedType: {"pkg.MyType"},
-			ConnHasIface:   {"pkg.MyIface"},
-			ConnHasVar:     {"pkg.Global"},
-			ConnImportsPkg: {"fmt", "os"},
-			ConnImportsDep: {"github.com/foo/bar"},
+			ConnHasIface:     {"pkg.MyIface"},
+			ConnHasVar:       {"pkg.Global"},
+			ConnImportsPkg:   {"fmt", "os"},
+			ConnImportsDep:   {"github.com/foo/bar"},
 		},
 	}
 
@@ -176,12 +176,12 @@ func TestGolangPackageAccessors(t *testing.T) {
 	p := GolangPackage{
 		Path: "mypackage",
 		Connections: map[ConnectionKind][]string{
-			ConnHasFile:    {"file1.go", "file2.go"},
-			ConnHasFunc:    {"pkg.Func1"},
-			ConnHasStruct:  {"pkg.MyStruct"},
+			ConnHasFile:      {"file1.go", "file2.go"},
+			ConnHasFunc:      {"pkg.Func1"},
+			ConnHasStruct:    {"pkg.MyStruct"},
 			ConnHasNamedType: {"pkg.MyType"},
-			ConnHasIface:   {"pkg.MyIface"},
-			ConnHasVar:     {"pkg.Global"},
+			ConnHasIface:     {"pkg.MyIface"},
+			ConnHasVar:       {"pkg.Global"},
 		},
 	}
 
@@ -288,9 +288,9 @@ func TestFromGenericRoundtrip(t *testing.T) {
 		Language: "go",
 		Resources: map[string]domain.Resource{
 			"pkg.Func1": {
-				ID:   "pkg.Func1",
-				Kind: domain.ResourceFunction,
-				Name: "Func1",
+				ID:       "pkg.Func1",
+				Kind:     domain.ResourceFunction,
+				Name:     "Func1",
 				Location: domain.Location{StartsAt: 1, EndsAt: 5, Path: "main.go"},
 				Properties: map[string]any{
 					"input":  []any{map[string]any{"Name": "x", "Typing": "int"}},
@@ -299,35 +299,35 @@ func TestFromGenericRoundtrip(t *testing.T) {
 				Connections: map[string][]string{"calls": {"pkg.Func2"}},
 			},
 			"pkg.MyStruct": {
-				ID:   "pkg.MyStruct",
-				Kind: domain.ResourceType,
-				Name: "MyStruct",
+				ID:       "pkg.MyStruct",
+				Kind:     domain.ResourceType,
+				Name:     "MyStruct",
 				Location: domain.Location{StartsAt: 10, EndsAt: 15, Path: "main.go"},
 				Properties: map[string]any{
 					"params": []any{map[string]any{"Name": "X", "Typing": "int"}},
 				},
 			},
 			"pkg.MyInterface": {
-				ID:   "pkg.MyInterface",
-				Kind: domain.ResourceInterface,
-				Name: "MyInterface",
+				ID:       "pkg.MyInterface",
+				Kind:     domain.ResourceInterface,
+				Name:     "MyInterface",
 				Location: domain.Location{StartsAt: 20, EndsAt: 25, Path: "main.go"},
 				Properties: map[string]any{
 					"methods": []any{map[string]any{"Name": "Do", "Input": []any{}, "Output": []any{}}},
 				},
 			},
 			"pkg.GlobalVar": {
-				ID:   "pkg.GlobalVar",
-				Kind: domain.ResourceVariable,
-				Name: "GlobalVar",
-				Location: domain.Location{StartsAt: 30, EndsAt: 30, Path: "main.go"},
+				ID:         "pkg.GlobalVar",
+				Kind:       domain.ResourceVariable,
+				Name:       "GlobalVar",
+				Location:   domain.Location{StartsAt: 30, EndsAt: 30, Path: "main.go"},
 				Properties: map[string]any{"typing": "string", "value": "\"hello\""},
 			},
 			"main.go": {
-				ID:   "main.go",
-				Kind: domain.ResourceFile,
-				Name: "main.go",
-				Properties: map[string]any{"from_package": "mypackage"},
+				ID:          "main.go",
+				Kind:        domain.ResourceFile,
+				Name:        "main.go",
+				Properties:  map[string]any{"from_package": "mypackage"},
 				Connections: map[string][]string{"has_function": {"pkg.Func1"}, "has_struct": {"pkg.MyStruct"}},
 			},
 			"mypackage": {
@@ -395,9 +395,9 @@ func TestFromGenericMethod(t *testing.T) {
 	domainTopo := &domain.Topology{
 		Resources: map[string]domain.Resource{
 			"pkg.Method1": {
-				ID:   "pkg.Method1",
-				Kind: domain.ResourceMethod,
-				Name: "Method1",
+				ID:       "pkg.Method1",
+				Kind:     domain.ResourceMethod,
+				Name:     "Method1",
 				Location: domain.Location{StartsAt: 1, EndsAt: 5, Path: "main.go"},
 				Properties: map[string]any{
 					"input":       []any{},
@@ -421,11 +421,11 @@ func TestFromGenericNamedType(t *testing.T) {
 	domainTopo := &domain.Topology{
 		Resources: map[string]domain.Resource{
 			"pkg.MyType": {
-				ID:   "pkg.MyType",
-				Kind: domain.ResourceNamedType,
-				Name: "MyType",
+				ID:         "pkg.MyType",
+				Kind:       domain.ResourceNamedType,
+				Name:       "MyType",
 				Properties: map[string]any{"underlying": "string"},
-				Location: domain.Location{StartsAt: 1, EndsAt: 1, Path: "main.go"},
+				Location:   domain.Location{StartsAt: 1, EndsAt: 1, Path: "main.go"},
 			},
 		},
 	}
@@ -438,4 +438,3 @@ func TestFromGenericNamedType(t *testing.T) {
 		t.Errorf("expected underlying 'string', got %q", nt.Underlying)
 	}
 }
-

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"ltp/internal/helper"
-	"ltp/internal/topology/domain"
+	"aracne/internal/helper"
+	"aracne/internal/topology/domain"
 )
 
 func TestServerGraphModes(t *testing.T) {
@@ -159,7 +159,7 @@ func TestServerGraphModes(t *testing.T) {
 
 func TestOptimizationRulesCollapseAndPersistDefaults(t *testing.T) {
 	dir := t.TempDir()
-	dbPath := filepath.Join(dir, ".ltp", "topology.db")
+	dbPath := filepath.Join(dir, ".aracne", "topology.db")
 	root := filepath.Join(dir, "repo")
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
@@ -224,7 +224,7 @@ func TestOptimizationRulesCollapseAndPersistDefaults(t *testing.T) {
 	if len(saved) != 2 || !saved[0].Favorite || !saved[1].Favorite {
 		t.Fatalf("unexpected default rules: %+v", saved)
 	}
-	if _, err := os.Stat(filepath.Join(dir, ".ltp", "optimization_rules.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, ".aracne", "optimization_rules.json")); err != nil {
 		t.Fatalf("optimization rules were not persisted: %v", err)
 	}
 

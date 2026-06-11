@@ -1,8 +1,8 @@
 # CLAUDE.md
 
-# LTP Integration
+# Aracne Project Integration
 
-This project uses **llm-topology** for codebase navigation. The topology database provides a pre-analyzed graph of all functions, structs/classes, interfaces, variables, and their relationships.
+This project uses **aracne** for codebase navigation. The topology database provides a pre-analyzed graph of all functions, structs/classes, interfaces, variables, and their relationships.
 
 ## Navigation Model
 
@@ -81,10 +81,10 @@ Use these Claude Code MCP tools for MCP-mode topology operations:
 
 | Tool | Purpose |
 |------|---------|
-| `mcp__llm-topology__read` | Read any resource by ID |
-| `mcp__llm-topology__edit` | Edit files and update topology automatically |
-| `mcp__llm-topology__write` | Write files and update topology automatically |
-| `mcp__llm-topology__warnings_list` | List topology warnings |
-| `mcp__llm-topology__bug_report` | Report a confirmed bug on a resource node |
+| `mcp__aracne__read` | Read any resource by ID |
+| `mcp__aracne__edit` | Edit files and update topology automatically |
+| `mcp__aracne__write` | Write files and update topology automatically |
+| `mcp__aracne__warnings_list` | List topology warnings |
+| `mcp__aracne__bug_report` | Report a confirmed bug on a resource node |
 
-This is it for ltp integration
+This is it for Aracne Project Integration

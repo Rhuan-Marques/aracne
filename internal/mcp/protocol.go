@@ -89,5 +89,5 @@ type CallToolResult struct {
 // MCP response content block with a type (e.g., "text") and optional text content for tool results.
 type ContentBlock struct {
 	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
+	Text string `json:"text"`
 }

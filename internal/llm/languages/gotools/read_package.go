@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"ltp/internal/topology/golang"
+	"aracne/internal/topology/golang"
 )
 
 type ReadPackage struct {
@@ -25,7 +25,7 @@ func (r *ReadPackage) Description() string {
 
 func (r *ReadPackage) Parameters() []Parameter {
 	return []Parameter{
-		{Name: "name", Type: "string", Description: "The package path (e.g. 'ltp/internal/cli', 'fmt')", Required: true},
+		{Name: "name", Type: "string", Description: "The package path (e.g. 'aracne/internal/cli', 'fmt')", Required: true},
 	}
 }
 

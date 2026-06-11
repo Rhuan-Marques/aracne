@@ -7,8 +7,8 @@ import (
 	"regexp"
 	"strings"
 
-	"ltp/internal/topology/domain"
-	"ltp/internal/topology/golang"
+	"aracne/internal/topology/domain"
+	"aracne/internal/topology/golang"
 )
 
 type GoScanner struct{}

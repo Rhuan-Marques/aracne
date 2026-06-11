@@ -1,11 +1,11 @@
 ---
 name: bug-hunter
 description: Scans the entire project topology looking for bugs
-tools: mcp__llm-topology__read, mcp__llm-topology__read_interface, mcp__llm-topology__read_file, mcp__llm-topology__read_package, mcp__llm-topology__read_dependency, mcp__llm-topology__bug_report
+tools: mcp__aracne__read, mcp__aracne__read_interface, mcp__aracne__read_file, mcp__aracne__read_package, mcp__aracne__read_dependency, mcp__aracne__bug_report
 mcpServers:
-  - llm-topology:
+  - aracne:
       type: stdio
-      command: ltp
+      command: arac
       args: ["serve", "--tool-profile", "bug-hunter"]
 ---
 

@@ -16,14 +16,18 @@ import (
 	"sync"
 	"time"
 
-	"ltp/internal/helper"
-	"ltp/internal/topology/domain"
+	"aracne/internal/chat"
+	"aracne/internal/helper"
+	"aracne/internal/topology/domain"
 )
 
 type Server struct {
 	dbPath      string
 	ws          *WebSocketManager
 	watcherOnce sync.Once
+	chatOnce    sync.Once
+	chatMgr     *chat.Manager
+	chatErr     error
 }
 
 type Summary struct {
@@ -127,6 +131,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	mux.HandleFunc("/api/node/", s.handleNode)
 	mux.HandleFunc("/api/optimization-rules", s.handleOptimizationRules)
 	mux.HandleFunc("/api/agent-routes", s.handleAgentRoutes)
+	mux.HandleFunc("/api/chat", s.handleChat)
+	mux.HandleFunc("/api/chat/", s.handleChat)
 	mux.HandleFunc("/api/warnings", s.handleWarnings)
 	mux.HandleFunc("/api/bugs", s.handleBugs)
 	mux.ServeHTTP(w, r)

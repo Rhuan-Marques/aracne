@@ -5,11 +5,11 @@ import (
 	"os"
 	"sort"
 
-	"ltp/internal/topology/domain"
+	"aracne/internal/topology/domain"
 )
 
 func RunWarningsList(args []string) {
-	dbPath := ".ltp/topology.db"
+	dbPath := ".aracne/topology.db"
 	sourceID := ""
 	targetID := ""
 	var kind domain.WarningKind

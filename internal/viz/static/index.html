@@ -3,135 +3,289 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>LTP Topology Visualization</title>
+  <title>Aracne Viz</title>
   <link rel="stylesheet" href="/styles.css">
+  <link rel="icon" href="/icon.png">
 </head>
 <body>
-  <div class="shell">
-    <aside class="panel left">
-      <div class="brand">
-        <span class="mark"></span>
-        <div>
-          <h1>LTP Viz</h1>
-          <p id="subtitle">Topology graph explorer</p>
-        </div>
-      </div>
+  <header class="appHeader">
+    <a class="appBrand" href="/graph" data-route="/graph" aria-label="Aracne Viz home">
+      <img class="mark" src="/aracne.svg" alt="">
+      <span>Aracne Viz</span>
+    </a>
+    <nav class="appNav" aria-label="Screens">
+      <a id="navGraph" href="/graph" data-route="/graph" class="navItem">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M4 12h5"/><path d="M15 12h5"/><path d="m6 6 4 4"/><path d="m14 14 4 4"/><path d="m18 6-4 4"/><path d="m10 14-4 4"/></svg>
+        <span>Visualization</span>
+      </a>
+      <a id="navChat" href="/chat" data-route="/chat" class="navItem">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg>
+        <span>Chat</span>
+      </a>
+    </nav>
+    <a id="navSettings" href="/settings" data-route="/settings" class="settingsButton" aria-label="Settings">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/></svg>
+    </a>
+  </header>
 
-      <label>Visualization</label>
-      <select id="mode">
-        <option value="packages">Packages</option>
-        <option value="data_flow">Data Flow</option>
-        <option value="custom">Custom</option>
-      </select>
-      <p id="modeHelp" class="modeHelp"></p>
+  <main id="appRoot">
+    <section id="graphPage" class="page graphPage">
+      <div class="shell">
+        <aside class="panel left">
+          <label>Visualization</label>
+          <select id="mode">
+            <option value="packages">Packages</option>
+            <option value="data_flow">Data Flow</option>
+            <option value="custom">Custom</option>
+          </select>
+          <p id="modeHelp" class="modeHelp"></p>
 
-      <label>Search</label>
-      <input id="query" placeholder="function, path, description">
+          <label>Search</label>
+          <input id="query" placeholder="function, path, description">
 
-      <div class="actions">
-        <button id="loadGraph">Load View</button>
-        <button id="clear">Clear</button>
-      </div>
-
-      <section id="depthControls" class="depthControls disabled" aria-label="Neighborhood depth">
-        <div class="depthLabel">
-          <span id="depthIcon"></span>
-          <span>Depht:</span>
-        </div>
-        <div class="depthButtons">
-          <button type="button" class="depthButton active" data-depth="1" disabled>1</button>
-          <button type="button" class="depthButton" data-depth="2" disabled>2</button>
-          <button type="button" class="depthButton" data-depth="3" disabled>3</button>
-          <button type="button" class="depthButton" data-depth="4" disabled>4</button>
-        </div>
-      </section>
-
-      <section class="agentRouteControls" aria-label="Agent route">
-        <label for="agentRoute">Agent Route</label>
-        <select id="agentRoute">
-          <option value="">None</option>
-        </select>
-        <p id="agentRouteHint" class="fieldHint">Show what an active Claude/OpenCode session has seen.</p>
-      </section>
-
-      <button id="graphOptimizationToggle" class="sidebarTool" type="button">
-        <span>Graph Optimization</span>
-      </button>
-      <div id="optimizationMenu" class="optimizationMenu hidden">
-        <div class="optimizationMenuHeader">
-          <div>
-            <strong>Optimization Rules</strong>
-            <p class="fieldHint">Matching nodes collapse into their incoming resources.</p>
+          <div class="actions">
+            <button id="loadGraph">Load View</button>
+            <button id="clear">Clear</button>
           </div>
-          <button id="addOptimizationRule" type="button">Add Rule</button>
-        </div>
-        <div id="optimizationRules" class="optimizationRules"></div>
-      </div>
 
-      <div id="customControls" class="customControls hidden">
-        <label>Kinds</label>
-        <select id="kind" class="nativeMulti" multiple size="8">
-          <option value="package">package</option>
-          <option value="file">file</option>
-          <option value="function">function</option>
-          <option value="method">method</option>
-          <option value="type">type</option>
-          <option value="named_type">named_type</option>
-          <option value="interface">interface</option>
-          <option value="variable">variable</option>
-          <option value="dependency">dependency</option>
-        </select>
-        <p class="fieldHint">Leave empty for all kinds, or pick the node families you want.</p>
+          <section id="depthControls" class="depthControls disabled" aria-label="Neighborhood depth">
+            <div class="depthLabel">
+              <span id="depthIcon"></span>
+              <span>Depth:</span>
+            </div>
+            <div class="depthButtons">
+              <button type="button" class="depthButton active" data-depth="1" disabled>1</button>
+              <button type="button" class="depthButton" data-depth="2" disabled>2</button>
+              <button type="button" class="depthButton" data-depth="3" disabled>3</button>
+              <button type="button" class="depthButton" data-depth="4" disabled>4</button>
+            </div>
+          </section>
 
-        <label>Edge Types</label>
-        <select id="edgeKind" class="nativeMulti" multiple size="10"></select>
-        <p class="fieldHint">Leave empty for all relationships, or narrow the graph by connection type.</p>
+          <section class="agentRouteControls" aria-label="Agent route">
+            <label for="agentRoute">Agent Route</label>
+            <select id="agentRoute">
+              <option value="">None</option>
+            </select>
+            <p id="agentRouteHint" class="fieldHint">Show what an active Claude/OpenCode session has seen.</p>
+          </section>
 
-        <label><input type="checkbox" id="strictEdges"> Strict Edges</label>
-        <p class="fieldHint">Only show nodes that have at least one connection of the selected edge types.</p>
-
-        <div class="grid2">
-          <div>
-            <label>Path contains</label>
-            <input id="path" placeholder="internal/topology">
+          <button id="graphOptimizationToggle" class="sidebarTool" type="button">
+            <span>Graph Optimization</span>
+          </button>
+          <div id="optimizationMenu" class="optimizationMenu hidden">
+            <div class="optimizationMenuHeader">
+              <div>
+                <strong>Optimization Rules</strong>
+                <p class="fieldHint">Matching nodes collapse into their incoming resources.</p>
+              </div>
+              <button id="addOptimizationRule" type="button">Add Rule</button>
+            </div>
+            <div id="optimizationRules" class="optimizationRules"></div>
           </div>
+
+          <div id="customControls" class="customControls hidden">
+            <label>Kinds</label>
+            <select id="kind" class="nativeMulti" multiple size="8">
+              <option value="package">package</option>
+              <option value="file">file</option>
+              <option value="function">function</option>
+              <option value="method">method</option>
+              <option value="type">type</option>
+              <option value="named_type">named_type</option>
+              <option value="interface">interface</option>
+              <option value="variable">variable</option>
+              <option value="dependency">dependency</option>
+            </select>
+            <p class="fieldHint">Leave empty for all kinds, or pick the node families you want.</p>
+
+            <label>Edge Types</label>
+            <select id="edgeKind" class="nativeMulti" multiple size="10"></select>
+            <p class="fieldHint">Leave empty for all relationships, or narrow the graph by connection type.</p>
+
+            <label><input type="checkbox" id="strictEdges"> Strict Edges</label>
+            <p class="fieldHint">Only show nodes that have at least one connection of the selected edge types.</p>
+
+            <div class="grid2">
+              <div>
+                <label>Path contains</label>
+                <input id="path" placeholder="internal/topology">
+              </div>
+              <div>
+                <label>Limit</label>
+                <input id="limit" type="number" min="1" max="3000" value="300">
+              </div>
+            </div>
+          </div>
+        </aside>
+
+        <main class="canvasWrap">
+          <div class="toolbar">
+            <span id="status">Loading topology summary...</span>
+            <div>
+              <button id="zoomIn">+</button>
+              <button id="zoomOut">-</button>
+              <button id="fit">Fit</button>
+            </div>
+          </div>
+          <canvas id="graph"></canvas>
+          <div class="hint">Click a node to inspect. Double-click to expand. Drag to pan, wheel to zoom.</div>
+        </main>
+
+        <aside class="panel right">
+          <div class="tabBar">
+            <button class="tab active" id="inspectorTab">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+              Inspector
+            </button>
+            <button class="tab disabled" id="codeTab">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+              Code
+            </button>
+          </div>
+          <div id="inspector" class="empty">Select a node.</div>
+          <div id="codePanel" class="empty hidden">No source available.</div>
+        </aside>
+      </div>
+    </section>
+
+    <section id="chatPage" class="page chatPage hidden">
+      <div class="chatLayout">
+        <header class="chatTop">
           <div>
-            <label>Limit</label>
-            <input id="limit" type="number" min="1" max="3000" value="300">
+            <p id="chatAgentLabel" class="eyebrow">Default Chat</p>
+            <h2 id="chatTitle">New chat</h2>
+          </div>
+        </header>
+        <div id="chatMessages" class="chatMessages clean"></div>
+        <div id="chatThinking" class="chatThinking hidden"><span></span><span></span><span></span> thinking</div>
+        <div id="chatPending" class="chatPending"></div>
+        <form id="chatComposer" class="modernComposer">
+          <textarea id="chatInput" rows="4" placeholder="Ask Aracne to inspect, plan, edit, or explain this codebase..."></textarea>
+          <div class="composerFooter">
+            <input id="chatProvider" type="hidden">
+            <input id="chatModel" type="hidden">
+            <div class="choiceWrap">
+              <button id="chatModelButton" type="button" class="composerChip modelChip">Select model</button>
+            </div>
+            <select id="chatMode" class="hidden" aria-label="Current mode">
+              <option value="plan">Plan Mode</option>
+              <option value="build" selected>Build Mode</option>
+            </select>
+            <div class="choiceWrap">
+              <button id="chatModeButton" type="button" class="composerChip">Build Mode</button>
+            </div>
+            <select id="chatApprovalMode" class="hidden" aria-label="Current approval mode">
+              <option value="manual">Manual Approval</option>
+              <option value="auto">Auto Judge</option>
+              <option value="always">Don't Ask</option>
+            </select>
+            <div class="choiceWrap">
+              <button id="chatApprovalModeButton" type="button" class="composerChip">Manual Approval</button>
+            </div>
+            <button id="agentButton" type="button" class="composerChip">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8V4"/><path d="M8 4h8"/><rect x="5" y="8" width="14" height="12" rx="3"/><path d="M9 13h.01"/><path d="M15 13h.01"/><path d="M10 17h4"/></svg>
+              Task
+            </button>
+            <button id="historyButton" type="button" class="composerIcon" aria-label="Chat history">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 7v5l3 2"/></svg>
+            </button>
+            <button type="submit" class="sendButton">Send</button>
+          </div>
+        </form>
+        <div id="chatModelMenu" class="agentMenu choiceMenu hidden"></div>
+        <div id="chatModeMenu" class="agentMenu choiceMenu hidden"></div>
+        <div id="chatApprovalModeMenu" class="agentMenu choiceMenu hidden"></div>
+        <div id="agentMenu" class="agentMenu hidden"></div>
+      </div>
+    </section>
+
+    <section id="historyPage" class="page historyPage hidden">
+      <div class="simplePage">
+        <div class="simplePageHeader">
+          <div>
+            <p class="eyebrow">Chat</p>
+            <h2>History</h2>
+          </div>
+          <button id="newChatFromHistory" type="button">New Chat</button>
+        </div>
+        <div id="chatHistoryList" class="historyList"></div>
+      </div>
+    </section>
+
+    <section id="settingsPage" class="page settingsPage hidden">
+      <div class="simplePage settingsPanel">
+        <p class="eyebrow">Configuration</p>
+        <h2>Settings</h2>
+        <p class="settingsIntro">Configure your LLM providers and default models for codebase interaction.</p>
+        <div class="settingsSection">
+          <div class="settingsSectionHeader">
+            <h3>Provider Settings</h3>
+            <button id="addProvider" type="button">Add Provider</button>
+          </div>
+          <div id="providerList" class="providerList"></div>
+          <div id="providerEditor" class="providerEditor hidden">
+            <div class="settingsGrid twoCols">
+              <label>Provider
+                <select id="providerChoice">
+                  <option value="openai">OpenAI</option>
+                  <option value="anthropic">Anthropic</option>
+                  <option value="deepseek">DeepSeek</option>
+                  <option value="custom">Custom</option>
+                </select>
+              </label>
+              <label id="providerCustomWrap" class="hidden">Provider Name
+                <input id="providerCustomID" placeholder="my-provider">
+              </label>
+              <div class="credentialField">
+                <label>Credential</label>
+                <div class="credentialRow">
+                  <select id="providerCredentialType" aria-label="Credential type">
+                    <option value="key">Key</option>
+                    <option value="env">Env</option>
+                  </select>
+                  <input id="providerCredentialValue" type="password" placeholder="API key">
+                </div>
+              </div>
+            </div>
+            <div id="providerCustomFields" class="settingsGrid hidden">
+              <label>Base URL
+                <input id="providerBaseURL" placeholder="https://api.example.com">
+              </label>
+              <label>Chat Contract
+                <select id="providerChatContract">
+                  <option value="openai">OpenAI</option>
+                  <option value="deepseek">DeepSeek</option>
+                  <option value="anthropic">Anthropic</option>
+                </select>
+              </label>
+              <div class="possibleModelsField">
+                <div class="possibleModelsHeader">
+                  <label>Possible Models</label>
+                  <button id="addPossibleModel" type="button" class="composerIcon" aria-label="Add possible model">+</button>
+                </div>
+                <div id="providerPossibleModels" class="possibleModelsList"></div>
+              </div>
+            </div>
+            <div class="providerEditorActions">
+              <button id="saveProviderEntry" type="button">Create</button>
+              <button id="cancelProviderEntry" type="button">Cancel</button>
+            </div>
+          </div>
+        </div>
+        <div id="modelDefaults" class="settingsSection hidden">
+          <div class="settingsSectionHeader">
+            <h3>Model Defaults</h3>
+          </div>
+          <div class="choiceWrap defaultModelWrap">
+            <label>Main Model Default</label>
+            <button id="mainModelDefaultButton" type="button" class="composerChip modelChip">Select default model</button>
+            <div id="mainModelDefaultMenu" class="agentMenu choiceMenu hidden"></div>
           </div>
         </div>
       </div>
+    </section>
+  </main>
 
-    </aside>
-
-    <main class="canvasWrap">
-      <div class="toolbar">
-        <span id="status">Loading topology summary...</span>
-        <div>
-          <button id="zoomIn">+</button>
-          <button id="zoomOut">-</button>
-          <button id="fit">Fit</button>
-        </div>
-      </div>
-      <canvas id="graph"></canvas>
-      <div class="hint">Click a node to inspect. Double-click to expand. Drag to pan, wheel to zoom.</div>
-    </main>
-
-    <aside class="panel right">
-      <div class="tabBar">
-        <button class="tab active" id="inspectorTab">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-          Inspector
-        </button>
-        <button class="tab disabled" id="codeTab">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
-          Code
-        </button>
-      </div>
-      <div id="inspector" class="empty">Select a node.</div>
-      <div id="codePanel" class="empty hidden">No source available.</div>
-    </aside>
-  </div>
   <script src="/app.js"></script>
 </body>
 </html>

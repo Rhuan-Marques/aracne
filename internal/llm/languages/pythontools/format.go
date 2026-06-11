@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"ltp/internal/topology/python"
+	"aracne/internal/topology/python"
 )
 
 func desc(s string) string {

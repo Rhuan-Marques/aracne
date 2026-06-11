@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"ltp/internal/topology"
-	"ltp/internal/topology/domain"
+	"aracne/internal/topology"
+	"aracne/internal/topology/domain"
 )
 
 type BugList struct {

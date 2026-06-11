@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"ltp/internal/helper"
-	"ltp/internal/topology/domain"
+	"aracne/internal/helper"
+	"aracne/internal/topology/domain"
 )
 
 func ClaudeMdContent() string {
@@ -17,11 +17,11 @@ func AgentsMdContent() string {
 }
 
 func ClaudeMdContentForModes(modes helper.ToolModes, readSplit map[domain.ResourceKind]bool) string {
-	return agentInstructionsContent(modes, "mcp__llm-topology__", readSplit)
+	return agentInstructionsContent(modes, "mcp__aracne__", readSplit)
 }
 
 func AgentsMdContentForModes(modes helper.ToolModes, readSplit map[domain.ResourceKind]bool) string {
-	return agentInstructionsContent(modes, "llm-topology_", readSplit)
+	return agentInstructionsContent(modes, "aracne_", readSplit)
 }
 
 func bt(s string) string {
@@ -46,9 +46,9 @@ func agentInstructionsContent(modes helper.ToolModes, mcpToolPrefix string, read
 }
 
 func introductionSection() string {
-	return `# LTP Integration
+	return `# Aracne Project Integration
 
-This project uses **llm-topology** for codebase navigation. The topology database provides a pre-analyzed graph of all functions, structs/classes, interfaces, variables, and their relationships.
+This project uses **aracne** for codebase navigation. The topology database provides a pre-analyzed graph of all functions, structs/classes, interfaces, variables, and their relationships.
 
 `
 }
@@ -58,7 +58,7 @@ func navigationModelSection(modes helper.ToolModes) string {
 	if modes.Other == helper.OtherModeMCP {
 		step2 = "Use lookup MCP tools"
 	} else {
-		step2 = "Use `ltp read` commands in bash"
+		step2 = "Use `arac read` commands in bash"
 	}
 
 	b := &strings.Builder{}
@@ -75,7 +75,7 @@ func navigationModelSection(modes helper.ToolModes) string {
 		if modes.Other == helper.OtherModeMCP {
 			note = "use MCP lookups"
 		} else {
-			note = "use `ltp read` commands"
+			note = "use `arac read` commands"
 		}
 		fmt.Fprintf(b, "\n**Note: Never try to use `read` native tool, %s instead**\n\n", note)
 	}
@@ -116,29 +116,29 @@ func lookupToolsSection(modes helper.ToolModes, mcpToolPrefix string, readSplit 
 		b.WriteString("\n")
 	} else if modes.Other == helper.OtherModeTerminal {
 		if useSplit {
-			b.WriteString("## ltp read Terminal command:\n")
-			b.WriteString("To navigate, you should always use your terminal tool to use `ltp read {resource ID}` commands. The available resources are the following:\n")
+			b.WriteString("## arac read Terminal command:\n")
+			b.WriteString("To navigate, you should always use your terminal tool to use `arac read {resource ID}` commands. The available resources are the following:\n")
 			for kind := range readSplit {
 				switch kind {
 				case domain.ResourceFunction, domain.ResourceMethod:
-					fmt.Fprintf(b, "- %s: Reads the function and context for resources it uses\n", bt("ltp read {function_id}"))
+					fmt.Fprintf(b, "- %s: Reads the function and context for resources it uses\n", bt("arac read {function_id}"))
 				case domain.ResourceType:
-					fmt.Fprintf(b, "- %s: Reads the struct and context for resources it uses\n", bt("ltp read {struct_id}"))
+					fmt.Fprintf(b, "- %s: Reads the struct and context for resources it uses\n", bt("arac read {struct_id}"))
 				case domain.ResourceInterface:
-					fmt.Fprintf(b, "- %s: Reads the interface and context for which resources it is implemented by\n", bt("ltp read {interface_id}"))
+					fmt.Fprintf(b, "- %s: Reads the interface and context for which resources it is implemented by\n", bt("arac read {interface_id}"))
 				case domain.ResourceNamedType:
-					fmt.Fprintf(b, "- %s: Reads the named type and context for which resources it is used by\n", bt("ltp read {named_type_id}"))
+					fmt.Fprintf(b, "- %s: Reads the named type and context for which resources it is used by\n", bt("arac read {named_type_id}"))
 				case domain.ResourceFile:
-					fmt.Fprintf(b, "- %s: Reads the content of a file\n", bt("ltp read {file_path}"))
+					fmt.Fprintf(b, "- %s: Reads the content of a file\n", bt("arac read {file_path}"))
 				case domain.ResourcePackage:
-					fmt.Fprintf(b, "- %s: Reads the package and context for which resources it is used by\n", bt("ltp read {package_id}"))
+					fmt.Fprintf(b, "- %s: Reads the package and context for which resources it is used by\n", bt("arac read {package_id}"))
 				case domain.ResourceDependency:
-					fmt.Fprintf(b, "- %s: Reads the dependency and context for which resources it is used by\n", bt("ltp read {dependency_id}"))
+					fmt.Fprintf(b, "- %s: Reads the dependency and context for which resources it is used by\n", bt("arac read {dependency_id}"))
 				}
 			}
 		} else {
-			b.WriteString("## ltp read Terminal command:\n")
-			fmt.Fprintf(b, "- %s: This command will give you the code and full context for any resource you want. These include: Files, Functions, Structs, etc. The resource_id can be a file's path or the ID of any other resource.\n", bt("ltp read {resource_id}"))
+			b.WriteString("## arac read Terminal command:\n")
+			fmt.Fprintf(b, "- %s: This command will give you the code and full context for any resource you want. These include: Files, Functions, Structs, etc. The resource_id can be a file's path or the ID of any other resource.\n", bt("arac read {resource_id}"))
 		}
 		b.WriteString("\n")
 	}
@@ -151,11 +151,11 @@ func lookupToolsSection(modes helper.ToolModes, mcpToolPrefix string, readSplit 
 func grepSection(modes helper.ToolModes, mcpToolPrefix string) string {
 	switch modes.Grep {
 	case helper.GrepModeNative:
-		return "## Grep/Search\n\nUse your native `grep`/`Grep` search tool for content search. When you need topology metadata in results, use `ltp grep <pattern> [path]`; it returns `path:line:match` plus `ResourceID` and `Description` when a match maps to a topology resource.\n\n"
+		return "## Grep/Search\n\nUse your native `grep`/`Grep` search tool for content search. When you need topology metadata in results, use `arac grep <pattern> [path]`; it returns `path:line:match` plus `ResourceID` and `Description` when a match maps to a topology resource.\n\n"
 	case helper.GrepModeMCP:
 		return fmt.Sprintf("## Grep/Search\n\nUse the MCP tool %s for content search. It returns `path:line:match` plus `ResourceID` and `Description` when a match maps to a topology resource.\n\nDo *not* use your native `grep` tool.\nDo not use `grep`, `Select-String` or `rg` in the terminal", bt(mcpToolPrefix+"grep"))
 	case helper.GrepModeTerminal:
-		return "## Grep/Search\n\nUse `ltp grep <pattern> [path]` for content search. It returns `path:line:match` plus `ResourceID` and `Description` when a match maps to a topology resource.\n\nDo *not* use your native `grep` tool.\nDo not use `grep`, `Select-String` or `rg` in the terminal"
+		return "## Grep/Search\n\nUse `arac grep <pattern> [path]` for content search. It returns `path:line:match` plus `ResourceID` and `Description` when a match maps to a topology resource.\n\nDo *not* use your native `grep` tool.\nDo not use `grep`, `Select-String` or `rg` in the terminal"
 	default:
 		return ""
 	}
@@ -166,7 +166,7 @@ func resourceContextSection(modes helper.ToolModes) string {
 	if modes.Other == helper.OtherModeMCP {
 		toolRef = "MCP Lookup Tool"
 	} else {
-		toolRef = "`ltp read` command"
+		toolRef = "`arac read` command"
 	}
 
 	b := &strings.Builder{}
@@ -195,7 +195,7 @@ func editWriteSection(modes helper.ToolModes, mcpToolPrefix string) string {
 	case helper.EditModeMCP:
 		return fmt.Sprintf("## Edit and Write:\n\nYou can edit files using the MCP tool %s.\nYou can write files using the MCP tool %s.\nAfter editing or writing, the context for the topology will be automatically updated to reflect your actions.\n\n**Note: NEVER try to edit or write using your native tools**\n\n", bt(mcpToolPrefix+"edit"), bt(mcpToolPrefix+"write"))
 	case helper.EditModeTerminal:
-		return "## Edit:\n\nYou can edit files using `ltp edit {file_path} {old_string} {new_string}` in your terminal. The old string should only have one match in the file, make the string longer if there's any conflict.\nYou can write files using `ltp write {file_path} {content}` in your terminal.\nAfter editing or writing, the context for the topology will be automatically updated to reflect your actions.\n\n**Note: NEVER try to edit or write using your native tools**\n\n"
+		return "## Edit:\n\nYou can edit files using `arac edit {file_path} {old_string} {new_string}` in your terminal. The old string should only have one match in the file, make the string longer if there's any conflict.\nYou can write files using `arac write {file_path} {content}` in your terminal.\nAfter editing or writing, the context for the topology will be automatically updated to reflect your actions.\n\n**Note: NEVER try to edit or write using your native tools**\n\n"
 	}
 	return ""
 }
@@ -209,8 +209,8 @@ func otherSection(modes helper.ToolModes, mcpToolPrefix string) string {
 		fmt.Fprintf(b, "- If you want to check for any topology warnings, you can do it using %s\n\n", bt(mcpToolPrefix+"warnings_list"))
 	} else if modes.Other == helper.OtherModeTerminal {
 		b.WriteString("## Other:\n\n")
-		fmt.Fprintf(b, "- If you find a bug that is not relevant to your task, *do not fix it*. Instead, report it using %s\n", bt("ltp bug report --resource <id> --description <text>"))
-		fmt.Fprintf(b, "- If you want to check for any topology warnings, you can do it using %s\n\n", bt("ltp warnings list"))
+		fmt.Fprintf(b, "- If you find a bug that is not relevant to your task, *do not fix it*. Instead, report it using %s\n", bt("arac bug report --resource <id> --description <text>"))
+		fmt.Fprintf(b, "- If you want to check for any topology warnings, you can do it using %s\n\n", bt("arac warnings list"))
 	}
 
 	return b.String()

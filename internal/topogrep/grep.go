@@ -6,10 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 
-	"ltp/internal/topology/domain"
+	"aracne/internal/topology/domain"
 )
 
 type Match struct {
@@ -111,7 +112,7 @@ func shouldSkipDir(path, name string) bool {
 		return false
 	}
 	switch name {
-	case ".git", ".ltp", "node_modules", "vendor":
+	case ".git", ".aracne", "node_modules", "vendor":
 		return true
 	}
 	return strings.HasPrefix(name, ".") && path != name
@@ -131,16 +132,21 @@ func searchFile(path string, re *regexp.Regexp, index map[string][]resourceLocat
 	lineNo := 0
 	for scanner.Scan() {
 		lineNo++
-		line := scanner.Text()
+		line := strings.TrimRight(scanner.Text(), "\r")
 		if !re.MatchString(line) {
 			continue
 		}
-		match := Match{Path: displayPath(path), Line: lineNo, Text: line}
-		if resource := bestResource(resources, lineNo); resource != nil {
-			match.ResourceID = resource.id
-			match.Description = resource.description
+		resource := bestResource(resources, lineNo)
+		if resource == nil {
+			continue
 		}
-		matches = append(matches, match)
+		matches = append(matches, Match{
+			Path:        displayPath(path),
+			Line:        lineNo,
+			Text:        line,
+			ResourceID:  resource.id,
+			Description: resource.description,
+		})
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, nil
@@ -208,7 +214,11 @@ func canonicalPath(path string) string {
 	if abs, err := filepath.Abs(path); err == nil {
 		path = abs
 	}
-	return filepath.Clean(path)
+	path = filepath.Clean(path)
+	if runtime.GOOS == "windows" {
+		path = strings.ToLower(path)
+	}
+	return path
 }
 
 func displayPath(path string) string {

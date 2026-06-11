@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"ltp/internal/topology/domain"
-	"ltp/internal/topology/golang"
+	"aracne/internal/topology/domain"
+	"aracne/internal/topology/golang"
 )
 
 func TestGoScannerName(t *testing.T) {
@@ -798,6 +798,220 @@ func TestAnalyzeFunctionBody_knownNameSkipsResolution(t *testing.T) {
 
 // TestAnalyzeFunctionBody_endToEndWithFullScan validates the full pipeline:
 // ParseFile -> analyzeFunctionBody for a real Go file with local var method calls
+func TestAnalyzeFunctionBody_externalImportCallDoesNotWarn(t *testing.T) {
+	modulePath := "example.com/test"
+	pkgPath := golang.PackagePath(modulePath)
+	pr := &ParseResult{
+		PkgPath:    pkgPath,
+		ModulePath: modulePath,
+		ImportMap: map[string]string{
+			"fmt":  "fmt",
+			"http": "net/http",
+		},
+	}
+	gt := buildTestTopology(t, modulePath, string(pkgPath))
+	body := parseGoExpr(t, `
+		fmt.Println("hello")
+		http.ListenAndServe(":0", nil)
+	`).(*ast.BlockStmt)
+
+	conns := analyzeFunctionBody(body, pr, gt, nil, "", nil, "example.com/test.caller", nil)
+
+	if len(conns) != 0 {
+		t.Fatalf("expected no topology connections for external imports, got %v", conns)
+	}
+	if len(gt.Warnings) != 0 {
+		t.Fatalf("expected no warnings for external imports, got %v", gt.Warnings)
+	}
+}
+
+func TestAnalyzeFunctionBody_builtinsDoNotWarn(t *testing.T) {
+	modulePath := "example.com/test"
+	pkgPath := golang.PackagePath(modulePath)
+	pr := &ParseResult{PkgPath: pkgPath, ModulePath: modulePath}
+	gt := buildTestTopology(t, modulePath, string(pkgPath))
+	body := parseGoExpr(t, `
+		_ = make([]int, 0, 4)
+		_ = len(x)
+		_ = cap(x)
+		_ = new(int)
+		x = append(x, 1)
+		copy(a, b)
+		delete(m, "k")
+		panic("boom")
+		println("hello")
+		close(ch)
+	`).(*ast.BlockStmt)
+
+	analyzeFunctionBody(body, pr, gt, nil, "", nil, "example.com/test.caller", nil)
+
+	if len(gt.Warnings) != 0 {
+		for _, w := range gt.Warnings {
+			t.Logf("unexpected warning: [%s] %s", w.Kind, w.Message)
+		}
+		t.Fatalf("expected no warnings for builtins, got %d", len(gt.Warnings))
+	}
+}
+
+func TestAnalyzeFunctionBody_knownLocalFunctionDoesNotWarn(t *testing.T) {
+	modulePath := "example.com/test"
+	pkgPath := golang.PackagePath(modulePath)
+	pr := &ParseResult{
+		PkgPath:    pkgPath,
+		ModulePath: modulePath,
+		Functions: []FunctionParse{
+			{
+				Function: golang.GolangFunction{
+					ID:   golang.FunctionID("example.com/test.helperFunc"),
+					Name: "helperFunc",
+				},
+			},
+		},
+	}
+	gt := buildTestTopology(t, modulePath, string(pkgPath))
+	body := parseGoExpr(t, `helperFunc()`).(*ast.BlockStmt)
+
+	analyzeFunctionBody(body, pr, gt, nil, "", nil, "example.com/test.caller", nil)
+
+	if len(gt.Warnings) != 0 {
+		for _, w := range gt.Warnings {
+			t.Logf("unexpected warning: [%s] %s", w.Kind, w.Message)
+		}
+		t.Fatalf("expected no warnings for known local function, got %d", len(gt.Warnings))
+	}
+}
+
+func TestAnalyzeFunctionBody_localVarCallDoesNotWarn(t *testing.T) {
+	modulePath := "example.com/test"
+	pkgPath := golang.PackagePath(modulePath)
+	pr := &ParseResult{PkgPath: pkgPath, ModulePath: modulePath}
+	gt := buildTestTopology(t, modulePath, string(pkgPath))
+	body := parseGoExpr(t, `
+		f := someFunc
+		f(42)
+	`).(*ast.BlockStmt)
+
+	analyzeFunctionBody(body, pr, gt, nil, "", nil, "example.com/test.caller", nil)
+
+	if len(gt.Warnings) != 0 {
+		for _, w := range gt.Warnings {
+			t.Logf("unexpected warning: [%s] %s", w.Kind, w.Message)
+		}
+		t.Fatalf("expected no warnings for local var call, got %d", len(gt.Warnings))
+	}
+}
+
+func TestAnalyzeFunctionBody_paramFunctionCallDoesNotWarn(t *testing.T) {
+	modulePath := "example.com/test"
+	pkgPath := golang.PackagePath(modulePath)
+	pr := &ParseResult{PkgPath: pkgPath, ModulePath: modulePath}
+	gt := buildTestTopology(t, modulePath, string(pkgPath))
+	body := parseGoExpr(t, `callback(42)`).(*ast.BlockStmt)
+
+	funcInput := []golang.VariableDefinition{
+		{Name: "callback", Typing: "func(int) error"},
+	}
+
+	analyzeFunctionBody(body, pr, gt, funcInput, "", nil, "example.com/test.caller", nil)
+
+	if len(gt.Warnings) != 0 {
+		for _, w := range gt.Warnings {
+			t.Logf("unexpected warning: [%s] %s", w.Kind, w.Message)
+		}
+		t.Fatalf("expected no warnings for param function call, got %d", len(gt.Warnings))
+	}
+}
+
+func TestAnalyzeFunctionBody_paramStructMethodCallDoesNotWarn(t *testing.T) {
+	modulePath := "example.com/test"
+	pkgPath := golang.PackagePath(modulePath)
+	pr := &ParseResult{PkgPath: pkgPath, ModulePath: modulePath}
+	gt := buildTestTopology(t, modulePath, string(pkgPath))
+
+	structID := golang.StructID("example.com/test.MyStruct")
+	methodID := golang.FunctionID("example.com/test.(MyStruct).DoSomething")
+	gt.Structs[structID] = golang.GolangStruct{
+		ID:          structID,
+		Name:        "MyStruct",
+		Connections: map[golang.ConnectionKind][]string{golang.ConnHasMethod: {string(methodID)}},
+	}
+	gt.Functions[methodID] = golang.GolangFunction{
+		ID:   methodID,
+		Name: "DoSomething",
+	}
+
+	body := parseGoExpr(t, `s.DoSomething()`).(*ast.BlockStmt)
+	funcInput := []golang.VariableDefinition{
+		{Name: "s", Typing: "MyStruct"},
+	}
+
+	analyzeFunctionBody(body, pr, gt, funcInput, "", nil, "example.com/test.caller", nil)
+
+	if len(gt.Warnings) != 0 {
+		for _, w := range gt.Warnings {
+			t.Logf("unexpected warning: [%s] %s", w.Kind, w.Message)
+		}
+		t.Fatalf("expected no warnings for param struct method call, got %d", len(gt.Warnings))
+	}
+}
+
+func TestAnalyzeFunctionBody_internalImportKnownFunctionDoesNotWarn(t *testing.T) {
+	modulePath := "example.com/test"
+	pkgPath := golang.PackagePath(modulePath)
+	pr := &ParseResult{
+		PkgPath:    pkgPath,
+		ModulePath: modulePath,
+		ImportMap:  map[string]string{"other": "example.com/test/other"},
+	}
+	gt := buildTestTopology(t, modulePath, string(pkgPath))
+	gt.Functions["example.com/test/other.HelperFunc"] = golang.GolangFunction{
+		ID:   "example.com/test/other.HelperFunc",
+		Name: "HelperFunc",
+	}
+	body := parseGoExpr(t, `other.HelperFunc()`).(*ast.BlockStmt)
+
+	analyzeFunctionBody(body, pr, gt, nil, "", nil, "example.com/test.caller", nil)
+
+	if len(gt.Warnings) != 0 {
+		for _, w := range gt.Warnings {
+			t.Logf("unexpected warning: [%s] %s", w.Kind, w.Message)
+		}
+		t.Fatalf("expected no warnings for known internal import function, got %d", len(gt.Warnings))
+	}
+}
+
+func TestAnalyzeFunctionBody_nonExistentFunctionDoesWarn(t *testing.T) {
+	modulePath := "example.com/test"
+	pkgPath := golang.PackagePath(modulePath)
+	pr := &ParseResult{PkgPath: pkgPath, ModulePath: modulePath}
+	gt := buildTestTopology(t, modulePath, string(pkgPath))
+	body := parseGoExpr(t, `NonExistent()`).(*ast.BlockStmt)
+
+	analyzeFunctionBody(body, pr, gt, nil, "", nil, "example.com/test.caller", nil)
+
+	if len(gt.Warnings) == 0 {
+		t.Fatal("expected a warning for non-existent function")
+	}
+}
+
+func TestAnalyzeFunctionBody_internalImportMissingFunctionDoesWarn(t *testing.T) {
+	modulePath := "example.com/test"
+	pkgPath := golang.PackagePath(modulePath)
+	pr := &ParseResult{
+		PkgPath:    pkgPath,
+		ModulePath: modulePath,
+		ImportMap:  map[string]string{"other": "example.com/test/other"},
+	}
+	gt := buildTestTopology(t, modulePath, string(pkgPath))
+	body := parseGoExpr(t, `other.MissingFunc()`).(*ast.BlockStmt)
+
+	analyzeFunctionBody(body, pr, gt, nil, "", nil, "example.com/test.caller", nil)
+
+	if len(gt.Warnings) == 0 {
+		t.Fatal("expected a warning for missing internal import function")
+	}
+}
+
 func TestAnalyzeFunctionBody_endToEndWithFullScan(t *testing.T) {
 	dir := t.TempDir()
 	goModPath := filepath.Join(dir, "go.mod")

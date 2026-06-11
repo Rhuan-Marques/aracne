@@ -1,11 +1,11 @@
 ---
 name: descriptions-generation-executor
 description: Generates descriptions for one assigned batch of undocumented topology resources
-tools: mcp__llm-topology__read, mcp__llm-topology__read_interface, mcp__llm-topology__read_file, mcp__llm-topology__read_package, mcp__llm-topology__read_dependency, mcp__llm-topology__update_description
+tools: mcp__aracne__read, mcp__aracne__read_interface, mcp__aracne__read_file, mcp__aracne__read_package, mcp__aracne__read_dependency, mcp__aracne__update_description
 mcpServers:
-  - llm-topology:
+  - aracne:
       type: stdio
-      command: ltp
+      command: arac
       args: ["serve", "--tool-profile", "descriptions-executor"]
 ---
 

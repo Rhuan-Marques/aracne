@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"ltp/internal/helper"
+	"aracne/internal/helper"
 )
 
 type repeatedStringFlag []string
@@ -21,7 +21,7 @@ func (f *repeatedStringFlag) Set(value string) error {
 
 func RunAgentRoute(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: ltp agent-route record [--db <path>] --session <id> --platform <name> --kind <full_cut|description> --resource <id>")
+		fmt.Fprintln(os.Stderr, "Usage: arac agent-route record [--db <path>] --session <id> --platform <name> --kind <full_cut|description> --resource <id>")
 		os.Exit(1)
 	}
 	switch args[0] {
@@ -35,7 +35,7 @@ func RunAgentRoute(args []string) {
 
 func runAgentRouteRecord(args []string) {
 	fs := flag.NewFlagSet("agent-route record", flag.ExitOnError)
-	dbPath := fs.String("db", ".ltp/topology.db", "Topology database path")
+	dbPath := fs.String("db", ".aracne/topology.db", "Topology database path")
 	sessionID := fs.String("session", "", "Agent/session ID")
 	platform := fs.String("platform", "", "Agent platform: claude or opencode")
 	label := fs.String("label", "", "Optional display label")

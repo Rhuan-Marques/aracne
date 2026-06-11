@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"ltp/internal/helper"
+	"aracne/internal/helper"
 )
 
 func (s *Server) agentRouteTTL() time.Duration {

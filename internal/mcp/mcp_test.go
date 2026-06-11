@@ -147,14 +147,14 @@ func TestInitializeResult(t *testing.T) {
 		ProtocolVersion: "2024-11-05",
 		Capabilities:    Capabilities{Tools: &struct{}{}},
 		ServerInfo: ServerInfo{
-			Name:    "llm-topology",
+			Name:    "aracne",
 			Version: "1.0.0",
 		},
 	}
 	if result.ProtocolVersion != "2024-11-05" {
 		t.Errorf("unexpected protocol version: %q", result.ProtocolVersion)
 	}
-	if result.ServerInfo.Name != "llm-topology" {
+	if result.ServerInfo.Name != "aracne" {
 		t.Errorf("unexpected server name: %q", result.ServerInfo.Name)
 	}
 }

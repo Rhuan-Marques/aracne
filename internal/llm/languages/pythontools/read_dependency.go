@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"ltp/internal/topology/python"
+	"aracne/internal/topology/python"
 )
 
 type ReadDependency struct {

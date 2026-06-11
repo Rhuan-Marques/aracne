@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"sort"
 
-	"ltp/internal/helper"
-	"ltp/internal/topology"
-	"ltp/internal/topology/domain"
+	"aracne/internal/helper"
+	"aracne/internal/topology"
+	"aracne/internal/topology/domain"
 )
 
 // GoManager wraps TopologyManager with Go-specific context enrichment. It exposes ReadFunction/ReadStruct for retrieving functions and structs with interconnected context (called funcs, implemented interfaces, constructor, etc.) and delegates UpdateDescription to the generic manager.
