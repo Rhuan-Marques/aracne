@@ -17,8 +17,14 @@ func TestAgentInstructionsOmitNativeReadEditTools(t *testing.T) {
 
 	got := AgentsMdContentForModes(modes, nil)
 
+	// With Read=Native there are no MCP/terminal read tools, so the read/lookup
+	// sections (and the CONTEXT explanation they produce) must be absent — the
+	// agent reads natively. Other-mode tools (warnings/bug) remain via MCP.
 	for _, forbidden := range []string{
 		"## arac read Terminal command:",
+		"## MCP Lookup tools:",
+		"## Resource Context",
+		"`aracne_read`",
 		"aracne_edit",
 		"aracne_write",
 	} {
@@ -27,10 +33,8 @@ func TestAgentInstructionsOmitNativeReadEditTools(t *testing.T) {
 		}
 	}
 	for _, required := range []string{
-		"## MCP Lookup tools:",
-		"`aracne_read`",
 		"## Navigation Model",
-		"## Resource Context",
+		"Use your `read` tool",
 		"## How to Navigate:",
 		"## Behavioral Rules",
 		"`aracne_warnings_list`",
@@ -211,6 +215,46 @@ func TestAgentInstructionsNoPrioritiesSection(t *testing.T) {
 	}
 	if strings.Contains(got, "## Description Generation") {
 		t.Fatalf("generated CLAUDE.md contains old Description Generation section:\n%s", got)
+	}
+}
+
+func TestAgentInstructionsReadModeGovernsLookupDocs(t *testing.T) {
+	// Read=MCP while Other=Terminal: read/lookup docs must follow Read (MCP);
+	// meta-tool docs follow Other (terminal). Previously the lookup section was
+	// (incorrectly) gated by the Other mode.
+	mcpRead := helper.ToolModes{
+		Read:  helper.ReadModeMCP,
+		Edit:  helper.EditModeNative,
+		Other: helper.OtherModeTerminal,
+		Grep:  helper.GrepModeNative,
+	}
+	got := ClaudeMdContentForModes(mcpRead, nil)
+	if !strings.Contains(got, "## MCP Lookup tools:") || !strings.Contains(got, "`mcp__aracne__read`") {
+		t.Fatalf("Read=MCP should produce MCP lookup docs regardless of Other mode:\n%s", got)
+	}
+	if strings.Contains(got, "## arac read Terminal command:") {
+		t.Fatalf("Read=MCP should not produce terminal read docs:\n%s", got)
+	}
+	if !strings.Contains(got, "arac warnings list") {
+		t.Fatalf("Other=Terminal should produce terminal meta-tool docs:\n%s", got)
+	}
+
+	// Read=Terminal while Other=MCP: the inverse.
+	termRead := helper.ToolModes{
+		Read:  helper.ReadModeTerminal,
+		Edit:  helper.EditModeNative,
+		Other: helper.OtherModeMCP,
+		Grep:  helper.GrepModeNative,
+	}
+	got2 := ClaudeMdContentForModes(termRead, nil)
+	if !strings.Contains(got2, "## arac read Terminal command:") {
+		t.Fatalf("Read=Terminal should produce terminal read docs regardless of Other mode:\n%s", got2)
+	}
+	if strings.Contains(got2, "## MCP Lookup tools:") {
+		t.Fatalf("Read=Terminal should not produce MCP lookup docs:\n%s", got2)
+	}
+	if !strings.Contains(got2, "`mcp__aracne__warnings_list`") {
+		t.Fatalf("Other=MCP should produce MCP meta-tool docs:\n%s", got2)
 	}
 }
 

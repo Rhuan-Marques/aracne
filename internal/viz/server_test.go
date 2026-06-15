@@ -282,8 +282,11 @@ func TestConfigNeedDescriptionAPI(t *testing.T) {
 	if len(cfg.NeedDescription) != 5 || cfg.NeedDescription[0] != domain.ResourceFunction || cfg.NeedDescription[1] != domain.ResourceMethod {
 		t.Fatalf("unexpected default need_description: %+v", cfg.NeedDescription)
 	}
+	if cfg.DescriptionBatchSize != helper.DefaultDescriptionBatchSize {
+		t.Fatalf("unexpected default description_batch_size: %d", cfg.DescriptionBatchSize)
+	}
 
-	body := bytes.NewBufferString(`{"need_description":["function","type","function"]}`)
+	body := bytes.NewBufferString(`{"need_description":["function","type","function"],"description_batch_size":3}`)
 	req, err := http.NewRequest(http.MethodPut, server.URL+"/api/config", body)
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
@@ -303,10 +306,16 @@ func TestConfigNeedDescriptionAPI(t *testing.T) {
 	if len(cfg.NeedDescription) != 2 || cfg.NeedDescription[0] != domain.ResourceFunction || cfg.NeedDescription[1] != domain.ResourceType {
 		t.Fatalf("unexpected saved need_description: %+v", cfg.NeedDescription)
 	}
+	if cfg.DescriptionBatchSize != 3 {
+		t.Fatalf("unexpected saved description_batch_size: %d", cfg.DescriptionBatchSize)
+	}
 
 	saved := helper.LoadConfig(helper.ConfigPath(dbPath))
 	if len(saved.NeedDescription) != 2 || saved.NeedDescription[0] != domain.ResourceFunction || saved.NeedDescription[1] != domain.ResourceType {
 		t.Fatalf("unexpected persisted need_description: %+v", saved.NeedDescription)
+	}
+	if saved.DescriptionBatchSize != 3 {
+		t.Fatalf("unexpected persisted description_batch_size: %d", saved.DescriptionBatchSize)
 	}
 }
 

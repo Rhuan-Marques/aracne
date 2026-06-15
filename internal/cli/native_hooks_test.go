@@ -24,14 +24,14 @@ func TestClaudeNativeEditHookForOS(t *testing.T) {
 			name:       "linux uses shell hook",
 			goos:       "linux",
 			scriptName: "arac-update-file.sh",
-			shell:      "sh",
+			shell:      "bash",
 			command:    "${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-update-file.sh",
 		},
 		{
 			name:       "macos uses shell hook",
 			goos:       "darwin",
 			scriptName: "arac-update-file.sh",
-			shell:      "sh",
+			shell:      "bash",
 			command:    "${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-update-file.sh",
 		},
 	}

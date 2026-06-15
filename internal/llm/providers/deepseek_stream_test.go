@@ -127,6 +127,36 @@ data: [DONE]`
 	}
 }
 
+// TestDeepSeekStreamChat_NonContiguousToolCallIndices guards against dropping
+// tool calls whose stream indices are not a contiguous 0..n run (gap at index
+// 1). The collection must sort by index instead of stopping at the first gap.
+func TestDeepSeekStreamChat_NonContiguousToolCallIndices(t *testing.T) {
+	sse := `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_a","type":"function","function":{"name":"tool_a","arguments":"{}"}}]}}]}
+
+data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":2,"id":"call_c","type":"function","function":{"name":"tool_c","arguments":"{}"}}]}}]}
+
+data: [DONE]`
+
+	server := newDeepSeekTestServer(t, sse)
+	defer server.Close()
+
+	provider := NewDeepSeekWithConfig("test-key", "deepseek-chat", server.URL)
+	resp, err := provider.StreamChat(
+		[]llm.Message{{Role: "user", Content: "do tools"}},
+		nil,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("StreamChat: %v", err)
+	}
+	if len(resp.ToolCalls) != 2 {
+		t.Fatalf("expected 2 tool calls (non-contiguous indices), got %d: %+v", len(resp.ToolCalls), resp.ToolCalls)
+	}
+	if resp.ToolCalls[0].Function.Name != "tool_a" || resp.ToolCalls[1].Function.Name != "tool_c" {
+		t.Fatalf("expected tool_a then tool_c (sorted by index), got: %+v", resp.ToolCalls)
+	}
+}
+
 func TestDeepSeekStreamChat_MultipleToolCalls(t *testing.T) {
 	sse := `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"tool_a","arguments":""}}]}}]}
 

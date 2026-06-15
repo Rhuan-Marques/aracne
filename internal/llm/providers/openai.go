@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 
 	"aracne/internal/llm"
@@ -170,12 +171,13 @@ func (o *OpenAI) StreamChatContext(ctx context.Context, messages []llm.Message, 
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("read stream: %w", err)
 	}
-	for i := 0; ; i++ {
-		call := toolCalls[i]
-		if call == nil {
-			break
-		}
-		result.ToolCalls = append(result.ToolCalls, *call)
+	indices := make([]int, 0, len(toolCalls))
+	for idx := range toolCalls {
+		indices = append(indices, idx)
+	}
+	sort.Ints(indices)
+	for _, idx := range indices {
+		result.ToolCalls = append(result.ToolCalls, *toolCalls[idx])
 	}
 	return result, nil
 }

@@ -3,6 +3,14 @@ package pyscanner
 import "aracne/internal/topology/python"
 
 func matchClassInheritance(gt *python.PythonTopology) {
+	// Clear existing inheritance edges first so re-running over the full
+	// topology during an incremental UpdateFile rebuilds them from scratch
+	// instead of appending duplicates (mirrors goscanner.matchStructsToInterfaces).
+	for id, cls := range gt.Classes {
+		delete(cls.Connections, python.ConnInherits)
+		delete(cls.Connections, python.ConnInheritedBy)
+		gt.Classes[id] = cls
+	}
 	for classID, cls := range gt.Classes {
 		for _, baseName := range cls.Bases {
 			parentID := resolveBaseClassID(baseName, cls, gt)

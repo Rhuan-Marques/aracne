@@ -62,7 +62,7 @@ func claudeNativeEditHookForOS(goos string) claudeNativeEditHook {
 		scriptName: "arac-update-file.sh",
 		content:    claudeUpdateFileHookShellScript(),
 		command:    "${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-update-file.sh",
-		shell:      "sh",
+		shell:      "bash",
 	}
 }
 

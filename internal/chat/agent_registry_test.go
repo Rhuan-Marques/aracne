@@ -187,19 +187,19 @@ func TestEnsureDefaultAgentFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 4 {
-		t.Fatalf("expected 4 files, got %d", len(entries))
+	if len(entries) != 5 {
+		t.Fatalf("expected 5 files, got %d", len(entries))
 	}
 	names := map[string]bool{}
 	for _, e := range entries {
 		names[e.Name()] = true
 	}
-	for _, name := range []string{"descriptions-generation-executor.md", "bug-hunter.md", "bug-judge.md", "bug-solver.md"} {
+	for _, name := range []string{"explorer.md", "descriptions-generation-executor.md", "bug-hunter.md", "bug-judge.md", "bug-solver.md"} {
 		if !names[name] {
 			t.Errorf("missing file: %s", name)
 		}
 	}
-	for _, name := range []string{"bug-hunter.md", "bug-judge.md", "bug-solver.md"} {
+	for _, name := range []string{"explorer.md", "bug-hunter.md", "bug-judge.md", "bug-solver.md"} {
 		data, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
 			t.Fatal(err)
@@ -296,8 +296,14 @@ func TestAgentKindPrompt_WithKinds(t *testing.T) {
 	if prompt == "" {
 		t.Fatal("expected non-empty prompt when default agents exist")
 	}
-	if !strings.Contains(prompt, "Available Agent Kinds") {
-		t.Error("prompt should list available kinds")
+	if !strings.Contains(prompt, "Available CreateTasks Agent Kinds") {
+		t.Error("prompt should list CreateTasks kinds")
+	}
+	if !strings.Contains(prompt, "explorer") {
+		t.Error("prompt should list explorer")
+	}
+	if strings.Contains(prompt, "bug-hunter") {
+		t.Error("prompt should not list workflow-only agents")
 	}
 	if !strings.Contains(prompt, "CreateTasks") {
 		t.Error("prompt should mention CreateTasks")

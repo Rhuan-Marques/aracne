@@ -41,10 +41,16 @@ func disableOpenCode(global bool, autoYes bool) {
 	changed := false
 
 	if mcpMap, ok := config["mcp"].(map[string]interface{}); ok {
-		if _, exists := mcpMap["arac"]; exists {
-			delete(mcpMap, "arac")
+		removed := false
+		for _, key := range []string{"aracne", "arac"} {
+			if _, exists := mcpMap[key]; exists {
+				delete(mcpMap, key)
+				removed = true
+			}
+		}
+		if removed {
 			changed = true
-			fmt.Println("[OpenCode] Removed arac MCP server from config")
+			fmt.Println("[OpenCode] Removed aracne MCP server from config")
 		}
 		if len(mcpMap) == 0 {
 			delete(config, "mcp")
@@ -99,10 +105,16 @@ func disableClaudeCode(global bool, autoYes bool) {
 	changed := false
 
 	if mcpServers, ok := config["mcpServers"].(map[string]interface{}); ok {
-		if _, exists := mcpServers["arac"]; exists {
-			delete(mcpServers, "arac")
+		removed := false
+		for _, key := range []string{"aracne", "arac"} {
+			if _, exists := mcpServers[key]; exists {
+				delete(mcpServers, key)
+				removed = true
+			}
+		}
+		if removed {
 			changed = true
-			fmt.Println("[Claude Code] Removed arac MCP server from config")
+			fmt.Println("[Claude Code] Removed aracne MCP server from config")
 		}
 		if len(mcpServers) == 0 {
 			delete(config, "mcpServers")

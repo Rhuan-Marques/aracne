@@ -24,7 +24,8 @@ import (
 type Server struct {
 	dbPath   string
 	ws       *WebSocketManager
-	chatOnce sync.Once
+	chatMu   sync.Mutex
+	chatInit bool
 	chatMgr  *chat.Manager
 	chatErr  error
 }
@@ -405,10 +406,19 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) refreshChatConfig(cfg *helper.Config) {
-	if s.chatMgr == nil || cfg == nil {
+	if cfg == nil {
 		return
 	}
-	s.chatMgr.SetConfig(cfg)
+	// Read the manager under the same lock that guards lazy initialization in
+	// chatManager(). Do not initialize it here: if the chat manager has not
+	// been created yet it will pick up the saved config when first used.
+	s.chatMu.Lock()
+	mgr := s.chatMgr
+	s.chatMu.Unlock()
+	if mgr == nil {
+		return
+	}
+	mgr.SetConfig(cfg)
 }
 
 func (s *Server) handleOptimizationRules(w http.ResponseWriter, r *http.Request) {

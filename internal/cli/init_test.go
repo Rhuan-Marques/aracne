@@ -180,8 +180,8 @@ func TestOpenCodePaths_Global(t *testing.T) {
 
 func TestClaudePaths_Local(t *testing.T) {
 	mcpPath, commandsDir, agentsDir, claudeMdPath := claudePaths(false)
-	if mcpPath != ".claude/.mcp.json" {
-		t.Fatalf("mcpPath = %q, want .claude/.mcp.json", mcpPath)
+	if mcpPath != ".mcp.json" {
+		t.Fatalf("mcpPath = %q, want .mcp.json", mcpPath)
 	}
 	if commandsDir != ".claude/commands" {
 		t.Fatalf("commandsDir = %q, want .claude/commands", commandsDir)

@@ -24,13 +24,13 @@ func TestHelper(t *testing.T) {}
 	mustRun(t, dir, "scan", "-root", dir)
 
 	// Production function should be found
-	out := mustRun(t, dir, "search", "ProductionFunc")
+	out := mustRun(t, dir, "resource", "list", "ProductionFunc")
 	if !strings.Contains(out, "ProductionFunc") {
 		t.Fatalf("expected ProductionFunc in search, got:\n%s", out)
 	}
 
 	// Test function should NOT be found
-	testOut, err := runLtp(t, dir, "search", "TestHelper")
+	testOut, err := runLtp(t, dir, "resource", "list", "TestHelper")
 	if err == nil {
 		if strings.Contains(testOut, "TestHelper") {
 			t.Fatalf("expected TestHelper to be excluded from scan, but found:\n%s", testOut)
@@ -58,13 +58,13 @@ func HiddenDep() {}
 	mustRun(t, dir, "scan", "-root", dir)
 
 	// RealFunc should appear
-	out := mustRun(t, dir, "search", "RealFunc")
+	out := mustRun(t, dir, "resource", "list", "RealFunc")
 	if !strings.Contains(out, "RealFunc") {
 		t.Fatalf("expected RealFunc in search, got:\n%s", out)
 	}
 
 	// HiddenDep should NOT appear
-	testOut, err := runLtp(t, dir, "search", "HiddenDep")
+	testOut, err := runLtp(t, dir, "resource", "list", "HiddenDep")
 	if err == nil && strings.Contains(testOut, "HiddenDep") {
 		t.Fatalf("expected HiddenDep in node_modules to be excluded, got:\n%s", testOut)
 	}
@@ -89,12 +89,12 @@ func HiddenFunc() {}
 
 	mustRun(t, dir, "scan", "-root", dir)
 
-	out := mustRun(t, dir, "search", "VisibleFunc")
+	out := mustRun(t, dir, "resource", "list", "VisibleFunc")
 	if !strings.Contains(out, "VisibleFunc") {
 		t.Fatalf("expected VisibleFunc in search, got:\n%s", out)
 	}
 
-	hiddenOut, err := runLtp(t, dir, "search", "HiddenFunc")
+	hiddenOut, err := runLtp(t, dir, "resource", "list", "HiddenFunc")
 	if err == nil && strings.Contains(hiddenOut, "HiddenFunc") {
 		t.Fatalf("expected HiddenFunc in .secret to be excluded, got:\n%s", hiddenOut)
 	}
@@ -119,12 +119,12 @@ func PreCommit() {}
 
 	mustRun(t, dir, "scan", "-root", dir)
 
-	out := mustRun(t, dir, "search", "AppFunc")
+	out := mustRun(t, dir, "resource", "list", "AppFunc")
 	if !strings.Contains(out, "AppFunc") {
 		t.Fatalf("expected AppFunc in search, got:\n%s", out)
 	}
 
-	gitOut, err := runLtp(t, dir, "search", "PreCommit")
+	gitOut, err := runLtp(t, dir, "resource", "list", "PreCommit")
 	if err == nil && strings.Contains(gitOut, "PreCommit") {
 		t.Fatalf("expected PreCommit in .git to be excluded, got:\n%s", gitOut)
 	}
@@ -203,12 +203,12 @@ func sayHello(g Greeter) string {
 
 	mustRun(t, dir, "scan", "-root", dir)
 
-	out := mustRun(t, dir, "search", "Greeter")
+	out := mustRun(t, dir, "resource", "list", "Greeter")
 	if !strings.Contains(out, "Greeter") {
 		t.Fatalf("expected Greeter interface in search, got:\n%s", out)
 	}
 
-	out2 := mustRun(t, dir, "search", "English")
+	out2 := mustRun(t, dir, "resource", "list", "English")
 	if !strings.Contains(out2, "English") {
 		t.Fatalf("expected English struct in search, got:\n%s", out2)
 	}
@@ -230,7 +230,7 @@ func NewConfig() *Config {
 
 	mustRun(t, dir, "scan", "-root", dir)
 
-	out := mustRun(t, dir, "search", "NewConfig")
+	out := mustRun(t, dir, "resource", "list", "NewConfig")
 	if !strings.Contains(out, "NewConfig") {
 		t.Fatalf("expected NewConfig in search, got:\n%s", out)
 	}
@@ -250,7 +250,7 @@ func PrintID(id ID) {
 
 	mustRun(t, dir, "scan", "-root", dir)
 
-	out := mustRun(t, dir, "search", "ID")
+	out := mustRun(t, dir, "resource", "list", "ID")
 	if !strings.Contains(out, "namedtest.ID") || !strings.Contains(out, "namedtest.ID") {
 		t.Fatalf("expected %sID in search, got:\n%s", "namedtest.", out)
 	}

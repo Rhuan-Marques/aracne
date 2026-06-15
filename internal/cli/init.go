@@ -148,7 +148,7 @@ func initOpenCode(global bool, modes helper.ToolModes, readSplit map[domain.Reso
 			if mcpMap == nil {
 				mcpMap = make(map[string]interface{})
 			}
-			mcpMap["arac"] = map[string]interface{}{
+			mcpMap["aracne"] = map[string]interface{}{
 				"type":    "local",
 				"command": []string{"arac", "serve", "--tool-profile", "all"},
 				"enabled": true,
@@ -208,7 +208,7 @@ func initClaudeCode(global bool, modes helper.ToolModes, readSplit map[domain.Re
 			if mcpServers == nil {
 				mcpServers = make(map[string]interface{})
 			}
-			mcpServers["arac"] = map[string]interface{}{
+			mcpServers["aracne"] = map[string]interface{}{
 				"command": "arac",
 				"args":    []string{"serve", "--tool-profile", string(ToolProfileDefault)},
 			}
@@ -278,7 +278,7 @@ func claudePaths(global bool) (string, string, string, string) {
 		}
 		return filepath.Join(home, ".claude.json"), filepath.Join(home, ".claude", "commands"), filepath.Join(home, ".claude", "agents"), filepath.Join(home, ".claude", "CLAUDE.md")
 	}
-	return ".claude/.mcp.json", ".claude/commands", ".claude/agents", "CLAUDE.md"
+	return ".mcp.json", ".claude/commands", ".claude/agents", "CLAUDE.md"
 }
 
 func readJSONConfig(path string) map[string]interface{} {
@@ -358,11 +358,8 @@ func claudeToolsForProfile(modes helper.ToolModes, profile ToolProfile, readSpli
 		result = append(result, "Read")
 	} else if modes.Read == helper.ReadModeMCP {
 		if useSplit {
-			if profileAllows(profile, "read_function") && (splitKinds[domain.ResourceFunction] || splitKinds[domain.ResourceMethod]) {
-				result = append(result, "mcp__aracne__read_function")
-			}
-			if profileAllows(profile, "read_struct") && splitKinds[domain.ResourceType] {
-				result = append(result, "mcp__aracne__read_struct")
+			for _, name := range splitReadToolNames(profile, splitKinds) {
+				result = append(result, "mcp__aracne__"+name)
 			}
 		} else if profileAllows(profile, "read") {
 			result = append(result, "mcp__aracne__read")
@@ -384,7 +381,7 @@ func claudeToolsForProfile(modes helper.ToolModes, profile ToolProfile, readSpli
 	}
 	if modes.Other == helper.OtherModeMCP {
 		for _, name := range profileTools(profile) {
-			if name == "read" || name == "edit" || name == "write" || name == "grep" || name == "read_function" || name == "read_struct" {
+			if isReadToolName(name) || name == "edit" || name == "write" || name == "grep" {
 				continue
 			}
 			result = append(result, "mcp__aracne__"+name)
@@ -418,28 +415,34 @@ func openCodePermissions(modes helper.ToolModes, profile ToolProfile, readSplit 
 
 func allowedMCPToolNames(modes helper.ToolModes, profile ToolProfile, readSplit map[domain.ResourceKind]bool) []string {
 	useSplit := len(readSplit) > 0 && profile != ToolProfileDescriptionsExecutor
-	splitKinds := readSplit
+
+	splitEnabled := map[string]bool{}
+	if modes.Read == helper.ReadModeMCP && useSplit {
+		for _, name := range splitReadToolNames(profile, readSplit) {
+			splitEnabled[name] = true
+		}
+	}
 
 	var result []string
 	for _, name := range profileTools(profile) {
-		switch name {
-		case "read":
+		switch {
+		case name == "read":
 			if modes.Read == helper.ReadModeMCP && !useSplit {
 				result = append(result, name)
 			}
-		case "read_function":
-			if modes.Read == helper.ReadModeMCP && useSplit && (splitKinds[domain.ResourceFunction] || splitKinds[domain.ResourceMethod]) {
+		case isReadToolName(name):
+			// Split read tools (read_function, read_struct, read_interface,
+			// read_named_type, read_file, read_package, read_dependency) are
+			// gated by the Read mode and the read_split kinds, mirroring the
+			// server registry in BuildToolRegistry.
+			if splitEnabled[name] {
 				result = append(result, name)
 			}
-		case "read_struct":
-			if modes.Read == helper.ReadModeMCP && useSplit && splitKinds[domain.ResourceType] {
-				result = append(result, name)
-			}
-		case "edit", "write":
+		case name == "edit" || name == "write":
 			if modes.Edit == helper.EditModeMCP {
 				result = append(result, name)
 			}
-		case "grep":
+		case name == "grep":
 			if modes.Grep == helper.GrepModeMCP {
 				result = append(result, name)
 			}
@@ -450,6 +453,48 @@ func allowedMCPToolNames(modes helper.ToolModes, profile ToolProfile, readSplit 
 		}
 	}
 	return result
+}
+
+// isReadToolName reports whether name is one of the read tools (the unsplit
+// "read" plus the per-kind split read tools). These are gated by the Read tool
+// mode and the read_split configuration, never by the Other mode.
+func isReadToolName(name string) bool {
+	switch name {
+	case "read", "read_function", "read_struct", "read_interface", "read_named_type", "read_file", "read_package", "read_dependency":
+		return true
+	default:
+		return false
+	}
+}
+
+// splitReadToolNames returns the split read tool names enabled for the given
+// profile and read_split kinds, in a deterministic order. It mirrors the
+// per-kind registration performed by BuildToolRegistry so that the generated
+// client allow-lists exactly match the tools the MCP server exposes.
+func splitReadToolNames(profile ToolProfile, splitKinds map[domain.ResourceKind]bool) []string {
+	var names []string
+	if profileAllows(profile, "read_function") && (splitKinds[domain.ResourceFunction] || splitKinds[domain.ResourceMethod]) {
+		names = append(names, "read_function")
+	}
+	if profileAllows(profile, "read_struct") && splitKinds[domain.ResourceType] {
+		names = append(names, "read_struct")
+	}
+	if profileAllows(profile, "read_interface") && splitKinds[domain.ResourceInterface] {
+		names = append(names, "read_interface")
+	}
+	if profileAllows(profile, "read_named_type") && splitKinds[domain.ResourceNamedType] {
+		names = append(names, "read_named_type")
+	}
+	if profileAllows(profile, "read_file") && splitKinds[domain.ResourceFile] {
+		names = append(names, "read_file")
+	}
+	if profileAllows(profile, "read_package") && splitKinds[domain.ResourcePackage] {
+		names = append(names, "read_package")
+	}
+	if profileAllows(profile, "read_dependency") && splitKinds[domain.ResourceDependency] {
+		names = append(names, "read_dependency")
+	}
+	return names
 }
 
 func profileAllows(profile ToolProfile, toolName string) bool {
@@ -471,29 +516,33 @@ func terminalGuidance(modes helper.ToolModes, profile ToolProfile, readSplit map
 	}
 	useSplit := len(readSplit) > 0 && profile != ToolProfileDescriptionsExecutor
 	var lines []string
+
+	// Read tools are governed by the Read tool mode (mirrors BuildToolRegistry),
+	// not the Other mode. In terminal mode every resource kind is read via the
+	// same `arac read` command; list one line per enabled kind.
+	if modes.Read == helper.ReadModeTerminal {
+		if useSplit {
+			for _, name := range splitReadToolNames(profile, readSplit) {
+				lines = append(lines, "- `arac read <resource-id>` to "+terminalReadDescription(name))
+			}
+		} else if profileAllows(profile, "read") {
+			lines = append(lines, "- `arac read <resource-id>` to read resources or files")
+		}
+	}
+
 	for _, name := range profileTools(profile) {
-		switch name {
-		case "read":
-			if modes.Read == helper.ReadModeTerminal && !useSplit {
-				lines = append(lines, "- `arac read <resource-id>` to read resources or files")
-			}
-		case "read_function":
-			if modes.Read == helper.ReadModeTerminal && useSplit {
-				lines = append(lines, "- `arac read <resource-id>` to read a function")
-			}
-		case "read_struct":
-			if modes.Read == helper.ReadModeTerminal && useSplit {
-				lines = append(lines, "- `arac read <resource-id>` to read a struct/type")
-			}
-		case "edit":
+		switch {
+		case isReadToolName(name):
+			// Handled above, gated by the Read mode.
+		case name == "edit":
 			if modes.Edit == helper.EditModeTerminal {
 				lines = append(lines, "- `arac edit` with JSON stdin for exact string replacement")
 			}
-		case "write":
+		case name == "write":
 			if modes.Edit == helper.EditModeTerminal {
 				lines = append(lines, "- `arac write` with JSON stdin for file writes")
 			}
-		case "grep":
+		case name == "grep":
 			if modes.Grep == helper.GrepModeTerminal {
 				lines = append(lines, "- `arac grep <pattern> [path]` to search file contents with topology resource metadata")
 			}
@@ -507,6 +556,29 @@ func terminalGuidance(modes helper.ToolModes, profile ToolProfile, readSplit map
 		return ""
 	}
 	return "## Terminal arac Commands\n\nUse only these arac commands for terminal-mode topology operations:\n" + strings.Join(lines, "\n") + "\n"
+}
+
+// terminalReadDescription returns the human-readable suffix for a per-kind
+// `arac read` guidance line in terminal mode.
+func terminalReadDescription(toolName string) string {
+	switch toolName {
+	case "read_function":
+		return "read a function"
+	case "read_struct":
+		return "read a struct/type"
+	case "read_interface":
+		return "read an interface"
+	case "read_named_type":
+		return "read a named type"
+	case "read_file":
+		return "read a file"
+	case "read_package":
+		return "read a package"
+	case "read_dependency":
+		return "read a dependency"
+	default:
+		return "read a resource"
+	}
 }
 
 func terminalCommandForTool(name string) string {

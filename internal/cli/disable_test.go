@@ -10,9 +10,9 @@ import (
 
 func TestStripAracneIntegrationSegment(t *testing.T) {
 	tests := []struct {
-		name     string
-		input    string
-		want     string
+		name  string
+		input string
+		want  string
 	}{
 		{
 			name:  "empty content",
@@ -20,39 +20,39 @@ func TestStripAracneIntegrationSegment(t *testing.T) {
 			want:  "",
 		},
 		{
-			name:     "no markers present",
-			input:    "# Some Doc\n\ncontent\n",
-			want:     "# Some Doc\n\ncontent\n",
+			name:  "no markers present",
+			input: "# Some Doc\n\ncontent\n",
+			want:  "# Some Doc\n\ncontent\n",
 		},
 		{
-			name:     "only start marker",
-			input:    "# Aracne Project Integration\n\ncontent\n",
-			want:     "# Aracne Project Integration\n\ncontent\n",
+			name:  "only start marker",
+			input: "# Aracne Project Integration\n\ncontent\n",
+			want:  "# Aracne Project Integration\n\ncontent\n",
 		},
 		{
-			name:     "both markers mid-file",
-			input:    "before\n\n# Aracne Project Integration\n\nsection to remove\n\nGood Luck in your task.\n\nafter\n",
-			want:     "before\n\nafter\n",
+			name:  "both markers mid-file",
+			input: "before\n\n# Aracne Project Integration\n\nsection to remove\n\nGood Luck in your task.\n\nafter\n",
+			want:  "before\n\nafter\n",
 		},
 		{
-			name:     "section at beginning of file",
-			input:    "# Aracne Project Integration\n\nsection\n\nGood Luck in your task.\n\nafter\n",
-			want:     "after\n",
+			name:  "section at beginning of file",
+			input: "# Aracne Project Integration\n\nsection\n\nGood Luck in your task.\n\nafter\n",
+			want:  "after\n",
 		},
 		{
-			name:     "section at end of file",
-			input:    "before\n\n# Aracne Project Integration\n\nsection\n\nGood Luck in your task.\n",
-			want:     "before\n",
+			name:  "section at end of file",
+			input: "before\n\n# Aracne Project Integration\n\nsection\n\nGood Luck in your task.\n",
+			want:  "before\n",
 		},
 		{
-			name:     "CRLF line endings preserved",
-			input:    "before\r\n\r\n# Aracne Project Integration\r\n\r\nsection\r\n\r\nGood Luck in your task.\r\n\r\nafter\r\n",
-			want:     "before\r\n\r\nafter\r\n",
+			name:  "CRLF line endings preserved",
+			input: "before\r\n\r\n# Aracne Project Integration\r\n\r\nsection\r\n\r\nGood Luck in your task.\r\n\r\nafter\r\n",
+			want:  "before\r\n\r\nafter\r\n",
 		},
 		{
-			name:     "no trailing newline",
-			input:    "before\n\n# Aracne Project Integration\n\nsection\n\nGood Luck in your task.",
-			want:     "before\n",
+			name:  "no trailing newline",
+			input: "before\n\n# Aracne Project Integration\n\nsection\n\nGood Luck in your task.",
+			want:  "before\n",
 		},
 	}
 
@@ -242,13 +242,13 @@ func TestDisableClaudeCode(t *testing.T) {
 
 	mcpContent := `{
   "mcpServers": {
-    "arac": {
+    "aracne": {
       "command": "arac",
       "args": ["serve", "--tool-profile", "default"]
     }
   }
 }`
-	os.WriteFile(".claude/.mcp.json", []byte(mcpContent), 0644)
+	os.WriteFile(".mcp.json", []byte(mcpContent), 0644)
 
 	for _, cmd := range []string{
 		"descriptions-generate.md", "descriptions-apply.md", "descriptions_clear.md",
@@ -288,7 +288,7 @@ func TestDisableClaudeCode(t *testing.T) {
 
 	disableClaudeCode(false, true)
 
-	mcpData, _ := os.ReadFile(".claude/.mcp.json")
+	mcpData, _ := os.ReadFile(".mcp.json")
 	if strings.TrimSpace(string(mcpData)) != "{}" {
 		t.Fatalf(".mcp.json should be empty, got:\n%s", string(mcpData))
 	}
@@ -373,9 +373,9 @@ func TestRunDisableParsesFlagsAndDisablesBothByDefault(t *testing.T) {
 	os.WriteFile(".opencode/commands/bug-hunter.md", []byte("content"), 0644)
 
 	mcpConfig := `{
-	  "mcpServers": {"arac": {"command": "arac"}}
+	  "mcpServers": {"aracne": {"command": "arac"}}
 	}`
-	os.WriteFile(".claude/.mcp.json", []byte(mcpConfig), 0644)
+	os.WriteFile(".mcp.json", []byte(mcpConfig), 0644)
 	os.WriteFile(".claude/commands/bug-hunter.md", []byte("content"), 0644)
 
 	RunDisable([]string{"-y"})
@@ -385,7 +385,7 @@ func TestRunDisableParsesFlagsAndDisablesBothByDefault(t *testing.T) {
 		t.Fatal("RunDisable default should disable OpenCode (mcp still present)")
 	}
 
-	mcpData, _ := os.ReadFile(".claude/.mcp.json")
+	mcpData, _ := os.ReadFile(".mcp.json")
 	if strings.TrimSpace(string(mcpData)) != "{}" {
 		t.Fatal("RunDisable default should disable Claude Code (mcpServers still present)")
 	}
@@ -410,9 +410,9 @@ func TestRunDisableOnlyOpenCode(t *testing.T) {
 	os.WriteFile(".opencode/commands/bug-hunter.md", []byte("content"), 0644)
 
 	mcpConfig := `{
-	  "mcpServers": {"arac": {"command": "arac"}}
+	  "mcpServers": {"aracne": {"command": "arac"}}
 	}`
-	os.WriteFile(".claude/.mcp.json", []byte(mcpConfig), 0644)
+	os.WriteFile(".mcp.json", []byte(mcpConfig), 0644)
 	os.WriteFile(".claude/commands/bug-hunter.md", []byte("content"), 0644)
 
 	RunDisable([]string{"-y", "--opencode"})
@@ -422,7 +422,7 @@ func TestRunDisableOnlyOpenCode(t *testing.T) {
 		t.Fatal("--opencode should disable OpenCode")
 	}
 
-	mcpData, _ := os.ReadFile(".claude/.mcp.json")
+	mcpData, _ := os.ReadFile(".mcp.json")
 	if !strings.Contains(string(mcpData), "mcpServers") {
 		t.Fatal("--opencode should NOT disable Claude Code")
 	}
@@ -447,9 +447,9 @@ func TestRunDisableAllFlag(t *testing.T) {
 	os.WriteFile(".opencode/commands/bug-hunter.md", []byte("content"), 0644)
 
 	mcpConfig := `{
-	  "mcpServers": {"arac": {"command": "arac"}}
+	  "mcpServers": {"aracne": {"command": "arac"}}
 	}`
-	os.WriteFile(".claude/.mcp.json", []byte(mcpConfig), 0644)
+	os.WriteFile(".mcp.json", []byte(mcpConfig), 0644)
 	os.WriteFile(".claude/commands/bug-hunter.md", []byte("content"), 0644)
 
 	RunDisable([]string{"-y", "--all"})
@@ -459,7 +459,7 @@ func TestRunDisableAllFlag(t *testing.T) {
 		t.Fatal("--all should disable OpenCode")
 	}
 
-	mcpData, _ := os.ReadFile(".claude/.mcp.json")
+	mcpData, _ := os.ReadFile(".mcp.json")
 	if strings.TrimSpace(string(mcpData)) != "{}" {
 		t.Fatal("--all should disable Claude Code")
 	}

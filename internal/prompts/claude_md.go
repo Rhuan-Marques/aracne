@@ -54,31 +54,30 @@ This project uses **aracne** for codebase navigation. The topology database prov
 }
 
 func navigationModelSection(modes helper.ToolModes) string {
-	var step2 string
-	if modes.Other == helper.OtherModeMCP {
-		step2 = "Use lookup MCP tools"
-	} else {
-		step2 = "Use `arac read` commands in bash"
-	}
-
 	b := &strings.Builder{}
 	fmt.Fprintf(b, "## Navigation Model\n\n")
 	fmt.Fprintf(b, "The topology is a directed graph can enhance your information about the repository you're using if you use it correctly.\n\n")
 	fmt.Fprintf(b, "**Navigation Flow:**\n")
 	fmt.Fprintf(b, "1. Use `ls` to understand the project file layout\n")
-	fmt.Fprintf(b, "2. Use %s to get a resource's full context with interconnected relationships\n", step2)
 
+	// How resources are read/looked up is governed by the Read tool mode, not
+	// the Other mode: the topology read tools are only available when Read is
+	// MCP or terminal (see BuildToolRegistry).
 	if modes.Read == helper.ReadModeNative {
-		fmt.Fprintf(b, "3. Use your `read` tool to get files when %s is not relevant\n\n", step2)
-	} else {
-		var note string
-		if modes.Other == helper.OtherModeMCP {
-			note = "use MCP lookups"
-		} else {
-			note = "use `arac read` commands"
-		}
-		fmt.Fprintf(b, "\n**Note: Never try to use `read` native tool, %s instead**\n\n", note)
+		fmt.Fprintf(b, "2. Use your `read` tool to read resources and files\n\n")
+		return b.String()
 	}
+
+	var lookup, note string
+	if modes.Read == helper.ReadModeMCP {
+		lookup = "Use lookup MCP tools"
+		note = "use MCP lookups"
+	} else {
+		lookup = "Use `arac read` commands in bash"
+		note = "use `arac read` commands"
+	}
+	fmt.Fprintf(b, "2. Use %s to get a resource's full context with interconnected relationships\n", lookup)
+	fmt.Fprintf(b, "\n**Note: Never try to use `read` native tool, %s instead**\n\n", note)
 
 	return b.String()
 }
@@ -88,7 +87,9 @@ func lookupToolsSection(modes helper.ToolModes, mcpToolPrefix string, readSplit 
 
 	b := &strings.Builder{}
 
-	if modes.Other == helper.OtherModeMCP {
+	// Read tools follow the Read tool mode (mirrors BuildToolRegistry), not the
+	// Other mode.
+	if modes.Read == helper.ReadModeMCP {
 		if useSplit {
 			b.WriteString("## MCP Lookup tools:\n")
 			for kind := range readSplit {
@@ -114,7 +115,7 @@ func lookupToolsSection(modes helper.ToolModes, mcpToolPrefix string, readSplit 
 			fmt.Fprintf(b, "- %s: This command will give you the code and full context for any resource you want. These include: Files, Functions, Structs, etc. The tool receives a Resource ID, which can be the file's path or the ID of any resource.\n", bt(mcpToolPrefix+"read"))
 		}
 		b.WriteString("\n")
-	} else if modes.Other == helper.OtherModeTerminal {
+	} else if modes.Read == helper.ReadModeTerminal {
 		if useSplit {
 			b.WriteString("## arac read Terminal command:\n")
 			b.WriteString("To navigate, you should always use your terminal tool to use `arac read {resource ID}` commands. The available resources are the following:\n")
@@ -162,8 +163,14 @@ func grepSection(modes helper.ToolModes, mcpToolPrefix string) string {
 }
 
 func resourceContextSection(modes helper.ToolModes) string {
+	// The "# CONTEXT:" output is produced only by the topology read tools, which
+	// exist when Read is MCP or terminal. With native reads there is no such
+	// section to explain.
+	if modes.Read == helper.ReadModeNative {
+		return ""
+	}
 	var toolRef string
-	if modes.Other == helper.OtherModeMCP {
+	if modes.Read == helper.ReadModeMCP {
 		toolRef = "MCP Lookup Tool"
 	} else {
 		toolRef = "`arac read` command"

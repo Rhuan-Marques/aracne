@@ -53,7 +53,7 @@ Flags for "grep":
 
 Flags for "descriptions generate":
   --targets <kinds>       Comma-separated resource kinds overriding config need_description (default: function,method,type,interface,file)
-  --batch-size <n>        Maximum resources assigned to each description executor (default 20)
+  --batch-size <n>        Maximum resources assigned to each description executor (default 5)
   --parallel <n>          Maximum description executors to run concurrently (default 4)
   --max-retries <n>       Maximum executor attempts per resource (default 3)
 

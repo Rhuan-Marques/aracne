@@ -10,11 +10,14 @@ import (
 )
 
 func (s *Server) chatManager() (*chat.Manager, error) {
-	s.chatOnce.Do(func() {
+	s.chatMu.Lock()
+	defer s.chatMu.Unlock()
+	if !s.chatInit {
+		s.chatInit = true
 		s.chatMgr, s.chatErr = chat.NewManager(s.dbPath, ".", func(event chat.Event) {
 			s.ws.Broadcast(WebSocketEvent{Type: "chat_event", Payload: event})
 		})
-	})
+	}
 	return s.chatMgr, s.chatErr
 }
 

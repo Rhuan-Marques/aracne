@@ -473,6 +473,61 @@ class y:
 	}
 }
 
+// TestUpdateFile_noDuplicateClassConnections guards against the incremental
+// UpdateFile path re-appending "methods"/inheritance connections to classes
+// that live in files other than the one being updated. Before the fix this
+// duplicated edges on every update and ultimately violated the SQLite
+// connections UNIQUE constraint when persisted.
+func TestUpdateFile_noDuplicateClassConnections(t *testing.T) {
+	if !hasPython() {
+		t.Skip("python not available")
+	}
+
+	tmpDir := t.TempDir()
+	pkgName := filepath.Base(tmpDir)
+
+	aPath := filepath.Join(tmpDir, "a.py")
+	bPath := filepath.Join(tmpDir, "b.py")
+	if err := os.WriteFile(aPath, []byte("class A:\n    def foo(self):\n        return 1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bPath, []byte("class B(A):\n    def bar(self):\n        return 2\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := NewPythonScanner()
+	topo, err := s.Scan(tmpDir)
+	if err != nil {
+		t.Fatalf("initial Scan failed: %v", err)
+	}
+
+	classA := pkgName + ".A"
+	beforeMethods := len(topo.Resources[classA].Connections["methods"])
+	beforeInheritedBy := len(topo.Resources[classA].Connections["inherited_by"])
+	if beforeMethods < 1 {
+		t.Fatalf("expected class A to have at least one method after Scan, got %d", beforeMethods)
+	}
+
+	// Update the OTHER file. This re-runs method/inheritance population over the
+	// whole topology and must leave class A's connection counts unchanged.
+	newB := "class B(A):\n    def bar(self):\n        return 2\n\n    def baz(self):\n        return 3\n"
+	if err := os.WriteFile(bPath, []byte(newB), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.UpdateFile(topo, bPath); err != nil {
+		t.Fatalf("UpdateFile failed: %v", err)
+	}
+
+	afterMethods := len(topo.Resources[classA].Connections["methods"])
+	afterInheritedBy := len(topo.Resources[classA].Connections["inherited_by"])
+	if afterMethods != beforeMethods {
+		t.Errorf("class A 'methods' count changed from %d to %d after updating another file (duplicated edges)", beforeMethods, afterMethods)
+	}
+	if afterInheritedBy != beforeInheritedBy {
+		t.Errorf("class A 'inherited_by' count changed from %d to %d after updating another file (duplicated edges)", beforeInheritedBy, afterInheritedBy)
+	}
+}
+
 func TestResolveValueRef_dotted_function_via_import(t *testing.T) {
 	pr := &ParseResult{
 		PkgPath:    "mypkg",

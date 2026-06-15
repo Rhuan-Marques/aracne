@@ -35,7 +35,7 @@ def greet(name):
 `)
 
 	mustRun(t, dir, "scan", "-root", dir)
-	out := mustRun(t, dir, "search", "greet")
+	out := mustRun(t, dir, "resource", "list", "greet")
 	if !strings.Contains(out, "greet") {
 		t.Fatalf("expected greet in search, got:\n%s", out)
 	}
@@ -59,7 +59,7 @@ def util_func():
 `)
 
 	mustRun(t, dir, "scan", "-root", dir)
-	out := mustRun(t, dir, "search", "util_func")
+	out := mustRun(t, dir, "resource", "list", "util_func")
 	if !strings.Contains(out, "util_func") {
 		t.Fatalf("expected util_func in search, got:\n%s", out)
 	}
@@ -88,12 +88,12 @@ def test_production():
 
 	mustRun(t, dir, "scan", "-root", dir)
 
-	out := mustRun(t, dir, "search", "production")
+	out := mustRun(t, dir, "resource", "list", "production")
 	if !strings.Contains(out, "production") {
 		t.Fatalf("expected production function in search, got:\n%s", out)
 	}
 
-	testOut, err := runLtp(t, dir, "search", "test_production")
+	testOut, err := runLtp(t, dir, "resource", "list", "test_production")
 	if err == nil && strings.Contains(testOut, "test_production") {
 		t.Fatalf("expected test_production to be excluded, got:\n%s", testOut)
 	}
@@ -127,12 +127,12 @@ def cached_func():
 
 	mustRun(t, dir, "scan", "-root", dir)
 
-	out := mustRun(t, dir, "search", "real_func")
+	out := mustRun(t, dir, "resource", "list", "real_func")
 	if !strings.Contains(out, "real_func") {
 		t.Fatalf("expected real_func in search, got:\n%s", out)
 	}
 
-	cacheOut, err := runLtp(t, dir, "search", "cached_func")
+	cacheOut, err := runLtp(t, dir, "resource", "list", "cached_func")
 	if err == nil && strings.Contains(cacheOut, "cached_func") {
 		t.Fatalf("expected cached_func in __pycache__ to be excluded, got:\n%s", cacheOut)
 	}
@@ -166,12 +166,12 @@ def dep_func():
 
 	mustRun(t, dir, "scan", "-root", dir)
 
-	out := mustRun(t, dir, "search", "app_func")
+	out := mustRun(t, dir, "resource", "list", "app_func")
 	if !strings.Contains(out, "app_func") {
 		t.Fatalf("expected app_func in search, got:\n%s", out)
 	}
 
-	venvOut, err := runLtp(t, dir, "search", "dep_func")
+	venvOut, err := runLtp(t, dir, "resource", "list", "dep_func")
 	if err == nil && strings.Contains(venvOut, "dep_func") {
 		t.Fatalf("expected dep_func in venv to be excluded, got:\n%s", venvOut)
 	}
@@ -203,11 +203,11 @@ class GrandChild(Child):
 
 	mustRun(t, dir, "scan", "-root", dir)
 
-	out := mustRun(t, dir, "search", "Base")
+	out := mustRun(t, dir, "resource", "list", "Base")
 	if !strings.Contains(out, "Base") {
 		t.Fatalf("expected Base in search, got:\n%s", out)
 	}
-	out2 := mustRun(t, dir, "search", "Child")
+	out2 := mustRun(t, dir, "resource", "list", "Child")
 	if !strings.Contains(out2, "Child") {
 		t.Fatalf("expected Child in search, got:\n%s", out2)
 	}
@@ -236,11 +236,11 @@ class Service:
 
 	mustRun(t, dir, "scan", "-root", dir)
 
-	out := mustRun(t, dir, "search", "Service")
+	out := mustRun(t, dir, "resource", "list", "Service")
 	if !strings.Contains(out, "Service") {
 		t.Fatalf("expected Service in search, got:\n%s", out)
 	}
-	out2 := mustRun(t, dir, "search", "Service.run")
+	out2 := mustRun(t, dir, "resource", "list", "Service.run")
 	if !strings.Contains(out2, "run") {
 		t.Fatalf("expected Service.run in search, got:\n%s", out2)
 	}

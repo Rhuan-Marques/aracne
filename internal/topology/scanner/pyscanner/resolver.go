@@ -232,6 +232,13 @@ func collectDependencies(gt *python.PythonTopology) {
 }
 
 func populateClassMethods(gt *python.PythonTopology) {
+	// Clear existing has_method edges first so re-running over the full
+	// topology during an incremental UpdateFile rebuilds them from scratch
+	// instead of appending duplicates (mirrors goscanner.populateStructMethods).
+	for id, cls := range gt.Classes {
+		delete(cls.Connections, python.ConnHasMethod)
+		gt.Classes[id] = cls
+	}
 	for _, f := range gt.Functions {
 		if f.MethodFrom != nil {
 			cls := gt.Classes[*f.MethodFrom]

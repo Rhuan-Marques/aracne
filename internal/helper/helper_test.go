@@ -68,6 +68,69 @@ func TestReadJsonNonexistent(t *testing.T) {
 	}
 }
 
+// TestRemoveFileResourcesWarningSurvivesCleanup verifies that when a file is
+// removed, the "verify caller" warning is attributed to the surviving
+// referencer (SourceID) rather than the deleted node, so it is not discarded by
+// CleanupOrphanedWarnings.
+func TestRemoveFileResourcesWarningSurvivesCleanup(t *testing.T) {
+	topo := &domain.Topology{
+		Resources: map[string]domain.Resource{
+			"pkg/a.go": {
+				ID:          "pkg/a.go",
+				Kind:        domain.ResourceFile,
+				Name:        "a.go",
+				Connections: map[string][]string{"has_function": {"pkg.Removed"}},
+			},
+			"pkg.Removed": {
+				ID:   "pkg.Removed",
+				Kind: domain.ResourceFunction,
+				Name: "Removed",
+			},
+			"pkg.Caller": {
+				ID:          "pkg.Caller",
+				Kind:        domain.ResourceFunction,
+				Name:        "Caller",
+				Connections: map[string][]string{"calls": {"pkg.Removed"}},
+			},
+		},
+		Warnings: map[string]domain.TopologyWarning{},
+	}
+
+	warnings := RemoveFileResources(topo, "pkg/a.go")
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 warning, got %d: %+v", len(warnings), warnings)
+	}
+	w := warnings[0]
+	if w.Kind != domain.WarnNodeRemoved {
+		t.Fatalf("expected node_removed kind, got %q", w.Kind)
+	}
+	// The surviving referencer must be the SourceID so the warning is not
+	// dropped by CleanupOrphanedWarnings (which removes warnings whose SourceID
+	// no longer exists in the topology).
+	if w.SourceID != "pkg.Caller" {
+		t.Fatalf("expected SourceID=pkg.Caller (survivor), got %q", w.SourceID)
+	}
+	if w.TargetID != "pkg.Removed" {
+		t.Fatalf("expected TargetID=pkg.Removed (deleted node), got %q", w.TargetID)
+	}
+
+	// Simulate the manager flow: record warnings, then prune orphans.
+	for _, warn := range warnings {
+		topo.Warnings[warn.ID] = warn
+	}
+	CleanupOrphanedWarnings(topo)
+
+	if len(topo.Warnings) != 1 {
+		t.Fatalf("warning should survive cleanup (SourceID still exists), got %d", len(topo.Warnings))
+	}
+	if _, ok := topo.Resources["pkg.Removed"]; ok {
+		t.Fatal("pkg.Removed should have been deleted from resources")
+	}
+	if _, ok := topo.Resources["pkg.Caller"]; !ok {
+		t.Fatal("pkg.Caller should still exist")
+	}
+}
+
 func TestDiffScanFilesErrorsForMissingRoot(t *testing.T) {
 	manifestPath := filepath.Join(t.TempDir(), "file_manifest.json")
 	if err := WriteManifest(FileManifest{}, manifestPath); err != nil {
@@ -670,6 +733,9 @@ func TestDefaultConfigIncludesNeedDescription(t *testing.T) {
 			t.Fatalf("NeedDescription = %v, want %v", cfg.NeedDescription, want)
 		}
 	}
+	if cfg.DescriptionBatchSize != DefaultDescriptionBatchSize {
+		t.Fatalf("DescriptionBatchSize = %d, want %d", cfg.DescriptionBatchSize, DefaultDescriptionBatchSize)
+	}
 }
 
 func TestLoadConfigNeedDescriptionFallback(t *testing.T) {
@@ -688,6 +754,25 @@ func TestLoadConfigNeedDescriptionFallback(t *testing.T) {
 	cfg = LoadConfig(path)
 	if len(cfg.NeedDescription) != 1 || cfg.NeedDescription[0] != domain.ResourceFile {
 		t.Fatalf("NeedDescription = %v, want [file]", cfg.NeedDescription)
+	}
+}
+
+func TestLoadConfigDescriptionBatchSize(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"description_batch_size":3}`), 0644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+	cfg := LoadConfig(path)
+	if cfg.DescriptionBatchSize != 3 {
+		t.Fatalf("DescriptionBatchSize = %d, want 3", cfg.DescriptionBatchSize)
+	}
+
+	if err := os.WriteFile(path, []byte(`{"description_batch_size":0}`), 0644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+	cfg = LoadConfig(path)
+	if cfg.DescriptionBatchSize != DefaultDescriptionBatchSize {
+		t.Fatalf("DescriptionBatchSize = %d, want default %d", cfg.DescriptionBatchSize, DefaultDescriptionBatchSize)
 	}
 }
 

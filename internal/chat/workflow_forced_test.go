@@ -54,14 +54,29 @@ func setupWorkflowManager(t *testing.T, serverURL string, populateTopo bool) *Ma
 
 func setupWorkflowTopologyDB(t *testing.T, dir string) {
 	t.Helper()
+	files := map[string]string{
+		"main.go": "package main\n\nfunc main() {}\n",
+		"foo.go":  "package main\n\nfunc foo() int {\n\treturn 1\n}\n",
+		"bar.go":  "package main\n\nfunc bar() int {\n\treturn 2\n}\n",
+		"baz.go":  "package main\n\ntype Baz struct {\n\tValue int\n}\n",
+	}
+	paths := make(map[string]string, len(files))
+	for name, content := range files {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile %s: %v", name, err)
+		}
+		paths[name] = path
+	}
+
 	topo := &domain.Topology{
 		Root:     dir,
 		Language: "go",
 		Resources: map[string]domain.Resource{
-			"func_main": {ID: "func_main", Name: "main", Kind: domain.ResourceFunction, Location: domain.Location{Path: "main.go"}, Description: "the main function"},
-			"func_foo":  {ID: "func_foo", Name: "foo", Kind: domain.ResourceFunction, Location: domain.Location{Path: "foo.go"}, Description: ""},
-			"func_bar":  {ID: "func_bar", Name: "bar", Kind: domain.ResourceFunction, Location: domain.Location{Path: "bar.go"}, Description: ""},
-			"type_baz":  {ID: "type_baz", Name: "Baz", Kind: domain.ResourceType, Location: domain.Location{Path: "baz.go"}, Description: ""},
+			"func_main": {ID: "func_main", Name: "main", Kind: domain.ResourceFunction, Location: domain.Location{Path: paths["main.go"], StartsAt: 3, EndsAt: 3}, Description: "the main function"},
+			"func_foo":  {ID: "func_foo", Name: "foo", Kind: domain.ResourceFunction, Location: domain.Location{Path: paths["foo.go"], StartsAt: 3, EndsAt: 5}, Description: ""},
+			"func_bar":  {ID: "func_bar", Name: "bar", Kind: domain.ResourceFunction, Location: domain.Location{Path: paths["bar.go"], StartsAt: 3, EndsAt: 5}, Description: ""},
+			"type_baz":  {ID: "type_baz", Name: "Baz", Kind: domain.ResourceType, Location: domain.Location{Path: paths["baz.go"], StartsAt: 3, EndsAt: 5}, Description: ""},
 		},
 		Warnings: make(map[string]domain.TopologyWarning),
 		Errors:   make(map[string]string),
@@ -145,6 +160,100 @@ data: [DONE]`)
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func TestBuildWorkflowTaskSpecs_DescriptionPrompts(t *testing.T) {
+	manager := setupWorkflowManager(t, "", true)
+
+	single, err := manager.buildWorkflowTaskSpecs(WorkflowRequest{Type: "descriptions", BatchSize: 1})
+	if err != nil {
+		t.Fatalf("buildWorkflowTaskSpecs single: %v", err)
+	}
+	if len(single) != 3 {
+		t.Fatalf("single task count = %d, want 3", len(single))
+	}
+	if !strings.Contains(single[0].Prompt, "The main resource has already been read for you") {
+		t.Fatalf("single-resource prompt should include pre-read content:\n%s", single[0].Prompt)
+	}
+	if strings.Contains(single[0].Prompt, "## Guidelines") {
+		t.Fatalf("single-resource prompt should not use numbered guidelines:\n%s", single[0].Prompt)
+	}
+
+	multi, err := manager.buildWorkflowTaskSpecs(WorkflowRequest{Type: "descriptions", BatchSize: 2})
+	if err != nil {
+		t.Fatalf("buildWorkflowTaskSpecs multi: %v", err)
+	}
+	if len(multi) != 2 {
+		t.Fatalf("multi task count = %d, want 2", len(multi))
+	}
+	if strings.Contains(multi[0].Prompt, "The main resource has already been read for you") {
+		t.Fatalf("multi-resource prompt should let executor call read:\n%s", multi[0].Prompt)
+	}
+	if !strings.Contains(multi[0].Prompt, "Assigned resources") || !strings.Contains(multi[0].Prompt, "## Guidelines") {
+		t.Fatalf("multi-resource prompt missing assigned list or guidelines:\n%s", multi[0].Prompt)
+	}
+}
+
+func TestBuildWorkflowTaskSpecs_BugWorkflows(t *testing.T) {
+	manager := setupWorkflowManager(t, "", true)
+	pendingOne, err := manager.manager.CreateBug("func_foo", "first pending bug")
+	if err != nil {
+		t.Fatalf("CreateBug pendingOne: %v", err)
+	}
+	pendingTwo, err := manager.manager.CreateBug("func_foo", "duplicate candidate")
+	if err != nil {
+		t.Fatalf("CreateBug pendingTwo: %v", err)
+	}
+	pendingOther, err := manager.manager.CreateBug("type_baz", "other node bug")
+	if err != nil {
+		t.Fatalf("CreateBug pendingOther: %v", err)
+	}
+	ack, err := manager.manager.CreateBug("func_bar", "acknowledged bug")
+	if err != nil {
+		t.Fatalf("CreateBug ack: %v", err)
+	}
+	if err := manager.manager.AcknowledgeBug(ack.ID); err != nil {
+		t.Fatalf("AcknowledgeBug: %v", err)
+	}
+
+	hunter, err := manager.buildWorkflowTaskSpecs(WorkflowRequest{Type: "bug_hunter", BatchSize: 1})
+	if err != nil {
+		t.Fatalf("build hunter: %v", err)
+	}
+	if len(hunter) != 1 || hunter[0].AgentKind != "bug-hunter" {
+		t.Fatalf("hunter tasks = %+v, want one bug-hunter", hunter)
+	}
+
+	judge, err := manager.buildWorkflowTaskSpecs(WorkflowRequest{Type: "bug_judge", BatchSize: 1})
+	if err != nil {
+		t.Fatalf("build judge: %v", err)
+	}
+	if len(judge) != 3 {
+		t.Fatalf("judge task count = %d, want 3", len(judge))
+	}
+	var firstPrompt string
+	for _, task := range judge {
+		if strings.Contains(task.Prompt, pendingOne.ID) {
+			firstPrompt = task.Prompt
+		}
+	}
+	if firstPrompt == "" {
+		t.Fatal("missing judge task for first pending bug")
+	}
+	if !strings.Contains(firstPrompt, pendingTwo.ID) {
+		t.Fatalf("judge prompt should include same-node bug for duplicate checking:\n%s", firstPrompt)
+	}
+	if strings.Contains(firstPrompt, pendingOther.ID) {
+		t.Fatalf("judge prompt should not include other-node bugs:\n%s", firstPrompt)
+	}
+
+	solver, err := manager.buildWorkflowTaskSpecs(WorkflowRequest{Type: "bug_solver", BatchSize: 1})
+	if err != nil {
+		t.Fatalf("build solver: %v", err)
+	}
+	if len(solver) != 1 || solver[0].AgentKind != "bug-solver" || !strings.Contains(solver[0].Prompt, ack.ID) {
+		t.Fatalf("solver tasks = %+v, want one assigned ack bug", solver)
 	}
 }
 

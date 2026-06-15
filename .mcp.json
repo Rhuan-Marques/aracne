@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "arac": {
+    "aracne": {
       "args": [
         "serve",
         "--tool-profile",

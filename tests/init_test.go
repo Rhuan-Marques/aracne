@@ -29,7 +29,7 @@ func TestInitDefault_CreatesBothAgents(t *testing.T) {
 	}
 
 	// Claude files
-	assertExists(t, dir, ".claude/.mcp.json")
+	assertExists(t, dir, ".mcp.json")
 	assertExists(t, dir, ".claude/commands")
 	assertExists(t, dir, ".claude/agents")
 	assertExists(t, dir, "CLAUDE.md")
@@ -50,7 +50,7 @@ func TestInitOpenCodeOnly(t *testing.T) {
 
 	assertExists(t, dir, ".opencode/opencode.json")
 	assertExists(t, dir, "AGENTS.md")
-	assertNotExists(t, dir, ".claude/.mcp.json")
+	assertNotExists(t, dir, ".mcp.json")
 	assertNotExists(t, dir, "CLAUDE.md")
 }
 
@@ -58,7 +58,7 @@ func TestInitClaudeOnly(t *testing.T) {
 	dir := t.TempDir()
 	mustRun(t, dir, "init", "-y", "--claude")
 
-	assertExists(t, dir, ".claude/.mcp.json")
+	assertExists(t, dir, ".mcp.json")
 	assertExists(t, dir, "CLAUDE.md")
 	assertNotExists(t, dir, ".opencode/opencode.json")
 	assertNotExists(t, dir, "AGENTS.md")
@@ -87,7 +87,7 @@ func TestInitGlobal_CreatesFilesInHome(t *testing.T) {
 
 	// No local files should exist
 	assertNotExists(t, dir, ".opencode/opencode.json")
-	assertNotExists(t, dir, ".claude/.mcp.json")
+	assertNotExists(t, dir, ".mcp.json")
 }
 
 func TestInitModeFlags_UpdateConfig(t *testing.T) {
@@ -170,8 +170,8 @@ func TestInitOpenCodeConfig_Structure(t *testing.T) {
 
 	raw := readFile(t, dir, ".opencode/opencode.json")
 	var cfg struct {
-		MCP map[string]interface{} `json:"mcp"`
-		Permission map[string]string `json:"permission"`
+		MCP        map[string]interface{} `json:"mcp"`
+		Permission map[string]string      `json:"permission"`
 	}
 	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
 		t.Fatalf("parse opencode.json: %v\ncontent: %s", err, raw)
@@ -180,9 +180,9 @@ func TestInitOpenCodeConfig_Structure(t *testing.T) {
 	if cfg.MCP == nil {
 		t.Fatal("opencode.json missing 'mcp' section")
 	}
-	aracEntry, ok := cfg.MCP["arac"].(map[string]interface{})
+	aracEntry, ok := cfg.MCP["aracne"].(map[string]interface{})
 	if !ok {
-		t.Fatalf("opencode.json mcp section missing 'arac' entry: %+v", cfg.MCP)
+		t.Fatalf("opencode.json mcp section missing 'aracne' entry: %+v", cfg.MCP)
 	}
 	if aracEntry["type"] != "local" {
 		t.Fatalf("arac MCP type = %q, want local", aracEntry["type"])
@@ -215,7 +215,7 @@ func TestInitClaudeConfig_Structure(t *testing.T) {
 	dir := t.TempDir()
 	mustRun(t, dir, "init", "-y")
 
-	raw := readFile(t, dir, ".claude/.mcp.json")
+	raw := readFile(t, dir, ".mcp.json")
 	var cfg struct {
 		MCPServers map[string]interface{} `json:"mcpServers"`
 	}
@@ -226,9 +226,9 @@ func TestInitClaudeConfig_Structure(t *testing.T) {
 	if cfg.MCPServers == nil {
 		t.Fatal(".mcp.json missing 'mcpServers' section")
 	}
-	aracEntry, ok := cfg.MCPServers["arac"].(map[string]interface{})
+	aracEntry, ok := cfg.MCPServers["aracne"].(map[string]interface{})
 	if !ok {
-		t.Fatalf(".mcp.json mcpServers missing 'arac' entry: %+v", cfg.MCPServers)
+		t.Fatalf(".mcp.json mcpServers missing 'aracne' entry: %+v", cfg.MCPServers)
 	}
 	if aracEntry["command"] != "arac" {
 		t.Fatalf("arac MCP command = %q, want arac", aracEntry["command"])

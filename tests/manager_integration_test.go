@@ -22,7 +22,7 @@ func Greet(u User) string {
 `)
 
 	mustRun(t, dir, "scan", "-root", dir)
-	out := mustRun(t, dir, "search", "User")
+	out := mustRun(t, dir, "resource", "list", "User")
 
 	if !strings.Contains(out, "myapp.User") && !strings.Contains(out, "User") {
 		t.Fatalf("expected User in search results, got:\n%s", out)
@@ -48,7 +48,7 @@ class User:
 `)
 
 	mustRun(t, dir, "scan", "-root", dir)
-	out := mustRun(t, dir, "search", "greet")
+	out := mustRun(t, dir, "resource", "list", "greet")
 
 	if !strings.Contains(out, "greet") {
 		t.Fatalf("expected greet in search results, got:\n%s", out)
@@ -69,12 +69,12 @@ def py_hello():
 
 	mustRun(t, dir, "scan", "-root", dir)
 
-	goOut := mustRun(t, dir, "search", "GoHello")
+	goOut := mustRun(t, dir, "resource", "list", "GoHello")
 	if !strings.Contains(goOut, "GoHello") {
 		t.Fatalf("expected GoHello in search, got:\n%s", goOut)
 	}
 
-	pyOut := mustRun(t, dir, "search", "py_hello")
+	pyOut := mustRun(t, dir, "resource", "list", "py_hello")
 	if !strings.Contains(pyOut, "py_hello") {
 		t.Fatalf("expected py_hello in search, got:\n%s", pyOut)
 	}
@@ -190,7 +190,7 @@ func Greet(name string) string {
 `)
 
 	mustRun(t, dir, "scan", "-root", dir)
-	out := mustRun(t, dir, "search", "Greet")
+	out := mustRun(t, dir, "resource", "list", "Greet")
 
 	if !strings.Contains(out, "Greet") {
 		t.Fatalf("expected Greet in search, got:\n%s", out)

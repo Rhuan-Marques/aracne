@@ -8,7 +8,7 @@
 *.so
 *.dylib
 *.log
-
+*bin/
 .hidden/
 node_modules/
 dist/

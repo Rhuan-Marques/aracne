@@ -112,7 +112,7 @@ Use the CONTEXT section to understand relationships **without making additional 
 When asked to document the project or generate descriptions:
 
 1. Call `node_list_no_description` to get all resources with empty descriptions
-2. Split the list into deterministic batches of at most 20 resources
+2. Split the list into deterministic batches of at most the configured description batch size (default 5)
 3. Assign each batch to a **descriptions-generation-executor** sub-agent when subagents are available. Each executor:
    - Receives only its assigned IDs, names, and kinds
    - Calls `read` with each assigned resource's ID

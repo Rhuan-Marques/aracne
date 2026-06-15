@@ -257,10 +257,10 @@ func RemoveFileResources(topo *domain.Topology, fileID string) []domain.Topology
 					warnID := res.ID + "@" + string(domain.WarnNodeRemoved) + "@" + target
 					warnings = append(warnings, domain.TopologyWarning{
 						ID:       warnID,
-						SourceID: target,
+						SourceID: res.ID,
 						Kind:     domain.WarnNodeRemoved,
-						TargetID: res.ID,
-						Message:  fmt.Sprintf("%s was removed from %s, verify %s %s", target, fileID, connType, res.ID),
+						TargetID: target,
+						Message:  fmt.Sprintf("%s was removed from %s, verify %s which references it via %s", target, fileID, res.ID, connType),
 					})
 				}
 			}
