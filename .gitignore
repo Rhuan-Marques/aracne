@@ -42,3 +42,6 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+.opencode/
+.claude/
+go.sum

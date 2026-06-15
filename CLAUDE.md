@@ -13,18 +13,13 @@ The topology is a directed graph can enhance your information about the reposito
 **Note: Never try to use `read` native tool, use MCP lookups instead**
 
 ## MCP Lookup tools:
-- `mcp__aracne__read_function`: Reads the function and context for resources it uses, receives a function ID.
-- `mcp__aracne__read_struct`: Reads the struct and context for resources it uses, receives a struct ID.
-- `mcp__aracne__read_file`: Reads the content of a file, receives the file path.
-- `mcp__aracne__read_interface`: Reads the interface and context for which resources it is implemented by, receives an interface ID.
-- `mcp__aracne__read_function`: Reads the function and context for resources it uses, receives a function ID.
+- `mcp__aracne__read`: This command will give you the code and full context for any resource you want. These include: Files, Functions, Structs, etc. The tool receives a Resource ID, which can be the file's path or the ID of any resource.
 
 Note: Do *not* use "cat", "Get-Content" or any other OS command to read files## Grep/Search
 
-Use the MCP tool `mcp__aracne__grep` for content search. It returns `path:line:match` plus `ResourceID` and `Description` when a match maps to a topology resource.
+Use your native `grep`/`Grep` search tool for content search. When you need topology metadata in results, use `arac grep <pattern> [path]`; it returns `path:line:match` plus `ResourceID` and `Description` when a match maps to a topology resource.
 
-Do *not* use your native `grep` tool.
-Do not use `grep`, `Select-String` or `rg` in the terminal## Resource Context
+## Resource Context
 
 When you call a MCP Lookup Tool, the output has two sections:
 
@@ -47,11 +42,9 @@ Use the CONTEXT section to understand relationships **without making additional 
 
 ## Edit and Write:
 
-You can edit files using the MCP tool `mcp__aracne__edit`.
-You can write files using the MCP tool `mcp__aracne__write`.
+You can edit files using your native `edit` tool.
+You can write files using your native `write` tool.
 After editing or writing, the context for the topology will be automatically updated to reflect your actions.
-
-**Note: NEVER try to edit or write using your native tools**
 
 ## Other:
 
