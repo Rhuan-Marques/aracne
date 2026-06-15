@@ -94,10 +94,10 @@ func RunInit(args []string) {
 	}
 
 	if *opencode {
-		initOpenCode(*global, cfg.ToolModes, cfg.ReadSplit, *yes)
+		initOpenCode(*global, cfg.ToolModes, cfg.ReadSplit, cfg.DescriptionBatchSize, *yes)
 	}
 	if *claude {
-		initClaudeCode(*global, cfg.ToolModes, cfg.ReadSplit, *yes)
+		initClaudeCode(*global, cfg.ToolModes, cfg.ReadSplit, cfg.DescriptionBatchSize, *yes)
 	}
 }
 
@@ -137,7 +137,7 @@ func parseGrepToolMode(value string) (helper.GrepToolMode, error) {
 	}
 }
 
-func initOpenCode(global bool, modes helper.ToolModes, readSplit map[domain.ResourceKind]bool, autoYes bool) {
+func initOpenCode(global bool, modes helper.ToolModes, readSplit map[domain.ResourceKind]bool, descriptionBatchSize int, autoYes bool) {
 	configPath, configDir, agentsMdPath := opencodePaths(global)
 	os.MkdirAll(configDir, 0755)
 
@@ -179,7 +179,7 @@ func initOpenCode(global bool, modes helper.ToolModes, readSplit map[domain.Reso
 	os.MkdirAll(commandsDir, 0755)
 	os.MkdirAll(agentsDir, 0755)
 
-	writeOpenCodePrimaryCommand(commandsDir, "descriptions-generate", "Generate descriptions for undocumented resources in the topology", "build", prompts.DescriptionsGenerateCommand("descriptions-generation-executor"), autoYes)
+	writeOpenCodePrimaryCommand(commandsDir, "descriptions-generate", "Generate descriptions for undocumented resources in the topology", "build", prompts.DescriptionsGenerateCommand("descriptions-generation-executor", descriptionBatchSize), autoYes)
 	writeOpenCodeCommand(commandsDir, "descriptions-apply", "Write topology descriptions back into source files as doc comments", "build", prompts.DescriptionsApplyCommand(), autoYes)
 	writeOpenCodeCommand(commandsDir, "descriptions_clear", "Clear stored topology descriptions", "build", prompts.DescriptionsClearCommand(), autoYes)
 	writeOpenCodeCommand(commandsDir, "bug-hunter", "Launch a Bug Hunter sub-agent to scan the entire topology for bugs", "bug-hunter", bugHunterCommandForAgent("bug-hunter"), autoYes)
@@ -198,7 +198,7 @@ func initOpenCode(global bool, modes helper.ToolModes, readSplit map[domain.Reso
 	fmt.Println("[OpenCode] Restart OpenCode to activate the topology workflow.")
 }
 
-func initClaudeCode(global bool, modes helper.ToolModes, readSplit map[domain.ResourceKind]bool, autoYes bool) {
+func initClaudeCode(global bool, modes helper.ToolModes, readSplit map[domain.ResourceKind]bool, descriptionBatchSize int, autoYes bool) {
 	mcpConfigPath, commandsDir, agentsDir, claudeMdPath := claudePaths(global)
 
 	if anyMCPMode(modes) {
@@ -223,7 +223,7 @@ func initClaudeCode(global bool, modes helper.ToolModes, readSplit map[domain.Re
 	os.MkdirAll(commandsDir, 0755)
 	os.MkdirAll(agentsDir, 0755)
 
-	writeCommand(commandsDir, "descriptions-generate", "Generate descriptions for undocumented resources in the topology", prompts.DescriptionsGenerateCommand("descriptions-generation-executor"), autoYes)
+	writeCommand(commandsDir, "descriptions-generate", "Generate descriptions for undocumented resources in the topology", prompts.DescriptionsGenerateCommand("descriptions-generation-executor", descriptionBatchSize), autoYes)
 	writeCommand(commandsDir, "descriptions-apply", "Write topology descriptions back into source files as doc comments", prompts.DescriptionsApplyCommand(), autoYes)
 	writeCommand(commandsDir, "descriptions_clear", "Clear stored topology descriptions", prompts.DescriptionsClearCommand(), autoYes)
 	writeCommand(commandsDir, "bug-hunter", "Launch a Bug Hunter sub-agent to scan the entire topology for bugs", bugHunterCommandForAgent(".claude/agents/bug-hunter.md"), autoYes)
@@ -532,7 +532,7 @@ func terminalCommandForTool(name string) string {
 	case "bug_delete":
 		return "arac bug delete <bugID>"
 	case "node_list_no_description":
-		return "arac node list --no-description"
+		return "arac resource list --no-description"
 	case "update_description":
 		return "arac update-description <id> <kind> <desc>"
 	default:

@@ -18,13 +18,25 @@
     chatSession: null,
     chatAgents: [],
     providerConfig: null,
+    appConfig: null,
+    savingNeedDescription: false,
     selectedChatProvider: '',
     selectedChatModel: '',
     providerEditorID: null,
     providerEditorType: 'supported',
     chatView: 'graph',
     chatThinking: false,
+    chatRunActive: false,
+    chatQueues: {},
+    chatQueueSeq: 0,
+    chatQueueSending: false,
     chatStreaming: null,
+    chatSocket: null,
+    chatSocketReconnectTimer: null,
+    chatSocketRefreshOnOpen: false,
+    selectedTaskGroupID: null,
+    selectedTaskID: null,
+    taskStreaming: null,
     scale: 1,
     ox: 0,
     oy: 0,
@@ -246,7 +258,77 @@
 
   function chatSocketNeeded() {
     var path = window.location.pathname;
-    return path === '/graph' || path.indexOf('/chat/') === 0 || state.chatThinking;
+    return path === '/graph' || path.indexOf('/chat/') === 0 || state.chatThinking || state.chatRunActive;
+  }
+
+  function chatSocketURL() {
+    var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return protocol + '//' + window.location.host + '/api/ws';
+  }
+
+  function clearChatQueues() {
+    state.chatQueues = {};
+    state.chatQueueSending = false;
+    renderChat();
+  }
+
+  function ensureChatSocket() {
+    if (!chatSocketNeeded()) return;
+    if (state.chatSocket && (state.chatSocket.readyState === WebSocket.OPEN || state.chatSocket.readyState === WebSocket.CONNECTING)) return;
+    if (state.chatSocketReconnectTimer) {
+      clearTimeout(state.chatSocketReconnectTimer);
+      state.chatSocketReconnectTimer = null;
+    }
+    var socket;
+    try {
+      socket = new WebSocket(chatSocketURL());
+    } catch (_) {
+      return;
+    }
+    state.chatSocket = socket;
+    socket.addEventListener('open', function () {
+      if (state.chatSocket !== socket) return;
+      if (state.chatSocketRefreshOnOpen && state.chatSession) {
+        state.chatSocketRefreshOnOpen = false;
+        loadChatSession(state.chatSession.id);
+      }
+    });
+    socket.addEventListener('message', function (e) {
+      var msg;
+      try {
+        msg = JSON.parse(e.data);
+      } catch (_) {
+        return;
+      }
+      if (!msg || msg.type === 'connected' || msg.type === 'ping') return;
+      if (msg.type === 'chat_event') handleChatEvent(msg.payload);
+    });
+    socket.addEventListener('close', function () {
+      if (state.chatSocket !== socket) return;
+      state.chatSocket = null;
+      clearChatQueues();
+      if (!chatSocketNeeded()) return;
+      state.chatSocketRefreshOnOpen = true;
+      state.chatSocketReconnectTimer = setTimeout(function () {
+        state.chatSocketReconnectTimer = null;
+        ensureChatSocket();
+      }, 1000);
+    });
+    socket.addEventListener('error', function () {
+      socket.close();
+    });
+  }
+
+  function closeChatSocketIfIdle() {
+    if (chatSocketNeeded()) return;
+    if (state.chatSocketReconnectTimer) {
+      clearTimeout(state.chatSocketReconnectTimer);
+      state.chatSocketReconnectTimer = null;
+    }
+    if (state.chatSocket) {
+      state.chatSocket.close();
+      state.chatSocket = null;
+    }
   }
 
   function loadOptimizationRules() {
@@ -378,6 +460,7 @@
         option.selected = action === 'all';
       });
       refreshMultiSelect(select.id);
+      if (opts.onChange) opts.onChange(selectedValues(select));
     });
     picker.querySelector('.multiPickerOptions').addEventListener('change', function (e) {
       if (e.target.type !== 'checkbox') return;
@@ -386,6 +469,7 @@
       });
       if (option) option.selected = e.target.checked;
       refreshMultiSelect(select.id);
+      if (opts.onChange) opts.onChange(selectedValues(select));
     });
     if (opts.search) {
       picker.querySelector('.multiPickerSearch').addEventListener('input', function (e) {
@@ -941,9 +1025,14 @@
     el('navSettings').classList.toggle('active', route === 'settings');
 
     if (route === 'graph') resize();
-    if (route === 'settings') loadChatProvider();
+    if (route === 'settings') {
+      loadChatProvider();
+      loadAppConfig();
+    }
     if (route === 'history') loadChatHistory();
     if (route === 'chat') enterChatRoute(path);
+    ensureChatSocket();
+    closeChatSocketIfIdle();
   }
 
   var sessionIDRe = /^chat_\d+_[0-9a-f]+$/;
@@ -992,6 +1081,45 @@
       renderChatModelControls();
       return saved;
     }).catch(showError);
+  }
+
+  function defaultNeedDescription() {
+    return ['function', 'method', 'type', 'interface', 'file'];
+  }
+
+  function loadAppConfig() {
+    return api('/api/config').then(function (config) {
+      state.appConfig = config || {};
+      renderNeedDescriptionSettings();
+    }).catch(showError);
+  }
+
+  function renderNeedDescriptionSettings() {
+    var select = el('needDescription');
+    if (!select) return;
+    var values = state.appConfig && Array.isArray(state.appConfig.need_description) ? state.appConfig.need_description : defaultNeedDescription();
+    Array.prototype.forEach.call(select.options, function (option) {
+      option.selected = values.indexOf(option.value) !== -1;
+    });
+    refreshMultiSelect('needDescription');
+    var status = el('needDescriptionStatus');
+    if (status) status.textContent = 'Saved in .aracne/config.json.';
+  }
+
+  function saveNeedDescriptionSettings(values) {
+    if (state.savingNeedDescription) return;
+    state.savingNeedDescription = true;
+    var status = el('needDescriptionStatus');
+    if (status) status.textContent = 'Saving...';
+    return apiJSON('/api/config', 'PUT', {need_description: values}).then(function (saved) {
+      state.appConfig = saved || {};
+      state.savingNeedDescription = false;
+      renderNeedDescriptionSettings();
+    }).catch(function (err) {
+      state.savingNeedDescription = false;
+      if (status) status.textContent = 'Save failed.';
+      showError(err);
+    });
   }
 
   function cloneProviderConfig() {
@@ -1265,8 +1393,14 @@
   function loadChatSession(id) {
     if (!id) return Promise.resolve();
     return api('/api/chat/sessions/' + encodeURIComponent(id)).then(function (session) {
-      if (state.chatSession && state.chatSession.id !== session.id) state.chatStreaming = null;
+      if (state.chatSession && state.chatSession.id !== session.id) {
+        state.chatStreaming = null;
+        state.taskStreaming = null;
+        state.selectedTaskGroupID = null;
+        state.selectedTaskID = null;
+      }
       state.chatSession = session;
+      state.chatRunActive = !!session.running;
       el('chatMode').value = session.mode || 'build';
       el('chatApprovalMode').value = session.approval_mode || 'manual';
       if (session.model) selectChatModel(session.provider || state.selectedChatProvider, session.model);
@@ -1275,6 +1409,140 @@
       renderChat();
       loadChatSessions();
     }).catch(showError);
+  }
+
+  function chatQueueKey() {
+    return state.chatSession ? state.chatSession.id : 'new';
+  }
+
+  function currentChatQueue() {
+    var key = chatQueueKey();
+    state.chatQueues[key] = state.chatQueues[key] || [];
+    return state.chatQueues[key];
+  }
+
+  function moveNewChatQueue(sessionID) {
+    if (!sessionID || !state.chatQueues.new || !state.chatQueues.new.length) return;
+    state.chatQueues[sessionID] = (state.chatQueues[sessionID] || []).concat(state.chatQueues.new);
+    state.chatQueues.new = [];
+  }
+
+  function isTaskChatOpen() {
+    return !!(state.selectedTaskGroupID && state.selectedTaskID);
+  }
+
+  function updateTaskChatControls(active) {
+    var composer = el('chatComposer');
+    var backBar = el('taskChatBackBar');
+    if (composer) composer.classList.toggle('hidden', !!active);
+    if (backBar) backBar.classList.toggle('hidden', !active);
+  }
+
+  function renderQueuedMessages() {
+    var queue = currentChatQueue();
+    if (!queue.length || isTaskChatOpen()) return '';
+    return queue.map(function (item, index) {
+      return '<div class="chatMessage user queuedMessage" data-queue-id="' + esc(item.id) + '">' +
+        (index === 0 ? '<span class="queuedBadge">queued...</span>' : '') +
+        '<textarea class="queuedEdit" data-queue-edit="' + esc(item.id) + '" rows="2">' + esc(item.content || '') + '</textarea>' +
+        '<button type="button" class="queuedDelete" data-queue-delete="' + esc(item.id) + '">Delete</button>' +
+        '</div>';
+    }).join('');
+  }
+
+  function queueChatMessage(payload) {
+    var queue = currentChatQueue();
+    queue.push({
+      id: 'queued_' + (++state.chatQueueSeq),
+      content: payload.content,
+      mode: payload.mode,
+      approvalMode: payload.approval_mode,
+      provider: payload.provider
+    });
+    renderChat();
+  }
+
+  function removeQueuedMessage(id) {
+    var queue = currentChatQueue();
+    state.chatQueues[chatQueueKey()] = queue.filter(function (item) { return item.id !== id; });
+    renderChat();
+  }
+
+  function updateQueuedMessage(id, content) {
+    currentChatQueue().forEach(function (item) {
+      if (item.id === id) item.content = content;
+    });
+  }
+
+  function shouldQueueChatMessage() {
+    return !!(state.chatRunActive || (state.chatStreaming && (state.chatStreaming.content || state.chatStreaming.reasoning)) || state.chatQueueSending);
+  }
+
+  function isRunningSendError(err) {
+    return String(err && (err.message || err) || '').indexOf('currently running') !== -1;
+  }
+
+  function hasPendingChatInteraction() {
+    var session = state.chatSession;
+    return !!(session && ((session.pending_approvals || []).length || (session.pending_questions || []).length));
+  }
+
+  function sendChatPayload(payload, existingSessionOnly) {
+    ensureChatSocket();
+    state.chatRunActive = true;
+    state.chatThinking = true;
+    state.chatStreaming = null;
+    renderChatThinking();
+    if (!state.chatSession && !existingSessionOnly) {
+      return apiJSON('/api/chat/sessions', 'POST', payload).then(function (session) {
+        state.chatSession = session;
+        moveNewChatQueue(session.id);
+        navigate('/chat/' + encodeURIComponent(session.id));
+        return session;
+      });
+    }
+    if (!state.chatSession) return Promise.reject(new Error('No chat session is available'));
+    return apiJSON('/api/chat/sessions/' + encodeURIComponent(state.chatSession.id) + '/messages', 'POST', payload).then(function (session) {
+      state.chatSession = session;
+      return session;
+    });
+  }
+
+  function processNextQueuedMessage() {
+    if (state.chatQueueSending || state.chatRunActive || hasPendingChatInteraction() || isTaskChatOpen()) return;
+    var queue = currentChatQueue();
+    if (!queue.length) return;
+    var item = queue.shift();
+    if (!String(item.content || '').trim()) {
+      renderChat();
+      processNextQueuedMessage();
+      return;
+    }
+    state.chatQueueSending = true;
+    renderChat();
+    sendChatPayload({
+      content: item.content,
+      mode: item.mode || el('chatMode').value,
+      approval_mode: item.approvalMode || el('chatApprovalMode').value,
+      provider: item.provider || {provider: state.selectedChatProvider, model: state.selectedChatModel}
+    }, true).then(function (session) {
+      state.chatSession = session;
+      loadChatSessions();
+    }).catch(function (err) {
+      currentChatQueue().unshift(item);
+      if (isRunningSendError(err)) {
+        state.chatRunActive = true;
+        renderChat();
+        return;
+      }
+      state.chatRunActive = false;
+      state.chatThinking = false;
+      showChatError(err);
+    }).finally(function () {
+      state.chatQueueSending = false;
+      renderChat();
+      renderChatThinking();
+    });
   }
 
   function renderChat() {
@@ -1289,15 +1557,28 @@
     el('chatTitle').textContent = session ? (session.title || 'New chat') : 'New chat';
     el('chatAgentLabel').textContent = session && session.agent !== 'default' ? agentName(session.agent) + ' Task' : 'Default Chat';
     if (!session) {
-      box.innerHTML = '<div class="chatWelcome"><h2>Welcome</h2><p>Ask Aracne to inspect topology, plan changes, run tools, or build features.</p></div>';
+      updateTaskChatControls(false);
+      box.innerHTML = '<div class="chatWelcome"><h2>Welcome</h2><p>Ask Aracne to inspect topology, plan changes, run tools, or build features.</p></div>' + renderQueuedMessages();
       el('chatPending').innerHTML = '';
       return;
+    }
+    updateTaskChatControls(false);
+    if (state.selectedTaskGroupID && state.selectedTaskID) {
+      if (renderTaskChat(box, session)) {
+        updateTaskChatControls(true);
+        renderChatPending();
+        return;
+      }
+      state.selectedTaskGroupID = null;
+      state.selectedTaskID = null;
+      state.taskStreaming = null;
     }
     var messages = session.messages || [];
     var html = messages.length ? messages.map(renderChatMessage).join('') : '<div class="chatWelcome"><h2>' + esc(session.title || 'New chat') + '</h2><p>This session is ready.</p></div>';
     if (state.chatStreaming && state.chatStreaming.sessionID === session.id && (state.chatStreaming.content || state.chatStreaming.reasoning)) {
       html += renderChatStreaming();
     }
+    html += renderQueuedMessages();
     box.innerHTML = html;
     if (openKeys.size) {
       box.querySelectorAll('details.tool').forEach(function (d) {
@@ -1330,6 +1611,7 @@
     var role = msg.role || 'assistant';
     var status = msg.status || '';
     if (role === 'tool') {
+      if (msg.tool_name === 'CreateTasks') return renderTaskGroupToolMessage(msg, status);
       var input = msg.tool_input ? JSON.stringify(msg.tool_input, null, 2) : '{}';
       var output = msg.tool_output || '';
       var inputStr = formatToolInput(msg.tool_input);
@@ -1353,6 +1635,88 @@
       '</div>';
   }
 
+  function findTaskGroup(groupID) {
+    var groups = state.chatSession ? (state.chatSession.task_groups || []) : [];
+    for (var i = 0; i < groups.length; i++) {
+      if (groups[i].id === groupID) return groups[i];
+    }
+    return null;
+  }
+
+  function findTaskGroupByToolCall(toolCallID) {
+    var groups = state.chatSession ? (state.chatSession.task_groups || []) : [];
+    for (var i = 0; i < groups.length; i++) {
+      if (groups[i].tool_call_id === toolCallID) return groups[i];
+    }
+    return null;
+  }
+
+  function findTask(group, taskID) {
+    var tasks = group ? (group.tasks || []) : [];
+    for (var i = 0; i < tasks.length; i++) {
+      if (tasks[i].id === taskID) return tasks[i];
+    }
+    return null;
+  }
+
+  function taskGroupProgress(group) {
+    var tasks = group ? (group.tasks || []) : [];
+    var done = 0;
+    var failed = 0;
+    tasks.forEach(function (task) {
+      if (task.status === 'completed' || task.status === 'failed') done++;
+      if (task.status === 'failed') failed++;
+    });
+    return {done: done, failed: failed, total: tasks.length};
+  }
+
+  function renderTaskGroupToolMessage(msg, status) {
+    var group = findTaskGroupByToolCall(msg.tool_call_id);
+    if (!group) {
+      return '<details class="chatMessage tool ' + esc(status) + '"><summary class="toolCallSummary"><strong>CreateTasks</strong><span>' + esc(status || 'pending') + '</span></summary><div class="toolDetails"><div class="toolDetailsMarkdown">' + renderMarkdown(msg.tool_output || '') + '</div></div></details>';
+    }
+    var progress = taskGroupProgress(group);
+    var complete = progress.total > 0 && progress.done >= progress.total;
+    var label = complete ? 'Tasks Completed!' : 'Tasks Running (' + esc(String(group.worker_count || 1)) + ' workers)...';
+    var percent = progress.total ? Math.round(progress.done / progress.total * 100) : 0;
+    var open = state.selectedTaskGroupID === group.id && !state.selectedTaskID;
+    var progressHTML = progress.total > 1 ? '<div class="taskProgress"><div class="taskProgressTrack"><span style="width:' + percent + '%"></span></div><small>' + esc(String(progress.done)) + '/' + esc(String(progress.total)) + '</small></div>' : '';
+    return '<section class="chatMessage taskGroupTool ' + esc(status) + (open ? ' open' : '') + '">' +
+      '<button type="button" class="taskGroupHeader" data-task-group-toggle="' + esc(group.id) + '"><strong>' + label + '</strong><span>' + esc(progress.failed ? progress.failed + ' failed' : (group.status || status || 'pending')) + '</span></button>' +
+      progressHTML +
+      (open ? renderTaskGroupMenu(group) : '') +
+      '</section>';
+  }
+
+  function renderTaskGroupMenu(group) {
+    var tasks = group.tasks || [];
+    var rows = tasks.map(function (task, index) {
+      return '<button type="button" class="taskRow ' + esc(task.status || 'pending') + '" data-task-open="' + esc(task.id) + '" data-task-group="' + esc(group.id) + '">' +
+        '<span><b>' + esc(task.agent_kind || 'agent') + '</b><small>Task ' + esc(String(index + 1)) + '</small></span>' +
+        '<em>' + esc(task.status || 'pending') + '</em>' +
+        '</button>';
+    }).join('');
+    var resumable = group.status !== 'completed' && !group.processing;
+    return '<div class="taskMenu">' + rows + (resumable ? '<button type="button" class="taskContinue" data-task-resume="' + esc(group.id) + '">Continue</button>' : '') + '</div>';
+  }
+
+  function renderTaskChat(box, session) {
+    var group = findTaskGroup(state.selectedTaskGroupID);
+    var task = findTask(group, state.selectedTaskID);
+    if (!group || !task) return false;
+    el('chatAgentLabel').textContent = agentName(task.agent_kind) + ' Sub-agent';
+    el('chatTitle').textContent = 'Task Chat';
+    var messages = task.messages || [];
+    var html = '<div class="taskChatHeader"><div><strong>' + esc(agentName(task.agent_kind)) + '</strong><small>' + esc(task.status || 'pending') + '</small></div></div>';
+    html += messages.length ? messages.map(renderChatMessage).join('') : '<div class="empty">No task messages yet.</div>';
+    if (state.taskStreaming && state.taskStreaming.groupID === group.id && state.taskStreaming.taskID === task.id && (state.taskStreaming.content || state.taskStreaming.reasoning)) {
+      html += renderChatMessage({role: 'assistant', status: 'streaming', content: state.taskStreaming.content, reasoning: state.taskStreaming.reasoning});
+    }
+    box.innerHTML = html;
+    box.scrollTop = box.scrollHeight;
+    return true;
+  }
+
   function renderChatStreaming() {
     return renderChatMessage({
       role: 'assistant',
@@ -1367,17 +1731,10 @@
     var panel = el('chatPending');
     if (!panel || !session) return;
     var html = [];
-    var workflowEvents = (session.events || []).filter(function (event) {
-      return event.type && event.type.indexOf('workflow_') === 0;
-    }).slice(-8);
-    workflowEvents.forEach(function (event) {
-      var payload = event.payload || {};
-      var label = (payload.type ? agentName(payload.type) : 'Task') + ' ' + event.type.replace('workflow_', '').replace(/_/g, ' ');
-      var detail = '';
-      if (payload.total) detail = 'Batch ' + esc(payload.completed || 0) + ' of ' + esc(payload.total);
-      else if (payload.queued !== undefined) detail = esc(payload.queued) + ' item(s) queued';
-      if (payload.error) detail += (detail ? ' - ' : '') + esc(payload.error);
-      html.push('<div class="pendingCard"><strong>' + esc(label) + '</strong>' + (detail ? '<p>' + detail + '</p>' : '') + (payload.text ? '<pre>' + esc(payload.text) + '</pre>' : '') + '</div>');
+    (session.task_groups || []).forEach(function (group) {
+      if (group.status === 'completed' || group.processing) return;
+      var progress = taskGroupProgress(group);
+      html.push('<div class="pendingCard warning"><strong>Task group interrupted</strong><p>' + esc(String(progress.done)) + ' of ' + esc(String(progress.total)) + ' task(s) done.</p><div class="pendingActions"><button data-task-resume="' + esc(group.id) + '" type="button">Continue</button></div></div>');
     });
     (session.pending_approvals || []).forEach(function (approval) {
       html.push('<div class="pendingCard"><strong>Approve tool call?</strong><p>' + esc(approval.reason || '') + '</p><code>' + esc(approval.tool_call && approval.tool_call.function ? approval.tool_call.function.name : '') + '</code><div class="pendingActions"><button data-approval="' + esc(approval.id) + '" data-approved="true" type="button">Allow</button><button data-approval="' + esc(approval.id) + '" data-approved="false" type="button">Decline</button></div></div>');
@@ -1401,32 +1758,64 @@
       approval_mode: el('chatApprovalMode').value,
       provider: {provider: state.selectedChatProvider, model: state.selectedChatModel}
     };
-    state.chatThinking = true;
-    state.chatStreaming = null;
-    renderChatThinking();
+    if (shouldQueueChatMessage()) {
+      input.value = '';
+      queueChatMessage(payload);
+      return;
+    }
     function sent(session) {
       input.value = '';
       state.chatSession = session;
+      if (session && session.id) moveNewChatQueue(session.id);
       renderChat();
       loadChatSessions();
     }
     function failed(err) {
+      if (isRunningSendError(err)) {
+        input.value = '';
+        state.chatRunActive = true;
+        queueChatMessage(payload);
+        renderChatThinking();
+        return;
+      }
+      state.chatRunActive = false;
       state.chatThinking = false;
       input.value = content;
       renderChatThinking();
       showChatError(err);
     }
-    if (!state.chatSession) {
-      return apiJSON('/api/chat/sessions', 'POST', payload).then(function (session) {
-        sent(session);
-        navigate('/chat/' + encodeURIComponent(session.id));
-      }).catch(failed);
-    }
-    return apiJSON('/api/chat/sessions/' + encodeURIComponent(state.chatSession.id) + '/messages', 'POST', payload).then(sent).catch(failed);
+    return sendChatPayload(payload, false).then(function (session) {
+      sent(session);
+    }).catch(failed);
   }
 
   function handleChatEvent(event) {
     if (!event || !event.type) return;
+    if (event.type === 'run_started' && state.chatSession && event.session_id === state.chatSession.id) {
+      state.chatRunActive = true;
+      renderChat();
+      return;
+    }
+    if (event.type === 'run_completed' && state.chatSession && event.session_id === state.chatSession.id) {
+      state.chatRunActive = false;
+      state.chatThinking = false;
+      state.chatStreaming = null;
+      renderChatThinking();
+      loadChatSession(state.chatSession.id).then(processNextQueuedMessage);
+      return;
+    }
+    if (event.type === 'task_delta' && state.chatSession && event.session_id === state.chatSession.id) {
+      var taskPayload = event.payload || {};
+      if (state.selectedTaskGroupID === taskPayload.group_id && state.selectedTaskID === taskPayload.task_id) {
+        if (!state.taskStreaming || state.taskStreaming.groupID !== taskPayload.group_id || state.taskStreaming.taskID !== taskPayload.task_id) {
+          state.taskStreaming = {groupID: taskPayload.group_id, taskID: taskPayload.task_id, content: '', reasoning: ''};
+        }
+        state.taskStreaming.content += taskPayload.content || '';
+        state.taskStreaming.reasoning += taskPayload.reasoning || '';
+        renderChat();
+      }
+      return;
+    }
     if (event.type === 'delta' && state.chatSession && event.session_id === state.chatSession.id) {
       var payload = event.payload || {};
       if (!state.chatStreaming || state.chatStreaming.sessionID !== event.session_id) {
@@ -1434,6 +1823,7 @@
       }
       state.chatStreaming.content += payload.content || '';
       state.chatStreaming.reasoning += payload.reasoning || '';
+      state.chatRunActive = true;
       state.chatThinking = true;
       renderChat();
       renderChatThinking();
@@ -1447,18 +1837,49 @@
     if ((event.type === 'message' || event.type === 'error') && state.chatSession && event.session_id === state.chatSession.id) {
       state.chatStreaming = null;
     }
-    if ((event.type === 'workflow_completed' || event.type === 'workflow_failed') && state.chatSession && event.session_id === state.chatSession.id) {
-      state.chatThinking = false;
-      renderChatThinking();
+    if (event.type === 'task_message' && state.chatSession && event.session_id === state.chatSession.id) {
+      state.taskStreaming = null;
+    }
+    if (event.type === 'task_group_status' && state.chatSession && event.session_id === state.chatSession.id) {
+      var groupPayload = event.payload || {};
+      if (groupPayload.status === 'completed') {
+        state.chatThinking = false;
+        renderChatThinking();
+      }
     }
     if (event.type === 'session_title_updated') loadChatSessions();
     if (state.chatSession && event.session_id === state.chatSession.id) loadChatSession(state.chatSession.id);
     else loadChatSessions();
   }
 
+  function stopChat() {
+    if (!state.chatSession || !(state.chatRunActive || state.chatThinking)) return;
+    var sessionID = state.chatSession.id;
+    var stop = document.querySelector('.stopButton');
+    if (stop) stop.disabled = true;
+    apiJSON('/api/chat/sessions/' + encodeURIComponent(sessionID) + '/stop', 'POST', {}).then(function (session) {
+      state.chatSession = session;
+      state.chatRunActive = !!session.running;
+      state.chatThinking = false;
+      state.chatStreaming = null;
+      renderChat();
+      renderChatThinking();
+    }).catch(function (err) {
+      if (stop) stop.disabled = false;
+      showError(err);
+      renderChatThinking();
+    });
+  }
+
   function renderChatThinking() {
     var thinking = el('chatThinking');
     if (thinking) thinking.classList.toggle('hidden', !state.chatThinking);
+    var stop = document.querySelector('.stopButton');
+    if (stop) {
+      var active = !!(state.chatRunActive || state.chatThinking);
+      stop.classList.toggle('hidden', !active);
+      stop.disabled = !active;
+    }
   }
 
   function resolveApproval(approvalID, approved) {
@@ -1507,10 +1928,16 @@
     id = id || 'default';
     if (id === 'default') return 'Default Chat';
     var agent = (state.chatAgents || []).find(function (item) { return item.id === id; });
-    return agent ? agent.name : id.replace(/_/g, ' ').replace(/^./, function (c) { return c.toUpperCase(); });
+    return agent ? agent.name : id.replace(/[-_]/g, ' ').replace(/^./, function (c) { return c.toUpperCase(); });
+  }
+
+  function workflowTypeForTask(id) {
+    if (id === 'descriptions-generation-executor') return 'descriptions';
+    return id;
   }
 
   function startTask(taskID) {
+    var workflowType = workflowTypeForTask(taskID);
     var name = agentName(taskID);
     if (!window.confirm('Start the ' + name + ' task?')) return;
     el('agentMenu').classList.add('hidden');
@@ -1518,13 +1945,27 @@
     renderChatThinking();
     createChatSession('default', name).then(function (session) {
       if (!session) return;
-      return apiJSON('/api/chat/workflows', 'POST', {session_id: session.id, type: taskID, batch_size: 5, parallel: 2}).catch(showChatError);
+      return apiJSON('/api/chat/workflows', 'POST', {session_id: session.id, type: workflowType, parallel: 2}).catch(showChatError);
+    });
+  }
+
+  function resumeTaskGroup(groupID) {
+    if (!state.chatSession || !groupID) return;
+    state.chatThinking = true;
+    renderChatThinking();
+    return apiJSON('/api/chat/sessions/' + encodeURIComponent(state.chatSession.id) + '/task-groups/' + encodeURIComponent(groupID) + '/resume', 'POST', {}).then(function (session) {
+      state.chatSession = session;
+      renderChat();
+    }).catch(function (err) {
+      state.chatThinking = false;
+      renderChatThinking();
+      showChatError(err);
     });
   }
 
   function startWorkflow(kind) {
     function run() {
-      return apiJSON('/api/chat/workflows', 'POST', {session_id: state.chatSession.id, type: kind, batch_size: 5, parallel: 2}).catch(showChatError);
+      return apiJSON('/api/chat/workflows', 'POST', {session_id: state.chatSession.id, type: kind, parallel: 2}).catch(showChatError);
     }
     if (state.chatSession) run(); else createChatSession('default', agentName(kind)).then(run);
   }
@@ -1732,6 +2173,10 @@
     e.preventDefault();
     el('chatComposer').requestSubmit();
   });
+  document.querySelector('.stopButton').addEventListener('click', function (e) {
+    e.preventDefault();
+    stopChat();
+  });
   el('historyButton').onclick = function () { navigate('/chat/history'); };
   el('newChatFromHistory').onclick = function () { navigate('/chat'); };
   el('agentButton').onclick = function () {
@@ -1742,7 +2187,61 @@
     var button = e.target.closest('[data-task]');
     if (button) startTask(button.dataset.task);
   });
+  el('chatMessages').addEventListener('click', function (e) {
+    var deleteQueued = e.target.closest('[data-queue-delete]');
+    if (deleteQueued) {
+      removeQueuedMessage(deleteQueued.dataset.queueDelete);
+      return;
+    }
+    var editQueued = e.target.closest('[data-queue-edit]');
+    if (editQueued) {
+      editQueued.focus();
+      return;
+    }
+    var toggle = e.target.closest('[data-task-group-toggle]');
+    if (toggle) {
+      var groupID = toggle.dataset.taskGroupToggle;
+      state.selectedTaskGroupID = state.selectedTaskGroupID === groupID && !state.selectedTaskID ? null : groupID;
+      state.selectedTaskID = null;
+      state.taskStreaming = null;
+      renderChat();
+      return;
+    }
+    var openTask = e.target.closest('[data-task-open]');
+    if (openTask) {
+      state.selectedTaskGroupID = openTask.dataset.taskGroup;
+      state.selectedTaskID = openTask.dataset.taskOpen;
+      state.taskStreaming = null;
+      renderChat();
+      return;
+    }
+    if (e.target.closest('[data-task-back]')) {
+      state.selectedTaskGroupID = null;
+      state.selectedTaskID = null;
+      state.taskStreaming = null;
+      renderChat();
+      return;
+    }
+    var resume = e.target.closest('[data-task-resume]');
+    if (resume) resumeTaskGroup(resume.dataset.taskResume);
+  });
+  el('chatMessages').addEventListener('input', function (e) {
+    var editQueued = e.target.closest('[data-queue-edit]');
+    if (editQueued) updateQueuedMessage(editQueued.dataset.queueEdit, editQueued.value);
+  });
+  el('taskChatBackBar').addEventListener('click', function (e) {
+    if (!e.target.closest('[data-task-back]')) return;
+    state.selectedTaskGroupID = null;
+    state.selectedTaskID = null;
+    state.taskStreaming = null;
+    renderChat();
+  });
   el('chatPending').addEventListener('click', function (e) {
+    var resume = e.target.closest('[data-task-resume]');
+    if (resume) {
+      resumeTaskGroup(resume.dataset.taskResume);
+      return;
+    }
     var approval = e.target.closest('[data-approval]');
     if (approval) {
       resolveApproval(approval.dataset.approval, approval.dataset.approved === 'true');
@@ -1777,6 +2276,13 @@
     search: true,
     icon: 'git-branch',
     color: edgeColor
+  });
+  enhanceMultiSelect(el('needDescription'), {
+    title: 'Need Description',
+    emptyLabel: 'No kinds selected',
+    icon: 'file-text',
+    color: function (kind) { return colors[kind] || '#e2e8f0'; },
+    onChange: saveNeedDescriptionSettings
   });
   loadSummary();
   Promise.all([loadOptimizationRules()]).then(loadGraph);

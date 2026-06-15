@@ -44,7 +44,12 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
-		writeJSON(w, chat.AgentProfiles())
+		profiles, err := mgr.AgentProfiles()
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, profiles)
 	case "sessions":
 		s.handleChatSessions(w, r, mgr, parts[1:])
 	case "workflows":
@@ -134,6 +139,17 @@ func (s *Server) handleChatSessions(w http.ResponseWriter, r *http.Request, mgr 
 	}
 
 	switch parts[1] {
+	case "stop":
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		session, err := mgr.StopSession(sessionID)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, session)
 	case "messages":
 		if r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -181,6 +197,17 @@ func (s *Server) handleChatSessions(w http.ResponseWriter, r *http.Request, mgr 
 			return
 		}
 		session, err := mgr.AnswerQuestion(sessionID, parts[2], body.Answer)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, session)
+	case "task-groups":
+		if r.Method != http.MethodPost || len(parts) < 4 || parts[3] != "resume" {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		session, err := mgr.ResumeTaskGroup(sessionID, parts[2])
 		if err != nil {
 			writeError(w, err)
 			return

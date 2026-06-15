@@ -58,6 +58,6 @@ Examine functions, methods, structs/classes, and interfaces for:
 }
 
 func BugHunterAgentContent() string {
-	return "---\nname: bug-hunter\ndescription: Scans the entire project topology looking for bugs\ntools: read, read_function, read_struct, bug_report\n---\n\n" +
+	return "---\nname: bug-hunter\ndescription: Scans the entire project topology looking for bugs\ntools: read, read_function, read_struct, read_interface, read_file, grep, bug_report\n---\n\n" +
 		BugHunterPrompt()
 }

@@ -468,3 +468,316 @@ func setupTopologyDB(t *testing.T, dir string) {
 		t.Fatalf("WriteDb: %v", err)
 	}
 }
+
+func TestSend_EmitsRunStartedAndCompleted(t *testing.T) {
+	sse := `data: {"choices":[{"index":0,"delta":{"content":"done"}}]}
+
+data: [DONE]`
+
+	var (
+		mu     sync.Mutex
+		events []Event
+	)
+	collect := func(e Event) {
+		mu.Lock()
+		events = append(events, e)
+		mu.Unlock()
+	}
+
+	dir := t.TempDir()
+	setupTopologyDB(t, dir)
+	storeDir := filepath.Join(dir, "chat")
+	if err := os.MkdirAll(storeDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(dir, "topology.db")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, sse)
+	}))
+	defer server.Close()
+
+	manager, err := NewManager(dbPath, dir, collect)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	manager.SetProvider(ProviderSettings{
+		Provider: ProviderOpenAI,
+		Model:    "gpt-4o",
+		BaseURL:  server.URL,
+		APIKey:   "test-key",
+	})
+
+	session, err := manager.CreateSession("default", "run events test")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	_, err = manager.Send(session.ID, SendRequest{Content: "go"})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		var hasStart, hasFinish bool
+		for _, e := range events {
+			if e.Type == "run_started" {
+				hasStart = true
+			}
+			if e.Type == "run_completed" {
+				hasFinish = true
+			}
+		}
+		mu.Unlock()
+		if hasStart && hasFinish {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	var startIdx, finishIdx int = -1, -1
+	for i, e := range events {
+		if e.Type == "run_started" {
+			startIdx = i
+		}
+		if e.Type == "run_completed" {
+			finishIdx = i
+		}
+	}
+
+	if startIdx == -1 {
+		t.Fatal("expected run_started event")
+	}
+	if finishIdx == -1 {
+		t.Fatal("expected run_completed event")
+	}
+	if startIdx > finishIdx {
+		t.Fatal("run_started must appear before run_completed")
+	}
+
+	payload := events[startIdx].Payload
+	if active, ok := payload["active"]; !ok || active != true {
+		t.Fatalf("run_started payload.active should be true, got %v", payload)
+	}
+	payload = events[finishIdx].Payload
+	if active, ok := payload["active"]; !ok || active != false {
+		t.Fatalf("run_completed payload.active should be false, got %v", payload)
+	}
+}
+
+func TestGetSession_ReturnsRunningDuringAndAfterRun(t *testing.T) {
+	done := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{"content":"Hello"}}]}
+
+`)
+		w.(http.Flusher).Flush()
+		<-done
+		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{"content":" world"}}]}
+
+data: [DONE]`)
+		w.(http.Flusher).Flush()
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	setupTopologyDB(t, dir)
+	storeDir := filepath.Join(dir, "chat")
+	if err := os.MkdirAll(storeDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(dir, "topology.db")
+
+	manager, err := NewManager(dbPath, dir, func(e Event) {})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	manager.SetProvider(ProviderSettings{
+		Provider: ProviderOpenAI,
+		Model:    "gpt-4o",
+		BaseURL:  server.URL,
+		APIKey:   "test-key",
+	})
+
+	session, err := manager.CreateSession("default", "running test")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	_, err = manager.Send(session.ID, SendRequest{Content: "go"})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	session, err = manager.GetSession(session.ID)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if !session.Running {
+		t.Fatal("expected Running=true while LLM stream is active")
+	}
+
+	close(done)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		manager.mu.Lock()
+		_, stillRunning := manager.running[session.ID]
+		manager.mu.Unlock()
+		if !stillRunning {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	session, err = manager.GetSession(session.ID)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if session.Running {
+		t.Fatal("expected Running=false after LLM stream completed")
+	}
+}
+
+func TestSend_RejectsUserMessageWhenAlreadyRunning(t *testing.T) {
+	blocked := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		<-blocked
+		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{"content":"finally"}}]}
+
+data: [DONE]`)
+		w.(http.Flusher).Flush()
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	setupTopologyDB(t, dir)
+	storeDir := filepath.Join(dir, "chat")
+	if err := os.MkdirAll(storeDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(dir, "topology.db")
+
+	manager, err := NewManager(dbPath, dir, func(e Event) {})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	manager.SetProvider(ProviderSettings{
+		Provider: ProviderOpenAI,
+		Model:    "gpt-4o",
+		BaseURL:  server.URL,
+		APIKey:   "test-key",
+	})
+
+	session, err := manager.CreateSession("default", "running reject test")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	_, err = manager.Send(session.ID, SendRequest{Content: "first"})
+	if err != nil {
+		t.Fatalf("first Send: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		manager.mu.Lock()
+		_, running := manager.running[session.ID]
+		manager.mu.Unlock()
+		if running {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	before, err := manager.GetSession(session.ID)
+	if err != nil {
+		t.Fatalf("GetSession before rejected send: %v", err)
+	}
+	beforeMessages := len(before.Messages)
+	beforeLLMMessages := len(before.LLMMessages)
+
+	_, err = manager.Send(session.ID, SendRequest{Content: "second"})
+	if err == nil {
+		t.Fatal("expected second Send to fail while session is running")
+	}
+	if !strings.Contains(err.Error(), "currently running") {
+		t.Fatalf("expected running error, got %v", err)
+	}
+
+	during, err := manager.GetSession(session.ID)
+	if err != nil {
+		t.Fatalf("GetSession after rejected send: %v", err)
+	}
+	if len(during.Messages) != beforeMessages {
+		t.Fatalf("expected visible messages to remain at %d, got %d", beforeMessages, len(during.Messages))
+	}
+	if len(during.LLMMessages) != beforeLLMMessages {
+		t.Fatalf("expected LLM messages to remain at %d, got %d", beforeLLMMessages, len(during.LLMMessages))
+	}
+	for _, msg := range during.Messages {
+		if msg.Role == "user" && msg.Content == "second" {
+			t.Fatal("rejected user message was appended to visible messages")
+		}
+	}
+	for _, msg := range during.LLMMessages {
+		if msg.Role == "user" && msg.Content == "second" {
+			t.Fatal("rejected user message was appended to LLM messages")
+		}
+	}
+
+	close(blocked)
+
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		manager.mu.Lock()
+		_, stillRunning := manager.running[session.ID]
+		manager.mu.Unlock()
+		if !stillRunning {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func TestGetSession_ReturnsRunningFalseWhenNotActive(t *testing.T) {
+	dir := t.TempDir()
+	setupTopologyDB(t, dir)
+	storeDir := filepath.Join(dir, "chat")
+	if err := os.MkdirAll(storeDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(dir, "topology.db")
+
+	manager, err := NewManager(dbPath, dir, func(e Event) {})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	session, err := manager.CreateSession("default", "idle test")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	got, err := manager.GetSession(session.ID)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if got.Running {
+		t.Fatal("expected Running=false for an idle session with no sends")
+	}
+}

@@ -25,6 +25,8 @@ func main() {
 		cli.RunViz(os.Args[2:])
 	case "init":
 		cli.RunInit(os.Args[2:])
+	case "disable":
+		cli.RunDisable(os.Args[2:])
 	case "descriptions":
 		if len(os.Args) < 3 {
 			cli.PrintUsage()
@@ -44,8 +46,6 @@ func main() {
 		cli.RunUpdateFile(os.Args[2:])
 	case "read":
 		cli.RunRead()
-	case "search":
-		cli.RunSearch(os.Args[2:])
 	case "grep":
 		cli.RunGrep(os.Args[2:])
 	case "update-description":
@@ -54,20 +54,19 @@ func main() {
 		cli.RunEdit()
 	case "write":
 		cli.RunWrite()
+	case "resource":
+		if len(os.Args) < 3 || os.Args[2] != "list" {
+			fmt.Fprintln(os.Stderr, "Usage: arac resource list [query] [--kind <kind>]... [--no-description]")
+			os.Exit(1)
+		}
+		cli.RunResourceList(os.Args[3:])
 	case "node":
-		if len(os.Args) < 3 || (os.Args[2] != "list" && os.Args[2] != "count") {
-			fmt.Fprintln(os.Stderr, "Usage: arac node list [--no-description]")
-			fmt.Fprintln(os.Stderr, "       arac node count [--no-description]")
+		if len(os.Args) < 3 || os.Args[2] != "count" {
+			fmt.Fprintln(os.Stderr, "Usage: arac node count [--no-description]")
 			os.Exit(1)
 		}
 		noDesc := len(os.Args) > 3 && os.Args[3] == "--no-description"
 		switch os.Args[2] {
-		case "list":
-			if noDesc {
-				cli.RunNodeListNoDescription()
-			} else {
-				cli.RunNodeList()
-			}
 		case "count":
 			if noDesc {
 				cli.RunNodeCountNoDescription()

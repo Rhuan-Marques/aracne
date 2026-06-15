@@ -2,7 +2,10 @@ package helper
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"aracne/internal/topology/domain"
 )
@@ -62,6 +65,72 @@ func TestReadJsonNonexistent(t *testing.T) {
 	_, err := ReadJson("nonexistent.json")
 	if err == nil {
 		t.Error("expected error for nonexistent file")
+	}
+}
+
+func TestDiffScanFilesErrorsForMissingRoot(t *testing.T) {
+	manifestPath := filepath.Join(t.TempDir(), "file_manifest.json")
+	if err := WriteManifest(FileManifest{}, manifestPath); err != nil {
+		t.Fatalf("WriteManifest: %v", err)
+	}
+
+	_, _, deleted, err := DiffScanFiles(filepath.Join(t.TempDir(), "missing"), "go", manifestPath)
+	if err == nil {
+		t.Fatal("expected missing root error")
+	}
+	if len(deleted) != 0 {
+		t.Fatalf("expected no deleted files on error, got %v", deleted)
+	}
+}
+
+func TestDiffScanFilesRefusesMassDeleteWhenNoCurrentFiles(t *testing.T) {
+	root := t.TempDir()
+	manifestPath := filepath.Join(t.TempDir(), "file_manifest.json")
+	manifest := FileManifest{
+		filepath.Join(root, "main.go"): "2026-01-01T00:00:00Z",
+	}
+	if err := WriteManifest(manifest, manifestPath); err != nil {
+		t.Fatalf("WriteManifest: %v", err)
+	}
+
+	_, _, deleted, err := DiffScanFiles(root, "go", manifestPath)
+	if err == nil {
+		t.Fatal("expected no source files guard error")
+	}
+	if len(deleted) != 0 {
+		t.Fatalf("expected no deleted files on guard error, got %v", deleted)
+	}
+}
+
+func TestDiffScanFilesNormalizesWindowsManifestPaths(t *testing.T) {
+	root := t.TempDir()
+	filePath := filepath.Join(root, "main.go")
+	if !strings.HasPrefix(filePath, "/mnt/c/") {
+		t.Skip("windows-to-wsl path normalization test requires /mnt/c temp path")
+	}
+	if err := os.WriteFile(filePath, []byte("package main\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	info, err := os.Stat(filePath)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+
+	manifestPath := filepath.Join(t.TempDir(), "file_manifest.json")
+	windowsPath := "C:" + strings.ReplaceAll(strings.TrimPrefix(filePath, "/mnt/c"), "/", "\\")
+	manifest := FileManifest{
+		windowsPath: info.ModTime().UTC().Format(time.RFC3339Nano),
+	}
+	if err := WriteManifest(manifest, manifestPath); err != nil {
+		t.Fatalf("WriteManifest: %v", err)
+	}
+
+	added, modified, deleted, err := DiffScanFiles(root, "go", manifestPath)
+	if err != nil {
+		t.Fatalf("DiffScanFiles: %v", err)
+	}
+	if len(added) != 0 || len(modified) != 0 || len(deleted) != 0 {
+		t.Fatalf("expected no changes, got added=%v modified=%v deleted=%v", added, modified, deleted)
 	}
 }
 
@@ -587,6 +656,38 @@ func TestApplyDescriptions_SkippedKinds(t *testing.T) {
 	}
 	if string(data) != original {
 		t.Error("expected no change for dependency kind")
+	}
+}
+
+func TestDefaultConfigIncludesNeedDescription(t *testing.T) {
+	cfg := DefaultConfig()
+	want := []domain.ResourceKind{domain.ResourceFunction, domain.ResourceMethod, domain.ResourceType, domain.ResourceInterface, domain.ResourceFile}
+	if len(cfg.NeedDescription) != len(want) {
+		t.Fatalf("NeedDescription = %v, want %v", cfg.NeedDescription, want)
+	}
+	for i := range want {
+		if cfg.NeedDescription[i] != want[i] {
+			t.Fatalf("NeedDescription = %v, want %v", cfg.NeedDescription, want)
+		}
+	}
+}
+
+func TestLoadConfigNeedDescriptionFallback(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"describe_targets":["variable","type"]}`), 0644); err != nil {
+		t.Fatalf("WriteFile legacy config: %v", err)
+	}
+	cfg := LoadConfig(path)
+	if len(cfg.NeedDescription) != 2 || cfg.NeedDescription[0] != domain.ResourceVariable || cfg.NeedDescription[1] != domain.ResourceType {
+		t.Fatalf("legacy NeedDescription = %v, want [variable type]", cfg.NeedDescription)
+	}
+
+	if err := os.WriteFile(path, []byte(`{"need_description":["file"],"describe_targets":["variable"]}`), 0644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+	cfg = LoadConfig(path)
+	if len(cfg.NeedDescription) != 1 || cfg.NeedDescription[0] != domain.ResourceFile {
+		t.Fatalf("NeedDescription = %v, want [file]", cfg.NeedDescription)
 	}
 }
 

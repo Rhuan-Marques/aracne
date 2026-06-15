@@ -1,5 +1,7 @@
 package llm
 
+import "context"
+
 // Represents a message in an LLM chat conversation, containing the role (user/assistant/tool), content text, optional tool call ID, and any tool calls made by the assistant.
 type Message struct {
 	Role       string     `json:"role"`
@@ -59,4 +61,8 @@ type StreamCallback func(StreamEvent)
 type Provider interface {
 	Chat(messages []Message, tools []ToolDefinition) (*ChatResponse, error)
 	StreamChat(messages []Message, tools []ToolDefinition, emit StreamCallback) (*ChatResponse, error)
+}
+
+type ContextProvider interface {
+	StreamChatContext(ctx context.Context, messages []Message, tools []ToolDefinition, emit StreamCallback) (*ChatResponse, error)
 }

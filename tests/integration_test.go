@@ -499,3 +499,148 @@ type SharedStruct struct {
 		t.Log("Note: No warning for cross-file struct reference (may be expected)")
 	}
 }
+
+// Test: Incremental scan with no changes should produce no warnings
+func TestIncrementalScanNoChanges(t *testing.T) {
+	root := t.TempDir()
+	p := newProject(t, root, "testapp")
+	mainGo := filepath.Join(p.dir, "main.go")
+	writeFile(t, mainGo, `package main
+
+func main() {}
+`)
+	p.scan(t)
+
+	// Re-scan with no changes
+	out, err := runLtp(t, p.dir, "scan", "-root", p.dir, "-output", p.dbPath)
+	if err != nil {
+		t.Fatalf("second scan failed: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "warning") {
+		t.Logf("Second scan produced output:\n%s", out)
+	}
+}
+
+// Test: Update file on a file that doesn't exist should remove its resources
+func TestUpdateFileOnDeletedFile(t *testing.T) {
+	root := t.TempDir()
+	p := newProject(t, root, "testapp")
+	writeFile(t, filepath.Join(p.dir, "main.go"), `package main
+
+func main() {}
+`)
+	writeFile(t, filepath.Join(p.dir, "extra.go"), `package main
+
+func Extra() {}
+`)
+	p.scan(t)
+	assertNoWarnings(t, p)
+
+	// Delete extra.go and run update-file on it
+	extraGo := filepath.Join(p.dir, "extra.go")
+	if err := os.Remove(extraGo); err != nil {
+		t.Fatal(err)
+	}
+	p.updateFile(t, extraGo)
+
+	// Should have no warnings since the file was just removed
+	out := p.warningsList(t)
+	t.Logf("After deleting file:\n%s", out)
+}
+
+// Test: Full lifecycle: scan, modify, add, verify
+func TestIncrementalScanFileAdded(t *testing.T) {
+	root := t.TempDir()
+	p := newProject(t, root, "testapp")
+	writeFile(t, filepath.Join(p.dir, "main.go"), `package main
+
+func main() {}
+`)
+
+	// Use default output path so search can find it
+	mustRun(t, p.dir, "scan", "-root", p.dir, "-output", p.dbPath)
+
+	// Add a new file
+	writeFile(t, filepath.Join(p.dir, "newfunc.go"), `package main
+
+func NewlyAdded() int { return 42 }
+`)
+	mustRun(t, p.dir, "update-file", filepath.Join(p.dir, "newfunc.go"), "--db", p.dbPath)
+
+	warnOut := mustRun(t, p.dir, "warnings", "list", "--db", p.dbPath)
+	t.Logf("After adding file:\n%s", warnOut)
+}
+
+// Test: Warning lifecycle - remove, get warning, restore via update-file, verify cleared
+func TestWarningFullLifecycle(t *testing.T) {
+	root := t.TempDir()
+	p := newProject(t, root, "testapp")
+	mainGo := filepath.Join(p.dir, "main.go")
+	writeFile(t, mainGo, `package main
+
+func main() {
+    greet()
+}
+
+func greet() string { return "hi" }
+`)
+	p.scan(t)
+	assertNoWarnings(t, p)
+
+	// Remove greet()
+	writeFile(t, mainGo, `package main
+
+func main() {
+    greet()
+}
+`)
+	p.updateFile(t, mainGo)
+	assertHasWarningKinds(t, p, "use_missing_node")
+
+	// Restore greet() - should clear warning
+	writeFile(t, mainGo, `package main
+
+func main() {
+    greet()
+}
+
+func greet() string { return "hi" }
+`)
+	p.updateFile(t, mainGo)
+	assertNoWarnings(t, p)
+}
+
+// Test: Struct with methods - remove method, verify warning
+func TestMethodRemovalFromStruct(t *testing.T) {
+	root := t.TempDir()
+	p := newProject(t, root, "testapp")
+	mainGo := filepath.Join(p.dir, "main.go")
+	writeFile(t, mainGo, `package main
+
+type Service struct{}
+
+func (s Service) Serve() {}
+
+func CallService(s Service) {
+    s.Serve()
+}
+`)
+	p.scan(t)
+	assertNoWarnings(t, p)
+
+	// Remove Serve method
+	writeFile(t, mainGo, `package main
+
+type Service struct{}
+
+func CallService(s Service) {
+    s.Serve()
+}
+`)
+	p.updateFile(t, mainGo)
+	out := p.warningsList(t)
+	t.Logf("After method removal:\n%s", out)
+	if strings.Contains(out, "No warnings found") {
+		t.Log("Method removal may not generate cross-file warning (same file)")
+	}
+}

@@ -43,20 +43,20 @@ type Summary struct {
 }
 
 type GraphNode struct {
-	ID               string              `json:"id"`
-	Name             string              `json:"name"`
-	Kind             string              `json:"kind"`
-	Language         string              `json:"language"`
-	Path             string              `json:"path"`
-	StartsAt         int                 `json:"starts_at"`
-	EndsAt           int                 `json:"ends_at"`
-	Description      string              `json:"description,omitempty"`
-	Properties       map[string]any      `json:"properties,omitempty"`
-	InDegree         int                 `json:"in_degree"`
-	OutDegree        int                 `json:"out_degree"`
-	WarningCount     int                 `json:"warning_count"`
-	BugCount         int                 `json:"bug_count"`
-	Includes         []CollapsedResource `json:"includes,omitempty"`
+	ID           string              `json:"id"`
+	Name         string              `json:"name"`
+	Kind         string              `json:"kind"`
+	Language     string              `json:"language"`
+	Path         string              `json:"path"`
+	StartsAt     int                 `json:"starts_at"`
+	EndsAt       int                 `json:"ends_at"`
+	Description  string              `json:"description,omitempty"`
+	Properties   map[string]any      `json:"properties,omitempty"`
+	InDegree     int                 `json:"in_degree"`
+	OutDegree    int                 `json:"out_degree"`
+	WarningCount int                 `json:"warning_count"`
+	BugCount     int                 `json:"bug_count"`
+	Includes     []CollapsedResource `json:"includes,omitempty"`
 }
 
 type CollapsedResource struct {
@@ -129,6 +129,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	mux.HandleFunc("/api/search", s.handleSearch)
 	mux.HandleFunc("/api/node/", s.handleNode)
 	mux.HandleFunc("/api/optimization-rules", s.handleOptimizationRules)
+	mux.HandleFunc("/api/config", s.handleConfig)
 	mux.HandleFunc("/api/chat", s.handleChat)
 	mux.HandleFunc("/api/chat/", s.handleChat)
 	mux.HandleFunc("/api/warnings", s.handleWarnings)
@@ -352,6 +353,62 @@ func (s *Server) handleNode(w http.ResponseWriter, r *http.Request) {
 		Bugs:     idx.nodeBugs(id),
 		Code:     idx.nodeCodeWithIncludes(id, rules),
 	})
+}
+
+func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
+	path := helper.ConfigPath(s.dbPath)
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, helper.EnsureConfig(path))
+	case http.MethodPut:
+		cfg := helper.EnsureConfig(path)
+		var raw map[string]json.RawMessage
+		if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+			writeError(w, err)
+			return
+		}
+		if data, ok := raw["need_description"]; ok {
+			var values []domain.ResourceKind
+			if err := json.Unmarshal(data, &values); err != nil {
+				writeError(w, err)
+				return
+			}
+			targets, err := helper.NormalizeDescribeTargets(values)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			cfg.NeedDescription = targets
+			cfg.DescribeTargets = nil
+		}
+		if data, ok := raw["description_batch_size"]; ok {
+			var value int
+			if err := json.Unmarshal(data, &value); err != nil {
+				writeError(w, err)
+				return
+			}
+			if value <= 0 {
+				writeError(w, fmt.Errorf("description_batch_size must be greater than 0"))
+				return
+			}
+			cfg.DescriptionBatchSize = value
+		}
+		if err := helper.SaveConfig(cfg, path); err != nil {
+			writeError(w, err)
+			return
+		}
+		s.refreshChatConfig(cfg)
+		writeJSON(w, cfg)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) refreshChatConfig(cfg *helper.Config) {
+	if s.chatMgr == nil || cfg == nil {
+		return
+	}
+	s.chatMgr.SetConfig(cfg)
 }
 
 func (s *Server) handleOptimizationRules(w http.ResponseWriter, r *http.Request) {

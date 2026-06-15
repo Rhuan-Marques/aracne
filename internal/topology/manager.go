@@ -42,6 +42,11 @@ func (m *TopologyManager) FullScan(root string, reg *scanner.Registry) error {
 }
 
 func (m *TopologyManager) IncrementalScan(root string, reg *scanner.Registry) ([]domain.TopologyWarning, error) {
+	if info, err := os.Stat(root); err != nil {
+		return nil, fmt.Errorf("topology root %s is not accessible: %w", root, err)
+	} else if !info.IsDir() {
+		return nil, fmt.Errorf("topology root %s is not a directory", root)
+	}
 	if len(reg.DetectAll(root)) == 0 {
 		return nil, fmt.Errorf("no language scanner detected for %s", root)
 	}
@@ -59,7 +64,10 @@ func (m *TopologyManager) IncrementalScan(root string, reg *scanner.Registry) ([
 	langScanners := reg.DetectAll(root)
 	var added, modified, deleted []string
 	for _, ls := range langScanners {
-		a, m, d := helper.DiffScanFiles(root, ls.Name(), manifestPath)
+		a, m, d, diffErr := helper.DiffScanFiles(root, ls.Name(), manifestPath)
+		if diffErr != nil {
+			return nil, diffErr
+		}
 		added = append(added, a...)
 		modified = append(modified, m...)
 		deleted = append(deleted, d...)
@@ -561,5 +569,3 @@ func (m *TopologyManager) ListWarnings(sourceID, targetID string, kind domain.Wa
 	}
 	return results, nil
 }
-
-

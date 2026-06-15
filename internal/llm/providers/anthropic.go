@@ -3,6 +3,7 @@ package providers
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -73,10 +74,14 @@ func NewAnthropic(apiKey, model, baseURL string) *Anthropic {
 }
 
 func (a *Anthropic) Chat(messages []llm.Message, tools []llm.ToolDefinition) (*llm.ChatResponse, error) {
-	return a.StreamChat(messages, tools, nil)
+	return a.StreamChatContext(context.Background(), messages, tools, nil)
 }
 
 func (a *Anthropic) StreamChat(messages []llm.Message, tools []llm.ToolDefinition, emit llm.StreamCallback) (*llm.ChatResponse, error) {
+	return a.StreamChatContext(context.Background(), messages, tools, emit)
+}
+
+func (a *Anthropic) StreamChatContext(ctx context.Context, messages []llm.Message, tools []llm.ToolDefinition, emit llm.StreamCallback) (*llm.ChatResponse, error) {
 	if a.apiKey == "" {
 		return nil, fmt.Errorf("ANTHROPIC_API_KEY is not configured")
 	}
@@ -96,7 +101,7 @@ func (a *Anthropic) StreamChat(messages []llm.Message, tools []llm.ToolDefinitio
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", a.baseURL+"/v1/messages", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", a.baseURL+"/v1/messages", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}

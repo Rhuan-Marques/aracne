@@ -12,8 +12,9 @@ import (
 )
 
 type NodeListNoDescription struct {
-	mgr     *golang.GoManager
-	targets []domain.ResourceKind
+	mgr       *golang.GoManager
+	targets   []domain.ResourceKind
+	batchSize int
 }
 
 func NewNodeListNoDescription(mgr *golang.GoManager, targets ...[]domain.ResourceKind) *NodeListNoDescription {
@@ -21,7 +22,14 @@ func NewNodeListNoDescription(mgr *golang.GoManager, targets ...[]domain.Resourc
 	if len(targets) > 0 {
 		describeTargets = targets[0]
 	}
-	return &NodeListNoDescription{mgr: mgr, targets: describeTargets}
+	return &NodeListNoDescription{mgr: mgr, targets: describeTargets, batchSize: helper.DefaultDescriptionBatchSize}
+}
+
+func (l *NodeListNoDescription) SetBatchSize(batchSize int) *NodeListNoDescription {
+	if batchSize > 0 {
+		l.batchSize = batchSize
+	}
+	return l
 }
 
 func (l *NodeListNoDescription) Name() string {
@@ -76,7 +84,7 @@ func (l *NodeListNoDescription) Run(args json.RawMessage) (string, error) {
 
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("Found %d undocumented resources for targets: %s.\n\n", len(entries), helper.FormatDescribeTargets(l.targets)))
-	b.WriteString("## Orchestration Guidance\n\nThe main session should split these resources into batches of at most 20 and assign each batch to a descriptions-generation-executor subagent. Do not assign the same resource ID to more than one active executor. After executor batches finish, call this tool again and retry any resources that are still listed.\n\n")
+	b.WriteString(fmt.Sprintf("## Orchestration Guidance\n\nThe main session should split these resources into batches of at most %d and assign each batch to a descriptions-generation-executor subagent. Do not assign the same resource ID to more than one active executor. After executor batches finish, call this tool again and retry any resources that are still listed.\n\n", l.batchSize))
 	b.WriteString("## Resources\n\n")
 	for _, e := range entries {
 		b.WriteString(fmt.Sprintf("  - ID: %s\n    Name: %s\n    Kind: %s\n\n", e.ID, e.Name, e.Kind))

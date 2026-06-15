@@ -5,12 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Aracne Viz</title>
   <link rel="stylesheet" href="/styles.css">
-  <link rel="icon" href="/icon.png">
+  <link rel="icon" href="/icon_borderless.svg">
 </head>
 <body>
   <header class="appHeader">
     <a class="appBrand" href="/graph" data-route="/graph" aria-label="Aracne Viz home">
-      <img class="mark" src="/aracne.png" alt="">
+      <img class="mark" src="/aracne_borderless.svg" alt="">
       <span>Aracne Viz</span>
     </a>
     <nav class="appNav" aria-label="Screens">
@@ -186,9 +186,13 @@
             <button id="historyButton" type="button" class="composerIcon" aria-label="Chat history">
               <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 7v5l3 2"/></svg>
             </button>
+            <button type="button" class="stopButton hidden">Stop</button>
             <button type="submit" class="sendButton">Send</button>
           </div>
         </form>
+        <div id="taskChatBackBar" class="taskBackBar hidden">
+          <button type="button" data-task-back>Back to Main Chat</button>
+        </div>
         <div id="chatModelMenu" class="agentMenu choiceMenu hidden"></div>
         <div id="chatModeMenu" class="agentMenu choiceMenu hidden"></div>
         <div id="chatApprovalModeMenu" class="agentMenu choiceMenu hidden"></div>
@@ -214,6 +218,24 @@
         <p class="eyebrow">Configuration</p>
         <h2>Settings</h2>
         <p class="settingsIntro">Configure your LLM providers and default models for codebase interaction.</p>
+        <div class="settingsSection">
+          <div class="settingsSectionHeader">
+            <h3>Need Description</h3>
+          </div>
+          <p class="fieldHint">Choose which resource kinds are listed by no-description tools and description workflows.</p>
+          <select id="needDescription" class="nativeMulti" multiple size="9">
+            <option value="package">package</option>
+            <option value="file">file</option>
+            <option value="function">function</option>
+            <option value="method">method</option>
+            <option value="type">type</option>
+            <option value="named_type">named_type</option>
+            <option value="interface">interface</option>
+            <option value="variable">variable</option>
+            <option value="dependency">dependency</option>
+          </select>
+          <p id="needDescriptionStatus" class="fieldHint"></p>
+        </div>
         <div class="settingsSection">
           <div class="settingsSectionHeader">
             <h3>Provider Settings</h3>

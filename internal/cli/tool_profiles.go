@@ -117,10 +117,10 @@ func BuildToolRegistry(manager *topology.TopologyManager, scannerReg *scanner.Re
 
 	lang := GetLanguage(manager)
 	if lang == "python" {
-		registerPythonTopologyTools(registry, python.NewPythonManager(manager), allowed, cfg.DescribeTargets)
+		registerPythonTopologyTools(registry, python.NewPythonManager(manager), allowed, cfg.NeedDescription, cfg.DescriptionBatchSize)
 		return registry
 	}
-	registerGoTopologyTools(registry, golang.NewGoManager(manager), allowed, cfg.DescribeTargets)
+	registerGoTopologyTools(registry, golang.NewGoManager(manager), allowed, cfg.NeedDescription, cfg.DescriptionBatchSize)
 	return registry
 }
 
@@ -149,20 +149,20 @@ func profileTools(profile ToolProfile) []string {
 	}
 }
 
-func registerGoTopologyTools(registry *tools.Registry, mgr *golang.GoManager, allowed map[string]bool, describeTargets []domain.ResourceKind) {
+func registerGoTopologyTools(registry *tools.Registry, mgr *golang.GoManager, allowed map[string]bool, describeTargets []domain.ResourceKind, descriptionBatchSize int) {
 	if allowed["update_description"] {
 		registry.Register(gotools.NewUpdateDescriptionTool(mgr))
 	}
 	if allowed["node_list_no_description"] {
-		registry.Register(gotools.NewNodeListNoDescription(mgr, describeTargets))
+		registry.Register(gotools.NewNodeListNoDescription(mgr, describeTargets).SetBatchSize(descriptionBatchSize))
 	}
 }
 
-func registerPythonTopologyTools(registry *tools.Registry, mgr *python.PythonManager, allowed map[string]bool, describeTargets []domain.ResourceKind) {
+func registerPythonTopologyTools(registry *tools.Registry, mgr *python.PythonManager, allowed map[string]bool, describeTargets []domain.ResourceKind, descriptionBatchSize int) {
 	if allowed["update_description"] {
 		registry.Register(pythontools.NewUpdateDescriptionTool(mgr))
 	}
 	if allowed["node_list_no_description"] {
-		registry.Register(pythontools.NewNodeListNoDescription(mgr, describeTargets))
+		registry.Register(pythontools.NewNodeListNoDescription(mgr, describeTargets).SetBatchSize(descriptionBatchSize))
 	}
 }

@@ -28,6 +28,7 @@ func BuildToolRegistry(manager *topology.TopologyManager, scannerReg *scanner.Re
 	registry.Register(NewBashTool(workspace, manager, scannerReg))
 	registry.Register(NewGlobTool(workspace))
 	registry.Register(&AskUserQuestionTool{})
+	registry.Register(&CreateTasksTool{})
 	registry.Register(tools.NewGrep(manager))
 	registry.Register(tools.NewEdit(manager, scannerReg))
 	registry.Register(tools.NewWrite(manager, scannerReg))
@@ -42,7 +43,7 @@ func BuildToolRegistry(manager *topology.TopologyManager, scannerReg *scanner.Re
 	useSplit := cfg != nil && len(cfg.ReadSplit) > 0
 	if !useSplit {
 		registry.Register(tools.NewRead(manager))
-		registerLanguageMaintenanceTools(registry, manager, lang, nil)
+		registerLanguageMaintenanceTools(registry, manager, lang, nil, configDescriptionBatchSize(cfg))
 		return registry
 	}
 
@@ -64,20 +65,58 @@ func BuildToolRegistry(manager *topology.TopologyManager, scannerReg *scanner.Re
 			registry.Register(universaltools.NewReadDependency(manager))
 		}
 	}
-	registerLanguageMaintenanceTools(registry, manager, lang, cfg.DescribeTargets)
+	registerLanguageMaintenanceTools(registry, manager, lang, cfg.NeedDescription, configDescriptionBatchSize(cfg))
 	return registry
 }
 
-func registerLanguageMaintenanceTools(registry *tools.Registry, manager *topology.TopologyManager, lang string, targets []domain.ResourceKind) {
+func BuildAgentToolRegistry(manager *topology.TopologyManager, scannerReg *scanner.Registry, cfg *helper.Config, workspace string) *tools.Registry {
+	registry := tools.NewRegistry()
+	registry.Register(&tools.Ls{})
+	registry.Register(NewBashTool(workspace, manager, scannerReg))
+	registry.Register(NewGlobTool(workspace))
+	registry.Register(tools.NewRead(manager))
+	registry.Register(universaltools.NewReadFunction(manager))
+	registry.Register(universaltools.NewReadStruct(manager))
+	registry.Register(universaltools.NewReadInterface(manager))
+	registry.Register(universaltools.NewReadNamedType(manager))
+	registry.Register(universaltools.NewReadFile(manager))
+	registry.Register(universaltools.NewReadPackage(manager))
+	registry.Register(universaltools.NewReadDependency(manager))
+	registry.Register(tools.NewGrep(manager))
+	registry.Register(tools.NewEdit(manager, scannerReg))
+	registry.Register(tools.NewWrite(manager, scannerReg))
+	registry.Register(tools.NewWarningsList(manager))
+	registry.Register(tools.NewBugReport(manager))
+	registry.Register(tools.NewBugList(manager))
+	registry.Register(tools.NewBugAcknowledge(manager))
+	registry.Register(tools.NewBugDismiss(manager))
+	registry.Register(tools.NewBugDelete(manager))
+	lang := getLanguage(manager)
+	var targets []domain.ResourceKind
+	if cfg != nil {
+		targets = cfg.NeedDescription
+	}
+	registerLanguageMaintenanceTools(registry, manager, lang, targets, configDescriptionBatchSize(cfg))
+	return registry
+}
+
+func registerLanguageMaintenanceTools(registry *tools.Registry, manager *topology.TopologyManager, lang string, targets []domain.ResourceKind, descriptionBatchSize int) {
 	if lang == "python" {
 		pyMgr := python.NewPythonManager(manager)
 		registry.Register(pythontools.NewUpdateDescriptionTool(pyMgr))
-		registry.Register(pythontools.NewNodeListNoDescription(pyMgr, targets))
+		registry.Register(pythontools.NewNodeListNoDescription(pyMgr, targets).SetBatchSize(descriptionBatchSize))
 		return
 	}
 	goMgr := golang.NewGoManager(manager)
 	registry.Register(gotools.NewUpdateDescriptionTool(goMgr))
-	registry.Register(gotools.NewNodeListNoDescription(goMgr, targets))
+	registry.Register(gotools.NewNodeListNoDescription(goMgr, targets).SetBatchSize(descriptionBatchSize))
+}
+
+func configDescriptionBatchSize(cfg *helper.Config) int {
+	if cfg != nil && cfg.DescriptionBatchSize > 0 {
+		return cfg.DescriptionBatchSize
+	}
+	return helper.DefaultDescriptionBatchSize
 }
 
 func toolMap(registry *tools.Registry, allowed map[string]bool) map[string]tools.Tool {

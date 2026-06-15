@@ -3,6 +3,7 @@ package providers
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -71,10 +72,14 @@ func NewOpenAI(apiKey, model, baseURL string) *OpenAI {
 }
 
 func (o *OpenAI) Chat(messages []llm.Message, tools []llm.ToolDefinition) (*llm.ChatResponse, error) {
-	return o.StreamChat(messages, tools, nil)
+	return o.StreamChatContext(context.Background(), messages, tools, nil)
 }
 
 func (o *OpenAI) StreamChat(messages []llm.Message, tools []llm.ToolDefinition, emit llm.StreamCallback) (*llm.ChatResponse, error) {
+	return o.StreamChatContext(context.Background(), messages, tools, emit)
+}
+
+func (o *OpenAI) StreamChatContext(ctx context.Context, messages []llm.Message, tools []llm.ToolDefinition, emit llm.StreamCallback) (*llm.ChatResponse, error) {
 	if o.apiKey == "" {
 		return nil, fmt.Errorf("OPENAI_API_KEY is not configured")
 	}
@@ -86,7 +91,7 @@ func (o *OpenAI) StreamChat(messages []llm.Message, tools []llm.ToolDefinition, 
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", o.baseURL+"/v1/chat/completions", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", o.baseURL+"/v1/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}

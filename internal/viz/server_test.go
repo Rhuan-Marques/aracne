@@ -1,6 +1,7 @@
 package viz
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -260,6 +261,52 @@ func TestOptimizationRulesCollapseAndPersistDefaults(t *testing.T) {
 	}
 	if !strings.Contains(inspected.Code, "func mid()") || !strings.Contains(inspected.Code, "func leaf()") {
 		t.Fatalf("expected merged code for recursive includes, got:\n%s", inspected.Code)
+	}
+}
+
+func TestConfigNeedDescriptionAPI(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, ".aracne", "topology.db")
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll db dir: %v", err)
+	}
+	if err := helper.WriteDb(&domain.Topology{}, dbPath); err != nil {
+		t.Fatalf("WriteDb: %v", err)
+	}
+
+	server := httptest.NewServer(NewServer(dbPath))
+	defer server.Close()
+
+	var cfg helper.Config
+	getJSON(t, server.URL+"/api/config", &cfg)
+	if len(cfg.NeedDescription) != 5 || cfg.NeedDescription[0] != domain.ResourceFunction || cfg.NeedDescription[1] != domain.ResourceMethod {
+		t.Fatalf("unexpected default need_description: %+v", cfg.NeedDescription)
+	}
+
+	body := bytes.NewBufferString(`{"need_description":["function","type","function"]}`)
+	req, err := http.NewRequest(http.MethodPut, server.URL+"/api/config", body)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT /api/config: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT /api/config status = %d", resp.StatusCode)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&cfg); err != nil {
+		t.Fatalf("decode PUT /api/config: %v", err)
+	}
+	if len(cfg.NeedDescription) != 2 || cfg.NeedDescription[0] != domain.ResourceFunction || cfg.NeedDescription[1] != domain.ResourceType {
+		t.Fatalf("unexpected saved need_description: %+v", cfg.NeedDescription)
+	}
+
+	saved := helper.LoadConfig(helper.ConfigPath(dbPath))
+	if len(saved.NeedDescription) != 2 || saved.NeedDescription[0] != domain.ResourceFunction || saved.NeedDescription[1] != domain.ResourceType {
+		t.Fatalf("unexpected persisted need_description: %+v", saved.NeedDescription)
 	}
 }
 

@@ -103,7 +103,7 @@ func isReadOnlyTool(name string) bool {
 
 func isMutatingTool(name string) bool {
 	switch name {
-	case "edit", "write", "update_description", "bug_report", "bug_acknowledge", "bug_dismiss", "bug_delete":
+	case "edit", "write", "update_description", "bug_report", "bug_acknowledge", "bug_dismiss", "bug_delete", "CreateTasks":
 		return true
 	default:
 		return false

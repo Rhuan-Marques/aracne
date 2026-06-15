@@ -83,15 +83,22 @@ func SyncManifest(topo *domain.Topology, dbPath string) {
 	}
 }
 
-func CollectSourceFiles(root, language string) []string {
+func CollectSourceFiles(root, language string) ([]string, error) {
 	var files []string
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
-		return files
+		return nil, err
 	}
-	filepath.WalkDir(absRoot, func(path string, d os.DirEntry, err error) error {
+	info, err := os.Stat(absRoot)
+	if err != nil {
+		return nil, fmt.Errorf("access root %s: %w", absRoot, err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("root is not a directory: %s", absRoot)
+	}
+	err = filepath.WalkDir(absRoot, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
-			return nil
+			return err
 		}
 		if d.IsDir() {
 			if isIgnoredSourceDir(d.Name()) {
@@ -104,7 +111,10 @@ func CollectSourceFiles(root, language string) []string {
 		}
 		return nil
 	})
-	return files
+	if err != nil {
+		return nil, err
+	}
+	return files, nil
 }
 
 func IsSourceFile(path, language string) bool {
@@ -141,18 +151,29 @@ func isIgnoredSourceDir(name string) bool {
 		strings.HasPrefix(name, ".")
 }
 
-func DiffScanFiles(root, language, manifestPath string) (added, modified, deleted []string) {
+func DiffScanFiles(root, language, manifestPath string) (added, modified, deleted []string, err error) {
 	manifest := ReadManifest(manifestPath)
 
 	manifestTimes := make(map[string]time.Time)
 	for path, ts := range manifest {
-		t, err := time.Parse(time.RFC3339Nano, ts)
-		if err == nil {
-			manifestTimes[path] = t
+		if !IsSourceFile(path, language) {
+			continue
+		}
+		normalizedPath := normalizeManifestPath(root, path)
+		t, parseErr := time.Parse(time.RFC3339Nano, ts)
+		if parseErr == nil {
+			manifestTimes[normalizedPath] = t
 		}
 	}
 
-	currentFiles := CollectSourceFiles(root, language)
+	currentFiles, err := CollectSourceFiles(root, language)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if len(currentFiles) == 0 && len(manifestTimes) > 0 {
+		return nil, nil, nil, fmt.Errorf("no %s source files found under root %s; refusing to mark %d manifest files deleted", language, root, len(manifestTimes))
+	}
+
 	currentSet := make(map[string]bool, len(currentFiles))
 	for _, f := range currentFiles {
 		currentSet[f] = true
@@ -160,8 +181,8 @@ func DiffScanFiles(root, language, manifestPath string) (added, modified, delete
 		if !inManifest {
 			added = append(added, f)
 		} else {
-			fi, err := os.Stat(f)
-			if err == nil && fi.ModTime().UTC().After(t) {
+			fi, statErr := os.Stat(f)
+			if statErr == nil && fi.ModTime().UTC().After(t) {
 				modified = append(modified, f)
 			}
 		}
@@ -173,7 +194,40 @@ func DiffScanFiles(root, language, manifestPath string) (added, modified, delete
 		}
 	}
 
-	return
+	return added, modified, deleted, nil
+}
+
+func normalizeManifestPath(root, path string) string {
+	if _, err := os.Stat(path); err == nil {
+		if abs, absErr := filepath.Abs(path); absErr == nil {
+			return abs
+		}
+		return path
+	}
+
+	converted := windowsPathToWSL(path)
+	if converted != path {
+		if _, err := os.Stat(converted); err == nil {
+			return converted
+		}
+	}
+
+	return path
+}
+
+func windowsPathToWSL(path string) string {
+	if len(path) < 3 || path[1] != ':' || (path[2] != '\\' && path[2] != '/') {
+		return path
+	}
+	drive := path[0]
+	if drive >= 'A' && drive <= 'Z' {
+		drive = drive - 'A' + 'a'
+	}
+	if drive < 'a' || drive > 'z' {
+		return path
+	}
+	rest := strings.ReplaceAll(path[3:], "\\", "/")
+	return filepath.Join("/mnt", string(drive), rest)
 }
 
 func RemoveFileResources(topo *domain.Topology, fileID string) []domain.TopologyWarning {

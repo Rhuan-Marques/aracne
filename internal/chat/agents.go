@@ -9,7 +9,11 @@ type AgentProfile struct {
 	Icon        string `json:"icon"`
 }
 
-func AgentProfiles() []AgentProfile {
+func (m *Manager) AgentProfiles() ([]AgentProfile, error) {
+	return DefaultAgentProfiles(), nil
+}
+
+func DefaultAgentProfiles() []AgentProfile {
 	return []AgentProfile{
 		{ID: "descriptions", Name: "Descriptions", Description: "Generate concise topology descriptions", Icon: "file-text"},
 		{ID: "bug_hunter", Name: "Bug Hunter", Description: "Search topology resources for confirmed bugs", Icon: "bug"},

@@ -52,13 +52,17 @@ type ScannerConfig struct {
 }
 
 type Config struct {
-	ScanMode        ScanMode                     `json:"scan_mode"`
-	ToolModes       ToolModes                    `json:"tool_modes"`
-	DescribeTargets []domain.ResourceKind        `json:"describe_targets"`
-	ReadSplit       map[domain.ResourceKind]bool `json:"read_split,omitempty"`
-	MaxFileSize     int64                        `json:"max_file_size,omitempty"`
-	Scanner         ScannerConfig                `json:"scanner"`
+	ScanMode             ScanMode                     `json:"scan_mode"`
+	ToolModes            ToolModes                    `json:"tool_modes"`
+	NeedDescription      []domain.ResourceKind        `json:"need_description"`
+	DescribeTargets      []domain.ResourceKind        `json:"describe_targets,omitempty"`
+	DescriptionBatchSize int                          `json:"description_batch_size"`
+	ReadSplit            map[domain.ResourceKind]bool `json:"read_split,omitempty"`
+	MaxFileSize          int64                        `json:"max_file_size,omitempty"`
+	Scanner              ScannerConfig                `json:"scanner"`
 }
+
+const DefaultDescriptionBatchSize = 5
 
 func (c *Config) EffectiveMaxFileSize() int64 {
 	if c.MaxFileSize <= 0 {
@@ -75,18 +79,22 @@ func DefaultToolModes() ToolModes {
 	return ToolModes{Read: ReadModeMCP, Edit: EditModeNative, Other: OtherModeMCP, Grep: GrepModeNative}
 }
 
-func DefaultDescribeTargets() []domain.ResourceKind {
+func DefaultNeedDescription() []domain.ResourceKind {
 	return []domain.ResourceKind{
 		domain.ResourceFunction,
-		domain.ResourceType,
 		domain.ResourceMethod,
+		domain.ResourceType,
 		domain.ResourceInterface,
 		domain.ResourceFile,
 	}
 }
 
+func DefaultDescribeTargets() []domain.ResourceKind {
+	return DefaultNeedDescription()
+}
+
 func DefaultConfig() *Config {
-	return &Config{ScanMode: ScanModeDefault, ToolModes: DefaultToolModes(), DescribeTargets: DefaultDescribeTargets(), MaxFileSize: 512 * 1024, Scanner: ScannerConfig{UpdateFrequency: 200}}
+	return &Config{ScanMode: ScanModeDefault, ToolModes: DefaultToolModes(), NeedDescription: DefaultNeedDescription(), DescriptionBatchSize: DefaultDescriptionBatchSize, MaxFileSize: 512 * 1024, Scanner: ScannerConfig{UpdateFrequency: 200}}
 }
 
 func LoadConfig(path string) *Config {
@@ -114,6 +122,15 @@ func LoadConfig(path string) *Config {
 	if loaded.ToolModes.Grep == GrepModeNative || loaded.ToolModes.Grep == GrepModeMCP || loaded.ToolModes.Grep == GrepModeTerminal {
 		cfg.ToolModes.Grep = loaded.ToolModes.Grep
 	}
+	if loaded.NeedDescription != nil {
+		if targets, err := NormalizeDescribeTargets(loaded.NeedDescription); err == nil {
+			cfg.NeedDescription = targets
+		}
+	} else if loaded.DescribeTargets != nil {
+		if targets, err := NormalizeDescribeTargets(loaded.DescribeTargets); err == nil {
+			cfg.NeedDescription = targets
+		}
+	}
 	if loaded.DescribeTargets != nil {
 		if targets, err := NormalizeDescribeTargets(loaded.DescribeTargets); err == nil {
 			cfg.DescribeTargets = targets
@@ -121,6 +138,9 @@ func LoadConfig(path string) *Config {
 	}
 	if loaded.MaxFileSize > 0 {
 		cfg.MaxFileSize = loaded.MaxFileSize
+	}
+	if loaded.DescriptionBatchSize > 0 {
+		cfg.DescriptionBatchSize = loaded.DescriptionBatchSize
 	}
 	if loaded.ReadSplit != nil {
 		cfg.ReadSplit = loaded.ReadSplit

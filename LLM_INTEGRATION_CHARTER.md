@@ -22,7 +22,7 @@ There are three integration modes sharing the same topology engine. All must mai
 ### Mode A: Full CLI Integration
 - Direct terminal usage via `Aracne` subcommands
 - No LLM involved — all topology operations via CLI flags
-- Commands: `scan`, `read`, `update-description`, `node list`, `update-file`, `generate-descriptions`
+- Commands: `scan`, `read`, `update-description`, `resource list`, `update-file`, `generate-descriptions`
 
 ### Mode B: MCP Server (`arac serve`)
 - Exposes all topology tools as MCP (Model Context Protocol) tools over stdio

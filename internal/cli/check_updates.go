@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"time"
 
 	"aracne/internal/helper"
 )
@@ -43,37 +42,21 @@ func RunCheckUpdates(args []string) {
 	}
 
 	manifestPath := helper.ManifestPath(dbPath)
-	manifest := helper.ReadManifest(manifestPath)
-
-	manifestTimes := make(map[string]time.Time)
-	for path, ts := range manifest {
-		t, err := time.Parse(time.RFC3339Nano, ts)
-		if err == nil {
-			manifestTimes[path] = t
-		}
-	}
 
 	var added, modified, deleted []string
-	lang := topo.Language
-	currentFiles := helper.CollectSourceFiles(projectRoot, lang)
-	currentSet := make(map[string]bool, len(currentFiles))
-	for _, f := range currentFiles {
-		currentSet[f] = true
-		t, inManifest := manifestTimes[f]
-		if !inManifest {
-			added = append(added, f)
-		} else {
-			fi, err := os.Stat(f)
-			if err == nil && fi.ModTime().UTC().After(t) {
-				modified = append(modified, f)
-			}
-		}
+	languages := topo.Languages
+	if len(languages) == 0 && topo.Language != "" {
+		languages = []string{topo.Language}
 	}
-
-	for path := range manifestTimes {
-		if !currentSet[path] {
-			deleted = append(deleted, path)
+	for _, lang := range languages {
+		a, m, d, diffErr := helper.DiffScanFiles(projectRoot, lang, manifestPath)
+		if diffErr != nil {
+			fmt.Fprintf(os.Stderr, "Error checking updates: %v\n", diffErr)
+			os.Exit(1)
 		}
+		added = append(added, a...)
+		modified = append(modified, m...)
+		deleted = append(deleted, d...)
 	}
 
 	sort.Strings(added)

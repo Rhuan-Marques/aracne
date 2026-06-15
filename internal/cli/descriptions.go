@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	defaultDescriptionBatchSize  = 20
+	defaultDescriptionBatchSize  = helper.DefaultDescriptionBatchSize
 	defaultDescriptionParallel   = 4
 	defaultDescriptionMaxRetries = 3
 )
@@ -38,7 +38,7 @@ type descriptionBatchResult struct {
 
 func RunGenerateDescriptions(args []string) {
 	fs := flag.NewFlagSet("generate-descriptions", flag.ExitOnError)
-	targetsFlag := fs.String("targets", "", "Comma-separated resource kinds to describe (overrides config describe_targets)")
+	targetsFlag := fs.String("targets", "", "Comma-separated resource kinds to describe (overrides config need_description)")
 	batchSize := fs.Int("batch-size", defaultDescriptionBatchSize, "Maximum resources assigned to each description executor")
 	parallel := fs.Int("parallel", defaultDescriptionParallel, "Maximum description executors to run concurrently")
 	maxRetries := fs.Int("max-retries", defaultDescriptionMaxRetries, "Maximum executor attempts per resource")
@@ -53,13 +53,22 @@ func RunGenerateDescriptions(args []string) {
 	manager, reg := InitRegistry(".aracne/topology.db")
 	provider := providers.NewDeepSeek()
 	cfg := helper.EnsureConfig(helper.ConfigPath(".aracne/topology.db"))
+	batchSizeProvided := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "batch-size" {
+			batchSizeProvided = true
+		}
+	})
+	if !batchSizeProvided && cfg.DescriptionBatchSize > 0 {
+		*batchSize = cfg.DescriptionBatchSize
+	}
 	if *targetsFlag != "" {
 		targets, err := helper.ParseDescribeTargets(*targetsFlag)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
-		cfg.DescribeTargets = targets
+		cfg.NeedDescription = targets
 	}
 
 	lang := GetLanguage(manager)
@@ -77,12 +86,12 @@ func RunGenerateDescriptions(args []string) {
 		*maxRetries = 1
 	}
 
-	pending, err := undocumentedDescriptionResources(manager, cfg.DescribeTargets)
+	pending, err := undocumentedDescriptionResources(manager, cfg.NeedDescription)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Generating descriptions for %d resources (targets: %s, batch size: %d, parallel: %d, max retries: %d)...\n", len(pending), helper.FormatDescribeTargets(cfg.DescribeTargets), *batchSize, *parallel, *maxRetries)
+	fmt.Printf("Generating descriptions for %d resources (targets: %s, batch size: %d, parallel: %d, max retries: %d)...\n", len(pending), helper.FormatDescribeTargets(cfg.NeedDescription), *batchSize, *parallel, *maxRetries)
 	if len(pending) == 0 {
 		fmt.Println("done")
 		return
@@ -93,7 +102,7 @@ func RunGenerateDescriptions(args []string) {
 	toolReg := BuildToolRegistry(manager, reg, &agentCfg, ToolProfileDescriptionsExecutor)
 	toolMap := registryToolMap(toolReg)
 
-	if err := runDescriptionGeneration(manager, provider, toolMap, lang, cfg.DescribeTargets, *batchSize, *parallel, *maxRetries); err != nil {
+	if err := runDescriptionGeneration(manager, provider, toolMap, lang, cfg.NeedDescription, *batchSize, *parallel, *maxRetries); err != nil {
 		fmt.Fprintf(os.Stderr, "\nError: %v\n", err)
 		os.Exit(1)
 	}
@@ -231,14 +240,11 @@ func chunkDescriptionResources(resources []descriptionResource, batchSize int) [
 }
 
 func descriptionExecutorInput(batch []descriptionResource) string {
-	var b strings.Builder
-	b.WriteString("Process only the assigned resources below. Do not discover or update any other resource.\n\n")
-	b.WriteString("For each resource, call read with the resource_id, manually write a concise description, then call update_description immediately.\n\n")
-	b.WriteString("Assigned resources:\n\n")
+	resources := make([]prompts.DescriptionResource, 0, len(batch))
 	for _, res := range batch {
-		b.WriteString(fmt.Sprintf("- ID: %s\n  Name: %s\n  Kind: %s\n\n", res.ID, res.Name, res.Kind))
+		resources = append(resources, prompts.DescriptionResource{ID: res.ID, Name: res.Name, Kind: res.Kind})
 	}
-	return b.String()
+	return prompts.DescriptionsGenerationExecutorInput(resources)
 }
 
 func registryToolMap(registry *tools.Registry) map[string]tools.Tool {

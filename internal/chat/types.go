@@ -45,9 +45,11 @@ type Session struct {
 	Provider         ProviderName      `json:"provider"`
 	Model            string            `json:"model,omitempty"`
 	Agent            string            `json:"agent"`
+	Running          bool              `json:"running,omitempty"`
 	Messages         []SessionMessage  `json:"messages"`
 	LLMMessages      []llm.Message     `json:"llm_messages"`
 	Events           []Event           `json:"events"`
+	TaskGroups       []TaskGroup       `json:"task_groups,omitempty"`
 	PendingApprovals []PendingApproval `json:"pending_approvals,omitempty"`
 	PendingQuestions []PendingQuestion `json:"pending_questions,omitempty"`
 }
@@ -102,6 +104,38 @@ type PendingQuestion struct {
 	Options   []string     `json:"options,omitempty"`
 	Multiple  bool         `json:"multiple,omitempty"`
 	ToolCall  llm.ToolCall `json:"tool_call"`
+}
+
+type TaskGroup struct {
+	ID          string      `json:"id"`
+	ToolCallID  string      `json:"tool_call_id"`
+	Status      string      `json:"status"`
+	WorkerCount int         `json:"worker_count"`
+	CreatedAt   time.Time   `json:"created_at"`
+	UpdatedAt   time.Time   `json:"updated_at"`
+	Tasks       []AgentTask `json:"tasks"`
+	Processing  bool        `json:"processing,omitempty"`
+}
+
+type AgentTask struct {
+	ID          string           `json:"id"`
+	AgentKind   string           `json:"agent_kind"`
+	Prompt      string           `json:"prompt"`
+	NeedResult  bool             `json:"need_result"`
+	Status      string           `json:"status"`
+	Result      string           `json:"result,omitempty"`
+	Error       string           `json:"error,omitempty"`
+	Messages    []SessionMessage `json:"messages,omitempty"`
+	LLMMessages []llm.Message    `json:"llm_messages,omitempty"`
+	StartedAt   *time.Time       `json:"started_at,omitempty"`
+	CompletedAt *time.Time       `json:"completed_at,omitempty"`
+}
+
+type AgentKind struct {
+	Name         string   `json:"name"`
+	Description  string   `json:"description"`
+	Tools        []string `json:"tools"`
+	SystemPrompt string   `json:"system_prompt,omitempty"`
 }
 
 type CreateSessionRequest struct {

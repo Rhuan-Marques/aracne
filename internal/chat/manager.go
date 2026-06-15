@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,19 +22,28 @@ import (
 )
 
 type Manager struct {
-	mu        sync.Mutex
-	store     *Store
-	workspace string
-	dbPath    string
-	manager   *topology.TopologyManager
-	scanners  *scanner.Registry
-	config    *helper.Config
-	registry  *tools.Registry
-	policy    PermissionPolicy
-	emit      func(Event)
+	mu                sync.Mutex
+	store             *Store
+	workspace         string
+	dbPath            string
+	manager           *topology.TopologyManager
+	scanners          *scanner.Registry
+	config            *helper.Config
+	registry          *tools.Registry
+	agentToolRegistry *tools.Registry
+	policy            PermissionPolicy
+	emit              func(Event)
 
 	sessions           map[string]*Session
 	running            map[string]bool
+	runningCancels     map[string]context.CancelFunc
+	stopRequested      map[string]bool
+	runningToolCalls   map[string]llm.ToolCall
+	interruptedTools   map[string]bool
+	runningTaskGroups  map[string]bool
+	taskGroupCancels   map[string]context.CancelFunc
+	stoppedTaskGroups  map[string]bool
+	agentDir           string
 	provider           ProviderSettings
 	providerConfig     ProviderConfig
 	providerConfigPath string
@@ -54,6 +64,10 @@ func NewManager(dbPath, workspace string, emit func(Event)) (*Manager, error) {
 	scanners := NewScannerRegistry()
 	cfg := helper.EnsureConfig(helper.ConfigPath(dbPath))
 	chatDir := filepath.Join(filepath.Dir(dbPath), "chat")
+	agentDir := filepath.Join(filepath.Dir(dbPath), "agents")
+	if err := ensureDefaultAgentFiles(agentDir); err != nil {
+		return nil, err
+	}
 	providerConfigPath := filepath.Join(filepath.Dir(dbPath), "providers.json")
 	providerConfig, err := loadProviderConfig(providerConfigPath)
 	if err != nil {
@@ -80,10 +94,19 @@ func NewManager(dbPath, workspace string, emit func(Event)) (*Manager, error) {
 		scanners:           scanners,
 		config:             cfg,
 		registry:           BuildToolRegistry(mgr, scanners, cfg, workspace),
+		agentToolRegistry:  BuildAgentToolRegistry(mgr, scanners, cfg, workspace),
 		policy:             NewPermissionPolicy(workspace),
 		emit:               emit,
 		sessions:           byID,
 		running:            make(map[string]bool),
+		runningCancels:     make(map[string]context.CancelFunc),
+		stopRequested:      make(map[string]bool),
+		runningToolCalls:   make(map[string]llm.ToolCall),
+		interruptedTools:   make(map[string]bool),
+		runningTaskGroups:  make(map[string]bool),
+		taskGroupCancels:   make(map[string]context.CancelFunc),
+		stoppedTaskGroups:  make(map[string]bool),
+		agentDir:           agentDir,
 		provider:           provider,
 		providerConfig:     providerConfig,
 		providerConfigPath: providerConfigPath,
@@ -135,7 +158,22 @@ func (m *Manager) CreateSession(agent, title string) (*Session, error) {
 func (m *Manager) GetSession(id string) (*Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.getSessionLocked(id)
+	session, err := m.getSessionLocked(id)
+	if err != nil {
+		return nil, err
+	}
+	return m.sessionForResponseLocked(session), nil
+}
+
+func (m *Manager) SetConfig(cfg *helper.Config) {
+	if cfg == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.config = cfg
+	m.registry = BuildToolRegistry(m.manager, m.scanners, cfg, m.workspace)
+	m.agentToolRegistry = BuildAgentToolRegistry(m.manager, m.scanners, cfg, m.workspace)
 }
 
 func (m *Manager) ProviderSettings() ProviderConfigState {
@@ -195,6 +233,10 @@ func (m *Manager) Send(sessionID string, req SendRequest) (*Session, error) {
 	if strings.TrimSpace(req.Content) == "" {
 		m.mu.Unlock()
 		return nil, fmt.Errorf("message content is required")
+	}
+	if m.running[sessionID] {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("chat session is currently running; queue the message client-side")
 	}
 	if req.Mode == "" {
 		req.Mode = session.Mode
@@ -303,20 +345,116 @@ func (m *Manager) startRun(sessionID string) {
 		m.mu.Unlock()
 		return
 	}
+	delete(m.stopRequested, sessionID)
 	m.running[sessionID] = true
 	m.mu.Unlock()
+	m.recordEvent(sessionID, "run_started", map[string]any{"active": true})
 	go func() {
 		defer func() {
 			m.mu.Lock()
+			if cancel := m.runningCancels[sessionID]; cancel != nil {
+				cancel()
+			}
 			delete(m.running, sessionID)
+			delete(m.runningCancels, sessionID)
+			delete(m.stopRequested, sessionID)
+			delete(m.runningToolCalls, sessionID)
 			m.mu.Unlock()
+			m.recordEvent(sessionID, "run_completed", map[string]any{"active": false})
 		}()
 		m.runLoop(sessionID)
 	}()
 }
 
+func (m *Manager) StopSession(sessionID string) (*Session, error) {
+	var interrupted *llm.ToolCall
+	m.mu.Lock()
+	if _, err := m.getSessionLocked(sessionID); err != nil {
+		m.mu.Unlock()
+		return nil, err
+	}
+	m.stopRequested[sessionID] = true
+	if cancel := m.runningCancels[sessionID]; cancel != nil {
+		cancel()
+	}
+	if tc, ok := m.runningToolCalls[sessionID]; ok && tc.Function.Name != "CreateTasks" && !m.interruptedTools[tc.ID] {
+		m.interruptedTools[tc.ID] = true
+		copy := tc
+		interrupted = &copy
+	}
+	prefix := sessionID + ":"
+	for key, cancel := range m.taskGroupCancels {
+		if strings.HasPrefix(key, prefix) {
+			m.stoppedTaskGroups[key] = true
+			cancel()
+		}
+	}
+	m.mu.Unlock()
+	if interrupted != nil {
+		m.appendToolResult(sessionID, *interrupted, "Tool interrupted.", "interrupted")
+	}
+	m.recordEvent(sessionID, "stop_requested", map[string]any{"active": false})
+	return m.GetSession(sessionID)
+}
+
+func (m *Manager) beginLLMCall(sessionID string) (context.Context, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.stopRequested[sessionID] {
+		return nil, false
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.runningCancels[sessionID] = cancel
+	return ctx, true
+}
+
+func (m *Manager) finishLLMCall(sessionID string) {
+	m.mu.Lock()
+	delete(m.runningCancels, sessionID)
+	m.mu.Unlock()
+}
+
+func (m *Manager) isStopRequested(sessionID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.stopRequested[sessionID]
+}
+
+func (m *Manager) markRunningTool(sessionID string, tc llm.ToolCall) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.stopRequested[sessionID] {
+		return false
+	}
+	m.runningToolCalls[sessionID] = tc
+	return true
+}
+
+func (m *Manager) clearRunningTool(sessionID, toolCallID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if tc, ok := m.runningToolCalls[sessionID]; ok && tc.ID == toolCallID {
+		delete(m.runningToolCalls, sessionID)
+	}
+	interrupted := m.interruptedTools[toolCallID]
+	if interrupted {
+		delete(m.interruptedTools, toolCallID)
+	}
+	return interrupted || m.stopRequested[sessionID]
+}
+
+func streamChat(ctx context.Context, provider llm.Provider, messages []llm.Message, tools []llm.ToolDefinition, emit llm.StreamCallback) (*llm.ChatResponse, error) {
+	if contextual, ok := provider.(llm.ContextProvider); ok {
+		return contextual.StreamChatContext(ctx, messages, tools, emit)
+	}
+	return provider.StreamChat(messages, tools, emit)
+}
+
 func (m *Manager) runLoop(sessionID string) {
 	for i := 0; i < 40; i++ {
+		if m.isStopRequested(sessionID) {
+			return
+		}
 		m.mu.Lock()
 		session, err := m.getSessionLocked(sessionID)
 		if err != nil || len(session.PendingApprovals) > 0 || len(session.PendingQuestions) > 0 {
@@ -332,8 +470,12 @@ func (m *Manager) runLoop(sessionID string) {
 			m.appendAssistantError(sessionID, err)
 			return
 		}
+		ctx, ok := m.beginLLMCall(sessionID)
+		if !ok {
+			return
+		}
 		m.recordEvent(sessionID, "thinking", map[string]any{"active": true})
-		resp, err := provider.StreamChat(messages, toToolDefinitions(m.registry.List()), func(event llm.StreamEvent) {
+		resp, err := streamChat(ctx, provider, messages, toToolDefinitions(m.registry.List()), func(event llm.StreamEvent) {
 			payload := map[string]any{}
 			if event.Content != "" {
 				payload["content"] = event.Content
@@ -345,9 +487,16 @@ func (m *Manager) runLoop(sessionID string) {
 				m.recordEvent(sessionID, "delta", payload)
 			}
 		})
+		m.finishLLMCall(sessionID)
 		m.recordEvent(sessionID, "thinking", map[string]any{"active": false})
 		if err != nil {
+			if errors.Is(err, context.Canceled) || m.isStopRequested(sessionID) {
+				return
+			}
 			m.appendAssistantError(sessionID, err)
+			return
+		}
+		if m.isStopRequested(sessionID) {
 			return
 		}
 
@@ -376,6 +525,9 @@ func (m *Manager) runLoop(sessionID string) {
 		}
 		for _, tc := range resp.ToolCalls {
 			if paused := m.prepareOrExecuteTool(sessionID, tc); paused {
+				return
+			}
+			if m.isStopRequested(sessionID) {
 				return
 			}
 		}
@@ -422,15 +574,28 @@ func (m *Manager) prepareOrExecuteTool(sessionID string, tc llm.ToolCall) bool {
 }
 
 func (m *Manager) executeToolCall(sessionID string, tc llm.ToolCall) error {
+	if m.isStopRequested(sessionID) {
+		return nil
+	}
 	if tc.Function.Name == "ask_user_question" {
 		return m.createQuestion(sessionID, tc)
+	}
+	if tc.Function.Name == "CreateTasks" {
+		return m.executeCreateTasksTool(sessionID, tc)
 	}
 	tool, ok := m.registry.Get(tc.Function.Name)
 	if !ok {
 		return fmt.Errorf("unknown tool %q", tc.Function.Name)
 	}
+	if !m.markRunningTool(sessionID, tc) {
+		return nil
+	}
+	defer m.clearRunningTool(sessionID, tc.ID)
 	m.recordEvent(sessionID, "tool_running", map[string]any{"tool_call_id": tc.ID})
 	result, err := tool.Run(json.RawMessage(tc.Function.Arguments))
+	if m.clearRunningTool(sessionID, tc.ID) {
+		return nil
+	}
 	if err != nil {
 		if strings.TrimSpace(result) != "" {
 			result = result + "\n" + err.Error()
@@ -622,6 +787,18 @@ func (m *Manager) saveLocked(session *Session) error {
 	return m.store.Save(session)
 }
 
+func (m *Manager) sessionForResponseLocked(session *Session) *Session {
+	copy := *session
+	copy.Running = m.running[session.ID]
+	if len(session.TaskGroups) > 0 {
+		copy.TaskGroups = append([]TaskGroup(nil), session.TaskGroups...)
+		for i := range copy.TaskGroups {
+			copy.TaskGroups[i].Processing = m.runningTaskGroups[taskGroupRunKey(session.ID, copy.TaskGroups[i].ID)]
+		}
+	}
+	return &copy
+}
+
 func (m *Manager) providerForSession(session *Session) ProviderSettings {
 	settings := m.provider
 	if configured, ok := providerSettingsForName(m.providerConfig, session.Provider, session.Model); ok {
@@ -652,7 +829,7 @@ func (m *Manager) sessionApprovalMode(sessionID string) ApprovalMode {
 }
 
 func (m *Manager) systemPrompt(mode Mode, sessionAgent string) string {
-	base := "You are a codebase LLM chat inside aracne. Use tools to inspect and modify the workspace. Native read tools return topology-aware context and native edit/write tools update topology. In Plan Mode, do not mutate files or topology; produce plans and ask clarifying questions. In Build Mode, implement requested changes with minimal edits. Report confirmed unrelated bugs with bug_report instead of fixing them. Current mode: " + string(mode)
+	base := "You are a codebase LLM chat inside aracne. Use tools to inspect and modify the workspace. Native read tools return topology-aware context and native edit/write tools update topology. In Plan Mode, do not mutate files or topology; produce plans and ask clarifying questions. In Build Mode, implement requested changes with minimal edits. Report confirmed unrelated bugs with bug_report instead of fixing them. Current mode: " + string(mode) + agentKindPrompt(m.agentDir)
 	if prompt := agentPrompt(sessionAgent); prompt != "" {
 		return base + "\n\nYou are running as the " + normalizeAgent(sessionAgent) + " agent. Follow this agent instruction:\n\n" + prompt
 	}
@@ -727,6 +904,17 @@ func (p contractGuardProvider) StreamChat(messages []llm.Message, tools []llm.To
 		return nil, &ProviderContractError{Err: err}
 	}
 	return resp, err
+}
+
+func (p contractGuardProvider) StreamChatContext(ctx context.Context, messages []llm.Message, tools []llm.ToolDefinition, emit llm.StreamCallback) (*llm.ChatResponse, error) {
+	if contextual, ok := p.provider.(llm.ContextProvider); ok {
+		resp, err := contextual.StreamChatContext(ctx, messages, tools, emit)
+		if err != nil && isContractError(err) {
+			return nil, &ProviderContractError{Err: err}
+		}
+		return resp, err
+	}
+	return p.StreamChat(messages, tools, emit)
 }
 
 func isContractError(err error) bool {

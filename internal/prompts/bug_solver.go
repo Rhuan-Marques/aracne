@@ -7,6 +7,9 @@ func BugSolverPrompt() string {
 - ` + "`" + `read` + "`" + ` -- read any resource by its ID
 - ` + "`" + `read_function` + "`" + ` -- get function source and connected context
 - ` + "`" + `read_struct` + "`" + ` -- get struct/class source and connected context
+- ` + "`" + `read_interface` + "`" + ` -- inspect interface/protocol code and implementations
+- ` + "`" + `read_file` + "`" + ` -- inspect file-level context when needed
+- ` + "`" + `grep` + "`" + ` -- search for related call sites and fallback behavior
 - ` + "`" + `edit` + "`" + ` -- apply exact string changes when configured
 - ` + "`" + `write` + "`" + ` -- write files when configured
 - ` + "`" + `bug_delete` + "`" + ` -- remove the fixed bug from the database
@@ -30,6 +33,6 @@ func BugSolverPrompt() string {
 }
 
 func BugSolverAgentContent() string {
-	return "---\nname: bug-solver\ndescription: Fixes acknowledged bugs in the codebase and removes them\ntools: read, edit, write, read_function, read_struct, bug_delete\n---\n\n" +
+	return "---\nname: bug-solver\ndescription: Fixes acknowledged bugs in the codebase and removes them\ntools: read, edit, write, read_function, read_struct, read_interface, read_file, grep, bug_delete\n---\n\n" +
 		BugSolverPrompt()
 }

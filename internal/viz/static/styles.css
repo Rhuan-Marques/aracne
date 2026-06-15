@@ -898,6 +898,46 @@ body.chat-active .toolbar {
   background: rgba(37, 99, 235, 0.18);
 }
 
+.chatMessage.queuedMessage {
+  position: relative;
+  display: grid;
+  gap: 8px;
+  border-color: rgba(192, 132, 252, 0.42);
+  background: rgba(126, 34, 206, 0.18);
+}
+
+.queuedBadge {
+  justify-self: start;
+  color: #d8b4fe;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.queuedEdit {
+  width: 100%;
+  min-height: 54px;
+  border: 1px solid rgba(216, 180, 254, 0.28);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.44);
+  color: var(--text);
+  font: inherit;
+  resize: vertical;
+}
+
+.queuedDelete {
+  justify-self: end;
+  width: auto;
+  padding: 7px 12px;
+  border-color: rgba(251, 113, 133, 0.32);
+  color: #fecdd3;
+}
+
+.queuedDelete:hover {
+  border-color: var(--danger);
+}
+
 .chatMessage.assistant.error,
 .chatMessage.tool.error,
 .chatMessage.tool.denied,
@@ -1282,6 +1322,7 @@ body.chat-active .toolbar {
 .composerFooter select,
 .composerChip,
 .composerIcon,
+.stopButton,
 .sendButton {
   min-height: 34px;
   border: 1px solid rgba(148, 163, 184, 0.18);
@@ -1308,6 +1349,20 @@ body.chat-active .toolbar {
   width: 36px;
   padding: 0;
   justify-content: center;
+}
+
+.stopButton {
+  width: auto;
+  min-width: 74px;
+  border-color: rgba(251, 113, 133, 0.36);
+  color: #fecdd3;
+  background: rgba(127, 29, 29, 0.42);
+  font-weight: 800;
+}
+
+.stopButton:hover {
+  border-color: var(--danger);
+  color: #fff1f2;
 }
 
 .sendButton {
@@ -1603,6 +1658,146 @@ body.chat-active .toolbar {
 .pendingCard.warning {
   border-color: rgba(250, 204, 21, 0.45);
   background: rgba(250, 204, 21, 0.12);
+}
+
+.taskGroupTool {
+  width: min(760px, 100%);
+  border: 1px solid rgba(116, 212, 255, 0.28);
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(116, 212, 255, 0.13), rgba(167, 139, 250, 0.1));
+  padding: 12px;
+}
+
+.taskGroupHeader {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  cursor: pointer;
+  text-align: left;
+  padding: 0;
+}
+
+.taskGroupHeader strong {
+  font-size: 15px;
+}
+
+.taskGroupHeader span,
+.taskRow em,
+.taskChatHeader small {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.taskProgress {
+  position: relative;
+  margin-top: 12px;
+  padding-bottom: 16px;
+}
+
+.taskProgressTrack {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.22);
+  overflow: hidden;
+}
+
+.taskProgressTrack span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #38bdf8, #a78bfa);
+}
+
+.taskProgress small {
+  position: absolute;
+  right: 0;
+  bottom: -2px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.taskMenu {
+  margin-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.taskRow,
+.taskContinue,
+.taskChatHeader button {
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(15, 23, 42, 0.42);
+  color: var(--text);
+  border-radius: 14px;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+
+.taskRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  text-align: left;
+}
+
+.taskRow span {
+  display: grid;
+  gap: 2px;
+}
+
+.taskRow small {
+  color: var(--muted);
+}
+
+.taskRow.running {
+  border-color: rgba(56, 189, 248, 0.5);
+}
+
+.taskRow.completed {
+  border-color: rgba(52, 211, 153, 0.42);
+}
+
+.taskRow.failed {
+  border-color: rgba(251, 113, 133, 0.55);
+}
+
+.taskContinue {
+  justify-self: end;
+  background: rgba(56, 189, 248, 0.18);
+}
+
+.taskChatHeader {
+  width: min(760px, 100%);
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid rgba(116, 212, 255, 0.22);
+  border-radius: 18px;
+  padding: 12px;
+  background: rgba(15, 23, 42, 0.5);
+}
+
+.taskBackBar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.taskBackBar button {
+  width: auto;
+  min-width: 180px;
+}
+
+.taskChatHeader div {
+  display: grid;
+  gap: 2px;
+  text-align: right;
 }
 
 @media (max-width: 1000px) {

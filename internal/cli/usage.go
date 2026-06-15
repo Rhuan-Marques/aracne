@@ -15,13 +15,11 @@ Usage:
   Aracne descriptions apply            Write topology descriptions back into source as doc comments
   Aracne descriptions clear [flags]    Clear stored topology descriptions
   arac read [--kind <kind>] <resource-id>   Read a resource by ID; --kind forces exact kind (function, method, type, named_type, interface, variable, file, package, dependency)
-  Aracne search <string>      Search resource IDs and names, printing matching IDs one per line
+  arac resource list [query] [--kind <kind>]... [--no-description]  List resources, optionally filtered by query, kind, or missing description
   arac grep [flags] <pattern> [path]  Search file contents and annotate topology resource matches
   arac update-file <path>  Re-parse a file and update the topology database (--db to specify db path)
   Aracne read-resource-and-cut <id> <kind>  Get a resource's source code cut (kind: Function, Struct, Interface, ExternalVar, File, Package)
   arac update-description <id> <kind> <desc>  Update a resource's description in the topology DB
-  arac node list             List all nodes (IDs only)
-  arac node list --no-description  List undocumented nodes (IDs only)
   arac node count            Print total node count
   arac node count --no-description  Print count of undocumented nodes
   arac warnings list [flags] List outstanding topology warnings
@@ -54,7 +52,7 @@ Flags for "grep":
   --db <path>      Topology database path (default ".aracne/topology.db")
 
 Flags for "descriptions generate":
-  --targets <kinds>       Comma-separated resource kinds overriding config describe_targets (default: function,type,method,interface,file)
+  --targets <kinds>       Comma-separated resource kinds overriding config need_description (default: function,method,type,interface,file)
   --batch-size <n>        Maximum resources assigned to each description executor (default 20)
   --parallel <n>          Maximum description executors to run concurrently (default 4)
   --max-retries <n>       Maximum executor attempts per resource (default 3)
@@ -90,12 +88,12 @@ Flags for "init":
 
   Without flags, initializes both Claude Code and OpenCode.
 
-  Config file: .aracne/config.json supports "scan_mode", "tool_modes", and "describe_targets".
+  Config file: .aracne/config.json supports "scan_mode", "tool_modes", and "need_description".
     tool_modes.read:  "native", "mcp", or "terminal"
     tool_modes.edit:  "native", "mcp", or "terminal"
     tool_modes.other: "mcp" or "terminal"
     tool_modes.grep:  "native", "mcp", or "terminal"
-    describe_targets: ["function", "type", "method", "interface", "file"]
+    need_description: ["function", "method", "type", "interface", "file"]
 
 Flags for "analyze dead-code":
   --db <path>           Topology database path (default ".aracne/topology.db")

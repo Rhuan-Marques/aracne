@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 
+	"aracne/internal/helper"
 	"aracne/internal/llm/agent"
 	"aracne/internal/llm/tools"
 	"aracne/internal/prompts"
@@ -18,22 +19,7 @@ type workflowResource struct {
 }
 
 func (m *Manager) StartWorkflow(req WorkflowRequest) (string, error) {
-	if req.SessionID == "" {
-		return "", fmt.Errorf("session_id is required")
-	}
-	if req.Type == "" {
-		return "", fmt.Errorf("workflow type is required")
-	}
-	jobID := newID("job")
-	if req.BatchSize <= 0 {
-		req.BatchSize = 5
-	}
-	if req.Parallel <= 0 {
-		req.Parallel = 2
-	}
-	m.recordEvent(req.SessionID, "workflow_started", map[string]any{"job_id": jobID, "type": req.Type})
-	go m.runWorkflow(jobID, req)
-	return jobID, nil
+	return m.StartForcedWorkflow(req)
 }
 
 func (m *Manager) runWorkflow(jobID string, req WorkflowRequest) {
@@ -187,7 +173,7 @@ func (m *Manager) runSubAgent(systemPrompt, input string, toolMap map[string]too
 func (m *Manager) descriptionWorkflowTools() map[string]tools.Tool {
 	reg := tools.NewRegistry()
 	reg.Register(tools.NewRead(m.manager))
-	registerLanguageMaintenanceTools(reg, m.manager, getLanguage(m.manager), m.config.DescribeTargets)
+	registerLanguageMaintenanceTools(reg, m.manager, getLanguage(m.manager), m.config.NeedDescription, configDescriptionBatchSize(m.config))
 	return toolMap(reg, allowedToolSet("read", "update_description"))
 }
 
@@ -196,16 +182,13 @@ func (m *Manager) undocumentedResources() ([]workflowResource, error) {
 	if err != nil {
 		return nil, err
 	}
-	targets := make(map[domain.ResourceKind]bool)
-	for _, kind := range m.config.DescribeTargets {
-		targets[kind] = true
-	}
+	targets := helper.DescribeTargetSet(m.config.NeedDescription)
 	var result []workflowResource
 	for _, res := range topo.Resources {
 		if strings.TrimSpace(res.Description) != "" {
 			continue
 		}
-		if len(targets) > 0 && !targets[res.Kind] {
+		if !targets[res.Kind] {
 			continue
 		}
 		result = append(result, workflowResource{ID: res.ID, Name: res.Name, Kind: res.Kind})
@@ -245,14 +228,11 @@ func chunkResources(resources []workflowResource, size int) [][]workflowResource
 }
 
 func descriptionInput(batch []workflowResource) string {
-	var b strings.Builder
-	b.WriteString("Process only the assigned resources below. Do not discover or update any other resource.\n\n")
-	b.WriteString("For each resource, call read with the resource_id, manually write a concise description, then call update_description immediately.\n\n")
-	b.WriteString("Assigned resources:\n\n")
+	resources := make([]prompts.DescriptionResource, 0, len(batch))
 	for _, res := range batch {
-		b.WriteString(fmt.Sprintf("- ID: %s\n  Name: %s\n  Kind: %s\n\n", res.ID, res.Name, res.Kind))
+		resources = append(resources, prompts.DescriptionResource{ID: res.ID, Name: res.Name, Kind: res.Kind})
 	}
-	return b.String()
+	return prompts.DescriptionsGenerationExecutorInput(resources)
 }
 
 func assignedResourcesInput(prefix string, batch []workflowResource) string {

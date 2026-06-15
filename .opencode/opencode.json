@@ -13,7 +13,6 @@
     }
   },
   "permission": {
-    "edit": "deny",
     "aracne_*": "deny",
     "aracne_bug_report": "allow",
     "aracne_edit": "allow",
@@ -28,6 +27,7 @@
     "aracne_read_struct": "allow",
     "aracne_warnings_list": "allow",
     "aracne_write": "allow",
+    "edit": "deny",
     "read": "deny"
   }
 }

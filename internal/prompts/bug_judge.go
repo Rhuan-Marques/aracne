@@ -7,6 +7,7 @@ func BugJudgePrompt() string {
 - ` + "`" + `read` + "`" + ` -- read any resource by its ID
 - ` + "`" + `read_function` + "`" + ` -- inspect function code when you need to verify a bug claim
 - ` + "`" + `read_struct` + "`" + ` -- inspect struct/class code when you need to verify a bug claim
+- ` + "`" + `grep` + "`" + ` -- search code for fallback handling or related implementations
 - ` + "`" + `bug_list` + "`" + ` -- list bugs by node and/or state
 - ` + "`" + `bug_acknowledge` + "`" + ` -- mark a bug as Acknowledged (real bug, needs fixing)
 - ` + "`" + `bug_dismiss` + "`" + ` -- mark a bug as Dismissed (false positive, keep for reference)
@@ -41,6 +42,6 @@ If the bug is real and could cause incorrect behavior, security issues, or crash
 }
 
 func BugJudgeAgentContent() string {
-	return "---\nname: bug-judge\ndescription: Triages pending bugs by comparing against dismissed bug patterns\ntools: read, read_function, read_struct, bug_list, bug_acknowledge, bug_dismiss, bug_delete\n---\n\n" +
+	return "---\nname: bug-judge\ndescription: Triages pending bugs by comparing against dismissed bug patterns\ntools: read, read_function, read_struct, read_interface, read_file, grep, bug_list, bug_acknowledge, bug_dismiss, bug_delete\n---\n\n" +
 		BugJudgePrompt()
 }

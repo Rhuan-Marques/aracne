@@ -3,6 +3,7 @@ package providers
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -70,10 +71,14 @@ func NewDeepSeekWithConfig(apiKey, model, baseURL string) *DeepSeek {
 
 // Sends a chat completion request to the DeepSeek API with the given messages and tool definitions. Returns the response content and any tool calls, or an error on failure.
 func (d *DeepSeek) Chat(messages []llm.Message, tools []llm.ToolDefinition) (*llm.ChatResponse, error) {
-	return d.StreamChat(messages, tools, nil)
+	return d.StreamChatContext(context.Background(), messages, tools, nil)
 }
 
 func (d *DeepSeek) StreamChat(messages []llm.Message, tools []llm.ToolDefinition, emit llm.StreamCallback) (*llm.ChatResponse, error) {
+	return d.StreamChatContext(context.Background(), messages, tools, emit)
+}
+
+func (d *DeepSeek) StreamChatContext(ctx context.Context, messages []llm.Message, tools []llm.ToolDefinition, emit llm.StreamCallback) (*llm.ChatResponse, error) {
 	reqBody := deepSeekRequest{
 		Model:    d.model,
 		Messages: messages,
@@ -86,7 +91,7 @@ func (d *DeepSeek) StreamChat(messages []llm.Message, tools []llm.ToolDefinition
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", d.baseURL+"/v1/chat/completions", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", d.baseURL+"/v1/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}

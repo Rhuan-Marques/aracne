@@ -9,6 +9,7 @@
 *.dylib
 *.log
 
+.hidden/
 node_modules/
 dist/
 build/
