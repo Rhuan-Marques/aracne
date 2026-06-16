@@ -127,10 +127,48 @@ func IsSourceFile(path, language string) bool {
 		return strings.HasSuffix(name, ".go") && !strings.HasSuffix(name, "_test.go")
 	case "python":
 		return strings.HasSuffix(name, ".py") && !strings.HasPrefix(name, "test_")
+	case "javascript":
+		return isJavaScriptSourceName(name)
+	case "typescript":
+		return isTypeScriptSourceName(name)
 	default:
 		ext := filepath.Ext(name)
-		return ext == ".go" || ext == ".py"
+		return ext == ".go" || ext == ".py" || isJavaScriptSourceName(name) || isTypeScriptSourceName(name)
 	}
+}
+
+// isTypeScriptSourceName reports whether name is a TypeScript/TSX source file we should
+// parse, excluding test files (*.test.*, *.spec.*) and minified bundles (*.min.*).
+// Accepted extensions are .ts, .tsx, .mts, .cts (and therefore .d.ts).
+func isTypeScriptSourceName(name string) bool {
+	ext := filepath.Ext(name)
+	switch ext {
+	case ".ts", ".tsx", ".mts", ".cts":
+	default:
+		return false
+	}
+	base := strings.ToLower(strings.TrimSuffix(name, ext))
+	if strings.HasSuffix(base, ".test") || strings.HasSuffix(base, ".spec") || strings.HasSuffix(base, ".min") {
+		return false
+	}
+	return true
+}
+
+// isJavaScriptSourceName reports whether name is a JavaScript/JSX source file we
+// should parse, excluding test files (*.test.*, *.spec.*) and minified bundles
+// (*.min.*). The accepted extensions are .js, .mjs, .cjs, and .jsx.
+func isJavaScriptSourceName(name string) bool {
+	ext := filepath.Ext(name)
+	switch ext {
+	case ".js", ".mjs", ".cjs", ".jsx":
+	default:
+		return false
+	}
+	base := strings.ToLower(strings.TrimSuffix(name, ext))
+	if strings.HasSuffix(base, ".test") || strings.HasSuffix(base, ".spec") || strings.HasSuffix(base, ".min") {
+		return false
+	}
+	return true
 }
 
 func isIgnoredSourcePath(path string) bool {

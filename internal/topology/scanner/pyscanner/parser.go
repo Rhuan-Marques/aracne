@@ -1,11 +1,15 @@
 package pyscanner
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"time"
 
 	"aracne/internal/topology/domain"
 	"aracne/internal/topology/python"
@@ -15,6 +19,7 @@ type pyImport struct {
 	Name   string `json:"name"`
 	Alias  string `json:"alias"`
 	Module string `json:"module,omitempty"`
+	Level  int    `json:"level,omitempty"`
 }
 
 type pyClass struct {
@@ -66,9 +71,11 @@ type pyVarDef struct {
 }
 
 type pyVar struct {
-	Name   string `json:"name"`
-	Typing string `json:"typing"`
-	Value  string `json:"value"`
+	Name      string `json:"name"`
+	Typing    string `json:"typing"`
+	Value     string `json:"value"`
+	Lineno    int    `json:"lineno"`
+	EndLineno int    `json:"end_lineno"`
 }
 
 type pyFileResult struct {
@@ -91,16 +98,28 @@ func parsePythonFile(filePath string) (*pyFileResult, error) {
 	pythonExes := []string{"python3", "python"}
 	var cmdErr error
 	for _, exe := range pythonExes {
-		cmd := exec.Command(exe, "-c", pythonParseScript, absPath, dir)
-		output, err := cmd.CombinedOutput()
-		if err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		cmd := exec.CommandContext(ctx, exe, "-c", pythonParseScript, absPath, dir)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		runErr := cmd.Run()
+		cancel()
+		if runErr == nil {
+			// Decode only stdout: anything the interpreter writes to stderr
+			// (deprecation/syntax warnings, site noise) must not corrupt the
+			// JSON payload.
 			var result pyFileResult
-			if err := json.Unmarshal(output, &result); err != nil {
-				return nil, fmt.Errorf("parse json: %w\noutput: %s", err, string(output))
+			if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+				return nil, fmt.Errorf("parse json: %w\nstderr: %s", err, stderr.String())
 			}
 			return &result, nil
 		}
-		cmdErr = fmt.Errorf("%s parse failed: %s: %w", exe, string(output), err)
+		if ctx.Err() == context.DeadlineExceeded {
+			cmdErr = fmt.Errorf("%s parse timed out after 30s for %s", exe, absPath)
+			continue
+		}
+		cmdErr = fmt.Errorf("%s parse failed: %s: %w", exe, stderr.String(), runErr)
 	}
 	return nil, cmdErr
 }
@@ -146,7 +165,9 @@ func ParseFile(filePath string, pkgPath python.PackagePath, moduleRoot string) (
 	}
 
 	for _, imp := range raw.Imports {
-		if isInternal(imp.Name, moduleRoot) || imp.Module != "" && isInternal(imp.Module, moduleRoot) {
+		// Relative imports (level > 0, e.g. `from . import x`) are internal by
+		// definition, regardless of how their dotted name resolves.
+		if imp.Level > 0 || isInternal(imp.Name, moduleRoot) || (imp.Module != "" && isInternal(imp.Module, moduleRoot)) {
 			pr.InternalImports = append(pr.InternalImports, python.PackagePath(imp.Name))
 		} else {
 			pr.ExternalImports = append(pr.ExternalImports, python.PythonDependancy{
@@ -160,7 +181,7 @@ func ParseFile(filePath string, pkgPath python.PackagePath, moduleRoot string) (
 		pr.Classes = append(pr.Classes, c)
 
 		for _, cv := range cls.ClassVars {
-			if cv.Value != "" && cv.Value != "None" {
+			if isResolvableRef(cv.Value) {
 				pr.ClassVarRefs = append(pr.ClassVarRefs, ClassVarRef{
 					ClassID:  c.ID,
 					RefValue: cv.Value,
@@ -194,8 +215,8 @@ func ParseFile(filePath string, pkgPath python.PackagePath, moduleRoot string) (
 			Value:       val,
 			Location: domain.Location{
 				Path:     filePath,
-				StartsAt: 0,
-				EndsAt:   0,
+				StartsAt: v.Lineno,
+				EndsAt:   v.EndLineno,
 			},
 		})
 	}
@@ -235,7 +256,8 @@ func convertFunction(fn pyFunc, filePath string, pkgPath python.PackagePath, cla
 
 	var id python.FunctionID
 	if classID != nil {
-		id = python.FunctionID(string(pkgPath) + "." + string(*classID) + "." + fn.Name)
+		// classID already carries the package prefix; do not double it.
+		id = python.FunctionID(string(*classID) + "." + fn.Name)
 	} else {
 		id = python.FunctionID(string(pkgPath) + "." + fn.Name)
 	}
@@ -260,4 +282,27 @@ func isInternal(importPath, moduleRoot string) bool {
 		return false
 	}
 	return strings.EqualFold(parts[0], filepath.Base(moduleRoot))
+}
+
+// pyRefValueRE matches a bare identifier or dotted path that could name a
+// resolvable resource (class/function/variable).
+var pyRefValueRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$`)
+
+// pyNonRefValues are tokens the AST script emits for literals/collections that
+// look like identifiers but never name a topology resource.
+var pyNonRefValues = map[string]bool{
+	"None": true, "True": true, "False": true,
+	"list": true, "tuple": true, "dict": true, "set": true,
+	"str": true, "expr": true,
+}
+
+// isResolvableRef reports whether a class-var value is worth attempting to
+// resolve to a class/function/variable reference. Literal values (numbers,
+// quoted strings, collapsed collection tokens) are skipped so they no longer
+// generate spurious reference edges.
+func isResolvableRef(value string) bool {
+	if value == "" || pyNonRefValues[value] {
+		return false
+	}
+	return pyRefValueRE.MatchString(value)
 }

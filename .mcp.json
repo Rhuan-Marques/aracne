@@ -4,7 +4,9 @@
       "args": [
         "serve",
         "--tool-profile",
-        "default"
+        "main",
+        "--harness",
+        "claude_code"
       ],
       "command": "arac"
     }

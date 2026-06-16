@@ -82,7 +82,7 @@ func RunResourceList(args []string) {
 	var targetSet map[domain.ResourceKind]bool
 	if noDesc {
 		cfg := helper.EnsureConfig(helper.ConfigPath(".aracne/topology.db"))
-		targetSet = helper.DescribeTargetSet(cfg.NeedDescription)
+		targetSet = helper.DescribeTargetSet(cfg.Descriptions.Kinds)
 	}
 
 	var ids []string
@@ -133,7 +133,7 @@ func RunNodeCount() {
 func RunNodeCountNoDescription() {
 	manager, _ := InitRegistry(".aracne/topology.db")
 	cfg := helper.EnsureConfig(helper.ConfigPath(".aracne/topology.db"))
-	targetSet := helper.DescribeTargetSet(cfg.NeedDescription)
+	targetSet := helper.DescribeTargetSet(cfg.Descriptions.Kinds)
 
 	topo, err := manager.ReadAll()
 	if err != nil {

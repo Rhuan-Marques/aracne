@@ -678,7 +678,7 @@ func TestReadInterface(t *testing.T) {
 	}
 
 	formatted := gotools.FormatGoInterfaceContext(ctx)
-	if !strings.Contains(formatted, "## Implemented By") || !strings.Contains(formatted, "Store.Read") {
+	if !strings.Contains(formatted, "## Implemented By") || !strings.Contains(formatted, "example.com/readctx.(Store).Read") {
 		t.Fatalf("formatted interface context missing implementation details:\n%s", formatted)
 	}
 }

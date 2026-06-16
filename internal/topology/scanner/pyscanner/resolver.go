@@ -34,13 +34,22 @@ func analyzeFunctionBody(body *pyFunc, pr *ParseResult, gt *python.PythonTopolog
 	if bodyAssigns == nil {
 		bodyAssigns = []pyBodyAssign{}
 	}
-	resolveBodyCallRefs(bodyCalls, bodyAssigns, pr, gt, add, funcInput)
+	resolveBodyCallRefs(bodyCalls, bodyAssigns, pr, gt, add, funcInput, receiverClass)
 
 	return conn
 }
 
-func resolveBodyCallRefs(bodyCalls []pyBodyCall, bodyAssigns []pyBodyAssign, pr *ParseResult, gt *python.PythonTopology, add func(kind python.ConnectionKind, id string), funcInput []python.VariableDefinition) {
+func resolveBodyCallRefs(bodyCalls []pyBodyCall, bodyAssigns []pyBodyAssign, pr *ParseResult, gt *python.PythonTopology, add func(kind python.ConnectionKind, id string), funcInput []python.VariableDefinition, receiverClass *python.ClassID) {
 	varTypeMap := make(map[string]python.ClassID)
+
+	// Methods reach sibling methods through the receiver; map self/cls to the
+	// enclosing class so self.method() / cls.method() resolve to Calls edges.
+	if receiverClass != nil {
+		if _, ok := gt.Classes[*receiverClass]; ok {
+			varTypeMap["self"] = *receiverClass
+			varTypeMap["cls"] = *receiverClass
+		}
+	}
 
 	// Build from parameters with type annotations
 	for _, param := range funcInput {
@@ -112,7 +121,9 @@ func resolveBodyCallRefs(bodyCalls []pyBodyCall, bodyAssigns []pyBodyAssign, pr 
 			continue
 		}
 
-		add(python.ConnUsesClass, string(classID))
+		if receiverClass == nil || classID != *receiverClass {
+			add(python.ConnUsesClass, string(classID))
+		}
 
 		// Find the method on the class
 		for _, mid := range cls.Methods() {

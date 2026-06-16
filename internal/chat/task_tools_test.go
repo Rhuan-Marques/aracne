@@ -14,23 +14,24 @@ type testTool struct {
 	name string
 }
 
-func (t *testTool) Name() string                    { return t.name }
-func (t *testTool) Description() string             { return "test tool " + t.name }
-func (t *testTool) Parameters() []tools.Parameter    { return nil }
+func (t *testTool) Name() string                          { return t.name }
+func (t *testTool) Description() string                   { return "test tool " + t.name }
+func (t *testTool) Parameters() []tools.Parameter         { return nil }
 func (t *testTool) Run(_ json.RawMessage) (string, error) { return "result:" + t.name, nil }
 
 type errTool struct {
 	name string
 }
 
-func (t *errTool) Name() string                    { return t.name }
-func (t *errTool) Description() string             { return "error tool" }
-func (t *errTool) Parameters() []tools.Parameter    { return nil }
+func (t *errTool) Name() string                          { return t.name }
+func (t *errTool) Description() string                   { return "error tool" }
+func (t *errTool) Parameters() []tools.Parameter         { return nil }
 func (t *errTool) Run(_ json.RawMessage) (string, error) { return "", errRun }
 
 var errRun = &testToolError{"tool failed"}
 
 type testToolError struct{ msg string }
+
 func (e *testToolError) Error() string { return e.msg }
 
 func TestClampWorkerCount(t *testing.T) {
@@ -50,8 +51,8 @@ func TestTaskGroupCounts(t *testing.T) {
 	now := time.Now()
 	_ = now
 	cases := []struct {
-		name              string
-		group             TaskGroup
+		name         string
+		group        TaskGroup
 		wantC, wantF int
 	}{
 		{"mixed", TaskGroup{Tasks: []AgentTask{{Status: "completed"}, {Status: "failed"}, {Status: "pending"}}}, 1, 1},
@@ -72,9 +73,9 @@ func TestTaskGroupCounts(t *testing.T) {
 
 func TestFormatTaskGroupResult(t *testing.T) {
 	cases := []struct {
-		name      string
-		group     TaskGroup
-		check     []string
+		name       string
+		group      TaskGroup
+		check      []string
 		wantStatus string
 	}{
 		{

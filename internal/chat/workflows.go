@@ -173,7 +173,7 @@ func (m *Manager) runSubAgent(systemPrompt, input string, toolMap map[string]too
 func (m *Manager) descriptionWorkflowTools() map[string]tools.Tool {
 	reg := tools.NewRegistry()
 	reg.Register(tools.NewRead(m.manager))
-	registerLanguageMaintenanceTools(reg, m.manager, getLanguage(m.manager), m.config.NeedDescription, configDescriptionBatchSize(m.config))
+	registerLanguageMaintenanceTools(reg, nil, m.manager, getLanguage(m.manager), m.config.Descriptions.Kinds, configDescriptionBatchSize(m.config))
 	return toolMap(reg, allowedToolSet("read", "update_description"))
 }
 
@@ -182,7 +182,7 @@ func (m *Manager) undocumentedResources() ([]workflowResource, error) {
 	if err != nil {
 		return nil, err
 	}
-	targets := helper.DescribeTargetSet(m.config.NeedDescription)
+	targets := helper.DescribeTargetSet(m.config.Descriptions.Kinds)
 	var result []workflowResource
 	for _, res := range topo.Resources {
 		if strings.TrimSpace(res.Description) != "" {

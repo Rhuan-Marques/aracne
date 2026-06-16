@@ -74,7 +74,11 @@ func NewManager(dbPath, workspace string, emit func(Event)) (*Manager, error) {
 		return nil, err
 	}
 	provider := defaultProviderSettings()
-	if configured, ok := providerSettingsForModel(providerConfig, providerConfig.Defaults.Main); ok {
+	chatModel := providerConfig.Defaults.Main
+	if sel := chatModelSelection(cfg); sel != "" {
+		chatModel = sel
+	}
+	if configured, ok := providerSettingsForModel(providerConfig, chatModel); ok {
 		provider = configured
 	}
 	store := NewStore(chatDir)
@@ -121,7 +125,12 @@ func (m *Manager) ListSessions() []SessionSummary {
 	for _, session := range m.sessions {
 		result = append(result, summarizeSession(session))
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].UpdatedAt.After(result[j].UpdatedAt) })
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Pinned != result[j].Pinned {
+			return result[i].Pinned
+		}
+		return result[i].UpdatedAt.After(result[j].UpdatedAt)
+	})
 	return result
 }
 
@@ -163,6 +172,114 @@ func (m *Manager) GetSession(id string) (*Session, error) {
 		return nil, err
 	}
 	return m.sessionForResponseLocked(session), nil
+}
+
+func (m *Manager) DeleteSession(id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.running[id] {
+		return fmt.Errorf("cannot delete a running session")
+	}
+	delete(m.sessions, id)
+	return m.store.Delete(id)
+}
+
+func (m *Manager) UpdateSession(id string, title *string, pinned *bool) (*Session, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	session, err := m.getSessionLocked(id)
+	if err != nil {
+		return nil, err
+	}
+	if title != nil {
+		if trimmed := strings.TrimSpace(*title); trimmed != "" {
+			session.Title = trimmed
+		}
+	}
+	if pinned != nil {
+		session.Pinned = *pinned
+	}
+	if err := m.saveLocked(session); err != nil {
+		return nil, err
+	}
+	return m.sessionForResponseLocked(session), nil
+}
+
+// RewindAndResend truncates the conversation back to (and including) the given
+// user message, then re-sends it with optionally edited content. Used for
+// edit-and-resend and regenerate. User messages map 1:1 between the display
+// transcript and the LLM transcript, so the Nth user turn is a safe cut point.
+func (m *Manager) RewindAndResend(sessionID, messageID, newContent string) (*Session, error) {
+	m.mu.Lock()
+	session, err := m.getSessionLocked(sessionID)
+	if err != nil {
+		m.mu.Unlock()
+		return nil, err
+	}
+	if m.running[sessionID] {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("chat session is currently running")
+	}
+	msgIdx, userOrdinal := -1, 0
+	for i, msg := range session.Messages {
+		if msg.Role == "user" {
+			userOrdinal++
+			if msg.ID == messageID {
+				msgIdx = i
+				break
+			}
+		}
+	}
+	if msgIdx < 0 {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("user message not found: %s", messageID)
+	}
+	content := strings.TrimSpace(newContent)
+	if content == "" {
+		content = session.Messages[msgIdx].Content
+	}
+	llmCut, seen := len(session.LLMMessages), 0
+	for i, lm := range session.LLMMessages {
+		if lm.Role == "user" {
+			seen++
+			if seen == userOrdinal {
+				llmCut = i
+				break
+			}
+		}
+	}
+	session.Messages = append([]SessionMessage(nil), session.Messages[:msgIdx]...)
+	session.LLMMessages = append([]llm.Message(nil), session.LLMMessages[:llmCut]...)
+	session.PendingApprovals = nil
+	session.PendingQuestions = nil
+	session.UpdatedAt = time.Now().UTC()
+	if err := m.saveLocked(session); err != nil {
+		m.mu.Unlock()
+		return nil, err
+	}
+	m.mu.Unlock()
+	return m.Send(sessionID, SendRequest{Content: content})
+}
+
+func (m *Manager) RegenerateLast(sessionID string) (*Session, error) {
+	m.mu.Lock()
+	session, err := m.getSessionLocked(sessionID)
+	if err != nil {
+		m.mu.Unlock()
+		return nil, err
+	}
+	lastUserID := ""
+	for i := len(session.Messages) - 1; i >= 0; i-- {
+		if session.Messages[i].Role == "user" {
+			lastUserID = session.Messages[i].ID
+			break
+		}
+	}
+	m.mu.Unlock()
+	if lastUserID == "" {
+		return nil, fmt.Errorf("no user message to regenerate")
+	}
+	return m.RewindAndResend(sessionID, lastUserID, "")
 }
 
 func (m *Manager) SetConfig(cfg *helper.Config) {
@@ -920,6 +1037,22 @@ func (p contractGuardProvider) StreamChatContext(ctx context.Context, messages [
 func isContractError(err error) bool {
 	message := strings.ToLower(err.Error())
 	return strings.Contains(message, "unmarshal") || strings.Contains(message, "decode") || strings.Contains(message, "read stream")
+}
+
+// chatModelSelection returns the model id from viz.chat.agents.model, stripping
+// any "provider/" prefix. Empty means "use the providers.json default".
+func chatModelSelection(cfg *helper.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	model := strings.TrimSpace(cfg.Viz.Chat.Agents.Model)
+	if model == "" {
+		return ""
+	}
+	if idx := strings.LastIndex(model, "/"); idx >= 0 {
+		return strings.TrimSpace(model[idx+1:])
+	}
+	return model
 }
 
 func defaultProviderSettings() ProviderSettings {

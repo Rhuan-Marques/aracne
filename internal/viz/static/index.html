@@ -152,9 +152,14 @@
             <p id="chatAgentLabel" class="eyebrow">Default Chat</p>
             <h2 id="chatTitle">New chat</h2>
           </div>
+          <button id="chatNewButton" type="button" class="newChatButton">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+            New chat
+          </button>
         </header>
-        <div id="chatMessages" class="chatMessages clean"></div>
-        <div id="chatThinking" class="chatThinking hidden"><span></span><span></span><span></span> thinking</div>
+        <div id="chatMessages" class="chatMessages clean" role="log" aria-live="polite" aria-relevant="additions text"></div>
+        <button id="chatJumpLatest" type="button" class="jumpLatest hidden" aria-label="Jump to latest message">↓ Latest</button>
+        <div id="chatThinking" class="chatThinking hidden" role="status" aria-live="polite"><span></span><span></span><span></span> thinking</div>
         <div id="chatPending" class="chatPending"></div>
         <form id="chatComposer" class="modernComposer">
           <textarea id="chatInput" rows="4" placeholder="Ask Aracne to inspect, plan, edit, or explain this codebase..."></textarea>
@@ -209,6 +214,7 @@
           </div>
           <button id="newChatFromHistory" type="button">New Chat</button>
         </div>
+        <input id="historySearch" class="historySearch" type="search" placeholder="Search chats by title or agent...">
         <div id="chatHistoryList" class="historyList"></div>
       </div>
     </section>

@@ -128,16 +128,38 @@ func (s *Server) handleChatSessions(w http.ResponseWriter, r *http.Request, mgr 
 
 	sessionID := parts[0]
 	if len(parts) == 1 {
-		if r.Method != http.MethodGet {
+		switch r.Method {
+		case http.MethodGet:
+			session, err := mgr.GetSession(sessionID)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			writeJSON(w, session)
+		case http.MethodDelete:
+			if err := mgr.DeleteSession(sessionID); err != nil {
+				writeError(w, err)
+				return
+			}
+			writeJSON(w, map[string]string{"status": "deleted", "id": sessionID})
+		case http.MethodPatch:
+			var body struct {
+				Title  *string `json:"title"`
+				Pinned *bool   `json:"pinned"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				writeError(w, err)
+				return
+			}
+			session, err := mgr.UpdateSession(sessionID, body.Title, body.Pinned)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			writeJSON(w, session)
+		default:
 			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
 		}
-		session, err := mgr.GetSession(sessionID)
-		if err != nil {
-			writeError(w, err)
-			return
-		}
-		writeJSON(w, session)
 		return
 	}
 
@@ -158,12 +180,39 @@ func (s *Server) handleChatSessions(w http.ResponseWriter, r *http.Request, mgr 
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
+		if len(parts) >= 4 && parts[3] == "edit" {
+			var body struct {
+				Content string `json:"content"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				writeError(w, err)
+				return
+			}
+			session, err := mgr.RewindAndResend(sessionID, parts[2], body.Content)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			writeJSON(w, session)
+			return
+		}
 		var req chat.SendRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, err)
 			return
 		}
 		session, err := mgr.Send(sessionID, req)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, session)
+	case "regenerate":
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		session, err := mgr.RegenerateLast(sessionID)
 		if err != nil {
 			writeError(w, err)
 			return

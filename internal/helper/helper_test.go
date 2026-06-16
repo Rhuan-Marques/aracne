@@ -1,6 +1,7 @@
 package helper
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -722,58 +723,110 @@ func TestApplyDescriptions_SkippedKinds(t *testing.T) {
 	}
 }
 
-func TestDefaultConfigIncludesNeedDescription(t *testing.T) {
+func TestDefaultConfigDescriptions(t *testing.T) {
 	cfg := DefaultConfig()
 	want := []domain.ResourceKind{domain.ResourceFunction, domain.ResourceMethod, domain.ResourceType, domain.ResourceInterface, domain.ResourceFile}
-	if len(cfg.NeedDescription) != len(want) {
-		t.Fatalf("NeedDescription = %v, want %v", cfg.NeedDescription, want)
+	if len(cfg.Descriptions.Kinds) != len(want) {
+		t.Fatalf("Descriptions.Kinds = %v, want %v", cfg.Descriptions.Kinds, want)
 	}
 	for i := range want {
-		if cfg.NeedDescription[i] != want[i] {
-			t.Fatalf("NeedDescription = %v, want %v", cfg.NeedDescription, want)
+		if cfg.Descriptions.Kinds[i] != want[i] {
+			t.Fatalf("Descriptions.Kinds = %v, want %v", cfg.Descriptions.Kinds, want)
 		}
 	}
-	if cfg.DescriptionBatchSize != DefaultDescriptionBatchSize {
-		t.Fatalf("DescriptionBatchSize = %d, want %d", cfg.DescriptionBatchSize, DefaultDescriptionBatchSize)
+	if got := cfg.AgentParam("claude_code", "descriptions-generation-executor", "max-batch-size", 0); got != DefaultDescriptionBatchSize {
+		t.Fatalf("executor max-batch-size = %d, want %d", got, DefaultDescriptionBatchSize)
 	}
 }
 
-func TestLoadConfigNeedDescriptionFallback(t *testing.T) {
+func TestLoadConfigCleanBreakOnOldFormat(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
-	if err := os.WriteFile(path, []byte(`{"describe_targets":["variable","type"]}`), 0644); err != nil {
+	// An old-format config has none of the new-schema fields.
+	if err := os.WriteFile(path, []byte(`{"scan_mode":"hard","tool_modes":{"read":"mcp"},"need_description":["file"]}`), 0644); err != nil {
 		t.Fatalf("WriteFile legacy config: %v", err)
 	}
-	cfg := LoadConfig(path)
-	if len(cfg.NeedDescription) != 2 || cfg.NeedDescription[0] != domain.ResourceVariable || cfg.NeedDescription[1] != domain.ResourceType {
-		t.Fatalf("legacy NeedDescription = %v, want [variable type]", cfg.NeedDescription)
+	cfg, ok := LoadConfigStrict(path)
+	if ok {
+		t.Fatal("old-format config should not parse as valid new schema")
 	}
-
-	if err := os.WriteFile(path, []byte(`{"need_description":["file"],"describe_targets":["variable"]}`), 0644); err != nil {
-		t.Fatalf("WriteFile config: %v", err)
+	if cfg.Scan.Mode != ScanModeDefault {
+		t.Fatalf("Scan.Mode = %q, want default", cfg.Scan.Mode)
 	}
-	cfg = LoadConfig(path)
-	if len(cfg.NeedDescription) != 1 || cfg.NeedDescription[0] != domain.ResourceFile {
-		t.Fatalf("NeedDescription = %v, want [file]", cfg.NeedDescription)
+	if len(cfg.Descriptions.Kinds) != len(DefaultNeedDescription()) {
+		t.Fatalf("Descriptions.Kinds = %v, want defaults", cfg.Descriptions.Kinds)
 	}
 }
 
-func TestLoadConfigDescriptionBatchSize(t *testing.T) {
+func TestLoadConfigNewSchema(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
-	if err := os.WriteFile(path, []byte(`{"description_batch_size":3}`), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"descriptions":{"kinds":["file","type"]},"scan":{"mode":"all"}}`), 0644); err != nil {
 		t.Fatalf("WriteFile config: %v", err)
 	}
-	cfg := LoadConfig(path)
-	if cfg.DescriptionBatchSize != 3 {
-		t.Fatalf("DescriptionBatchSize = %d, want 3", cfg.DescriptionBatchSize)
+	cfg, ok := LoadConfigStrict(path)
+	if !ok {
+		t.Fatal("new-schema config should parse cleanly")
+	}
+	if len(cfg.Descriptions.Kinds) != 2 || cfg.Descriptions.Kinds[0] != domain.ResourceFile || cfg.Descriptions.Kinds[1] != domain.ResourceType {
+		t.Fatalf("Descriptions.Kinds = %v, want [file type]", cfg.Descriptions.Kinds)
+	}
+	if cfg.Scan.Mode != ScanModeAll {
+		t.Fatalf("Scan.Mode = %q, want all", cfg.Scan.Mode)
+	}
+	if cfg.Read.MaxFileSize <= 0 {
+		t.Fatalf("Read.MaxFileSize = %d, want normalized default", cfg.Read.MaxFileSize)
+	}
+}
+
+func TestEffectiveAgentInheritanceAndOverride(t *testing.T) {
+	cfg := DefaultConfig()
+	hunter := cfg.EffectiveAgent("claude_code", "bug-hunter")
+	if !containsConfigString(hunter.MCPTools, "bug_report") {
+		t.Fatalf("bug-hunter should have bug_report: %v", hunter.MCPTools)
+	}
+	if containsConfigString(hunter.MCPTools, "edit") {
+		t.Fatalf("bug-hunter should not have edit: %v", hunter.MCPTools)
 	}
 
-	if err := os.WriteFile(path, []byte(`{"description_batch_size":0}`), 0644); err != nil {
-		t.Fatalf("WriteFile config: %v", err)
+	// Per-harness model override wins for claude_code only.
+	cfg.LLM.ClaudeCode.Agents["bug-hunter"] = AgentConfig{Model: "sonnet"}
+	hunter = cfg.EffectiveAgent("claude_code", "bug-hunter")
+	if hunter.Model != "sonnet" {
+		t.Fatalf("claude_code bug-hunter model = %q, want sonnet", hunter.Model)
 	}
-	cfg = LoadConfig(path)
-	if cfg.DescriptionBatchSize != DefaultDescriptionBatchSize {
-		t.Fatalf("DescriptionBatchSize = %d, want default %d", cfg.DescriptionBatchSize, DefaultDescriptionBatchSize)
+	if !containsConfigString(hunter.MCPTools, "bug_report") {
+		t.Fatalf("override should not drop inherited tools: %v", hunter.MCPTools)
 	}
+	if oc := cfg.EffectiveAgent("opencode", "bug-hunter"); oc.Model == "sonnet" {
+		t.Fatalf("opencode bug-hunter should not inherit claude_code override: %q", oc.Model)
+	}
+}
+
+func TestVizChatAgentsRoundTrip(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Viz.Chat.Agents.Model = "deepseek/deepseek-v4-flash"
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var loaded Config
+	if err := json.Unmarshal(data, &loaded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if loaded.Viz.Chat.Agents.Model != "deepseek/deepseek-v4-flash" {
+		t.Fatalf("model = %q, want deepseek/deepseek-v4-flash", loaded.Viz.Chat.Agents.Model)
+	}
+	if _, ok := loaded.Viz.Chat.Agents.Agents["descriptions-generation-executor"]; !ok {
+		t.Fatalf("executor agent lost in round-trip: %+v", loaded.Viz.Chat.Agents.Agents)
+	}
+}
+
+func containsConfigString(list []string, want string) bool {
+	for _, s := range list {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }
 
 func containsStr(s, substr string) bool {

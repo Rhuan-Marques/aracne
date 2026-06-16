@@ -55,11 +55,11 @@ func injectCompletedGroup(t *testing.T, manager *Manager, sessionID, toolCallID 
 		UpdatedAt:  time.Now(),
 		Tasks: []AgentTask{
 			{
-				ID:        "task_1",
-				AgentKind: "explorer",
-				Prompt:    "find bugs",
-				Status:    "completed",
-				Result:    "found 2 bugs",
+				ID:         "task_1",
+				AgentKind:  "explorer",
+				Prompt:     "find bugs",
+				Status:     "completed",
+				Result:     "found 2 bugs",
 				NeedResult: true,
 			},
 		},

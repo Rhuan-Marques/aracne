@@ -49,24 +49,24 @@ func FormatGoFunctionContext(ctx *golang.GoFunctionContext) string {
 	b.WriteString("# CONTEXT:\n")
 
 	for _, iu := range ctx.InterfacesUsed {
-		b.WriteString(fmt.Sprintf("## %s: %s\n", iu.Name, desc(iu.Description)))
+		b.WriteString(fmt.Sprintf("## %s: %s\n", iu.ID, desc(iu.Description)))
 		for _, impl := range iu.Implementations {
-			b.WriteString(fmt.Sprintf("\t%s: %s\n", impl.Name, desc(impl.Description)))
+			b.WriteString(fmt.Sprintf("\t%s: %s\n", impl.StructID, desc(impl.Description)))
 			for _, m := range impl.Methods {
-				b.WriteString(fmt.Sprintf("\t\t%s.%s: %s\n", impl.Name, m.Name, desc(m.Description)))
+				b.WriteString(fmt.Sprintf("\t\t%s: %s\n", m.ID, desc(m.Description)))
 			}
 		}
 	}
 
 	for _, su := range ctx.StructsUsed {
-		b.WriteString(fmt.Sprintf("## %s: %s\n", su.Name, desc(su.Description)))
+		b.WriteString(fmt.Sprintf("## %s: %s\n", su.ID, desc(su.Description)))
 		for _, m := range su.Methods {
-			b.WriteString(fmt.Sprintf("\t%s.%s: %s\n", su.Name, m.Name, desc(m.Description)))
+			b.WriteString(fmt.Sprintf("\t%s: %s\n", m.ID, desc(m.Description)))
 		}
 	}
 
 	for _, cf := range ctx.CalledFunctions {
-		b.WriteString(fmt.Sprintf("## %s: %s\n", cf.Name, desc(cf.Description)))
+		b.WriteString(fmt.Sprintf("## %s: %s\n", cf.ID, desc(cf.Description)))
 	}
 
 	for _, ev := range ctx.ExtVarsUsed {
@@ -74,7 +74,7 @@ func FormatGoFunctionContext(ctx *golang.GoFunctionContext) string {
 		if ev.Value != "" {
 			valStr = fmt.Sprintf(" = %s", ev.Value)
 		}
-		b.WriteString(fmt.Sprintf("## %s%s\n", ev.Name, valStr))
+		b.WriteString(fmt.Sprintf("## %s%s\n", ev.ID, valStr))
 	}
 
 	return b.String()
@@ -120,26 +120,26 @@ func FormatGoStructContext(ctx *golang.GoStructContext) string {
 		if iface.NeedToImplement {
 			need = " [NEED TO IMPLEMENT]"
 		}
-		b.WriteString(fmt.Sprintf("## %s: %s%s\n", iface.Name, desc(iface.Description), need))
+		b.WriteString(fmt.Sprintf("## %s: %s%s\n", iface.ID, desc(iface.Description), need))
 	}
 
 	for _, m := range ctx.Methods {
-		b.WriteString(fmt.Sprintf("## %s: %s\n", m.Name, desc(m.Description)))
+		b.WriteString(fmt.Sprintf("## %s: %s\n", m.ID, desc(m.Description)))
 	}
 
 	for _, su := range ctx.StructsUsed {
-		b.WriteString(fmt.Sprintf("## %s: %s\n", su.Name, desc(su.Description)))
+		b.WriteString(fmt.Sprintf("## %s: %s\n", su.ID, desc(su.Description)))
 		for _, m := range su.Methods {
-			b.WriteString(fmt.Sprintf("\t%s.%s: %s\n", su.Name, m.Name, desc(m.Description)))
+			b.WriteString(fmt.Sprintf("\t%s: %s\n", m.ID, desc(m.Description)))
 		}
 	}
 
 	for _, iu := range ctx.InterfacesUsed {
-		b.WriteString(fmt.Sprintf("## %s: %s\n", iu.Name, desc(iu.Description)))
+		b.WriteString(fmt.Sprintf("## %s: %s\n", iu.ID, desc(iu.Description)))
 		for _, impl := range iu.Implementations {
-			b.WriteString(fmt.Sprintf("\t%s: %s\n", impl.Name, desc(impl.Description)))
+			b.WriteString(fmt.Sprintf("\t%s: %s\n", impl.StructID, desc(impl.Description)))
 			for _, m := range impl.Methods {
-				b.WriteString(fmt.Sprintf("\t\t%s.%s: %s\n", impl.Name, m.Name, desc(m.Description)))
+				b.WriteString(fmt.Sprintf("\t\t%s: %s\n", m.ID, desc(m.Description)))
 			}
 		}
 	}
@@ -149,7 +149,7 @@ func FormatGoStructContext(ctx *golang.GoStructContext) string {
 		if ev.Value != "" {
 			valStr = fmt.Sprintf(" = %s", ev.Value)
 		}
-		b.WriteString(fmt.Sprintf("## %s%s\n", ev.Name, valStr))
+		b.WriteString(fmt.Sprintf("## %s%s\n", ev.ID, valStr))
 	}
 
 	return b.String()
@@ -171,9 +171,9 @@ func FormatGoInterfaceContext(ctx *golang.GoInterfaceContext) string {
 	b.WriteString("# CONTEXT:\n")
 	b.WriteString("## Implemented By\n")
 	for _, impl := range ctx.Implementations {
-		b.WriteString(fmt.Sprintf("\t%s: %s\n", impl.Name, desc(impl.Description)))
+		b.WriteString(fmt.Sprintf("\t%s: %s\n", impl.StructID, desc(impl.Description)))
 		for _, m := range impl.Methods {
-			b.WriteString(fmt.Sprintf("\t\t%s.%s: %s\n", impl.Name, m.Name, desc(m.Description)))
+			b.WriteString(fmt.Sprintf("\t\t%s: %s\n", m.ID, desc(m.Description)))
 		}
 	}
 
@@ -237,22 +237,22 @@ func FormatGoFileContext(ctx *golang.GoFileContext) string {
 	b.WriteString(fmt.Sprintf("## Package: %s\n", ctx.FromPackage))
 
 	for _, fn := range ctx.Functions {
-		b.WriteString(fmt.Sprintf("## func %s: %s\n", fn.Name, desc(fn.Description)))
+		b.WriteString(fmt.Sprintf("## func %s: %s\n", fn.ID, desc(fn.Description)))
 	}
 	for _, s := range ctx.Structs {
-		b.WriteString(fmt.Sprintf("## struct %s: %s\n", s.Name, desc(s.Description)))
+		b.WriteString(fmt.Sprintf("## struct %s: %s\n", s.ID, desc(s.Description)))
 		for _, m := range s.Methods {
-			b.WriteString(fmt.Sprintf("\t%s.%s: %s\n", s.Name, m.Name, desc(m.Description)))
+			b.WriteString(fmt.Sprintf("\t%s: %s\n", m.ID, desc(m.Description)))
 		}
 	}
 	for _, iface := range ctx.Interfaces {
-		b.WriteString(fmt.Sprintf("## interface %s: %s\n", iface.Name, desc(iface.Description)))
+		b.WriteString(fmt.Sprintf("## interface %s: %s\n", iface.ID, desc(iface.Description)))
 	}
 	for _, nt := range ctx.NamedTypes {
-		b.WriteString(fmt.Sprintf("## type %s: %s\n", nt.Name, desc(nt.Description)))
+		b.WriteString(fmt.Sprintf("## type %s: %s\n", nt.ID, desc(nt.Description)))
 	}
 	for _, ev := range ctx.ExtVars {
-		b.WriteString(fmt.Sprintf("## var %s: %s\n", ev.Name, desc(ev.Description)))
+		b.WriteString(fmt.Sprintf("## var %s: %s\n", ev.ID, desc(ev.Description)))
 	}
 	for _, imp := range ctx.Imports {
 		b.WriteString(fmt.Sprintf("## import %q\n", imp))
@@ -280,22 +280,22 @@ func FormatGoPackageContext(ctx *golang.GoPackageContext) string {
 		b.WriteString(fmt.Sprintf("## file %s\n", f))
 	}
 	for _, fn := range ctx.Functions {
-		b.WriteString(fmt.Sprintf("## func %s: %s\n", fn.Name, desc(fn.Description)))
+		b.WriteString(fmt.Sprintf("## func %s: %s\n", fn.ID, desc(fn.Description)))
 	}
 	for _, s := range ctx.Structs {
-		b.WriteString(fmt.Sprintf("## struct %s: %s\n", s.Name, desc(s.Description)))
+		b.WriteString(fmt.Sprintf("## struct %s: %s\n", s.ID, desc(s.Description)))
 		for _, m := range s.Methods {
-			b.WriteString(fmt.Sprintf("\t%s.%s: %s\n", s.Name, m.Name, desc(m.Description)))
+			b.WriteString(fmt.Sprintf("\t%s: %s\n", m.ID, desc(m.Description)))
 		}
 	}
 	for _, iface := range ctx.Interfaces {
-		b.WriteString(fmt.Sprintf("## interface %s: %s\n", iface.Name, desc(iface.Description)))
+		b.WriteString(fmt.Sprintf("## interface %s: %s\n", iface.ID, desc(iface.Description)))
 	}
 	for _, nt := range ctx.NamedTypes {
-		b.WriteString(fmt.Sprintf("## type %s: %s\n", nt.Name, desc(nt.Description)))
+		b.WriteString(fmt.Sprintf("## type %s: %s\n", nt.ID, desc(nt.Description)))
 	}
 	for _, ev := range ctx.ExtVars {
-		b.WriteString(fmt.Sprintf("## var %s: %s\n", ev.Name, desc(ev.Description)))
+		b.WriteString(fmt.Sprintf("## var %s: %s\n", ev.ID, desc(ev.Description)))
 	}
 	for _, d := range ctx.Dependencies {
 		b.WriteString(fmt.Sprintf("## dep %q\n", d))

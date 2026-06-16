@@ -34,6 +34,14 @@
     chatSocket: null,
     chatSocketReconnectTimer: null,
     chatSocketRefreshOnOpen: false,
+    chatSocketBackoff: 0,
+    chatRefreshTimer: null,
+    chatLoadSeq: 0,
+    chatStopping: false,
+    editingMessageID: null,
+    sentHistory: [],
+    sentHistoryIdx: -1,
+    historyQuery: '',
     selectedTaskGroupID: null,
     selectedTaskID: null,
     taskStreaming: null,
@@ -74,93 +82,152 @@
 
   function el(id) { return document.getElementById(id); }
   function esc(s) {
-    return String(s || '').replace(/[&<>"]/g, function (c) {
-      return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c];
+    return String(s == null ? '' : s).replace(/[&<>"'`]/g, function (c) {
+      return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;', '`': '&#96;'}[c];
     });
+  }
+
+  function safeLink(url, label) {
+    var href = String(url == null ? '' : url).trim();
+    var labelText = label == null ? href : label;
+    if (!/^(https?:\/\/|mailto:|\/)/i.test(href)) return esc(labelText);
+    return '<a href="' + esc(href) + '" class="mdLink" target="_blank" rel="noopener noreferrer">' + esc(labelText) + '</a>';
   }
 
   function renderInlineMarkdown(s) {
-    return esc(s)
-      .replace(/`([^`]+)`/g, '<code>$1</code>')
+    var text = String(s == null ? '' : s);
+    var tokens = [];
+    function stash(html) {
+      tokens.push(html);
+      return '@@MDTOK' + (tokens.length - 1) + '@@';
+    }
+    // Protect inline code and links from escaping / emphasis so identifiers
+    // (some_func, __init__, a*b) inside them survive intact.
+    text = text.replace(/`([^`]+)`/g, function (_m, code) { return stash('<code>' + esc(code) + '</code>'); });
+    text = text.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, function (_m, label, url) { return stash(safeLink(url, label)); });
+    text = esc(text);
+    // file paths and path:line references become clickable into the graph.
+    text = text.replace(/(^|[\s(])((?:[\w@.-]+\/)+[\w-]+\.[a-zA-Z]{1,8}(?::\d+(?:-\d+)?)?|[\w-]+\.[a-zA-Z]{1,8}:\d+(?:-\d+)?)/g, function (_m, pre, ref) {
+      return pre + stash('<a class="codeRef" data-ref="' + esc(ref) + '">' + esc(ref) + '</a>');
+    });
+    text = text
       .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-      .replace(/__([^_]+)__/g, '<strong>$1</strong>')
-      .replace(/\*([^*]+)\*/g, '<em>$1</em>')
-      .replace(/_([^_]+)_/g, '<em>$1</em>');
+      .replace(/(^|[^\w])__([^_]+)__(?=[^\w]|$)/g, '$1<strong>$2</strong>')
+      .replace(/\*([^*\s][^*]*?)\*/g, '<em>$1</em>')
+      .replace(/(^|[^\w])_([^_]+)_(?=[^\w]|$)/g, '$1<em>$2</em>');
+    return text.replace(/@@MDTOK(\d+)@@/g, function (_m, i) { return tokens[Number(i)]; });
+  }
+
+  function highlightCodeLine(line) {
+    var cls = '';
+    var first = line.charAt(0);
+    if (first === '+' && line.slice(0, 3) !== '+++') cls = 'diffAdd';
+    else if (first === '-' && line.slice(0, 3) !== '---') cls = 'diffDel';
+    else if (first === '@') cls = 'diffMeta';
+    return '<span class="codeLine ' + cls + '">' + (esc(line) || '&nbsp;') + '</span>';
+  }
+
+  function renderCodeBlock(lang, code) {
+    var language = String(lang || '').trim().split(/\s+/)[0].toLowerCase();
+    var isDiff = language === 'diff' || language === 'patch';
+    var body = isDiff ? code.split('\n').map(highlightCodeLine).join('\n') : esc(code);
+    return '<div class="codeBlock' + (isDiff ? ' diff' : '') + '" data-code="' + esc(code) + '">' +
+      '<div class="codeBlockBar"><span class="codeLang">' + esc(language || 'text') + '</span>' +
+      '<button type="button" class="copyBtn" data-copy>Copy</button></div>' +
+      '<pre><code class="language-' + esc(language || 'text') + '">' + body + '</code></pre>' +
+      '</div>';
+  }
+
+  function splitTableRow(row) {
+    return row.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(function (cell) { return cell.trim(); });
+  }
+
+  function renderTable(headerLine, rows) {
+    var headers = splitTableRow(headerLine);
+    var head = '<tr>' + headers.map(function (h) { return '<th>' + renderInlineMarkdown(h) + '</th>'; }).join('') + '</tr>';
+    var body = rows.map(function (row) {
+      var cells = splitTableRow(row);
+      return '<tr>' + headers.map(function (_h, idx) { return '<td>' + renderInlineMarkdown(cells[idx] || '') + '</td>'; }).join('') + '</tr>';
+    }).join('');
+    return '<div class="tableWrap"><table class="mdTable"><thead>' + head + '</thead><tbody>' + body + '</tbody></table></div>';
   }
 
   function renderMarkdown(text) {
-    var lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
+    var lines = String(text == null ? '' : text).replace(/\r\n/g, '\n').split('\n');
     var html = [];
-    var inCode = false;
-    var codeLines = [];
-    var listType = '';
+    var listStack = [];
+    var i = 0;
 
-    function closeList() {
-      if (listType) {
-        html.push('</' + listType + '>');
-        listType = '';
+    function closeListsTo(indent) {
+      while (listStack.length && listStack[listStack.length - 1].indent >= indent) {
+        html.push('</' + listStack[listStack.length - 1].type + '>');
+        listStack.pop();
       }
     }
 
-    lines.forEach(function (line) {
-      var fence = line.match(/^\s*```/);
+    while (i < lines.length) {
+      var line = lines[i];
+      var fence = line.match(/^\s*```(.*)$/);
       if (fence) {
-        closeList();
-        if (inCode) {
-          html.push('<pre><code>' + esc(codeLines.join('\n')) + '</code></pre>');
-          codeLines = [];
-          inCode = false;
-        } else {
-          inCode = true;
-        }
-        return;
+        closeListsTo(0);
+        var code = [];
+        i++;
+        while (i < lines.length && !/^\s*```/.test(lines[i])) { code.push(lines[i]); i++; }
+        i++;
+        html.push(renderCodeBlock(fence[1], code.join('\n')));
+        continue;
       }
-      if (inCode) {
-        codeLines.push(line);
-        return;
-      }
-
-      if (!line.trim()) {
-        closeList();
-        return;
-      }
-
+      if (!line.trim()) { closeListsTo(0); i++; continue; }
       var heading = line.match(/^(#{1,6})\s+(.+)$/);
       if (heading) {
-        closeList();
-        var level = heading[1].length;
-        html.push('<h' + level + '>' + renderInlineMarkdown(heading[2]) + '</h' + level + '>');
-        return;
+        closeListsTo(0);
+        html.push('<h' + heading[1].length + '>' + renderInlineMarkdown(heading[2]) + '</h' + heading[1].length + '>');
+        i++;
+        continue;
       }
-
-      var unordered = line.match(/^\s*[-*]\s+(.+)$/);
-      if (unordered) {
-        if (listType !== 'ul') {
-          closeList();
-          html.push('<ul>');
-          listType = 'ul';
+      if (/^\s*>\s?/.test(line)) {
+        closeListsTo(0);
+        var quote = [];
+        while (i < lines.length && /^\s*>\s?/.test(lines[i])) { quote.push(lines[i].replace(/^\s*>\s?/, '')); i++; }
+        html.push('<blockquote>' + renderMarkdown(quote.join('\n')) + '</blockquote>');
+        continue;
+      }
+      if (line.indexOf('|') !== -1 && i + 1 < lines.length && /^\s*\|?[\s:|-]*-[\s:|-]*\|?[\s:|-]*$/.test(lines[i + 1]) && lines[i + 1].indexOf('|') !== -1) {
+        closeListsTo(0);
+        var headerLine = line;
+        i += 2;
+        var rows = [];
+        while (i < lines.length && lines[i].indexOf('|') !== -1 && lines[i].trim()) { rows.push(lines[i]); i++; }
+        html.push(renderTable(headerLine, rows));
+        continue;
+      }
+      var unordered = line.match(/^(\s*)[-*+]\s+(.+)$/);
+      var ordered = line.match(/^(\s*)(\d+)\.\s+(.+)$/);
+      if (unordered || ordered) {
+        var indent = (unordered || ordered)[1].length;
+        var type = unordered ? 'ul' : 'ol';
+        var content = unordered ? unordered[2] : ordered[3];
+        closeListsTo(indent + 1);
+        var top = listStack[listStack.length - 1];
+        if (top && top.indent === indent && top.type !== type) {
+          html.push('</' + top.type + '>');
+          listStack.pop();
+          top = listStack[listStack.length - 1];
         }
-        html.push('<li>' + renderInlineMarkdown(unordered[1]) + '</li>');
-        return;
-      }
-
-      var ordered = line.match(/^\s*\d+\.\s+(.+)$/);
-      if (ordered) {
-        if (listType !== 'ol') {
-          closeList();
-          html.push('<ol>');
-          listType = 'ol';
+        if (!top || top.indent < indent) {
+          var startAttr = (type === 'ol' && ordered && ordered[2] !== '1') ? ' start="' + esc(ordered[2]) + '"' : '';
+          html.push('<' + type + startAttr + '>');
+          listStack.push({type: type, indent: indent});
         }
-        html.push('<li>' + renderInlineMarkdown(ordered[1]) + '</li>');
-        return;
+        html.push('<li>' + renderInlineMarkdown(content) + '</li>');
+        i++;
+        continue;
       }
-
-      closeList();
+      closeListsTo(0);
       html.push('<p>' + renderInlineMarkdown(line) + '</p>');
-    });
-
-    if (inCode) html.push('<pre><code>' + esc(codeLines.join('\n')) + '</code></pre>');
-    closeList();
+      i++;
+    }
+    closeListsTo(0);
     return html.join('');
   }
   function icon(name) {
@@ -288,6 +355,7 @@
     state.chatSocket = socket;
     socket.addEventListener('open', function () {
       if (state.chatSocket !== socket) return;
+      state.chatSocketBackoff = 0;
       if (state.chatSocketRefreshOnOpen && state.chatSession) {
         state.chatSocketRefreshOnOpen = false;
         loadChatSession(state.chatSession.id);
@@ -306,13 +374,20 @@
     socket.addEventListener('close', function () {
       if (state.chatSocket !== socket) return;
       state.chatSocket = null;
-      clearChatQueues();
-      if (!chatSocketNeeded()) return;
+      // Queued messages are unsent user input — preserve them across a transient
+      // disconnect instead of discarding. Only release the in-flight send latch.
+      state.chatQueueSending = false;
+      if (!chatSocketNeeded()) {
+        state.chatSocketBackoff = 0;
+        return;
+      }
       state.chatSocketRefreshOnOpen = true;
+      var delay = Math.min(15000, 1000 * Math.pow(2, state.chatSocketBackoff || 0));
+      state.chatSocketBackoff = (state.chatSocketBackoff || 0) + 1;
       state.chatSocketReconnectTimer = setTimeout(function () {
         state.chatSocketReconnectTimer = null;
         ensureChatSocket();
-      }, 1000);
+      }, delay);
     });
     socket.addEventListener('error', function () {
       socket.close();
@@ -528,7 +603,6 @@
 
   function loadSummary() {
     api('/api/summary').then(function (s) {
-      el('subtitle').textContent = (s.language || 'unknown') + ' topology';
       state.languages = s.languages || [];
       populateLanguages(state.languages);
       populateEdgeTypes(s.edge_types || {});
@@ -1097,7 +1171,8 @@
   function renderNeedDescriptionSettings() {
     var select = el('needDescription');
     if (!select) return;
-    var values = state.appConfig && Array.isArray(state.appConfig.need_description) ? state.appConfig.need_description : defaultNeedDescription();
+    var descriptions = state.appConfig && state.appConfig.descriptions;
+    var values = descriptions && Array.isArray(descriptions.kinds) ? descriptions.kinds : defaultNeedDescription();
     Array.prototype.forEach.call(select.options, function (option) {
       option.selected = values.indexOf(option.value) !== -1;
     });
@@ -1111,7 +1186,7 @@
     state.savingNeedDescription = true;
     var status = el('needDescriptionStatus');
     if (status) status.textContent = 'Saving...';
-    return apiJSON('/api/config', 'PUT', {need_description: values}).then(function (saved) {
+    return apiJSON('/api/config', 'PUT', {descriptions: {kinds: values}}).then(function (saved) {
       state.appConfig = saved || {};
       state.savingNeedDescription = false;
       renderNeedDescriptionSettings();
@@ -1322,6 +1397,11 @@
       key_env: credentialType === 'env' ? credentialValue : '',
       key: credentialType === 'key' ? credentialValue : ''
     };
+    // Carry the saved secret across an edit/rename when the field is left blank
+    // so renaming a provider does not silently wipe its key.
+    if (state.providerEditorID && !entry.key && !entry.key_env) {
+      entry.key_from = state.providerEditorID;
+    }
     if (type === 'custom') {
       entry.base_url = el('providerBaseURL').value.trim();
       entry.chat_contract = el('providerChatContract').value;
@@ -1392,21 +1472,29 @@
 
   function loadChatSession(id) {
     if (!id) return Promise.resolve();
+    var seq = ++state.chatLoadSeq;
     return api('/api/chat/sessions/' + encodeURIComponent(id)).then(function (session) {
+      if (seq !== state.chatLoadSeq) return; // a newer load supersedes this stale response
       if (state.chatSession && state.chatSession.id !== session.id) {
         state.chatStreaming = null;
         state.taskStreaming = null;
         state.selectedTaskGroupID = null;
         state.selectedTaskID = null;
+        state.editingMessageID = null;
       }
       state.chatSession = session;
       state.chatRunActive = !!session.running;
+      if (!session.running) {
+        state.chatThinking = false;
+        state.chatStopping = false;
+      }
       el('chatMode').value = session.mode || 'build';
       el('chatApprovalMode').value = session.approval_mode || 'manual';
       if (session.model) selectChatModel(session.provider || state.selectedChatProvider, session.model);
       else ensureSelectedChatModel();
       renderChoiceControls();
       renderChat();
+      renderChatThinking();
       loadChatSessions();
     }).catch(showError);
   }
@@ -1545,21 +1633,62 @@
     });
   }
 
+  function atBottom(box) {
+    return box.scrollHeight - box.scrollTop - box.clientHeight < 60;
+  }
+
+  function updateJumpLatest() {
+    var btn = el('chatJumpLatest');
+    var box = el('chatMessages');
+    if (!btn || !box) return;
+    btn.classList.toggle('hidden', atBottom(box));
+  }
+
+  function scrollChatToBottom() {
+    var box = el('chatMessages');
+    if (box) box.scrollTop = box.scrollHeight;
+    updateJumpLatest();
+  }
+
+  function providerSetupCTA() {
+    return '<div class="chatWelcome"><h2>Set up a provider</h2><p>Add an LLM provider and API key in Settings to start chatting.</p>' +
+      '<button type="button" class="ctaButton" data-goto-settings>Open Settings</button></div>';
+  }
+
+  function captureFocus(box) {
+    var active = document.activeElement;
+    if (active && box.contains(active) && active.dataset && active.dataset.queueEdit) {
+      return {id: active.dataset.queueEdit, start: active.selectionStart, end: active.selectionEnd};
+    }
+    return null;
+  }
+
+  function restoreFocus(box, snap) {
+    if (!snap) return;
+    var field = box.querySelector('[data-queue-edit="' + snap.id.replace(/"/g, '') + '"]');
+    if (!field) return;
+    field.focus();
+    try { field.setSelectionRange(snap.start, snap.end); } catch (_) {}
+  }
+
   function renderChat() {
     var box = el('chatMessages');
     if (!box) return;
-    var openKeys = new Set();
+    var stick = atBottom(box);
+    var focusSnap = captureFocus(box);
+    var openKeys = {};
     box.querySelectorAll('details.tool[open]').forEach(function (d) {
       var strong = d.querySelector('summary strong');
-      if (strong) openKeys.add(strong.textContent);
+      if (strong) openKeys[strong.textContent] = true;
     });
     var session = state.chatSession;
     el('chatTitle').textContent = session ? (session.title || 'New chat') : 'New chat';
     el('chatAgentLabel').textContent = session && session.agent !== 'default' ? agentName(session.agent) + ' Task' : 'Default Chat';
     if (!session) {
       updateTaskChatControls(false);
-      box.innerHTML = '<div class="chatWelcome"><h2>Welcome</h2><p>Ask Aracne to inspect topology, plan changes, run tools, or build features.</p></div>' + renderQueuedMessages();
+      box.innerHTML = (hasConfiguredProviders() ? '<div class="chatWelcome"><h2>Welcome</h2><p>Ask Aracne to inspect topology, plan changes, run tools, or build features.</p></div>' : providerSetupCTA()) + renderQueuedMessages();
       el('chatPending').innerHTML = '';
+      updateJumpLatest();
       return;
     }
     updateTaskChatControls(false);
@@ -1567,6 +1696,8 @@
       if (renderTaskChat(box, session)) {
         updateTaskChatControls(true);
         renderChatPending();
+        if (stick) box.scrollTop = box.scrollHeight;
+        updateJumpLatest();
         return;
       }
       state.selectedTaskGroupID = null;
@@ -1574,19 +1705,22 @@
       state.taskStreaming = null;
     }
     var messages = session.messages || [];
-    var html = messages.length ? messages.map(renderChatMessage).join('') : '<div class="chatWelcome"><h2>' + esc(session.title || 'New chat') + '</h2><p>This session is ready.</p></div>';
-    if (state.chatStreaming && state.chatStreaming.sessionID === session.id && (state.chatStreaming.content || state.chatStreaming.reasoning)) {
-      html += renderChatStreaming();
-    }
+    var lastAssistant = -1;
+    messages.forEach(function (m, idx) { if ((m.role || 'assistant') === 'assistant' && m.status !== 'streaming') lastAssistant = idx; });
+    var streamingActive = !!(state.chatStreaming && state.chatStreaming.sessionID === session.id && (state.chatStreaming.content || state.chatStreaming.reasoning));
+    var html = messages.length ? messages.map(function (m, idx) {
+      return renderChatMessage(m, idx === lastAssistant && !streamingActive && !state.chatRunActive);
+    }).join('') : '<div class="chatWelcome"><h2>' + esc(session.title || 'New chat') + '</h2><p>This session is ready.</p></div>';
+    if (streamingActive) html += renderChatStreaming();
     html += renderQueuedMessages();
     box.innerHTML = html;
-    if (openKeys.size) {
-      box.querySelectorAll('details.tool').forEach(function (d) {
-        var strong = d.querySelector('summary strong');
-        if (strong && openKeys.has(strong.textContent)) d.open = true;
-      });
-    }
-    box.scrollTop = box.scrollHeight;
+    box.querySelectorAll('details.tool').forEach(function (d) {
+      var strong = d.querySelector('summary strong');
+      if (strong && openKeys[strong.textContent]) d.open = true;
+    });
+    restoreFocus(box, focusSnap);
+    if (stick) box.scrollTop = box.scrollHeight;
+    updateJumpLatest();
     renderChatPending();
   }
 
@@ -1607,31 +1741,54 @@
     }
     return parts.join(' ');
   }
-  function renderChatMessage(msg) {
+  function relativeTime(iso) {
+    if (!iso) return '';
+    var t = Date.parse(iso);
+    if (isNaN(t)) return '';
+    var diff = (Date.now() - t) / 1000;
+    if (diff < 0) diff = 0;
+    if (diff < 45) return 'just now';
+    if (diff < 3600) return Math.round(diff / 60) + 'm ago';
+    if (diff < 86400) return Math.round(diff / 3600) + 'h ago';
+    return new Date(t).toLocaleString();
+  }
+
+  function renderToolMessage(msg, status) {
+    if (msg.tool_name === 'CreateTasks') return renderTaskGroupToolMessage(msg, status);
+    var input = msg.tool_input ? JSON.stringify(msg.tool_input, null, 2) : '{}';
+    var output = msg.tool_output || '';
+    var inputStr = formatToolInput(msg.tool_input);
+    var displayName = esc(msg.tool_name || 'tool');
+    if (inputStr) {
+      if (inputStr.length > 60) inputStr = inputStr.substring(0, 60) + '...';
+      displayName += ' <span class="toolArgs">' + esc(inputStr) + '</span>';
+    }
+    var outputBlock = output
+      ? '<div class="toolOutputHead"><label>Output</label><button type="button" class="copyBtn small" data-copy data-code="' + esc(output) + '">Copy</button></div><pre class="toolIO toolOutput">' + esc(output) + '</pre>'
+      : '<label>Output</label><pre class="toolIO toolOutput muted">(no output)</pre>';
+    return '<details class="chatMessage tool ' + esc(status) + '">' +
+      '<summary class="toolCallSummary"><strong>' + displayName + '</strong><span>' + esc(status || 'pending') + '</span></summary>' +
+      '<div class="toolDetails"><label>Input</label><pre class="toolIO">' + esc(input) + '</pre>' + outputBlock + '</div>' +
+      '</details>';
+  }
+
+  function renderChatMessage(msg, isLastAssistant) {
     var role = msg.role || 'assistant';
     var status = msg.status || '';
-    if (role === 'tool') {
-      if (msg.tool_name === 'CreateTasks') return renderTaskGroupToolMessage(msg, status);
-      var input = msg.tool_input ? JSON.stringify(msg.tool_input, null, 2) : '{}';
-      var output = msg.tool_output || '';
-      var inputStr = formatToolInput(msg.tool_input);
-      var displayName = esc(msg.tool_name || 'tool');
-      if (inputStr) {
-        var maxLen = 60;
-        if (inputStr.length > maxLen) {
-          inputStr = inputStr.substring(0, maxLen) + '...';
-        }
-        displayName += ' ' + esc(inputStr);
-      }
-      return '<details class="chatMessage tool ' + esc(status) + '">' +
-        '<summary class="toolCallSummary"><strong>' + displayName + '</strong><span>' + esc(status || 'pending') + '</span></summary>' +
-        '<div class="toolDetails"><label>Input</label><pre>' + esc(input) + '</pre><label>Output</label><div class="toolDetailsMarkdown">' + renderMarkdown(output) + '</div></div>' +
-        '</details>';
-    }
-    return '<div class="chatMessage ' + esc(role) + ' ' + esc(status) + '">' +
-      '<span class="chatRole">' + esc(role) + '</span>' +
-      (msg.reasoning ? '<div class="reasoningBlock"><label>Reasoning</label><div>' + esc(msg.reasoning) + '</div></div>' : '') +
+    if (role === 'tool') return renderToolMessage(msg, status);
+    var showActions = !isTaskChatOpen();
+    var meta = '<span class="metaRole">' + esc(role) + '</span>';
+    var when = relativeTime(msg.created_at);
+    if (when) meta += '<span>' + esc(when) + '</span>';
+    if (role === 'assistant' && state.chatSession && state.chatSession.model) meta += '<span>' + esc(modelLabel(state.chatSession.model)) + '</span>';
+    var actions = '';
+    if (showActions && role === 'user' && msg.id) actions += '<button type="button" class="msgAction" data-edit-msg="' + esc(msg.id) + '" title="Edit and resend">Edit</button>';
+    if (showActions && role === 'assistant' && isLastAssistant) actions += '<button type="button" class="msgAction" data-regenerate="1" title="Regenerate response">Regenerate</button>';
+    if (msg.content) actions += '<button type="button" class="msgAction" data-copy-msg title="Copy message">Copy</button>';
+    return '<div class="chatMessage ' + esc(role) + ' ' + esc(status) + '" data-message-id="' + esc(msg.id || '') + '" data-raw="' + esc(msg.content || '') + '">' +
+      (msg.reasoning ? '<details class="reasoning"' + (status === 'streaming' ? ' open' : '') + '><summary>Reasoning</summary><div class="reasoningBody">' + renderMarkdown(msg.reasoning) + '</div></details>' : '') +
       '<div class="messageMarkdown">' + renderMarkdown(msg.content || '') + '</div>' +
+      '<div class="msgFooter"><div class="msgMeta">' + meta + '</div><div class="msgActions">' + actions + '</div></div>' +
       '</div>';
   }
 
@@ -1707,23 +1864,46 @@
     el('chatAgentLabel').textContent = agentName(task.agent_kind) + ' Sub-agent';
     el('chatTitle').textContent = 'Task Chat';
     var messages = task.messages || [];
-    var html = '<div class="taskChatHeader"><div><strong>' + esc(agentName(task.agent_kind)) + '</strong><small>' + esc(task.status || 'pending') + '</small></div></div>';
-    html += messages.length ? messages.map(renderChatMessage).join('') : '<div class="empty">No task messages yet.</div>';
+    var runningNote = state.chatRunActive ? '<span class="mainRunning"><span></span><span></span><span></span> main chat running</span>' : '';
+    var html = '<div class="taskChatHeader"><div><strong>' + esc(agentName(task.agent_kind)) + '</strong><small>' + esc(task.status || 'pending') + '</small></div>' + runningNote + '</div>';
+    html += messages.length ? messages.map(function (m) { return renderChatMessage(m, false); }).join('') : '<div class="empty">No task messages yet.</div>';
     if (state.taskStreaming && state.taskStreaming.groupID === group.id && state.taskStreaming.taskID === task.id && (state.taskStreaming.content || state.taskStreaming.reasoning)) {
-      html += renderChatMessage({role: 'assistant', status: 'streaming', content: state.taskStreaming.content, reasoning: state.taskStreaming.reasoning});
+      html += renderStreamingBubble(state.taskStreaming.content, state.taskStreaming.reasoning);
     }
     box.innerHTML = html;
-    box.scrollTop = box.scrollHeight;
     return true;
   }
 
+  function streamingInner(content, reasoning) {
+    var html = '';
+    if (reasoning) html += '<details class="reasoning" open><summary>Reasoning</summary><div class="reasoningBody">' + renderMarkdown(reasoning) + '</div></details>';
+    html += '<div class="messageMarkdown">' + renderMarkdown(content || '') + '</div>';
+    return html;
+  }
+
+  function renderStreamingBubble(content, reasoning) {
+    return '<div class="chatMessage assistant streaming" id="streamingMessage">' +
+      '<div class="streamBody">' + streamingInner(content, reasoning) + '</div>' +
+      '<div class="msgFooter"><div class="msgMeta"><span class="metaRole">assistant</span><span>streaming…</span></div></div>' +
+      '</div>';
+  }
+
   function renderChatStreaming() {
-    return renderChatMessage({
-      role: 'assistant',
-      status: 'streaming',
-      content: state.chatStreaming.content,
-      reasoning: state.chatStreaming.reasoning
-    });
+    return renderStreamingBubble(state.chatStreaming.content, state.chatStreaming.reasoning);
+  }
+
+  // Update only the streaming bubble during deltas instead of rebuilding the
+  // whole transcript every token: preserves selection, scroll, open tool blocks
+  // and the queued-message caret.
+  function updateStreamingNode(content, reasoning) {
+    var box = el('chatMessages');
+    if (!box) return;
+    var body = box.querySelector('#streamingMessage .streamBody');
+    if (!body) { renderChat(); return; }
+    var stick = atBottom(box);
+    body.innerHTML = streamingInner(content, reasoning);
+    if (stick) box.scrollTop = box.scrollHeight;
+    updateJumpLatest();
   }
 
   function renderChatPending() {
@@ -1746,11 +1926,137 @@
     panel.innerHTML = html.join('');
   }
 
+  function autoGrowComposer() {
+    var input = el('chatInput');
+    if (!input) return;
+    input.style.height = 'auto';
+    input.style.height = Math.min(260, input.scrollHeight) + 'px';
+  }
+
+  function recordSentHistory(content) {
+    if (!content) return;
+    if (state.sentHistory[state.sentHistory.length - 1] !== content) state.sentHistory.push(content);
+    if (state.sentHistory.length > 50) state.sentHistory = state.sentHistory.slice(-50);
+    state.sentHistoryIdx = state.sentHistory.length;
+  }
+
+  function updateEditingIndicator() {
+    var send = document.querySelector('.sendButton');
+    if (send) send.textContent = state.editingMessageID ? 'Resend' : 'Send';
+    var composer = el('chatComposer');
+    if (composer) composer.classList.toggle('editing', !!state.editingMessageID);
+  }
+
+  function startEditMessage(messageID) {
+    if (state.chatRunActive || !state.chatSession) return;
+    var msg = (state.chatSession.messages || []).filter(function (m) { return m.id === messageID; })[0];
+    if (!msg) return;
+    state.editingMessageID = messageID;
+    var input = el('chatInput');
+    input.value = msg.content || '';
+    input.focus();
+    autoGrowComposer();
+    updateEditingIndicator();
+  }
+
+  function cancelEdit() {
+    if (!state.editingMessageID) return;
+    state.editingMessageID = null;
+    el('chatInput').value = '';
+    autoGrowComposer();
+    updateEditingIndicator();
+  }
+
+  function submitEditedMessage(content) {
+    var editID = state.editingMessageID;
+    var input = el('chatInput');
+    state.editingMessageID = null;
+    updateEditingIndicator();
+    input.value = '';
+    autoGrowComposer();
+    state.chatRunActive = true;
+    state.chatThinking = true;
+    ensureChatSocket();
+    renderChatThinking();
+    return apiJSON('/api/chat/sessions/' + encodeURIComponent(state.chatSession.id) + '/messages/' + encodeURIComponent(editID) + '/edit', 'POST', {content: content}).then(function (session) {
+      state.chatSession = session;
+      renderChat();
+      loadChatSessions();
+    }).catch(function (err) {
+      state.chatRunActive = false;
+      state.chatThinking = false;
+      input.value = content;
+      renderChatThinking();
+      showChatError(err);
+    });
+  }
+
+  function regenerateLast() {
+    if (!state.chatSession || state.chatRunActive) return;
+    state.chatRunActive = true;
+    state.chatThinking = true;
+    ensureChatSocket();
+    renderChatThinking();
+    return apiJSON('/api/chat/sessions/' + encodeURIComponent(state.chatSession.id) + '/regenerate', 'POST', {}).then(function (session) {
+      state.chatSession = session;
+      renderChat();
+      loadChatSessions();
+    }).catch(function (err) {
+      state.chatRunActive = false;
+      state.chatThinking = false;
+      renderChatThinking();
+      showChatError(err);
+    });
+  }
+
+  function fallbackCopy(text) {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); } catch (_) {}
+    document.body.removeChild(ta);
+  }
+
+  function copyText(text, btn) {
+    function done() {
+      if (!btn) return;
+      var prev = btn.textContent;
+      btn.textContent = 'Copied';
+      setTimeout(function () { btn.textContent = prev; }, 1200);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, function () { fallbackCopy(text); done(); });
+    } else {
+      fallbackCopy(text);
+      done();
+    }
+  }
+
+  function openCodeRef(ref) {
+    if (!ref) return;
+    var path = ref.split(':')[0];
+    navigate('/graph');
+    var q = el('query');
+    if (q) q.value = path;
+    loadGraph();
+  }
+
   function sendChatMessage(e) {
     e.preventDefault();
     var input = el('chatInput');
     var content = input.value.trim();
     if (!content) return;
+    if (!hasConfiguredProviders()) {
+      showChatError(new Error('No LLM provider configured — open Settings to add one.'));
+      return;
+    }
+    recordSentHistory(content);
+    if (state.editingMessageID && state.chatSession) {
+      return submitEditedMessage(content);
+    }
     ensureSelectedChatModel();
     var payload = {
       content: content,
@@ -1760,11 +2066,13 @@
     };
     if (shouldQueueChatMessage()) {
       input.value = '';
+      autoGrowComposer();
       queueChatMessage(payload);
       return;
     }
     function sent(session) {
       input.value = '';
+      autoGrowComposer();
       state.chatSession = session;
       if (session && session.id) moveNewChatQueue(session.id);
       renderChat();
@@ -1773,6 +2081,7 @@
     function failed(err) {
       if (isRunningSendError(err)) {
         input.value = '';
+        autoGrowComposer();
         state.chatRunActive = true;
         queueChatMessage(payload);
         renderChatThinking();
@@ -1789,34 +2098,35 @@
     }).catch(failed);
   }
 
+  // Coalesce the many low-frequency events (tool_call/result, approval, status,
+  // workflow progress...) into a single debounced session reload instead of one
+  // full GET + re-render per event.
+  function scheduleSessionRefresh() {
+    if (!state.chatSession || state.chatRefreshTimer) return;
+    state.chatRefreshTimer = setTimeout(function () {
+      state.chatRefreshTimer = null;
+      if (state.chatSession) loadChatSession(state.chatSession.id);
+    }, 150);
+  }
+
   function handleChatEvent(event) {
     if (!event || !event.type) return;
-    if (event.type === 'run_started' && state.chatSession && event.session_id === state.chatSession.id) {
+    var mine = !!(state.chatSession && event.session_id === state.chatSession.id);
+    if (event.type === 'run_started' && mine) {
       state.chatRunActive = true;
-      renderChat();
+      renderChatThinking();
       return;
     }
-    if (event.type === 'run_completed' && state.chatSession && event.session_id === state.chatSession.id) {
+    if (event.type === 'run_completed' && mine) {
       state.chatRunActive = false;
       state.chatThinking = false;
+      state.chatStopping = false;
       state.chatStreaming = null;
       renderChatThinking();
       loadChatSession(state.chatSession.id).then(processNextQueuedMessage);
       return;
     }
-    if (event.type === 'task_delta' && state.chatSession && event.session_id === state.chatSession.id) {
-      var taskPayload = event.payload || {};
-      if (state.selectedTaskGroupID === taskPayload.group_id && state.selectedTaskID === taskPayload.task_id) {
-        if (!state.taskStreaming || state.taskStreaming.groupID !== taskPayload.group_id || state.taskStreaming.taskID !== taskPayload.task_id) {
-          state.taskStreaming = {groupID: taskPayload.group_id, taskID: taskPayload.task_id, content: '', reasoning: ''};
-        }
-        state.taskStreaming.content += taskPayload.content || '';
-        state.taskStreaming.reasoning += taskPayload.reasoning || '';
-        renderChat();
-      }
-      return;
-    }
-    if (event.type === 'delta' && state.chatSession && event.session_id === state.chatSession.id) {
+    if (event.type === 'delta' && mine) {
       var payload = event.payload || {};
       if (!state.chatStreaming || state.chatStreaming.sessionID !== event.session_id) {
         state.chatStreaming = {sessionID: event.session_id, content: '', reasoning: ''};
@@ -1825,47 +2135,61 @@
       state.chatStreaming.reasoning += payload.reasoning || '';
       state.chatRunActive = true;
       state.chatThinking = true;
-      renderChat();
+      if (!isTaskChatOpen()) updateStreamingNode(state.chatStreaming.content, state.chatStreaming.reasoning);
       renderChatThinking();
       return;
     }
-    if (event.type === 'thinking' && state.chatSession && event.session_id === state.chatSession.id) {
+    if (event.type === 'task_delta' && mine) {
+      var tp = event.payload || {};
+      if (state.selectedTaskGroupID === tp.group_id && state.selectedTaskID === tp.task_id) {
+        if (!state.taskStreaming || state.taskStreaming.groupID !== tp.group_id || state.taskStreaming.taskID !== tp.task_id) {
+          state.taskStreaming = {groupID: tp.group_id, taskID: tp.task_id, content: '', reasoning: ''};
+        }
+        state.taskStreaming.content += tp.content || '';
+        state.taskStreaming.reasoning += tp.reasoning || '';
+        updateStreamingNode(state.taskStreaming.content, state.taskStreaming.reasoning);
+      }
+      return;
+    }
+    if (event.type === 'thinking' && mine) {
       state.chatThinking = !!(event.payload && event.payload.active);
       renderChatThinking();
       return;
     }
-    if ((event.type === 'message' || event.type === 'error') && state.chatSession && event.session_id === state.chatSession.id) {
+    if (event.type === 'session_title_updated') {
+      loadChatSessions();
+      if (mine) scheduleSessionRefresh();
+      return;
+    }
+    if ((event.type === 'message' || event.type === 'error') && mine) {
       state.chatStreaming = null;
     }
-    if (event.type === 'task_message' && state.chatSession && event.session_id === state.chatSession.id) {
+    if (event.type === 'task_message' && mine) {
       state.taskStreaming = null;
     }
-    if (event.type === 'task_group_status' && state.chatSession && event.session_id === state.chatSession.id) {
-      var groupPayload = event.payload || {};
-      if (groupPayload.status === 'completed') {
-        state.chatThinking = false;
-        renderChatThinking();
-      }
+    if (event.type === 'task_group_status' && mine && event.payload && event.payload.status === 'completed') {
+      state.chatThinking = false;
+      renderChatThinking();
     }
-    if (event.type === 'session_title_updated') loadChatSessions();
-    if (state.chatSession && event.session_id === state.chatSession.id) loadChatSession(state.chatSession.id);
+    if (mine) scheduleSessionRefresh();
     else loadChatSessions();
   }
 
   function stopChat() {
-    if (!state.chatSession || !(state.chatRunActive || state.chatThinking)) return;
+    if (!state.chatSession || !(state.chatRunActive || state.chatThinking) || state.chatStopping) return;
     var sessionID = state.chatSession.id;
-    var stop = document.querySelector('.stopButton');
-    if (stop) stop.disabled = true;
+    state.chatStopping = true;
+    renderChatThinking();
     apiJSON('/api/chat/sessions/' + encodeURIComponent(sessionID) + '/stop', 'POST', {}).then(function (session) {
       state.chatSession = session;
       state.chatRunActive = !!session.running;
       state.chatThinking = false;
+      state.chatStopping = false;
       state.chatStreaming = null;
       renderChat();
       renderChatThinking();
     }).catch(function (err) {
-      if (stop) stop.disabled = false;
+      state.chatStopping = false;
       showError(err);
       renderChatThinking();
     });
@@ -1878,7 +2202,8 @@
     if (stop) {
       var active = !!(state.chatRunActive || state.chatThinking);
       stop.classList.toggle('hidden', !active);
-      stop.disabled = !active;
+      stop.disabled = !active || state.chatStopping;
+      stop.textContent = state.chatStopping ? 'Stopping…' : 'Stop';
     }
   }
 
@@ -1892,6 +2217,7 @@
 
   function answerQuestion(questionID, answer) {
     if (!state.chatSession) return;
+    if (!String(answer == null ? '' : answer).trim()) return;
     apiJSON('/api/chat/sessions/' + encodeURIComponent(state.chatSession.id) + '/questions/' + encodeURIComponent(questionID), 'POST', {answer: answer}).then(function (session) {
       state.chatSession = session;
       renderChat();
@@ -1901,13 +2227,58 @@
   function renderHistoryList() {
     var list = el('chatHistoryList');
     if (!list) return;
-    if (!state.chatSessions.length) {
-      list.innerHTML = '<div class="empty">No chats yet.</div>';
+    var q = (state.historyQuery || '').toLowerCase();
+    var sessions = state.chatSessions.filter(function (session) {
+      if (!q) return true;
+      return (session.title || '').toLowerCase().indexOf(q) !== -1 || agentName(session.agent).toLowerCase().indexOf(q) !== -1;
+    });
+    if (!sessions.length) {
+      list.innerHTML = '<div class="empty">' + (q ? 'No matching chats.' : 'No chats yet.') + '</div>';
       return;
     }
-    list.innerHTML = state.chatSessions.map(function (session) {
-      return '<a class="historyItem" href="/chat/' + esc(session.id) + '" data-route="/chat/' + esc(session.id) + '"><strong>' + esc(session.title || 'New chat') + '</strong><span>' + esc(agentName(session.agent)) + ' · ' + esc(session.updated_at || '') + '</span></a>';
+    list.innerHTML = sessions.map(function (session) {
+      var when = relativeTime(session.updated_at) || session.updated_at || '';
+      return '<div class="historyItem' + (session.pinned ? ' pinned' : '') + '">' +
+        '<a class="historyOpen" href="/chat/' + esc(session.id) + '" data-route="/chat/' + esc(session.id) + '">' +
+        '<strong>' + esc(session.title || 'New chat') + '</strong>' +
+        '<span>' + esc(agentName(session.agent)) + ' · ' + esc(when) + '</span></a>' +
+        '<div class="historyActions">' +
+        '<button type="button" class="iconButton starButton' + (session.pinned ? ' favorite' : '') + '" data-session-pin="' + esc(session.id) + '" data-pinned="' + (session.pinned ? 'true' : 'false') + '" title="' + (session.pinned ? 'Unpin' : 'Pin') + '">' + icon('star') + '</button>' +
+        '<button type="button" class="iconButton" data-session-rename="' + esc(session.id) + '" title="Rename">' + icon('file-text') + '</button>' +
+        '<button type="button" class="iconButton dangerButton" data-session-delete="' + esc(session.id) + '" title="Delete">' + icon('trash') + '</button>' +
+        '</div></div>';
     }).join('');
+  }
+
+  function renameSession(id) {
+    var session = state.chatSessions.filter(function (s) { return s.id === id; })[0];
+    var title = window.prompt('Rename chat', session ? (session.title || '') : '');
+    if (title == null) return;
+    apiJSON('/api/chat/sessions/' + encodeURIComponent(id), 'PATCH', {title: title}).then(function () {
+      if (state.chatSession && state.chatSession.id === id) state.chatSession.title = title;
+      renderChat();
+      loadChatHistory();
+    }).catch(showError);
+  }
+
+  function pinSession(id, pinned) {
+    apiJSON('/api/chat/sessions/' + encodeURIComponent(id), 'PATCH', {pinned: pinned}).then(loadChatHistory).catch(showError);
+  }
+
+  function deleteSession(id) {
+    if (!window.confirm('Delete this chat permanently?')) return;
+    fetch('/api/chat/sessions/' + encodeURIComponent(id), {method: 'DELETE'}).then(function (r) {
+      return r.json().then(function (body) {
+        if (!r.ok) throw new Error(body.error || r.statusText);
+        return body;
+      });
+    }).then(function () {
+      if (state.chatSession && state.chatSession.id === id) {
+        state.chatSession = null;
+        navigate('/chat');
+      }
+      loadChatHistory();
+    }).catch(showError);
   }
 
   function renderAgentMenu() {
@@ -1920,8 +2291,9 @@
 
   function positionMenu(button, menu) {
     var rect = button.getBoundingClientRect();
-    menu.style.left = rect.left + 'px';
+    menu.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - 320)) + 'px';
     menu.style.bottom = (window.innerHeight - rect.top + 8) + 'px';
+    menu.style.maxHeight = Math.max(160, rect.top - 24) + 'px';
   }
 
   function agentName(id) {
@@ -1943,7 +2315,7 @@
     el('agentMenu').classList.add('hidden');
     state.chatThinking = true;
     renderChatThinking();
-    createChatSession('default', name).then(function (session) {
+    createChatSession(taskID, name).then(function (session) {
       if (!session) return;
       return apiJSON('/api/chat/workflows', 'POST', {session_id: session.id, type: workflowType, parallel: 2}).catch(showChatError);
     });
@@ -2097,11 +2469,23 @@
   bindRouteClick(el('navChat'), '/chat');
   bindRouteClick(el('navSettings'), '/settings');
   el('chatHistoryList').addEventListener('click', function (e) {
+    var pin = e.target.closest('[data-session-pin]');
+    if (pin) { pinSession(pin.dataset.sessionPin, pin.dataset.pinned !== 'true'); return; }
+    var rename = e.target.closest('[data-session-rename]');
+    if (rename) { renameSession(rename.dataset.sessionRename); return; }
+    var del = e.target.closest('[data-session-delete]');
+    if (del) { deleteSession(del.dataset.sessionDelete); return; }
     var routeLink = e.target.closest('[data-route]');
     if (!routeLink || !el('chatHistoryList').contains(routeLink)) return;
     e.preventDefault();
     navigate(routeLink.getAttribute('href') || routeLink.dataset.route);
   });
+  if (el('historySearch')) {
+    el('historySearch').addEventListener('input', function (e) {
+      state.historyQuery = e.target.value || '';
+      renderHistoryList();
+    });
+  }
   document.addEventListener('click', function (e) {
     if (!e.target.closest('.multiPicker')) closeMultiPickers();
     document.querySelectorAll('.agentMenu:not(.hidden)').forEach(function (menu) {
@@ -2109,6 +2493,7 @@
       var button = document.getElementById(buttonID);
       if (!menu.contains(e.target) && (!button || !button.contains(e.target))) {
         menu.classList.add('hidden');
+        if (button) button.setAttribute('aria-expanded', 'false');
       }
     });
   });
@@ -2166,8 +2551,36 @@
     if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
       e.preventDefault();
       el('chatComposer').requestSubmit();
+      return;
+    }
+    if (e.key === 'Escape' && state.editingMessageID) {
+      e.preventDefault();
+      cancelEdit();
+      return;
+    }
+    if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && state.sentHistory.length && !state.editingMessageID) {
+      var input = e.target;
+      var atStart = input.selectionStart === 0 && input.selectionEnd === 0;
+      var atEnd = input.selectionStart === input.value.length && input.selectionEnd === input.value.length;
+      if (e.key === 'ArrowUp' && atStart && state.sentHistoryIdx > 0) {
+        state.sentHistoryIdx--;
+        input.value = state.sentHistory[state.sentHistoryIdx];
+        e.preventDefault();
+        autoGrowComposer();
+      } else if (e.key === 'ArrowDown' && atEnd) {
+        if (state.sentHistoryIdx < state.sentHistory.length - 1) {
+          state.sentHistoryIdx++;
+          input.value = state.sentHistory[state.sentHistoryIdx];
+        } else {
+          state.sentHistoryIdx = state.sentHistory.length;
+          input.value = '';
+        }
+        e.preventDefault();
+        autoGrowComposer();
+      }
     }
   });
+  el('chatInput').addEventListener('input', autoGrowComposer);
   el('chatComposer').addEventListener('submit', sendChatMessage);
   document.querySelector('.sendButton').addEventListener('click', function (e) {
     e.preventDefault();
@@ -2179,6 +2592,39 @@
   });
   el('historyButton').onclick = function () { navigate('/chat/history'); };
   el('newChatFromHistory').onclick = function () { navigate('/chat'); };
+  if (el('chatNewButton')) el('chatNewButton').onclick = function () { cancelEdit(); navigate('/chat'); };
+  if (el('chatJumpLatest')) el('chatJumpLatest').onclick = scrollChatToBottom;
+  el('chatMessages').addEventListener('scroll', updateJumpLatest);
+  [['chatModelButton', 'chatModelMenu'], ['chatModeButton', 'chatModeMenu'], ['chatApprovalModeButton', 'chatApprovalModeMenu'], ['agentButton', 'agentMenu'], ['mainModelDefaultButton', 'mainModelDefaultMenu']].forEach(function (pair) {
+    var button = el(pair[0]);
+    var menu = el(pair[1]);
+    if (!button || !menu) return;
+    button.setAttribute('aria-haspopup', 'menu');
+    button.setAttribute('aria-expanded', 'false');
+    menu.setAttribute('role', 'menu');
+    button.addEventListener('click', function () {
+      // Defer so this runs after the inline toggle handler regardless of
+      // listener registration order.
+      setTimeout(function () {
+        var open = !menu.classList.contains('hidden');
+        button.setAttribute('aria-expanded', open ? 'true' : 'false');
+        if (open) {
+          var first = menu.querySelector('button:not([disabled])');
+          if (first) first.focus();
+        }
+      }, 0);
+    });
+    menu.addEventListener('keydown', function (e) {
+      var items = Array.prototype.slice.call(menu.querySelectorAll('button:not([disabled])'));
+      if (!items.length) return;
+      var idx = items.indexOf(document.activeElement);
+      if (e.key === 'ArrowDown') { e.preventDefault(); items[(idx + 1) % items.length].focus(); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); items[(idx - 1 + items.length) % items.length].focus(); }
+      else if (e.key === 'Home') { e.preventDefault(); items[0].focus(); }
+      else if (e.key === 'End') { e.preventDefault(); items[items.length - 1].focus(); }
+      else if (e.key === 'Escape') { e.preventDefault(); menu.classList.add('hidden'); button.setAttribute('aria-expanded', 'false'); button.focus(); }
+    });
+  });
   el('agentButton').onclick = function () {
     positionMenu(this, el('agentMenu'));
     el('agentMenu').classList.toggle('hidden');
@@ -2188,6 +2634,36 @@
     if (button) startTask(button.dataset.task);
   });
   el('chatMessages').addEventListener('click', function (e) {
+    var copyBtn = e.target.closest('[data-copy]');
+    if (copyBtn) {
+      copyText(copyBtn.dataset.code || '', copyBtn);
+      return;
+    }
+    var copyMsg = e.target.closest('[data-copy-msg]');
+    if (copyMsg) {
+      var ownerMessage = copyMsg.closest('.chatMessage');
+      copyText(ownerMessage ? (ownerMessage.dataset.raw || '') : '', copyMsg);
+      return;
+    }
+    var editMsg = e.target.closest('[data-edit-msg]');
+    if (editMsg) {
+      startEditMessage(editMsg.dataset.editMsg);
+      return;
+    }
+    if (e.target.closest('[data-regenerate]')) {
+      regenerateLast();
+      return;
+    }
+    var codeRef = e.target.closest('.codeRef');
+    if (codeRef) {
+      e.preventDefault();
+      openCodeRef(codeRef.dataset.ref);
+      return;
+    }
+    if (e.target.closest('[data-goto-settings]')) {
+      navigate('/settings');
+      return;
+    }
     var deleteQueued = e.target.closest('[data-queue-delete]');
     if (deleteQueued) {
       removeQueuedMessage(deleteQueued.dataset.queueDelete);
@@ -2237,25 +2713,43 @@
     renderChat();
   });
   el('chatPending').addEventListener('click', function (e) {
+    var card = e.target.closest('.pendingCard');
+    function lockCard() {
+      if (!card) return;
+      card.classList.add('resolving');
+      Array.prototype.forEach.call(card.querySelectorAll('button, input'), function (n) { n.disabled = true; });
+    }
     var resume = e.target.closest('[data-task-resume]');
     if (resume) {
+      lockCard();
       resumeTaskGroup(resume.dataset.taskResume);
       return;
     }
     var approval = e.target.closest('[data-approval]');
     if (approval) {
+      lockCard();
       resolveApproval(approval.dataset.approval, approval.dataset.approved === 'true');
       return;
     }
     var question = e.target.closest('[data-question][data-answer]');
-    if (question) answerQuestion(question.dataset.question, question.dataset.answer);
+    if (question) {
+      lockCard();
+      answerQuestion(question.dataset.question, question.dataset.answer);
+    }
   });
   el('chatPending').addEventListener('submit', function (e) {
     var form = e.target.closest('.questionForm');
     if (!form) return;
     e.preventDefault();
     var input = form.querySelector('input');
-    answerQuestion(form.dataset.question, input ? input.value : '');
+    var value = input ? input.value : '';
+    if (!String(value).trim()) {
+      if (input) input.focus();
+      return;
+    }
+    var card = form.closest('.pendingCard');
+    if (card) Array.prototype.forEach.call(card.querySelectorAll('button, input'), function (n) { n.disabled = true; });
+    answerQuestion(form.dataset.question, value);
   });
   loadChatProvider();
   loadAgents().then(loadChatSessions).then(renderRoute);
@@ -2284,6 +2778,8 @@
     color: function (kind) { return colors[kind] || '#e2e8f0'; },
     onChange: saveNeedDescriptionSettings
   });
+  autoGrowComposer();
+  updateEditingIndicator();
   loadSummary();
   Promise.all([loadOptimizationRules()]).then(loadGraph);
 })();

@@ -48,7 +48,7 @@ func RunScan(args []string) {
 	start := time.Now()
 	reg := NewScannerRegistry()
 
-	resolvedMode := cfg.ScanMode
+	resolvedMode := cfg.Scan.Mode
 	switch {
 	case explicitFlags["hard"] && *hardFlag:
 		resolvedMode = helper.ScanModeHard

@@ -994,7 +994,7 @@ func TestResolveBodyCallRefs_localAssignmentAndMethodCall(t *testing.T) {
 	}
 	funcInput := []python.VariableDefinition{}
 
-	resolveBodyCallRefs(bodyCalls, bodyAssigns, pr, gt, add, funcInput)
+	resolveBodyCallRefs(bodyCalls, bodyAssigns, pr, gt, add, funcInput, nil)
 
 	if len(gotClasses) != 1 || gotClasses[0] != "mypkg.MyClass" {
 		t.Errorf("expected ConnUsesClass to mypkg.MyClass, got %v", gotClasses)
@@ -1046,7 +1046,7 @@ func TestResolveBodyCallRefs_paramTypeAnnotation(t *testing.T) {
 		{Name: "svc", Typing: "MyService"},
 	}
 
-	resolveBodyCallRefs(bodyCalls, bodyAssigns, pr, gt, add, funcInput)
+	resolveBodyCallRefs(bodyCalls, bodyAssigns, pr, gt, add, funcInput, nil)
 
 	if len(gotClasses) != 1 || gotClasses[0] != "mypkg.MyService" {
 		t.Errorf("expected ConnUsesClass to mypkg.MyService, got %v", gotClasses)
@@ -1078,7 +1078,7 @@ func TestResolveBodyCallRefs_unknownVariableNoConnection(t *testing.T) {
 	bodyAssigns := []pyBodyAssign{}
 	funcInput := []python.VariableDefinition{}
 
-	resolveBodyCallRefs(bodyCalls, bodyAssigns, pr, gt, add, funcInput)
+	resolveBodyCallRefs(bodyCalls, bodyAssigns, pr, gt, add, funcInput, nil)
 
 	if count != 0 {
 		t.Errorf("expected no connections for unknown variable, got %d", count)
@@ -1113,7 +1113,7 @@ func TestResolveBodyCallRefs_directFunctionCall(t *testing.T) {
 	bodyAssigns := []pyBodyAssign{}
 	funcInput := []python.VariableDefinition{}
 
-	resolveBodyCallRefs(bodyCalls, bodyAssigns, pr, gt, add, funcInput)
+	resolveBodyCallRefs(bodyCalls, bodyAssigns, pr, gt, add, funcInput, nil)
 
 	if len(gotCalls) != 1 || gotCalls[0] != "mypkg.helper" {
 		t.Errorf("expected ConnCalls to mypkg.helper, got %v", gotCalls)

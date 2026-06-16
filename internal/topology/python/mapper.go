@@ -42,11 +42,11 @@ func FromGeneric(topo *domain.Topology) *PythonTopology {
 			if dec, ok := res.Properties["decorators"]; ok {
 				jsonConvert(dec, &f.Decorators)
 			}
-			if ia, ok := res.Properties["is_async"]; ok && ia != nil {
-				f.IsAsync = ia.(bool)
+			if ia, ok := res.Properties["is_async"].(bool); ok {
+				f.IsAsync = ia
 			}
-			if mf, ok := res.Properties["method_from"]; ok && mf != nil {
-				cid := ClassID(mf.(string))
+			if mf, ok := res.Properties["method_from"].(string); ok && mf != "" {
+				cid := ClassID(mf)
 				f.MethodFrom = &cid
 			}
 			gt.Functions[f.ID] = f
@@ -65,18 +65,18 @@ func FromGeneric(topo *domain.Topology) *PythonTopology {
 			if bases, ok := res.Properties["bases"]; ok {
 				jsonConvert(bases, &c.Bases)
 			}
-			if ctor, ok := res.Properties["constructor"]; ok && ctor != nil {
-				cid := FunctionID(ctor.(string))
+			if ctor, ok := res.Properties["constructor"].(string); ok && ctor != "" {
+				cid := FunctionID(ctor)
 				c.Constructor = &cid
 			}
-			if ia, ok := res.Properties["is_abc"]; ok && ia != nil {
-				c.IsABC = ia.(bool)
+			if ia, ok := res.Properties["is_abc"].(bool); ok {
+				c.IsABC = ia
 			}
-			if ip, ok := res.Properties["is_protocol"]; ok && ip != nil {
-				c.IsProtocol = ip.(bool)
+			if ip, ok := res.Properties["is_protocol"].(bool); ok {
+				c.IsProtocol = ip
 			}
-			if ham, ok := res.Properties["has_abstract_methods"]; ok && ham != nil {
-				c.HasAbstractMethods = ham.(bool)
+			if ham, ok := res.Properties["has_abstract_methods"].(bool); ok {
+				c.HasAbstractMethods = ham
 			}
 			gt.Classes[c.ID] = c
 
@@ -86,8 +86,8 @@ func FromGeneric(topo *domain.Topology) *PythonTopology {
 				Name:        res.Name,
 				Description: res.Description,
 			}
-			if typing, ok := res.Properties["typing"]; ok {
-				v.Typing = typing.(string)
+			if typing, ok := res.Properties["typing"].(string); ok {
+				v.Typing = typing
 			}
 			if val, ok := res.Properties["value"]; ok {
 				var x any
@@ -104,8 +104,8 @@ func FromGeneric(topo *domain.Topology) *PythonTopology {
 				Description: res.Description,
 				Connections: mapKindConn(res.Connections),
 			}
-			if fp, ok := res.Properties["from_package"]; ok {
-				mod.FromPackage = PackagePath(fp.(string))
+			if fp, ok := res.Properties["from_package"].(string); ok {
+				mod.FromPackage = PackagePath(fp)
 			}
 			gt.Modules[mod.ID] = mod
 

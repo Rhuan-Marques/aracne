@@ -2,6 +2,7 @@ package agent
 
 import (
 	"aracne/internal/llm/languages/gotools"
+	"aracne/internal/llm/languages/jstools"
 	"aracne/internal/llm/languages/pythontools"
 )
 
@@ -11,8 +12,12 @@ func BuildPrompt(language string) string {
 		return gotools.BuildGoSystemPrompt()
 	case "python":
 		return pythontools.BuildPythonSystemPrompt()
+	case "javascript":
+		return jstools.BuildJavaScriptSystemPrompt()
+	case "typescript":
+		return jstools.BuildTypeScriptSystemPrompt()
 	case "multi":
-		return gotools.BuildGoSystemPrompt() + "\n\n" + pythontools.BuildPythonSystemPrompt()
+		return gotools.BuildGoSystemPrompt() + "\n\n" + pythontools.BuildPythonSystemPrompt() + "\n\n" + jstools.BuildJavaScriptSystemPrompt() + "\n\n" + jstools.BuildTypeScriptSystemPrompt()
 	default:
 		return gotools.BuildGoSystemPrompt()
 	}

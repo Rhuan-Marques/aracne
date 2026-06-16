@@ -74,13 +74,13 @@ class ParentClass: ...
     def method(self, ...): ...
 ` + "```" + `
 
-And a CONTEXT section with descriptions of everything the function interacts with:
+And a CONTEXT section with descriptions of everything the function interacts with. Each entry is keyed by the resource's FULL ID — pass it straight to read_function/read_struct to drill in:
 
 # CONTEXT:
-## ClassName: Description
-    ClassName.method: Description
-## CalledFunc: Description
-## VarName = value
+## pkg.ClassName: Description
+    pkg.ClassName.method: Description
+## pkg.CalledFunc: Description
+## pkg.VarName = value
 
 ## read_struct Output Format (for classes)
 
@@ -95,12 +95,12 @@ class MyClass(BaseClass):
 ` + "```" + `
 
 # CONTEXT:
-## BaseClass (base class): Description [NEED TO IMPLEMENT: method_name]
-## __init__: Description
-## method_name: Description
-## UsedClass: Description
-    UsedClass.method: Description
-## VarName = value
+## pkg.BaseClass (base class): Description [NEED TO IMPLEMENT: method_name]
+## pkg.MyClass.__init__: Description
+## pkg.MyClass.method_name: Description
+## pkg.UsedClass: Description
+    pkg.UsedClass.method: Description
+## pkg.VarName = value
 
 ## Guidelines
 

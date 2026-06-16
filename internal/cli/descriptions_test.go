@@ -6,17 +6,18 @@ import (
 	"strings"
 	"testing"
 
+	"aracne/internal/helper"
 	"aracne/internal/topology/domain"
 )
 
 func TestDescriptionsExecutorProfileIsLimited(t *testing.T) {
-	tools := profileTools(ToolProfileDescriptionsExecutor)
+	tools := helper.DefaultAgentMCPTools("descriptions-generation-executor")
 	allowed := make(map[string]bool, len(tools))
 	for _, tool := range tools {
 		allowed[tool] = true
 	}
 
-	for _, want := range []string{"read", "read_struct", "read_function", "update_description"} {
+	for _, want := range []string{"read", "update_description"} {
 		if !allowed[want] {
 			t.Fatalf("executor profile missing %q in %v", want, tools)
 		}

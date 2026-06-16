@@ -59,8 +59,8 @@ func RunGenerateDescriptions(args []string) {
 			batchSizeProvided = true
 		}
 	})
-	if !batchSizeProvided && cfg.DescriptionBatchSize > 0 {
-		*batchSize = cfg.DescriptionBatchSize
+	if cfgBatch := cfg.AgentParam("claude_code", "descriptions-generation-executor", "max-batch-size", 0); !batchSizeProvided && cfgBatch > 0 {
+		*batchSize = cfgBatch
 	}
 	if *targetsFlag != "" {
 		targets, err := helper.ParseDescribeTargets(*targetsFlag)
@@ -68,7 +68,7 @@ func RunGenerateDescriptions(args []string) {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
-		cfg.NeedDescription = targets
+		cfg.Descriptions.Kinds = targets
 	}
 
 	lang := GetLanguage(manager)
@@ -86,23 +86,21 @@ func RunGenerateDescriptions(args []string) {
 		*maxRetries = 1
 	}
 
-	pending, err := undocumentedDescriptionResources(manager, cfg.NeedDescription)
+	pending, err := undocumentedDescriptionResources(manager, cfg.Descriptions.Kinds)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Generating descriptions for %d resources (targets: %s, batch size: %d, parallel: %d, max retries: %d)...\n", len(pending), helper.FormatDescribeTargets(cfg.NeedDescription), *batchSize, *parallel, *maxRetries)
+	fmt.Printf("Generating descriptions for %d resources (targets: %s, batch size: %d, parallel: %d, max retries: %d)...\n", len(pending), helper.FormatDescribeTargets(cfg.Descriptions.Kinds), *batchSize, *parallel, *maxRetries)
 	if len(pending) == 0 {
 		fmt.Println("done")
 		return
 	}
 
-	agentCfg := *cfg
-	agentCfg.ToolModes = helper.ToolModes{Read: helper.ReadModeMCP, Edit: helper.EditModeMCP, Other: helper.OtherModeMCP}
-	toolReg := BuildToolRegistry(manager, reg, &agentCfg, ToolProfileDescriptionsExecutor)
+	toolReg := BuildToolRegistry(manager, reg, cfg, "claude_code", "descriptions-generation-executor")
 	toolMap := registryToolMap(toolReg)
 
-	if err := runDescriptionGeneration(manager, provider, toolMap, lang, cfg.NeedDescription, *batchSize, *parallel, *maxRetries); err != nil {
+	if err := runDescriptionGeneration(manager, provider, toolMap, lang, cfg.Descriptions.Kinds, *batchSize, *parallel, *maxRetries); err != nil {
 		fmt.Fprintf(os.Stderr, "\nError: %v\n", err)
 		os.Exit(1)
 	}

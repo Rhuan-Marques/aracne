@@ -279,14 +279,14 @@ func TestConfigNeedDescriptionAPI(t *testing.T) {
 
 	var cfg helper.Config
 	getJSON(t, server.URL+"/api/config", &cfg)
-	if len(cfg.NeedDescription) != 5 || cfg.NeedDescription[0] != domain.ResourceFunction || cfg.NeedDescription[1] != domain.ResourceMethod {
-		t.Fatalf("unexpected default need_description: %+v", cfg.NeedDescription)
+	if len(cfg.Descriptions.Kinds) != 5 || cfg.Descriptions.Kinds[0] != domain.ResourceFunction || cfg.Descriptions.Kinds[1] != domain.ResourceMethod {
+		t.Fatalf("unexpected default descriptions.kinds: %+v", cfg.Descriptions.Kinds)
 	}
-	if cfg.DescriptionBatchSize != helper.DefaultDescriptionBatchSize {
-		t.Fatalf("unexpected default description_batch_size: %d", cfg.DescriptionBatchSize)
+	if got := cfg.AgentParam("claude_code", "descriptions-generation-executor", "max-batch-size", 0); got != helper.DefaultDescriptionBatchSize {
+		t.Fatalf("unexpected default executor batch size: %d", got)
 	}
 
-	body := bytes.NewBufferString(`{"need_description":["function","type","function"],"description_batch_size":3}`)
+	body := bytes.NewBufferString(`{"descriptions":{"kinds":["function","type","function"]},"description_batch_size":3}`)
 	req, err := http.NewRequest(http.MethodPut, server.URL+"/api/config", body)
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
@@ -303,19 +303,19 @@ func TestConfigNeedDescriptionAPI(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&cfg); err != nil {
 		t.Fatalf("decode PUT /api/config: %v", err)
 	}
-	if len(cfg.NeedDescription) != 2 || cfg.NeedDescription[0] != domain.ResourceFunction || cfg.NeedDescription[1] != domain.ResourceType {
-		t.Fatalf("unexpected saved need_description: %+v", cfg.NeedDescription)
+	if len(cfg.Descriptions.Kinds) != 2 || cfg.Descriptions.Kinds[0] != domain.ResourceFunction || cfg.Descriptions.Kinds[1] != domain.ResourceType {
+		t.Fatalf("unexpected saved descriptions.kinds: %+v", cfg.Descriptions.Kinds)
 	}
-	if cfg.DescriptionBatchSize != 3 {
-		t.Fatalf("unexpected saved description_batch_size: %d", cfg.DescriptionBatchSize)
+	if got := cfg.AgentParam("claude_code", "descriptions-generation-executor", "max-batch-size", 0); got != 3 {
+		t.Fatalf("unexpected saved executor batch size: %d", got)
 	}
 
 	saved := helper.LoadConfig(helper.ConfigPath(dbPath))
-	if len(saved.NeedDescription) != 2 || saved.NeedDescription[0] != domain.ResourceFunction || saved.NeedDescription[1] != domain.ResourceType {
-		t.Fatalf("unexpected persisted need_description: %+v", saved.NeedDescription)
+	if len(saved.Descriptions.Kinds) != 2 || saved.Descriptions.Kinds[0] != domain.ResourceFunction || saved.Descriptions.Kinds[1] != domain.ResourceType {
+		t.Fatalf("unexpected persisted descriptions.kinds: %+v", saved.Descriptions.Kinds)
 	}
-	if saved.DescriptionBatchSize != 3 {
-		t.Fatalf("unexpected persisted description_batch_size: %d", saved.DescriptionBatchSize)
+	if got := saved.AgentParam("claude_code", "descriptions-generation-executor", "max-batch-size", 0); got != 3 {
+		t.Fatalf("unexpected persisted executor batch size: %d", got)
 	}
 }
 

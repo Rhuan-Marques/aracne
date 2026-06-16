@@ -80,16 +80,16 @@ type ParentStruct struct {...}
 func (p *ParentStruct) Method(...) (...) {...}
 ` + "```" + `
 
-And a CONTEXT section with descriptions of everything the function interacts with:
+And a CONTEXT section with descriptions of everything the function interacts with. Each entry is keyed by the resource's FULL ID — pass it straight to read_function/read_struct/read_interface to drill in:
 
 # CONTEXT:
-## InterfaceName: Description
-    ImplStruct: Description
-        ImplStruct.Method: Description
-## StructName: Description
-    StructName.Method: Description
-## CalledFunc: Description
-## ExtVarName = value
+## pkg.InterfaceName: Description
+    pkg.ImplStruct: Description
+        pkg.(ImplStruct).Method: Description
+## pkg.StructName: Description
+    pkg.(StructName).Method: Description
+## pkg.CalledFunc: Description
+## pkg.ExtVarName = value
 
 ## Guidelines
 

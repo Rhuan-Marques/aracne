@@ -10,10 +10,12 @@ import (
 
 	"aracne/internal/helper"
 	"aracne/internal/llm/languages/gotools"
+	"aracne/internal/llm/languages/jstools"
 	"aracne/internal/llm/languages/pythontools"
 	"aracne/internal/topology"
 	"aracne/internal/topology/domain"
 	"aracne/internal/topology/golang"
+	"aracne/internal/topology/javascript"
 	"aracne/internal/topology/python"
 )
 
@@ -208,9 +210,122 @@ func readFileWithContext(mgr *topology.TopologyManager, topo *domain.Topology, f
 	if topo.Language == "python" {
 		pt := python.FromGeneric(topo)
 		formatPythonFileContext(pt, fileID)
+	} else if topo.Language == "javascript" || topo.Language == "typescript" {
+		jt := javascript.FromGeneric(topo)
+		formatJSFileContext(jt, fileID)
 	} else {
 		gt := golang.FromGeneric(topo)
 		formatGoFileContext(gt, fileID)
+	}
+}
+
+func formatJSFileContext(jt *javascript.JavaScriptTopology, fileID string) {
+	mod, ok := jt.Modules[javascript.ModuleID(fileID)]
+	if !ok {
+		return
+	}
+
+	type info struct {
+		Name string
+		Desc string
+		Line int
+	}
+
+	var functions []info
+	var classEntries []struct {
+		info
+		cid javascript.ClassID
+	}
+	classMethods := make(map[javascript.ClassID][]info)
+	var vars []info
+
+	for _, fid := range mod.Functions() {
+		fn, exists := jt.Functions[fid]
+		if !exists {
+			continue
+		}
+		inf := info{Name: fn.Name, Desc: fn.Description, Line: fn.Loc.StartsAt}
+		if fn.MethodFrom != nil {
+			cid := *fn.MethodFrom
+			classMethods[cid] = append(classMethods[cid], inf)
+		} else {
+			functions = append(functions, inf)
+		}
+	}
+
+	for _, cid := range mod.Classes() {
+		cls, exists := jt.Classes[cid]
+		if !exists {
+			continue
+		}
+		classEntries = append(classEntries, struct {
+			info
+			cid javascript.ClassID
+		}{info: info{Name: cls.Name, Desc: cls.Description, Line: cls.Loc.StartsAt}, cid: cid})
+	}
+
+	for _, vid := range mod.ExternalVars() {
+		v, exists := jt.ExternalVars[vid]
+		if !exists {
+			continue
+		}
+		vars = append(vars, info{Name: v.Name, Desc: v.Description, Line: v.Location.StartsAt})
+	}
+
+	sortByLine := func(s []info) {
+		sort.Slice(s, func(i, j int) bool { return s[i].Line < s[j].Line })
+	}
+	sortByLine(functions)
+	sort.Slice(classEntries, func(i, j int) bool { return classEntries[i].Line < classEntries[j].Line })
+	for _, v := range classMethods {
+		sortByLine(v)
+	}
+	sortByLine(vars)
+
+	total := len(functions) + len(classEntries) + len(vars)
+	if total == 0 {
+		return
+	}
+	fmt.Print("\n\n# File Context\n")
+
+	if len(functions) > 0 {
+		fmt.Print("\n## Functions\n")
+		for _, f := range functions {
+			desc := f.Desc
+			if desc == "" {
+				desc = "(no description)"
+			}
+			fmt.Printf("    %s (line %d): %s\n", f.Name, f.Line, desc)
+		}
+	}
+
+	if len(classEntries) > 0 {
+		fmt.Print("\n## Classes\n")
+		for _, ce := range classEntries {
+			desc := ce.Desc
+			if desc == "" {
+				desc = "(no description)"
+			}
+			fmt.Printf("    %s (line %d): %s\n", ce.Name, ce.Line, desc)
+			for _, m := range classMethods[ce.cid] {
+				mdesc := m.Desc
+				if mdesc == "" {
+					mdesc = "(no description)"
+				}
+				fmt.Printf("        %s.%s (line %d): %s\n", ce.Name, m.Name, m.Line, mdesc)
+			}
+		}
+	}
+
+	if len(vars) > 0 {
+		fmt.Print("\n## Variables\n")
+		for _, v := range vars {
+			desc := v.Desc
+			if desc == "" {
+				desc = "(no description)"
+			}
+			fmt.Printf("    %s (line %d): %s\n", v.Name, v.Line, desc)
+		}
 	}
 }
 
@@ -483,6 +598,16 @@ func readAsFunction(mgr *topology.TopologyManager, lang string, id string) {
 		fmt.Print(pythontools.FormatPythonFunctionContext(ctx))
 		return
 	}
+	if lang == "javascript" || lang == "typescript" {
+		jsManager := javascript.NewJavaScriptManager(mgr)
+		ctx, err := jsManager.ReadFunction(id)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Print(jstools.FormatJavaScriptFunctionContext(ctx))
+		return
+	}
 	goManager := golang.NewGoManager(mgr)
 	ctx, err := goManager.ReadFunction(id)
 	if err != nil {
@@ -503,6 +628,16 @@ func readAsStruct(mgr *topology.TopologyManager, lang string, id string) {
 		fmt.Print(pythontools.FormatPythonClassContext(ctx))
 		return
 	}
+	if lang == "javascript" || lang == "typescript" {
+		jsManager := javascript.NewJavaScriptManager(mgr)
+		ctx, err := jsManager.ReadClass(id)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Print(jstools.FormatJavaScriptClassContext(ctx))
+		return
+	}
 	goManager := golang.NewGoManager(mgr)
 	ctx, err := goManager.ReadStruct(id)
 	if err != nil {
@@ -517,6 +652,15 @@ func readAsInterface(mgr *topology.TopologyManager, lang string, id string) {
 		readAsCut(mgr, lang, id, domain.ResourceInterface)
 		return
 	}
+	if lang == "javascript" || lang == "typescript" {
+		ctx, err := javascript.NewJavaScriptManager(mgr).ReadInterface(id)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Print(jstools.FormatJavaScriptInterfaceContext(ctx))
+		return
+	}
 	goManager := golang.NewGoManager(mgr)
 	ctx, err := goManager.ReadInterface(id)
 	if err != nil {
@@ -529,6 +673,15 @@ func readAsInterface(mgr *topology.TopologyManager, lang string, id string) {
 func readAsNamedType(mgr *topology.TopologyManager, lang string, id string) {
 	if lang == "python" {
 		readAsCut(mgr, lang, id, domain.ResourceNamedType)
+		return
+	}
+	if lang == "javascript" || lang == "typescript" {
+		ctx, err := javascript.NewJavaScriptManager(mgr).ReadNamedType(id)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Print(jstools.FormatJavaScriptNamedTypeContext(ctx))
 		return
 	}
 	goManager := golang.NewGoManager(mgr)
@@ -546,6 +699,14 @@ func readAsVariable(mgr *topology.TopologyManager, topo *domain.Topology, lang s
 	if lang == "python" {
 		pt := python.FromGeneric(topo)
 		v, ok := pt.ExternalVars[python.ExternalVarID(id)]
+		if !ok {
+			readAsCut(mgr, lang, id, domain.ResourceVariable)
+			return
+		}
+		loc = v.Location
+	} else if lang == "javascript" || lang == "typescript" {
+		jt := javascript.FromGeneric(topo)
+		v, ok := jt.ExternalVars[javascript.ExternalVarID(id)]
 		if !ok {
 			readAsCut(mgr, lang, id, domain.ResourceVariable)
 			return
@@ -588,6 +749,34 @@ func readAsVariable(mgr *topology.TopologyManager, topo *domain.Topology, lang s
 		}
 		for _, c := range pt.Classes {
 			if evids, ok := c.Connections[python.ConnUsesExtVar]; ok {
+				for _, evid := range evids {
+					if evid == id {
+						d := c.Description
+						if d == "" {
+							d = "(no description)"
+						}
+						usedBy = append(usedBy, fmt.Sprintf("\t%s %s", c.ID, d))
+						break
+					}
+				}
+			}
+		}
+	} else if lang == "javascript" || lang == "typescript" {
+		jt := javascript.FromGeneric(topo)
+		for _, fn := range jt.Functions {
+			for _, evid := range fn.UsesExtVar() {
+				if string(evid) == id {
+					d := fn.Description
+					if d == "" {
+						d = "(no description)"
+					}
+					usedBy = append(usedBy, fmt.Sprintf("\t%s %s", fn.ID, d))
+					break
+				}
+			}
+		}
+		for _, c := range jt.Classes {
+			if evids, ok := c.Connections[javascript.ConnUsesExtVar]; ok {
 				for _, evid := range evids {
 					if evid == id {
 						d := c.Description
@@ -670,6 +859,32 @@ func readAsDependency(mgr *topology.TopologyManager, topo *domain.Topology, lang
 				}
 			}
 		}
+	} else if lang == "javascript" || lang == "typescript" {
+		jt := javascript.FromGeneric(topo)
+		for _, fn := range jt.Functions {
+			for _, d := range fn.UsesDep() {
+				if string(d) == id {
+					desc := fn.Description
+					if desc == "" {
+						desc = "(no description)"
+					}
+					usedBy = append(usedBy, fmt.Sprintf("\t%s %s", fn.ID, desc))
+					break
+				}
+			}
+		}
+		for _, c := range jt.Classes {
+			for _, d := range c.UsesDep() {
+				if string(d) == id {
+					desc := c.Description
+					if desc == "" {
+						desc = "(no description)"
+					}
+					usedBy = append(usedBy, fmt.Sprintf("\t%s %s", c.ID, desc))
+					break
+				}
+			}
+		}
 	} else {
 		gt := golang.FromGeneric(topo)
 		for _, fn := range gt.Functions {
@@ -741,9 +956,130 @@ func readPackageContext(mgr *topology.TopologyManager, topo *domain.Topology, la
 	if topo.Language == "python" {
 		pt := python.FromGeneric(topo)
 		formatPythonPackageContext(pt, pkgID)
+	} else if topo.Language == "javascript" || topo.Language == "typescript" {
+		jt := javascript.FromGeneric(topo)
+		formatJSPackageContext(jt, pkgID)
 	} else {
 		gt := golang.FromGeneric(topo)
 		formatGoPackageContext(gt, pkgID)
+	}
+}
+
+func formatJSPackageContext(jt *javascript.JavaScriptTopology, pkgID string) {
+	pkg, ok := jt.Packages[javascript.PackagePath(pkgID)]
+	if !ok {
+		return
+	}
+
+	type entry struct {
+		Name string
+		Desc string
+		Loc  domain.Location
+	}
+
+	lookup := func(loc domain.Location) string {
+		rel, err := filepath.Rel(jt.Root, loc.Path)
+		if err != nil {
+			return fmt.Sprintf("line %d", loc.StartsAt)
+		}
+		return fmt.Sprintf("%s:%d", rel, loc.StartsAt)
+	}
+
+	var standalone []entry
+	classMethods := make(map[javascript.ClassID][]entry)
+	var classEntries []struct {
+		entry
+		cid javascript.ClassID
+	}
+	var vars []entry
+
+	for _, fid := range pkg.HasFunctions() {
+		fn, exists := jt.Functions[fid]
+		if !exists {
+			continue
+		}
+		e := entry{Name: fn.Name, Desc: fn.Description, Loc: fn.Loc}
+		if fn.MethodFrom != nil {
+			cid := *fn.MethodFrom
+			classMethods[cid] = append(classMethods[cid], e)
+		} else {
+			standalone = append(standalone, e)
+		}
+	}
+
+	for _, cid := range pkg.HasClasses() {
+		cls, exists := jt.Classes[cid]
+		if !exists {
+			continue
+		}
+		classEntries = append(classEntries, struct {
+			entry
+			cid javascript.ClassID
+		}{entry: entry{Name: cls.Name, Desc: cls.Description, Loc: cls.Loc}, cid: cid})
+	}
+
+	for _, vid := range pkg.HasExternalVars() {
+		v, exists := jt.ExternalVars[vid]
+		if !exists {
+			continue
+		}
+		vars = append(vars, entry{Name: v.Name, Desc: v.Description, Loc: v.Location})
+	}
+
+	sortByLine := func(s []entry) {
+		sort.Slice(s, func(i, j int) bool { return s[i].Loc.StartsAt < s[j].Loc.StartsAt })
+	}
+	sortByLine(standalone)
+	sort.Slice(classEntries, func(i, j int) bool { return classEntries[i].Loc.StartsAt < classEntries[j].Loc.StartsAt })
+	sortByLine(vars)
+	for _, v := range classMethods {
+		sortByLine(v)
+	}
+
+	total := len(standalone) + len(classEntries) + len(vars)
+	if total == 0 {
+		return
+	}
+	fmt.Print("\n# Context\n")
+
+	if len(standalone) > 0 {
+		fmt.Print("\n## Functions\n")
+		for _, e := range standalone {
+			desc := e.Desc
+			if desc == "" {
+				desc = "(no description)"
+			}
+			fmt.Printf("    %s (%s): %s\n", e.Name, lookup(e.Loc), desc)
+		}
+	}
+
+	if len(classEntries) > 0 {
+		fmt.Print("\n## Classes\n")
+		for _, ce := range classEntries {
+			desc := ce.Desc
+			if desc == "" {
+				desc = "(no description)"
+			}
+			fmt.Printf("    %s (%s): %s\n", ce.Name, lookup(ce.Loc), desc)
+			for _, m := range classMethods[ce.cid] {
+				mdesc := m.Desc
+				if mdesc == "" {
+					mdesc = "(no description)"
+				}
+				fmt.Printf("        %s.%s (%s): %s\n", ce.Name, m.Name, lookup(m.Loc), mdesc)
+			}
+		}
+	}
+
+	if len(vars) > 0 {
+		fmt.Print("\n## Variables\n")
+		for _, e := range vars {
+			desc := e.Desc
+			if desc == "" {
+				desc = "(no description)"
+			}
+			fmt.Printf("    %s (%s): %s\n", e.Name, lookup(e.Loc), desc)
+		}
 	}
 }
 

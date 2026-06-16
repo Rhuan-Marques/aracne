@@ -32,6 +32,7 @@ type ProviderConfig struct {
 type ProviderConfigEntry struct {
 	Key            string       `json:"key,omitempty"`
 	KeyEnv         string       `json:"key_env,omitempty"`
+	KeyFrom        string       `json:"key_from,omitempty"`
 	BaseURL        string       `json:"base_url,omitempty"`
 	ChatContract   ProviderName `json:"chat_contract,omitempty"`
 	PossibleModels []string     `json:"possible_models,omitempty"`
@@ -169,6 +170,7 @@ func normalizeProviderEntry(entry ProviderConfigEntry) ProviderConfigEntry {
 	entry.BaseURL = strings.TrimSpace(entry.BaseURL)
 	entry.ChatContract = ProviderName(strings.TrimSpace(string(entry.ChatContract)))
 	entry.KeyConfigured = false
+	entry.KeyFrom = ""
 	return entry
 }
 
@@ -212,17 +214,35 @@ func mergeProviderSecrets(next, current ProviderConfig) ProviderConfig {
 	}
 	for provider, entry := range next.Providers.Supported {
 		if entry.Key == "" && entry.KeyEnv == "" {
-			entry.Key = current.Providers.Supported[provider].Key
+			entry.Key = secretFromConfig(current, entry.KeyFrom, string(provider))
 			next.Providers.Supported[provider] = entry
 		}
 	}
 	for id, entry := range next.Providers.Custom {
 		if entry.Key == "" && entry.KeyEnv == "" {
-			entry.Key = current.Providers.Custom[id].Key
+			entry.Key = secretFromConfig(current, entry.KeyFrom, id)
 			next.Providers.Custom[id] = entry
 		}
 	}
 	return next
+}
+
+// secretFromConfig resolves a saved API key, honoring a key_from rename hint
+// (so renaming a custom provider carries its key over) before falling back to
+// the same id. Defeats the "blank save wipes the key" data-loss path.
+func secretFromConfig(current ProviderConfig, keyFrom, sameID string) string {
+	for _, id := range []string{strings.TrimSpace(keyFrom), sameID} {
+		if id == "" {
+			continue
+		}
+		if src, ok := current.Providers.Custom[id]; ok && src.Key != "" {
+			return src.Key
+		}
+		if src, ok := current.Providers.Supported[ProviderName(id)]; ok && src.Key != "" {
+			return src.Key
+		}
+	}
+	return ""
 }
 
 func supportedProviderModels() map[ProviderName]SupportedProviderModels {

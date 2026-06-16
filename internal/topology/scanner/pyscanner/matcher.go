@@ -45,11 +45,18 @@ func resolveBaseClassID(baseName string, cls python.PythonClass, gt *python.Pyth
 		return &samePkgID
 	}
 
+	// Deterministic global fallback: only resolve a bare base name when exactly
+	// one class in the whole topology carries it. The previous implementation
+	// returned the first match from a (randomly ordered) map range, producing
+	// non-deterministic and often wrong inheritance edges.
+	var matches []python.ClassID
 	for id := range gt.Classes {
 		if extractClassName(id) == baseName {
-			cid := python.ClassID(id)
-			return &cid
+			matches = append(matches, python.ClassID(id))
 		}
+	}
+	if len(matches) == 1 {
+		return &matches[0]
 	}
 
 	return nil

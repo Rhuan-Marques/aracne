@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"go/token"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -121,6 +122,10 @@ func Listen(addr, dbPath string) error {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/api/") && !localOriginAllowed(r) {
+		http.Error(w, "forbidden: cross-origin request rejected", http.StatusForbidden)
+		return
+	}
 	mux := http.NewServeMux()
 	mux.Handle("/", staticFileServer())
 	mux.HandleFunc("/api/ws", s.handleWebSocket)
@@ -368,19 +373,20 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			writeError(w, err)
 			return
 		}
-		if data, ok := raw["need_description"]; ok {
-			var values []domain.ResourceKind
-			if err := json.Unmarshal(data, &values); err != nil {
+		if data, ok := raw["descriptions"]; ok {
+			var section struct {
+				Kinds []domain.ResourceKind `json:"kinds"`
+			}
+			if err := json.Unmarshal(data, &section); err != nil {
 				writeError(w, err)
 				return
 			}
-			targets, err := helper.NormalizeDescribeTargets(values)
+			targets, err := helper.NormalizeDescribeTargets(section.Kinds)
 			if err != nil {
 				writeError(w, err)
 				return
 			}
-			cfg.NeedDescription = targets
-			cfg.DescribeTargets = nil
+			cfg.Descriptions.Kinds = targets
 		}
 		if data, ok := raw["description_batch_size"]; ok {
 			var value int
@@ -392,7 +398,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 				writeError(w, fmt.Errorf("description_batch_size must be greater than 0"))
 				return
 			}
-			cfg.DescriptionBatchSize = value
+			setExecutorBatchSize(cfg, value)
 		}
 		if err := helper.SaveConfig(cfg, path); err != nil {
 			writeError(w, err)
@@ -447,8 +453,44 @@ func (s *Server) handleOptimizationRules(w http.ResponseWriter, r *http.Request)
 	}
 }
 
+// setExecutorBatchSize writes the descriptions-executor max-batch-size to both
+// the chat agent (used by viz workflows) and the llm <any> agent (used by the
+// CLI), so the viz control affects both.
+func setExecutorBatchSize(cfg *helper.Config, value int) {
+	const name = "descriptions-generation-executor"
+	if cfg.Viz.Chat.Agents.Agents == nil {
+		cfg.Viz.Chat.Agents.Agents = map[string]helper.ChatAgentConfig{}
+	}
+	chatAg := cfg.Viz.Chat.Agents.Agents[name]
+	if chatAg.Params == nil {
+		chatAg.Params = map[string]int{}
+	}
+	chatAg.Params["max-batch-size"] = value
+	cfg.Viz.Chat.Agents.Agents[name] = chatAg
+
+	if cfg.LLM.Any.Agents == nil {
+		cfg.LLM.Any.Agents = map[string]helper.AgentConfig{}
+	}
+	llmAg := cfg.LLM.Any.Agents[name]
+	if llmAg.Params == nil {
+		llmAg.Params = map[string]int{}
+	}
+	llmAg.Params["max-batch-size"] = value
+	cfg.LLM.Any.Agents[name] = llmAg
+}
+
 func (s *Server) optimizationRulesPath() string {
-	return filepath.Join(filepath.Dir(s.dbPath), "optimization_rules.json")
+	cfg := helper.LoadConfig(helper.ConfigPath(s.dbPath))
+	rules := strings.TrimSpace(cfg.Viz.Graph.OptimizationRules)
+	if rules == "" {
+		return filepath.Join(filepath.Dir(s.dbPath), "optimization_rules.json")
+	}
+	if filepath.IsAbs(rules) {
+		return rules
+	}
+	// Relative config paths are resolved against the project root (the parent
+	// of the .aracne directory holding the topology db).
+	return filepath.Join(filepath.Dir(filepath.Dir(s.dbPath)), rules)
 }
 
 func (s *Server) readOptimizationRules() ([]OptimizationRule, error) {
@@ -1345,4 +1387,40 @@ func writeError(w http.ResponseWriter, err error) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusBadRequest)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+}
+
+// isLoopbackHost reports whether a host[:port] refers to the local machine.
+func isLoopbackHost(hostPort string) bool {
+	host := hostPort
+	if h, _, err := net.SplitHostPort(hostPort); err == nil {
+		host = h
+	}
+	host = strings.ToLower(strings.TrimSpace(host))
+	if host == "localhost" || host == "" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
+}
+
+// localOriginAllowed guards the local-only API against cross-site access and
+// DNS-rebinding. The Host header must resolve to loopback (a rebound public
+// domain will not), and any browser-supplied Origin must itself be loopback.
+// This is intentional for a localhost developer tool; binding to a non-loopback
+// address is not a supported configuration for the chat/API surface.
+func localOriginAllowed(r *http.Request) bool {
+	if !isLoopbackHost(r.Host) {
+		return false
+	}
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	return isLoopbackHost(u.Host) || strings.EqualFold(u.Host, r.Host)
 }

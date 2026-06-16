@@ -11,7 +11,6 @@ import (
 
 	"aracne/internal/helper"
 	"aracne/internal/prompts"
-	"aracne/internal/topology/domain"
 )
 
 func promptReplace(path string) bool {
@@ -35,10 +34,6 @@ func RunInit(args []string) {
 	claude := fs.Bool("claude", false, "Initialize Claude Code integration")
 	opencode := fs.Bool("opencode", false, "Initialize OpenCode integration")
 	global := fs.Bool("global", false, "Install globally")
-	readMode := fs.String("read-mode", "", "Read tool mode: native, mcp, or terminal")
-	editMode := fs.String("edit-mode", "", "Edit/write tool mode: native, mcp, or terminal")
-	otherMode := fs.String("other-mode", "", "Other topology tool mode: mcp or terminal")
-	grepMode := fs.String("grep-mode", "", "Grep/search tool mode: native, mcp, or terminal")
 	yes := fs.Bool("y", false, "Auto-confirm all replacement prompts")
 	fs.Parse(args)
 
@@ -47,127 +42,46 @@ func RunInit(args []string) {
 		*opencode = true
 	}
 
-	cfgPath := helper.ConfigPath(".aracne/topology.db")
-	cfg := helper.EnsureConfig(cfgPath)
-	changed := false
-	if *readMode != "" {
-		mode, err := parseReadToolMode(*readMode)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		cfg.ToolModes.Read = mode
-		changed = true
-	}
-	if *editMode != "" {
-		mode, err := parseEditToolMode(*editMode)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		cfg.ToolModes.Edit = mode
-		changed = true
-	}
-	if *otherMode != "" {
-		mode, err := parseOtherToolMode(*otherMode)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		cfg.ToolModes.Other = mode
-		changed = true
-	}
-	if *grepMode != "" {
-		mode, err := parseGrepToolMode(*grepMode)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		cfg.ToolModes.Grep = mode
-		changed = true
-	}
-	if changed {
-		if err := helper.SaveConfig(cfg, cfgPath); err != nil {
-			fmt.Fprintf(os.Stderr, "Error writing %s: %v\n", cfgPath, err)
-			os.Exit(1)
-		}
-	}
+	cfg := helper.EnsureConfig(helper.ConfigPath(".aracne/topology.db"))
 
 	if *opencode {
-		initOpenCode(*global, cfg.ToolModes, cfg.ReadSplit, cfg.DescriptionBatchSize, *yes)
+		initOpenCode(*global, cfg, *yes)
 	}
 	if *claude {
-		initClaudeCode(*global, cfg.ToolModes, cfg.ReadSplit, cfg.DescriptionBatchSize, *yes)
+		initClaudeCode(*global, cfg, *yes)
 	}
 }
 
-func parseReadToolMode(value string) (helper.ReadToolMode, error) {
-	switch helper.ReadToolMode(value) {
-	case helper.ReadModeNative, helper.ReadModeMCP, helper.ReadModeTerminal:
-		return helper.ReadToolMode(value), nil
-	default:
-		return "", fmt.Errorf("invalid --read-mode: %s (must be native, mcp, or terminal)", value)
-	}
-}
-
-func parseEditToolMode(value string) (helper.EditToolMode, error) {
-	switch helper.EditToolMode(value) {
-	case helper.EditModeNative, helper.EditModeMCP, helper.EditModeTerminal:
-		return helper.EditToolMode(value), nil
-	default:
-		return "", fmt.Errorf("invalid --edit-mode: %s (must be native, mcp, or terminal)", value)
-	}
-}
-
-func parseOtherToolMode(value string) (helper.OtherToolMode, error) {
-	switch helper.OtherToolMode(value) {
-	case helper.OtherModeMCP, helper.OtherModeTerminal:
-		return helper.OtherToolMode(value), nil
-	default:
-		return "", fmt.Errorf("invalid --other-mode: %s (must be mcp or terminal)", value)
-	}
-}
-
-func parseGrepToolMode(value string) (helper.GrepToolMode, error) {
-	switch helper.GrepToolMode(value) {
-	case helper.GrepModeNative, helper.GrepModeMCP, helper.GrepModeTerminal:
-		return helper.GrepToolMode(value), nil
-	default:
-		return "", fmt.Errorf("invalid --grep-mode: %s (must be native, mcp, or terminal)", value)
-	}
-}
-
-func initOpenCode(global bool, modes helper.ToolModes, readSplit map[domain.ResourceKind]bool, descriptionBatchSize int, autoYes bool) {
+func initOpenCode(global bool, cfg *helper.Config, autoYes bool) {
 	configPath, configDir, agentsMdPath := opencodePaths(global)
 	os.MkdirAll(configDir, 0755)
+	mainEff := cfg.EffectiveAgent("opencode", "main")
 
 	config := readJSONConfig(configPath)
-	if anyMCPMode(modes) {
-		if shouldWriteConfig(config, "mcp", configPath, "OpenCode", autoYes) {
-			mcpMap, _ := config["mcp"].(map[string]interface{})
-			if mcpMap == nil {
-				mcpMap = make(map[string]interface{})
-			}
-			mcpMap["aracne"] = map[string]interface{}{
-				"type":    "local",
-				"command": []string{"arac", "serve", "--tool-profile", "all"},
-				"enabled": true,
-			}
-			config["mcp"] = mcpMap
+	if shouldWriteConfig(config, "mcp", configPath, "OpenCode", autoYes) {
+		mcpMap, _ := config["mcp"].(map[string]interface{})
+		if mcpMap == nil {
+			mcpMap = make(map[string]interface{})
 		}
-	} else {
-		fmt.Println("[OpenCode] Terminal/native mode: no aracne MCP server needed")
+		mcpMap["aracne"] = map[string]interface{}{
+			"type":    "local",
+			"command": []string{"arac", "serve", "--tool-profile", "all", "--harness", "opencode"},
+			"enabled": true,
+		}
+		config["mcp"] = mcpMap
 	}
 
 	permissionMap, _ := config["permission"].(map[string]interface{})
 	if permissionMap == nil {
 		permissionMap = make(map[string]interface{})
 	}
-	permissionMap["read"] = nativePermission(modes.Read == helper.ReadModeNative)
-	permissionMap["edit"] = nativePermission(modes.Edit == helper.EditModeNative)
+	blocked := toolNameSet(mainEff.BlockedTools)
+	permissionMap["read"] = nativePermission(!blocked["read"])
+	permissionMap["edit"] = nativePermission(!blocked["edit"] && !blocked["write"])
+	permissionMap["bash"] = nativePermission(!blocked["bash"])
 	delete(permissionMap, "write")
 	permissionMap["aracne_*"] = "deny"
-	for _, toolName := range allowedMCPToolNames(modes, ToolProfileDefault, readSplit) {
+	for _, toolName := range mainEff.MCPTools {
 		permissionMap["aracne_"+toolName] = "allow"
 	}
 	config["permission"] = permissionMap
@@ -179,74 +93,63 @@ func initOpenCode(global bool, modes helper.ToolModes, readSplit map[domain.Reso
 	os.MkdirAll(commandsDir, 0755)
 	os.MkdirAll(agentsDir, 0755)
 
-	writeOpenCodePrimaryCommand(commandsDir, "descriptions-generate", "Generate descriptions for undocumented resources in the topology", "build", prompts.DescriptionsGenerateCommand("descriptions-generation-executor", descriptionBatchSize), autoYes)
+	batchSize := cfg.AgentParam("opencode", "descriptions-generation-executor", "max-batch-size", helper.DefaultDescriptionBatchSize)
+	writeOpenCodePrimaryCommand(commandsDir, "descriptions-generate", "Generate descriptions for undocumented resources in the topology", "build", prompts.DescriptionsGenerateCommand("descriptions-generation-executor", batchSize), autoYes)
 	writeOpenCodeCommand(commandsDir, "descriptions-apply", "Write topology descriptions back into source files as doc comments", "build", prompts.DescriptionsApplyCommand(), autoYes)
 	writeOpenCodeCommand(commandsDir, "descriptions_clear", "Clear stored topology descriptions", "build", prompts.DescriptionsClearCommand(), autoYes)
 	writeOpenCodeCommand(commandsDir, "bug-hunter", "Launch a Bug Hunter sub-agent to scan the entire topology for bugs", "bug-hunter", bugHunterCommandForAgent("bug-hunter"), autoYes)
 	writeOpenCodeCommand(commandsDir, "bug-judge", "Triage pending bugs by launching Bug Judge sub-agents for each node", "bug-judge", bugJudgeCommandForAgent("bug-judge"), autoYes)
 	writeOpenCodeCommand(commandsDir, "bug-solver", "Fix acknowledged bugs by launching Bug Solver sub-agents", "bug-solver", bugSolverCommandForAgent("bug-solver"), autoYes)
 
-	writeAgent(agentsDir, "descriptions-generation-executor", openCodeAgentContent("descriptions-generation-executor", "Generates descriptions for one assigned batch of undocumented topology resources", ToolProfileDescriptionsExecutor, modes, readSplit, prompts.DescriptionsGenerationExecutorPrompt()), autoYes)
-	writeAgent(agentsDir, "bug-hunter", openCodeAgentContent("bug-hunter", "Scans the entire project topology looking for bugs", ToolProfileBugHunter, modes, readSplit, prompts.BugHunterPrompt()), autoYes)
-	writeAgent(agentsDir, "bug-judge", openCodeAgentContent("bug-judge", "Triages pending bugs by comparing against dismissed bug patterns", ToolProfileBugJudge, modes, readSplit, prompts.BugJudgePrompt()), autoYes)
-	writeAgent(agentsDir, "bug-solver", openCodeAgentContent("bug-solver", "Fixes acknowledged bugs in the codebase and removes them", ToolProfileBugSolver, modes, readSplit, prompts.BugSolverPrompt()), autoYes)
+	writeAgent(agentsDir, "descriptions-generation-executor", openCodeAgentContent("Generates descriptions for one assigned batch of undocumented topology resources", cfg.EffectiveAgent("opencode", "descriptions-generation-executor"), prompts.DescriptionsGenerationExecutorPrompt()), autoYes)
+	writeAgent(agentsDir, "bug-hunter", openCodeAgentContent("Scans the entire project topology looking for bugs", cfg.EffectiveAgent("opencode", "bug-hunter"), prompts.BugHunterPrompt()), autoYes)
+	writeAgent(agentsDir, "bug-judge", openCodeAgentContent("Triages pending bugs by comparing against dismissed bug patterns", cfg.EffectiveAgent("opencode", "bug-judge"), prompts.BugJudgePrompt()), autoYes)
+	writeAgent(agentsDir, "bug-solver", openCodeAgentContent("Fixes acknowledged bugs in the codebase and removes them", cfg.EffectiveAgent("opencode", "bug-solver"), prompts.BugSolverPrompt()), autoYes)
 
-	if modes.Edit == helper.EditModeNative {
-		writeOpenCodeNativeEditPlugin(filepath.Join(configDir, "plugins"), autoYes)
-	}
-	writeMarkdownIntegrationFile(agentsMdPath, "OpenCode AGENTS.md", prompts.AgentsMdContentForModes(modes, readSplit))
+	writeOpenCodePlugins(mainEff.Plugins, configDir, autoYes)
+	writeMarkdownIntegrationFile(agentsMdPath, "OpenCode AGENTS.md", prompts.AgentsMdContentForAgent(mainEff))
 	fmt.Println("[OpenCode] Restart OpenCode to activate the topology workflow.")
 }
 
-func initClaudeCode(global bool, modes helper.ToolModes, readSplit map[domain.ResourceKind]bool, descriptionBatchSize int, autoYes bool) {
+func initClaudeCode(global bool, cfg *helper.Config, autoYes bool) {
 	mcpConfigPath, commandsDir, agentsDir, claudeMdPath := claudePaths(global)
+	claudeBaseDir := filepath.Dir(commandsDir)
+	mainEff := cfg.EffectiveAgent("claude_code", "main")
 
-	if anyMCPMode(modes) {
-		claudeConfig := readJSONConfig(mcpConfigPath)
-		if shouldWriteConfig(claudeConfig, "mcpServers", mcpConfigPath, "Claude Code", autoYes) {
-			mcpServers, _ := claudeConfig["mcpServers"].(map[string]interface{})
-			if mcpServers == nil {
-				mcpServers = make(map[string]interface{})
-			}
-			mcpServers["aracne"] = map[string]interface{}{
-				"command": "arac",
-				"args":    []string{"serve", "--tool-profile", string(ToolProfileDefault)},
-			}
-			claudeConfig["mcpServers"] = mcpServers
-			writeJSONConfig(mcpConfigPath, claudeConfig)
-			fmt.Printf("[Claude Code] MCP server configured in %s\n", mcpConfigPath)
+	claudeConfig := readJSONConfig(mcpConfigPath)
+	if shouldWriteConfig(claudeConfig, "mcpServers", mcpConfigPath, "Claude Code", autoYes) {
+		mcpServers, _ := claudeConfig["mcpServers"].(map[string]interface{})
+		if mcpServers == nil {
+			mcpServers = make(map[string]interface{})
 		}
-	} else {
-		fmt.Println("[Claude Code] Terminal/native mode: no aracne MCP server needed")
+		mcpServers["aracne"] = map[string]interface{}{
+			"command": "arac",
+			"args":    []string{"serve", "--tool-profile", "main", "--harness", "claude_code"},
+		}
+		claudeConfig["mcpServers"] = mcpServers
+		writeJSONConfig(mcpConfigPath, claudeConfig)
+		fmt.Printf("[Claude Code] MCP server configured in %s\n", mcpConfigPath)
 	}
 
 	os.MkdirAll(commandsDir, 0755)
 	os.MkdirAll(agentsDir, 0755)
 
-	writeCommand(commandsDir, "descriptions-generate", "Generate descriptions for undocumented resources in the topology", prompts.DescriptionsGenerateCommand("descriptions-generation-executor", descriptionBatchSize), autoYes)
+	batchSize := cfg.AgentParam("claude_code", "descriptions-generation-executor", "max-batch-size", helper.DefaultDescriptionBatchSize)
+	writeCommand(commandsDir, "descriptions-generate", "Generate descriptions for undocumented resources in the topology", prompts.DescriptionsGenerateCommand("descriptions-generation-executor", batchSize), autoYes)
 	writeCommand(commandsDir, "descriptions-apply", "Write topology descriptions back into source files as doc comments", prompts.DescriptionsApplyCommand(), autoYes)
 	writeCommand(commandsDir, "descriptions_clear", "Clear stored topology descriptions", prompts.DescriptionsClearCommand(), autoYes)
 	writeCommand(commandsDir, "bug-hunter", "Launch a Bug Hunter sub-agent to scan the entire topology for bugs", bugHunterCommandForAgent(".claude/agents/bug-hunter.md"), autoYes)
 	writeCommand(commandsDir, "bug-judge", "Triage pending bugs by launching Bug Judge sub-agents for each node", bugJudgeCommandForAgent(".claude/agents/bug-judge.md"), autoYes)
 	writeCommand(commandsDir, "bug-solver", "Fix acknowledged bugs by launching Bug Solver sub-agents", bugSolverCommandForAgent(".claude/agents/bug-solver.md"), autoYes)
 
-	writeAgent(agentsDir, "descriptions-generation-executor", claudeAgentContent("descriptions-generation-executor", "Generates descriptions for one assigned batch of undocumented topology resources", ToolProfileDescriptionsExecutor, modes, readSplit, prompts.DescriptionsGenerationExecutorPrompt()), autoYes)
-	writeAgent(agentsDir, "bug-hunter", claudeAgentContent("bug-hunter", "Scans the entire project topology looking for bugs", ToolProfileBugHunter, modes, readSplit, prompts.BugHunterPrompt()), autoYes)
-	writeAgent(agentsDir, "bug-judge", claudeAgentContent("bug-judge", "Triages pending bugs by comparing against dismissed bug patterns", ToolProfileBugJudge, modes, readSplit, prompts.BugJudgePrompt()), autoYes)
-	writeAgent(agentsDir, "bug-solver", claudeAgentContent("bug-solver", "Fixes acknowledged bugs in the codebase and removes them", ToolProfileBugSolver, modes, readSplit, prompts.BugSolverPrompt()), autoYes)
+	writeAgent(agentsDir, "descriptions-generation-executor", claudeAgentContent("descriptions-generation-executor", "Generates descriptions for one assigned batch of undocumented topology resources", cfg.EffectiveAgent("claude_code", "descriptions-generation-executor"), prompts.DescriptionsGenerationExecutorPrompt()), autoYes)
+	writeAgent(agentsDir, "bug-hunter", claudeAgentContent("bug-hunter", "Scans the entire project topology looking for bugs", cfg.EffectiveAgent("claude_code", "bug-hunter"), prompts.BugHunterPrompt()), autoYes)
+	writeAgent(agentsDir, "bug-judge", claudeAgentContent("bug-judge", "Triages pending bugs by comparing against dismissed bug patterns", cfg.EffectiveAgent("claude_code", "bug-judge"), prompts.BugJudgePrompt()), autoYes)
+	writeAgent(agentsDir, "bug-solver", claudeAgentContent("bug-solver", "Fixes acknowledged bugs in the codebase and removes them", cfg.EffectiveAgent("claude_code", "bug-solver"), prompts.BugSolverPrompt()), autoYes)
 
-	if modes.Edit == helper.EditModeNative {
-		settingsPath := filepath.Join(filepath.Dir(commandsDir), "settings.json")
-		hooksDir := filepath.Join(filepath.Dir(commandsDir), "hooks")
-		writeClaudeNativeEditHook(settingsPath, hooksDir, autoYes)
-	}
-
-	writeMarkdownIntegrationFile(claudeMdPath, "Claude Code CLAUDE.md", prompts.ClaudeMdContentForModes(modes, readSplit))
+	writeClaudePlugins(mainEff.Plugins, claudeBaseDir, autoYes)
+	writeMarkdownIntegrationFile(claudeMdPath, "Claude Code CLAUDE.md", prompts.ClaudeMdContentForAgent(mainEff))
 	fmt.Println("[Claude Code] Restart Claude Code to activate the topology workflow.")
-}
-
-func anyMCPMode(modes helper.ToolModes) bool {
-	return modes.Read == helper.ReadModeMCP || modes.Edit == helper.EditModeMCP || modes.Other == helper.OtherModeMCP || modes.Grep == helper.GrepModeMCP
 }
 
 func nativePermission(allowed bool) string {
@@ -254,6 +157,14 @@ func nativePermission(allowed bool) string {
 		return "allow"
 	}
 	return "deny"
+}
+
+func toolNameSet(names []string) map[string]bool {
+	set := make(map[string]bool, len(names))
+	for _, n := range names {
+		set[n] = true
+	}
+	return set
 }
 
 func opencodePaths(global bool) (string, string, string) {
@@ -334,281 +245,59 @@ func bugSolverCommandForAgent(agentRef string) string {
 	return "Use the " + agentRef + " agent to fix acknowledged bugs. It must inspect each acknowledged bug, apply the minimal fix, and delete the bug report after the fix is complete."
 }
 
-func claudeAgentContent(name, description string, profile ToolProfile, modes helper.ToolModes, readSplit map[domain.ResourceKind]bool, prompt string) string {
-	return fmt.Sprintf("---\nname: %s\ndescription: %s\ntools: %s\n%s---\n\n%s\n\n%s", name, description, strings.Join(claudeToolsForProfile(modes, profile, readSplit), ", "), claudeMCPServersFrontmatter(modes, profile), prompt, terminalGuidance(modes, profile, readSplit))
+func claudeAgentContent(name, description string, eff helper.AgentConfig, prompt string) string {
+	return fmt.Sprintf("---\nname: %s\ndescription: %s\ntools: %s\n%s---\n\n%s\n", name, description, strings.Join(claudeToolsForAgent(eff), ", "), claudeMCPServersFrontmatter(name), prompt)
 }
 
-func openCodeAgentContent(name, description string, profile ToolProfile, modes helper.ToolModes, readSplit map[domain.ResourceKind]bool, prompt string) string {
-	return fmt.Sprintf("---\ndescription: %s\nmode: subagent\npermission:\n%s---\n\n%s\n\n%s", description, openCodePermissions(modes, profile, readSplit), prompt, terminalGuidance(modes, profile, readSplit))
+func openCodeAgentContent(description string, eff helper.AgentConfig, prompt string) string {
+	return fmt.Sprintf("---\ndescription: %s\nmode: subagent\npermission:\n%s---\n\n%s\n", description, openCodePermissionsForAgent(eff), prompt)
 }
 
-func claudeMCPServersFrontmatter(modes helper.ToolModes, profile ToolProfile) string {
-	if !anyMCPMode(modes) {
-		return ""
-	}
-	return fmt.Sprintf("mcpServers:\n  - aracne:\n      type: stdio\n      command: arac\n      args: [\"serve\", \"--tool-profile\", \"%s\"]\n", profile)
+func claudeMCPServersFrontmatter(agentName string) string {
+	return fmt.Sprintf("mcpServers:\n  - aracne:\n      type: stdio\n      command: arac\n      args: [\"serve\", \"--tool-profile\", \"%s\", \"--harness\", \"claude_code\"]\n", agentName)
 }
 
-func claudeToolsForProfile(modes helper.ToolModes, profile ToolProfile, readSplit map[domain.ResourceKind]bool) []string {
-	useSplit := len(readSplit) > 0 && profile != ToolProfileDescriptionsExecutor
-	splitKinds := readSplit
-
+// claudeToolsForAgent builds the Claude `tools:` allow-list: the agent's MCP
+// tools (prefixed) plus each native tool not present in blocked_tools.
+func claudeToolsForAgent(eff helper.AgentConfig) []string {
 	var result []string
-	if modes.Read == helper.ReadModeNative {
-		result = append(result, "Read")
-	} else if modes.Read == helper.ReadModeMCP {
-		if useSplit {
-			for _, name := range splitReadToolNames(profile, splitKinds) {
-				result = append(result, "mcp__aracne__"+name)
-			}
-		} else if profileAllows(profile, "read") {
-			result = append(result, "mcp__aracne__read")
-		}
+	for _, name := range eff.MCPTools {
+		result = append(result, "mcp__aracne__"+name)
 	}
-	if modes.Edit == helper.EditModeNative {
-		if profileAllows(profile, "edit") {
-			result = append(result, "Edit")
+	blocked := toolNameSet(eff.BlockedTools)
+	for _, n := range nativeToolNames() {
+		if !blocked[n.key] {
+			result = append(result, n.claude)
 		}
-		if profileAllows(profile, "write") {
-			result = append(result, "Write")
-		}
-	} else if modes.Edit == helper.EditModeMCP {
-		for _, name := range []string{"edit", "write"} {
-			if profileAllows(profile, name) {
-				result = append(result, "mcp__aracne__"+name)
-			}
-		}
-	}
-	if modes.Other == helper.OtherModeMCP {
-		for _, name := range profileTools(profile) {
-			if isReadToolName(name) || name == "edit" || name == "write" || name == "grep" {
-				continue
-			}
-			result = append(result, "mcp__aracne__"+name)
-		}
-	}
-	if modes.Grep == helper.GrepModeNative && profileAllows(profile, "grep") {
-		result = append(result, "Grep")
-	} else if modes.Grep == helper.GrepModeMCP && profileAllows(profile, "grep") {
-		result = append(result, "mcp__aracne__grep")
-	}
-	if needsTerminal(modes) {
-		result = append(result, "Bash")
 	}
 	return result
 }
 
-func openCodePermissions(modes helper.ToolModes, profile ToolProfile, readSplit map[domain.ResourceKind]bool) string {
+// openCodePermissionsForAgent builds the OpenCode permission block: native
+// tools allowed unless blocked, all aracne tools denied except the agent's
+// MCP tools.
+func openCodePermissionsForAgent(eff helper.AgentConfig) string {
+	blocked := toolNameSet(eff.BlockedTools)
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("  read: %s\n", nativePermission(modes.Read == helper.ReadModeNative)))
-	canEditNatively := modes.Edit == helper.EditModeNative && (profileAllows(profile, "edit") || profileAllows(profile, "write"))
-	b.WriteString(fmt.Sprintf("  edit: %s\n", nativePermission(canEditNatively)))
-	if needsTerminal(modes) {
-		b.WriteString("  bash: allow\n")
-	}
+	b.WriteString(fmt.Sprintf("  read: %s\n", nativePermission(!blocked["read"])))
+	b.WriteString(fmt.Sprintf("  edit: %s\n", nativePermission(!blocked["edit"] && !blocked["write"])))
+	b.WriteString(fmt.Sprintf("  bash: %s\n", nativePermission(!blocked["bash"])))
 	b.WriteString("  \"aracne_*\": deny\n")
-	for _, toolName := range allowedMCPToolNames(modes, profile, readSplit) {
+	for _, toolName := range eff.MCPTools {
 		b.WriteString(fmt.Sprintf("  \"aracne_%s\": allow\n", toolName))
 	}
 	return b.String()
 }
 
-func allowedMCPToolNames(modes helper.ToolModes, profile ToolProfile, readSplit map[domain.ResourceKind]bool) []string {
-	useSplit := len(readSplit) > 0 && profile != ToolProfileDescriptionsExecutor
-
-	splitEnabled := map[string]bool{}
-	if modes.Read == helper.ReadModeMCP && useSplit {
-		for _, name := range splitReadToolNames(profile, readSplit) {
-			splitEnabled[name] = true
-		}
-	}
-
-	var result []string
-	for _, name := range profileTools(profile) {
-		switch {
-		case name == "read":
-			if modes.Read == helper.ReadModeMCP && !useSplit {
-				result = append(result, name)
-			}
-		case isReadToolName(name):
-			// Split read tools (read_function, read_struct, read_interface,
-			// read_named_type, read_file, read_package, read_dependency) are
-			// gated by the Read mode and the read_split kinds, mirroring the
-			// server registry in BuildToolRegistry.
-			if splitEnabled[name] {
-				result = append(result, name)
-			}
-		case name == "edit" || name == "write":
-			if modes.Edit == helper.EditModeMCP {
-				result = append(result, name)
-			}
-		case name == "grep":
-			if modes.Grep == helper.GrepModeMCP {
-				result = append(result, name)
-			}
-		default:
-			if modes.Other == helper.OtherModeMCP {
-				result = append(result, name)
-			}
-		}
-	}
-	return result
-}
-
-// isReadToolName reports whether name is one of the read tools (the unsplit
-// "read" plus the per-kind split read tools). These are gated by the Read tool
-// mode and the read_split configuration, never by the Other mode.
-func isReadToolName(name string) bool {
-	switch name {
-	case "read", "read_function", "read_struct", "read_interface", "read_named_type", "read_file", "read_package", "read_dependency":
-		return true
-	default:
-		return false
-	}
-}
-
-// splitReadToolNames returns the split read tool names enabled for the given
-// profile and read_split kinds, in a deterministic order. It mirrors the
-// per-kind registration performed by BuildToolRegistry so that the generated
-// client allow-lists exactly match the tools the MCP server exposes.
-func splitReadToolNames(profile ToolProfile, splitKinds map[domain.ResourceKind]bool) []string {
-	var names []string
-	if profileAllows(profile, "read_function") && (splitKinds[domain.ResourceFunction] || splitKinds[domain.ResourceMethod]) {
-		names = append(names, "read_function")
-	}
-	if profileAllows(profile, "read_struct") && splitKinds[domain.ResourceType] {
-		names = append(names, "read_struct")
-	}
-	if profileAllows(profile, "read_interface") && splitKinds[domain.ResourceInterface] {
-		names = append(names, "read_interface")
-	}
-	if profileAllows(profile, "read_named_type") && splitKinds[domain.ResourceNamedType] {
-		names = append(names, "read_named_type")
-	}
-	if profileAllows(profile, "read_file") && splitKinds[domain.ResourceFile] {
-		names = append(names, "read_file")
-	}
-	if profileAllows(profile, "read_package") && splitKinds[domain.ResourcePackage] {
-		names = append(names, "read_package")
-	}
-	if profileAllows(profile, "read_dependency") && splitKinds[domain.ResourceDependency] {
-		names = append(names, "read_dependency")
-	}
-	return names
-}
-
-func profileAllows(profile ToolProfile, toolName string) bool {
-	for _, name := range profileTools(profile) {
-		if name == toolName {
-			return true
-		}
-	}
-	return false
-}
-
-func needsTerminal(modes helper.ToolModes) bool {
-	return modes.Read == helper.ReadModeTerminal || modes.Edit == helper.EditModeTerminal || modes.Other == helper.OtherModeTerminal || modes.Grep == helper.GrepModeTerminal
-}
-
-func terminalGuidance(modes helper.ToolModes, profile ToolProfile, readSplit map[domain.ResourceKind]bool) string {
-	if !needsTerminal(modes) {
-		return ""
-	}
-	useSplit := len(readSplit) > 0 && profile != ToolProfileDescriptionsExecutor
-	var lines []string
-
-	// Read tools are governed by the Read tool mode (mirrors BuildToolRegistry),
-	// not the Other mode. In terminal mode every resource kind is read via the
-	// same `arac read` command; list one line per enabled kind.
-	if modes.Read == helper.ReadModeTerminal {
-		if useSplit {
-			for _, name := range splitReadToolNames(profile, readSplit) {
-				lines = append(lines, "- `arac read <resource-id>` to "+terminalReadDescription(name))
-			}
-		} else if profileAllows(profile, "read") {
-			lines = append(lines, "- `arac read <resource-id>` to read resources or files")
-		}
-	}
-
-	for _, name := range profileTools(profile) {
-		switch {
-		case isReadToolName(name):
-			// Handled above, gated by the Read mode.
-		case name == "edit":
-			if modes.Edit == helper.EditModeTerminal {
-				lines = append(lines, "- `arac edit` with JSON stdin for exact string replacement")
-			}
-		case name == "write":
-			if modes.Edit == helper.EditModeTerminal {
-				lines = append(lines, "- `arac write` with JSON stdin for file writes")
-			}
-		case name == "grep":
-			if modes.Grep == helper.GrepModeTerminal {
-				lines = append(lines, "- `arac grep <pattern> [path]` to search file contents with topology resource metadata")
-			}
-		default:
-			if modes.Other == helper.OtherModeTerminal {
-				lines = append(lines, "- `"+terminalCommandForTool(name)+"`")
-			}
-		}
-	}
-	if len(lines) == 0 {
-		return ""
-	}
-	return "## Terminal arac Commands\n\nUse only these arac commands for terminal-mode topology operations:\n" + strings.Join(lines, "\n") + "\n"
-}
-
-// terminalReadDescription returns the human-readable suffix for a per-kind
-// `arac read` guidance line in terminal mode.
-func terminalReadDescription(toolName string) string {
-	switch toolName {
-	case "read_function":
-		return "read a function"
-	case "read_struct":
-		return "read a struct/type"
-	case "read_interface":
-		return "read an interface"
-	case "read_named_type":
-		return "read a named type"
-	case "read_file":
-		return "read a file"
-	case "read_package":
-		return "read a package"
-	case "read_dependency":
-		return "read a dependency"
-	default:
-		return "read a resource"
-	}
-}
-
-func terminalCommandForTool(name string) string {
-	switch name {
-	case "read_function":
-		return "arac read <resource-id>"
-	case "read_struct":
-		return "arac read <resource-id>"
-	case "read":
-		return "arac read <resource-id>"
-	case "grep":
-		return "arac grep <pattern> [path]"
-	case "warnings_list":
-		return "arac warnings list"
-	case "bug_report":
-		return "arac bug report --node <id> --description <text>"
-	case "bug_list":
-		return "arac bug list [--node <id>] [--state <state>]"
-	case "bug_acknowledge":
-		return "arac bug acknowledge <bugID>"
-	case "bug_dismiss":
-		return "arac bug dismiss <bugID>"
-	case "bug_delete":
-		return "arac bug delete <bugID>"
-	case "node_list_no_description":
-		return "arac resource list --no-description"
-	case "update_description":
-		return "arac update-description <id> <kind> <desc>"
-	default:
-		return "Aracne " + name
+// nativeToolNames maps the aracne-relevant native tool keys to their Claude
+// (capitalized) tool names.
+func nativeToolNames() []struct{ key, claude string } {
+	return []struct{ key, claude string }{
+		{"read", "Read"},
+		{"grep", "Grep"},
+		{"edit", "Edit"},
+		{"write", "Write"},
+		{"bash", "Bash"},
 	}
 }
 

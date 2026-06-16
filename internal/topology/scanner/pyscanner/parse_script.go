@@ -33,15 +33,33 @@ def decorator_names(node):
     return [expr_str(d) for d in getattr(node, 'decorator_list', [])]
 
 def is_abstract(decorators):
+    abstract_names = ('abstractmethod', 'abstractproperty',
+                      'abstractclassmethod', 'abstractstaticmethod')
     for d in decorators:
-        if d in ('abstractmethod', 'abc.abstractmethod'):
+        if d.split('.')[-1] in abstract_names:
             return True
     return False
+
+def walk_no_nested_scopes(node):
+    # Like ast.walk, but does not descend into nested function/class/lambda
+    # scopes, so an inner function's calls are not attributed to its parent.
+    todo = [node]
+    i = 0
+    while i < len(todo):
+        cur = todo[i]
+        i += 1
+        yield cur
+        for child in ast.iter_child_nodes(cur):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+                continue
+            todo.append(child)
 
 def extract_body_calls(body):
     calls = []
     for stmt in body:
-        for node in ast.walk(stmt):
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        for node in walk_no_nested_scopes(stmt):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
                 if isinstance(node.func.value, ast.Name):
                     calls.append({
@@ -102,7 +120,9 @@ def extract_body(body, parent, import_map):
                 variables.append({
                     'name': item.target.id,
                     'typing': expr_str(item.annotation),
-                    'value': v
+                    'value': v,
+                    'lineno': item.lineno,
+                    'end_lineno': getattr(item, 'end_lineno', item.lineno),
                 })
         elif t == 'Assign':
             v = expr_str(item.value) if item.value else ''
@@ -111,20 +131,41 @@ def extract_body(body, parent, import_map):
                     variables.append({
                         'name': target.id,
                         'typing': '',
-                        'value': v
+                        'value': v,
+                        'lineno': item.lineno,
+                        'end_lineno': getattr(item, 'end_lineno', item.lineno),
                     })
+        elif t in ('If', 'Try', 'With', 'AsyncWith', 'For', 'AsyncFor', 'While'):
+            nested_bodies = [getattr(item, 'body', []),
+                             getattr(item, 'orelse', []),
+                             getattr(item, 'finalbody', [])]
+            for handler in getattr(item, 'handlers', []):
+                nested_bodies.append(getattr(handler, 'body', []))
+            for nb in nested_bodies:
+                if nb:
+                    nf, nc, nv = extract_body(nb, parent, import_map)
+                    functions.extend(nf)
+                    classes.extend(nc)
+                    variables.extend(nv)
         elif t == 'Expr':
             pass
     return functions, classes, variables
 
 def parse_func(node, parent, import_map):
     decs = decorator_names(node)
-    is_prop = any('property' in d or d.endswith('.setter') for d in decs)
+    is_prop = any(d in ('property', 'cached_property', 'functools.cached_property')
+                  or d.endswith('.setter') or d.endswith('.getter') for d in decs)
     params = []
-    for attr_name in ('args', 'posonlyargs', 'kwonlyargs'):
+    for attr_name in ('posonlyargs', 'args', 'kwonlyargs'):
         for a in getattr(getattr(node, 'args'), attr_name, []):
             if hasattr(a, 'arg'):
                 params.append(var_def(a))
+    vararg = getattr(node.args, 'vararg', None)
+    if vararg is not None:
+        params.append(var_def(vararg))
+    kwarg = getattr(node.args, 'kwarg', None)
+    if kwarg is not None:
+        params.append(var_def(kwarg))
     results = []
     if getattr(node, 'returns', None):
         results.append({'name': '', 'typing': expr_str(node.returns)})
@@ -184,11 +225,12 @@ def parse_file(path, module_root):
                 imports.append({'name': alias.name, 'alias': key})
         elif t == 'ImportFrom':
             mod = node.module or ''
+            level = getattr(node, 'level', 0) or 0
             for alias in node.names:
                 full = (mod + '.' + alias.name) if mod else alias.name
                 key = alias.asname or alias.name
                 import_map[key] = full
-                imports.append({'name': full, 'alias': key, 'module': mod})
+                imports.append({'name': full, 'alias': key, 'module': mod, 'level': level})
 
     relevant_nodes = [n for n in ast.iter_child_nodes(tree)
                       if type(n).__name__ not in ('Import', 'ImportFrom')]

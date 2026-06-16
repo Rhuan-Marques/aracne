@@ -8,7 +8,7 @@ The topology is a directed graph can enhance your information about the reposito
 
 **Navigation Flow:**
 1. Use `ls` to understand the project file layout
-2. Use Use lookup MCP tools to get a resource's full context with interconnected relationships
+2. Use lookup MCP tools to get a resource's full context with interconnected relationships
 
 **Note: Never try to use `read` native tool, use MCP lookups instead**
 
@@ -17,34 +17,37 @@ The topology is a directed graph can enhance your information about the reposito
 
 Note: Do *not* use "cat", "Get-Content" or any other OS command to read files## Grep/Search
 
-Use your native `grep`/`Grep` search tool for content search. When you need topology metadata in results, use `arac grep <pattern> [path]`; it returns `path:line:match` plus `ResourceID` and `Description` when a match maps to a topology resource.
+Use the MCP tool `mcp__aracne__grep` for content search. It returns `path:line:match` plus `ResourceID` and `Description` when a match maps to a topology resource.
 
-## Resource Context
+Do *not* use your native `grep` tool.
+Do not use `grep`, `Select-String` or `rg` in the terminal## Resource Context
 
 When you call a MCP Lookup Tool, the output has two sections:
 
 **Code Block:** The resource's full source code, plus relevant imports and enclosing type (for methods).
 
-**`# CONTEXT:` Section:** A structured hierarchical listing of everything the resource touches:
+**`# CONTEXT:` Section:** A structured hierarchical listing of everything the resource touches. Each entry is keyed by the resource's full ID, which you can pass directly to a lookup tool to drill deeper:
 
 ```
 # CONTEXT:
-## InterfaceName: Description
-    ImplStruct: Description
-        ImplStruct.Method: Description
-## OtherStruct: Description
-    OtherStruct.Method: Description
-## CalledFunction: Description
-## ExtVarName = value
+## pkg.InterfaceName: Description
+    pkg.ImplStruct: Description
+        pkg.(ImplStruct).Method: Description
+## pkg.OtherStruct: Description
+    pkg.(OtherStruct).Method: Description
+## pkg.CalledFunction: Description
+## pkg.ExtVarName = value
 ```
 
 Use the CONTEXT section to understand relationships **without making additional tool calls**.
 
 ## Edit and Write:
 
-You can edit files using your native `edit` tool.
-You can write files using your native `write` tool.
+You can edit files using the MCP tool `mcp__aracne__edit`.
+You can write files using the MCP tool `mcp__aracne__write`.
 After editing or writing, the context for the topology will be automatically updated to reflect your actions.
+
+**Note: NEVER try to edit or write using your native tools**
 
 ## Other:
 

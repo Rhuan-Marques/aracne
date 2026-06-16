@@ -292,7 +292,7 @@ func (ba *bodyAnalyzer) resolveQualifiedCall(xName, selName string) {
 			return
 		}
 
-		if ba.pr.ModulePath != "" && strings.HasPrefix(impPath, ba.pr.ModulePath) {
+		if isInternalImport(impPath, ba.pr.ModulePath) {
 			ba.addWarning(domain.WarnUseMissingNode, string(fnTargetID),
 				fmt.Sprintf("function %s calls %s which does not exist", ba.callerID, fnTargetID))
 		}
@@ -420,7 +420,7 @@ func (ba *bodyAnalyzer) resolveCompositeLit(lit *ast.CompositeLit) {
 			fmt.Sprintf("function %s references struct %s which does not exist", ba.callerID, structID))
 	case *ast.SelectorExpr:
 		if x, ok := t.X.(*ast.Ident); ok {
-			if impPath, ok := ba.pr.ImportMap[x.Name]; ok && strings.HasPrefix(impPath, ba.pr.ModulePath) {
+			if impPath, ok := ba.pr.ImportMap[x.Name]; ok && isInternalImport(impPath, ba.pr.ModulePath) {
 				internalPkg := golang.PackagePath(impPath)
 				structID := golang.StructID(string(internalPkg) + "." + t.Sel.Name)
 				if _, exists := ba.gt.Structs[structID]; exists {
@@ -442,6 +442,9 @@ func (ba *bodyAnalyzer) resolveCompositeLit(lit *ast.CompositeLit) {
 }
 
 func (ba *bodyAnalyzer) resolveIdentRef(ident *ast.Ident) {
+	if ident.Name == "_" || ba.knownNames[ident.Name] {
+		return
+	}
 	varID := golang.ExternalVarID(string(ba.pr.PkgPath) + "." + ident.Name)
 	if _, exists := ba.gt.ExternalVars[varID]; exists {
 		ba.add(golang.ConnUsesExtVar, string(varID))
@@ -462,6 +465,15 @@ func (ba *bodyAnalyzer) resolveAssignStmt(stmt *ast.AssignStmt) {
 	if stmt.Tok != token.DEFINE {
 		return
 	}
+
+	// Multi-value assignment from a single call: a, b := f()
+	if len(stmt.Rhs) == 1 && len(stmt.Lhs) > 1 {
+		if call, ok := stmt.Rhs[0].(*ast.CallExpr); ok {
+			ba.resolveMultiValueCallAssign(stmt.Lhs, call)
+			return
+		}
+	}
+
 	for i, lhs := range stmt.Lhs {
 		ident, ok := lhs.(*ast.Ident)
 		if !ok || ident.Name == "_" {
@@ -573,6 +585,67 @@ func (ba *bodyAnalyzer) resolveCallExprAssign(name string, call *ast.CallExpr) {
 
 	if iid := paramTypeNameToInterface(returnType, ba.pr.PkgPath, ba.pr.ImportMap, ba.pr.ModulePath, ba.gt); iid != nil {
 		ba.varIfaceMap[name] = *iid
+	}
+}
+
+// resolveMultiValueCallAssign handles `a, b := f()` where one call feeds several
+// LHS names; it maps each name to the struct/interface type of the corresponding
+// return value so later method calls on those names resolve.
+func (ba *bodyAnalyzer) resolveMultiValueCallAssign(lhs []ast.Expr, call *ast.CallExpr) {
+	for _, l := range lhs {
+		if ident, ok := l.(*ast.Ident); ok && ident.Name != "_" {
+			ba.knownNames[ident.Name] = true
+		}
+	}
+
+	fun := call.Fun
+	if ile, ok := fun.(*ast.IndexListExpr); ok {
+		fun = ile.X
+	}
+
+	var funcID golang.FunctionID
+	switch fn := fun.(type) {
+	case *ast.Ident:
+		funcID = golang.FunctionID(string(ba.pr.PkgPath) + "." + fn.Name)
+	case *ast.SelectorExpr:
+		if x, ok := fn.X.(*ast.Ident); ok {
+			if impPath, ok := ba.pr.ImportMap[x.Name]; ok {
+				funcID = golang.FunctionID(impPath + "." + fn.Sel.Name)
+			}
+		}
+	default:
+		return
+	}
+	if funcID == "" {
+		return
+	}
+
+	targetFunc, ok := ba.gt.Functions[funcID]
+	if !ok {
+		return
+	}
+
+	for i, l := range lhs {
+		ident, ok := l.(*ast.Ident)
+		if !ok || ident.Name == "_" {
+			continue
+		}
+		if i >= len(targetFunc.Output) {
+			continue
+		}
+		returnType := targetFunc.Output[i].Typing
+		if returnType == "" {
+			continue
+		}
+		if sid := paramTypeNameToStruct(returnType, ba.pr.PkgPath, ba.pr.ImportMap, ba.pr.ModulePath); sid != nil {
+			if _, ok := ba.gt.Structs[*sid]; ok {
+				ba.varTypeMap[ident.Name] = *sid
+				continue
+			}
+		}
+		if iid := paramTypeNameToInterface(returnType, ba.pr.PkgPath, ba.pr.ImportMap, ba.pr.ModulePath, ba.gt); iid != nil {
+			ba.varIfaceMap[ident.Name] = *iid
+		}
 	}
 }
 

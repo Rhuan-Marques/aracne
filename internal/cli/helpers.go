@@ -11,6 +11,7 @@ import (
 	"aracne/internal/topology/domain"
 	"aracne/internal/topology/scanner"
 	"aracne/internal/topology/scanner/goscanner"
+	"aracne/internal/topology/scanner/jsscanner"
 	"aracne/internal/topology/scanner/pyscanner"
 )
 
@@ -18,6 +19,8 @@ func NewScannerRegistry() *scanner.Registry {
 	reg := scanner.NewRegistry()
 	reg.Register(goscanner.NewGoScanner())
 	reg.Register(pyscanner.NewPythonScanner())
+	reg.Register(jsscanner.NewJavaScriptScanner())
+	reg.Register(jsscanner.NewTypeScriptScanner())
 	return reg
 }
 

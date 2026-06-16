@@ -191,11 +191,11 @@ func Hello() {}
 	mustRun(t, dir, "scan", "-root", dir, "-output", dbPath)
 
 	configPath := filepath.Join(filepath.Dir(dbPath), "config.json")
-	writeFile(t, configPath, `{"scan_mode": "all"}`)
+	writeFile(t, configPath, `{"scan": {"mode": "all"}}`)
 
 	out := mustRun(t, dir, "scan", "-root", dir, "-output", dbPath)
 
 	if !strings.Contains(out, "Full re-scan") {
-		t.Fatalf("expected 'Full re-scan' from config scan_mode=all, got:\n%s", dir)
+		t.Fatalf("expected 'Full re-scan' from config scan.mode=all, got:\n%s", out)
 	}
 }

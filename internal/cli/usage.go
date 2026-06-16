@@ -3,7 +3,7 @@ package cli
 import "fmt"
 
 func PrintUsage() {
-	fmt.Println(`arac - Go/Python project topology analyzer
+	fmt.Println(`arac - Go/Python/JavaScript/TypeScript project topology analyzer
 
 Usage:
   Aracne scan    [flags]    Incremental scan (changed files only); --all for full re-scan, --hard for full rebuild
@@ -38,11 +38,13 @@ Flags for "scan":
   -output <file>  Output SQLite database path (default ".aracne/topology.db")
   --all           Re-scan all files (preserves descriptions)
   --hard          Force full rebuild from scratch (clears descriptions and bugs)
-  --default       Force default incremental scan (overrides .aracne/config.json scan_mode)
+  --default       Force default incremental scan (overrides .aracne/config.json scan.mode)
   --debug         Compare warnings before and after scan, print differences
 
 Flags for "serve":
-  --tool-profile <profile>  Tool profile: default, descriptions-executor, bug-hunter, bug-judge, bug-solver, or all
+  --tool-profile <agent>    Agent whose tools to serve: main, all, or a configured agent name
+                            (bug-hunter, bug-judge, bug-solver, descriptions-generation-executor)
+  --harness <name>          Harness whose per-agent overrides apply: claude_code (default) or opencode
 
 Flags for "viz serve":
   --db <path>      Topology database path (default ".aracne/topology.db")
@@ -52,7 +54,7 @@ Flags for "grep":
   --db <path>      Topology database path (default ".aracne/topology.db")
 
 Flags for "descriptions generate":
-  --targets <kinds>       Comma-separated resource kinds overriding config need_description (default: function,method,type,interface,file)
+  --targets <kinds>       Comma-separated resource kinds overriding config descriptions.kinds (default: function,method,type,interface,file)
   --batch-size <n>        Maximum resources assigned to each description executor (default 5)
   --parallel <n>          Maximum description executors to run concurrently (default 4)
   --max-retries <n>       Maximum executor attempts per resource (default 3)
@@ -80,20 +82,13 @@ Flags for "init":
   --claude              Initialize Claude Code integration
   --opencode            Initialize OpenCode integration
   --global              Install to user-level (applies across all projects)
-  --read-mode <mode>    native, mcp, or terminal (default from config: mcp)
-  --edit-mode <mode>    native, mcp, or terminal; governs edit and write (default from config: native)
-  --other-mode <mode>   mcp or terminal (default from config: mcp)
-  --grep-mode <mode>    native, mcp, or terminal (default from config: native)
   -y                    Auto-confirm all replacement prompts
 
   Without flags, initializes both Claude Code and OpenCode.
-
-  Config file: .aracne/config.json supports "scan_mode", "tool_modes", and "need_description".
-    tool_modes.read:  "native", "mcp", or "terminal"
-    tool_modes.edit:  "native", "mcp", or "terminal"
-    tool_modes.other: "mcp" or "terminal"
-    tool_modes.grep:  "native", "mcp", or "terminal"
-    need_description: ["function", "method", "type", "interface", "file"]
+  Agent tools, blocked native tools, plugins, and models are configured in
+  .aracne/config.json under "llm" (per-agent mcp_tools / blocked_tools /
+  plugins, merged from "<any>" + the per-harness "claude_code"/"opencode"
+  blocks). Edit that file to customize what each agent can do.
 
 Flags for "analyze dead-code":
   --db <path>           Topology database path (default ".aracne/topology.db")
@@ -106,11 +101,10 @@ Flags for "analyze dead-code":
   Examples:
     Aracne scan -root ./myproject -output myproject.db
     Aracne agent "list all structs"
-    Aracne init --read-mode mcp --edit-mode native --other-mode mcp
     Aracne init --claude
     Aracne init --opencode
     Aracne viz serve
-    Aracne serve --tool-profile descriptions-executor
+    Aracne serve --tool-profile descriptions-generation-executor
     Aracne descriptions generate
     Aracne descriptions clear --target function,type
     arac read internal/topology/golang.GoManager

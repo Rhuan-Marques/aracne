@@ -44,8 +44,8 @@ func setupWorkflowManager(t *testing.T, serverURL string, populateTopo bool) *Ma
 	// Ensure NeedDescription includes function and type so undocumentedResources picks them up
 	if populateTopo {
 		manager.mu.Lock()
-		if manager.config.NeedDescription == nil {
-			manager.config.NeedDescription = []domain.ResourceKind{domain.ResourceFunction, domain.ResourceType}
+		if manager.config.Descriptions.Kinds == nil {
+			manager.config.Descriptions.Kinds = []domain.ResourceKind{domain.ResourceFunction, domain.ResourceType}
 		}
 		manager.mu.Unlock()
 	}

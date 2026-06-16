@@ -33,16 +33,16 @@ func FormatPythonModuleContext(ctx *python.PythonModuleContext) string {
 	b.WriteString(fmt.Sprintf("## Package: %s\n", ctx.FromPackage))
 
 	for _, fn := range ctx.Functions {
-		b.WriteString(fmt.Sprintf("## def %s: %s\n", fn.Name, desc(fn.Description)))
+		b.WriteString(fmt.Sprintf("## def %s: %s\n", fn.ID, desc(fn.Description)))
 	}
 	for _, c := range ctx.Classes {
-		b.WriteString(fmt.Sprintf("## class %s: %s\n", c.Name, desc(c.Description)))
+		b.WriteString(fmt.Sprintf("## class %s: %s\n", c.ID, desc(c.Description)))
 		for _, m := range c.Methods {
-			b.WriteString(fmt.Sprintf("\t%s.%s: %s\n", c.Name, m.Name, desc(m.Description)))
+			b.WriteString(fmt.Sprintf("\t%s: %s\n", m.ID, desc(m.Description)))
 		}
 	}
 	for _, ev := range ctx.ExtVars {
-		b.WriteString(fmt.Sprintf("## var %s: %s\n", ev.Name, desc(ev.Description)))
+		b.WriteString(fmt.Sprintf("## var %s: %s\n", ev.ID, desc(ev.Description)))
 	}
 	for _, imp := range ctx.Imports {
 		b.WriteString(fmt.Sprintf("## import %q\n", imp))
@@ -68,16 +68,16 @@ func FormatPythonPackageContext(ctx *python.PythonPackageContext) string {
 		b.WriteString(fmt.Sprintf("## module %s\n", f))
 	}
 	for _, fn := range ctx.Functions {
-		b.WriteString(fmt.Sprintf("## def %s: %s\n", fn.Name, desc(fn.Description)))
+		b.WriteString(fmt.Sprintf("## def %s: %s\n", fn.ID, desc(fn.Description)))
 	}
 	for _, c := range ctx.Classes {
-		b.WriteString(fmt.Sprintf("## class %s: %s\n", c.Name, desc(c.Description)))
+		b.WriteString(fmt.Sprintf("## class %s: %s\n", c.ID, desc(c.Description)))
 		for _, m := range c.Methods {
-			b.WriteString(fmt.Sprintf("\t%s.%s: %s\n", c.Name, m.Name, desc(m.Description)))
+			b.WriteString(fmt.Sprintf("\t%s: %s\n", m.ID, desc(m.Description)))
 		}
 	}
 	for _, ev := range ctx.ExtVars {
-		b.WriteString(fmt.Sprintf("## var %s: %s\n", ev.Name, desc(ev.Description)))
+		b.WriteString(fmt.Sprintf("## var %s: %s\n", ev.ID, desc(ev.Description)))
 	}
 	for _, d := range ctx.Dependencies {
 		b.WriteString(fmt.Sprintf("## dep %q\n", d))
@@ -137,14 +137,14 @@ func FormatPythonFunctionContext(ctx *python.PythonFunctionContext) string {
 	b.WriteString("# CONTEXT:\n")
 
 	for _, cu := range ctx.ClassesUsed {
-		b.WriteString(fmt.Sprintf("## %s: %s\n", cu.Name, desc(cu.Description)))
+		b.WriteString(fmt.Sprintf("## %s: %s\n", cu.ID, desc(cu.Description)))
 		for _, m := range cu.Methods {
-			b.WriteString(fmt.Sprintf("\t%s.%s: %s\n", cu.Name, m.Name, desc(m.Description)))
+			b.WriteString(fmt.Sprintf("\t%s: %s\n", m.ID, desc(m.Description)))
 		}
 	}
 
 	for _, cf := range ctx.CalledFunctions {
-		b.WriteString(fmt.Sprintf("## %s: %s\n", cf.Name, desc(cf.Description)))
+		b.WriteString(fmt.Sprintf("## %s: %s\n", cf.ID, desc(cf.Description)))
 	}
 
 	for _, ev := range ctx.ExtVarsUsed {
@@ -152,7 +152,7 @@ func FormatPythonFunctionContext(ctx *python.PythonFunctionContext) string {
 		if ev.Value != "" {
 			valStr = fmt.Sprintf(" = %s", ev.Value)
 		}
-		b.WriteString(fmt.Sprintf("## %s%s\n", ev.Name, valStr))
+		b.WriteString(fmt.Sprintf("## %s%s\n", ev.ID, valStr))
 	}
 
 	return b.String()
@@ -197,17 +197,17 @@ func FormatPythonClassContext(ctx *python.PythonClassContext) string {
 			methods := strings.Join(base.NeedToImplementMethods, ", ")
 			need = fmt.Sprintf(" [NEED TO IMPLEMENT: %s]", methods)
 		}
-		b.WriteString(fmt.Sprintf("## %s (base class): %s%s\n", base.Name, desc(base.Description), need))
+		b.WriteString(fmt.Sprintf("## %s (base class): %s%s\n", base.ID, desc(base.Description), need))
 	}
 
 	for _, m := range ctx.Methods {
-		b.WriteString(fmt.Sprintf("## %s: %s\n", m.Name, desc(m.Description)))
+		b.WriteString(fmt.Sprintf("## %s: %s\n", m.ID, desc(m.Description)))
 	}
 
 	for _, cu := range ctx.ClassesUsed {
-		b.WriteString(fmt.Sprintf("## %s: %s\n", cu.Name, desc(cu.Description)))
+		b.WriteString(fmt.Sprintf("## %s: %s\n", cu.ID, desc(cu.Description)))
 		for _, m := range cu.Methods {
-			b.WriteString(fmt.Sprintf("\t%s.%s: %s\n", cu.Name, m.Name, desc(m.Description)))
+			b.WriteString(fmt.Sprintf("\t%s: %s\n", m.ID, desc(m.Description)))
 		}
 	}
 
@@ -216,7 +216,7 @@ func FormatPythonClassContext(ctx *python.PythonClassContext) string {
 		if ev.Value != "" {
 			valStr = fmt.Sprintf(" = %s", ev.Value)
 		}
-		b.WriteString(fmt.Sprintf("## %s%s\n", ev.Name, valStr))
+		b.WriteString(fmt.Sprintf("## %s%s\n", ev.ID, valStr))
 	}
 
 	return b.String()

@@ -90,6 +90,9 @@ func (pr *ParseResult) processGenDecl(genDecl *ast.GenDecl, fset *token.FileSet)
 		case *ast.ValueSpec:
 			if genDecl.Tok == token.VAR || genDecl.Tok == token.CONST {
 				for _, name := range s.Names {
+					if name.Name == "_" {
+						continue
+					}
 					typing := ""
 					if s.Type != nil {
 						typing = exprToString(s.Type)
@@ -454,6 +457,17 @@ func rootIdent(expr ast.Expr) string {
 	default:
 		return ""
 	}
+}
+
+// isInternalImport reports whether impPath belongs to the module being scanned.
+// It enforces a path boundary so that a dependency sharing a string prefix with
+// the module path (e.g. module "github.com/a/b" vs import "github.com/a/b-utils")
+// is not misclassified as internal.
+func isInternalImport(impPath, modulePath string) bool {
+	if modulePath == "" {
+		return false
+	}
+	return impPath == modulePath || strings.HasPrefix(impPath, modulePath+"/")
 }
 
 func locationFromNode(fset *token.FileSet, node ast.Node, filePath string) domain.Location {

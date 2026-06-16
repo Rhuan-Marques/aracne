@@ -22,7 +22,7 @@ func RunAgent(args []string) {
 
 	provider := providers.NewDeepSeek()
 	cfg := helper.EnsureConfig(helper.ConfigPath(".aracne/topology.db"))
-	toolReg := BuildToolRegistry(manager, reg, cfg, ToolProfileDefault)
+	toolReg := BuildToolRegistry(manager, reg, cfg, "claude_code", "main")
 
 	lang := GetLanguage(manager)
 	topo, _ := manager.ReadAll()

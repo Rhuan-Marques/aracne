@@ -90,72 +90,33 @@ func TestInitGlobal_CreatesFilesInHome(t *testing.T) {
 	assertNotExists(t, dir, ".mcp.json")
 }
 
-func TestInitModeFlags_UpdateConfig(t *testing.T) {
-	dir := t.TempDir()
-	mustRun(t, dir, "init", "-y",
-		"--read-mode", "terminal",
-		"--edit-mode", "mcp",
-		"--other-mode", "terminal",
-		"--grep-mode", "mcp",
-	)
-
-	raw := readFile(t, dir, ".aracne/config.json")
-	var cfg struct {
-		ToolModes struct {
-			Read  string `json:"read"`
-			Edit  string `json:"edit"`
-			Other string `json:"other"`
-			Grep  string `json:"grep"`
-		} `json:"tool_modes"`
-	}
-	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
-		t.Fatalf("parse config: %v\ncontent: %s", err, raw)
-	}
-	if cfg.ToolModes.Read != "terminal" {
-		t.Fatalf("read mode = %q, want terminal", cfg.ToolModes.Read)
-	}
-	if cfg.ToolModes.Edit != "mcp" {
-		t.Fatalf("edit mode = %q, want mcp", cfg.ToolModes.Edit)
-	}
-	if cfg.ToolModes.Other != "terminal" {
-		t.Fatalf("other mode = %q, want terminal", cfg.ToolModes.Other)
-	}
-	if cfg.ToolModes.Grep != "mcp" {
-		t.Fatalf("grep mode = %q, want mcp", cfg.ToolModes.Grep)
-	}
-}
-
-func TestInitInvalidModeFlag_ExitsWithError(t *testing.T) {
-	dir := t.TempDir()
-	out, err := runLtp(t, dir, "init", "--read-mode", "bogus")
-	if err == nil {
-		t.Fatal("expected error for invalid --read-mode, got none")
-	}
-	if !strings.Contains(out, "invalid --read-mode") {
-		t.Fatalf("expected error about invalid --read-mode, got:\n%s", out)
-	}
-}
-
-func TestInitNativeEditHooks_Created(t *testing.T) {
+func TestInitDefault_NoNativeHooks(t *testing.T) {
 	dir := t.TempDir()
 	mustRun(t, dir, "init", "-y")
 
-	// Claude hooks
-	assertExists(t, dir, ".claude/hooks")
-	assertExists(t, dir, ".claude/hooks/arac-update-file.sh")
-	assertExists(t, dir, ".claude/settings.json")
-
-	// OpenCode plugin
-	assertExists(t, dir, ".opencode/plugins")
-	assertExists(t, dir, ".opencode/plugins/arac-native-edit-sync.js")
+	// The default config gives the main agent no plugins, so the native edit
+	// hook/plugin (which only matters for native edits) is not written.
+	assertNotExists(t, dir, ".claude/hooks/arac-update-file.sh")
+	assertNotExists(t, dir, ".opencode/plugins/arac-native-edit-sync.js")
 }
 
-func TestInitMCPEditMode_SkipsNativeHooks(t *testing.T) {
+func TestInitWithEditPlugin_CreatesNativeHooks(t *testing.T) {
 	dir := t.TempDir()
-	mustRun(t, dir, "init", "-y", "--edit-mode", "mcp")
+	// Pre-seed a config that enables the edit-update-db plugin on the main agent.
+	cfgDir := filepath.Join(dir, ".aracne")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatalf("mkdir .aracne: %v", err)
+	}
+	cfgJSON := `{"scan":{"mode":"default"},"llm":{"<any>":{"main_agent":{"mcp_tools":["read","edit","write"],"blocked_tools":["read","grep","edit","write"],"plugins":["edit-update-db-plugin"]}}}}`
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.json"), []byte(cfgJSON), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
-	assertNotExists(t, dir, ".claude/hooks")
-	assertNotExists(t, dir, ".opencode/plugins")
+	mustRun(t, dir, "init", "-y")
+
+	assertExists(t, dir, ".claude/hooks/arac-update-file.sh")
+	assertExists(t, dir, ".claude/settings.json")
+	assertExists(t, dir, ".opencode/plugins/arac-native-edit-sync.js")
 }
 
 func TestInitRerun_NoErrors(t *testing.T) {
@@ -195,10 +156,13 @@ func TestInitOpenCodeConfig_Structure(t *testing.T) {
 		t.Fatal("opencode.json missing 'permission' section")
 	}
 	if cfg.Permission["read"] != "deny" {
-		t.Fatalf("permission.read = %q, want deny (default read mode is mcp)", cfg.Permission["read"])
+		t.Fatalf("permission.read = %q, want deny (native read blocked by default)", cfg.Permission["read"])
 	}
-	if cfg.Permission["edit"] != "allow" {
-		t.Fatalf("permission.edit = %q, want allow (default edit mode is native)", cfg.Permission["edit"])
+	if cfg.Permission["edit"] != "deny" {
+		t.Fatalf("permission.edit = %q, want deny (native edit blocked by default, MCP edit used)", cfg.Permission["edit"])
+	}
+	if cfg.Permission["bash"] != "allow" {
+		t.Fatalf("permission.bash = %q, want allow (bash not blocked by default)", cfg.Permission["bash"])
 	}
 	if cfg.Permission["aracne_*"] != "deny" {
 		t.Fatalf("permission.aracne_* = %q, want deny", cfg.Permission["aracne_*"])

@@ -971,7 +971,7 @@ func namedTypeRefsFromType(typing string, pr *ParseResult, gt *golang.GolangTopo
 		if strings.Contains(token, ".") {
 			parts := strings.SplitN(token, ".", 2)
 			importPath, ok := pr.ImportMap[parts[0]]
-			if !ok || !strings.HasPrefix(importPath, pr.ModulePath) {
+			if !ok || !isInternalImport(importPath, pr.ModulePath) {
 				continue
 			}
 			id = golang.NamedTypeID(importPath + "." + parts[1])

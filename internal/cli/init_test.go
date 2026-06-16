@@ -7,134 +7,7 @@ import (
 	"testing"
 
 	"aracne/internal/helper"
-	"aracne/internal/topology/domain"
 )
-
-func TestParseReadToolMode_Valid(t *testing.T) {
-	for _, mode := range []helper.ReadToolMode{helper.ReadModeNative, helper.ReadModeMCP, helper.ReadModeTerminal} {
-		got, err := parseReadToolMode(string(mode))
-		if err != nil {
-			t.Fatalf("parseReadToolMode(%q): %v", mode, err)
-		}
-		if got != mode {
-			t.Fatalf("parseReadToolMode(%q) = %q, want %q", mode, got, mode)
-		}
-	}
-}
-
-func TestParseReadToolMode_Invalid(t *testing.T) {
-	_, err := parseReadToolMode("bogus")
-	if err == nil {
-		t.Fatal("expected error for bogus read mode")
-	}
-	if !strings.Contains(err.Error(), "invalid --read-mode") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestParseEditToolMode_Valid(t *testing.T) {
-	for _, mode := range []helper.EditToolMode{helper.EditModeNative, helper.EditModeMCP, helper.EditModeTerminal} {
-		got, err := parseEditToolMode(string(mode))
-		if err != nil {
-			t.Fatalf("parseEditToolMode(%q): %v", mode, err)
-		}
-		if got != mode {
-			t.Fatalf("parseEditToolMode(%q) = %q, want %q", mode, got, mode)
-		}
-	}
-}
-
-func TestParseEditToolMode_Invalid(t *testing.T) {
-	_, err := parseEditToolMode("bogus")
-	if err == nil {
-		t.Fatal("expected error for bogus edit mode")
-	}
-	if !strings.Contains(err.Error(), "invalid --edit-mode") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestParseOtherToolMode_Valid(t *testing.T) {
-	for _, mode := range []helper.OtherToolMode{helper.OtherModeMCP, helper.OtherModeTerminal} {
-		got, err := parseOtherToolMode(string(mode))
-		if err != nil {
-			t.Fatalf("parseOtherToolMode(%q): %v", mode, err)
-		}
-		if got != mode {
-			t.Fatalf("parseOtherToolMode(%q) = %q, want %q", mode, got, mode)
-		}
-	}
-}
-
-func TestParseOtherToolMode_Invalid(t *testing.T) {
-	_, err := parseOtherToolMode("bogus")
-	if err == nil {
-		t.Fatal("expected error for bogus other mode")
-	}
-	if !strings.Contains(err.Error(), "invalid --other-mode") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestParseGrepToolMode_Valid(t *testing.T) {
-	for _, mode := range []helper.GrepToolMode{helper.GrepModeNative, helper.GrepModeMCP, helper.GrepModeTerminal} {
-		got, err := parseGrepToolMode(string(mode))
-		if err != nil {
-			t.Fatalf("parseGrepToolMode(%q): %v", mode, err)
-		}
-		if got != mode {
-			t.Fatalf("parseGrepToolMode(%q) = %q, want %q", mode, got, mode)
-		}
-	}
-}
-
-func TestParseGrepToolMode_Invalid(t *testing.T) {
-	_, err := parseGrepToolMode("bogus")
-	if err == nil {
-		t.Fatal("expected error for bogus grep mode")
-	}
-	if !strings.Contains(err.Error(), "invalid --grep-mode") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestAnyMCPMode_AllMCP(t *testing.T) {
-	modes := helper.ToolModes{
-		Read:  helper.ReadModeMCP,
-		Edit:  helper.EditModeMCP,
-		Other: helper.OtherModeMCP,
-		Grep:  helper.GrepModeMCP,
-	}
-	if !anyMCPMode(modes) {
-		t.Fatal("all MCP modes should return true")
-	}
-}
-
-func TestAnyMCPMode_None(t *testing.T) {
-	modes := helper.ToolModes{
-		Read:  helper.ReadModeNative,
-		Edit:  helper.EditModeNative,
-		Other: helper.OtherModeTerminal,
-		Grep:  helper.GrepModeNative,
-	}
-	if anyMCPMode(modes) {
-		t.Fatal("no MCP modes should return false")
-	}
-}
-
-func TestAnyMCPMode_Partial(t *testing.T) {
-	cases := []helper.ToolModes{
-		{Read: helper.ReadModeMCP, Edit: helper.EditModeNative, Other: helper.OtherModeTerminal, Grep: helper.GrepModeNative},
-		{Read: helper.ReadModeNative, Edit: helper.EditModeMCP, Other: helper.OtherModeTerminal, Grep: helper.GrepModeNative},
-		{Read: helper.ReadModeNative, Edit: helper.EditModeNative, Other: helper.OtherModeMCP, Grep: helper.GrepModeNative},
-		{Read: helper.ReadModeNative, Edit: helper.EditModeNative, Other: helper.OtherModeTerminal, Grep: helper.GrepModeMCP},
-	}
-	for i, modes := range cases {
-		if !anyMCPMode(modes) {
-			t.Fatalf("case %d: expected true for at least one MCP mode: %+v", i, modes)
-		}
-	}
-}
 
 func TestNativePermission(t *testing.T) {
 	if nativePermission(true) != "allow" {
@@ -311,115 +184,78 @@ func TestBugSolverCommandForAgent(t *testing.T) {
 	}
 }
 
-func TestProfileAllows(t *testing.T) {
-	if !profileAllows(ToolProfileDefault, "read") {
-		t.Fatal("default profile should allow read")
-	}
-	if !profileAllows(ToolProfileBugSolver, "edit") {
-		t.Fatal("bug-solver profile should allow edit")
-	}
-	if profileAllows(ToolProfileDescriptionsExecutor, "edit") {
-		t.Fatal("descriptions-executor should NOT allow edit")
-	}
-}
+// --- new config-driven generation -----------------------------------------
 
-func TestNeedsTerminal_AllNative(t *testing.T) {
-	modes := helper.ToolModes{
-		Read:  helper.ReadModeNative,
-		Edit:  helper.EditModeNative,
-		Other: helper.OtherModeMCP,
-		Grep:  helper.GrepModeNative,
-	}
-	if needsTerminal(modes) {
-		t.Fatal("no terminal modes should return false")
-	}
-}
+func TestClaudeToolsForAgent_DefaultMainAgent(t *testing.T) {
+	eff := helper.DefaultConfig().EffectiveAgent("claude_code", "main")
+	tools := claudeToolsForAgent(eff)
 
-func TestNeedsTerminal_ReadTerminal(t *testing.T) {
-	modes := helper.ToolModes{
-		Read:  helper.ReadModeTerminal,
-		Edit:  helper.EditModeNative,
-		Other: helper.OtherModeMCP,
-		Grep:  helper.GrepModeNative,
+	want := map[string]bool{
+		"mcp__aracne__read":          true,
+		"mcp__aracne__warnings_list": true,
+		"mcp__aracne__edit":          true,
+		"mcp__aracne__write":         true,
+		"Bash":                       true,
 	}
-	if !needsTerminal(modes) {
-		t.Fatal("read=terminal should return true")
+	got := map[string]bool{}
+	for _, tool := range tools {
+		got[tool] = true
 	}
-}
-
-func TestNeedsTerminal_EditTerminal(t *testing.T) {
-	modes := helper.ToolModes{
-		Read:  helper.ReadModeNative,
-		Edit:  helper.EditModeTerminal,
-		Other: helper.OtherModeMCP,
-		Grep:  helper.GrepModeNative,
+	for name := range want {
+		if !got[name] {
+			t.Fatalf("expected %q in tools: %v", name, tools)
+		}
 	}
-	if !needsTerminal(modes) {
-		t.Fatal("edit=terminal should return true")
-	}
-}
-
-func TestNeedsTerminal_OtherTerminal(t *testing.T) {
-	modes := helper.ToolModes{
-		Read:  helper.ReadModeNative,
-		Edit:  helper.EditModeNative,
-		Other: helper.OtherModeTerminal,
-		Grep:  helper.GrepModeNative,
-	}
-	if !needsTerminal(modes) {
-		t.Fatal("other=terminal should return true")
-	}
-}
-
-func TestNeedsTerminal_GrepTerminal(t *testing.T) {
-	modes := helper.ToolModes{
-		Read:  helper.ReadModeNative,
-		Edit:  helper.EditModeNative,
-		Other: helper.OtherModeMCP,
-		Grep:  helper.GrepModeTerminal,
-	}
-	if !needsTerminal(modes) {
-		t.Fatal("grep=terminal should return true")
-	}
-}
-
-func TestTerminalCommandForTool(t *testing.T) {
-	tests := []struct {
-		tool string
-		want string
-	}{
-		{"read_function", "arac read <resource-id>"},
-		{"read_struct", "arac read <resource-id>"},
-		{"read", "arac read <resource-id>"},
-		{"grep", "arac grep <pattern> [path]"},
-		{"warnings_list", "arac warnings list"},
-		{"bug_report", "arac bug report --node <id> --description <text>"},
-		{"bug_list", "arac bug list [--node <id>] [--state <state>]"},
-		{"bug_acknowledge", "arac bug acknowledge <bugID>"},
-		{"bug_dismiss", "arac bug dismiss <bugID>"},
-		{"bug_delete", "arac bug delete <bugID>"},
-		{"node_list_no_description", "arac resource list --no-description"},
-		{"update_description", "arac update-description <id> <kind> <desc>"},
-		{"unknown_tool", "Aracne unknown_tool"},
-	}
-	for _, tt := range tests {
-		got := terminalCommandForTool(tt.tool)
-		if got != tt.want {
-			t.Fatalf("terminalCommandForTool(%q) = %q, want %q", tt.tool, got, tt.want)
+	// Native read/edit/write/grep are blocked by default.
+	for _, native := range []string{"Read", "Edit", "Write", "Grep"} {
+		if got[native] {
+			t.Fatalf("native %q should be blocked by default: %v", native, tools)
 		}
 	}
 }
 
-func TestClaudeAgentContent_ContainsFrontmatterAndPrompt(t *testing.T) {
-	modes := helper.ToolModes{
-		Read:  helper.ReadModeMCP,
-		Edit:  helper.EditModeNative,
-		Other: helper.OtherModeMCP,
-		Grep:  helper.GrepModeNative,
-	}
-	content := claudeAgentContent("test-agent", "Test agent", ToolProfileDefault, modes, nil, "This is the prompt")
+func TestOpenCodePermissionsForAgent_DefaultMainAgent(t *testing.T) {
+	eff := helper.DefaultConfig().EffectiveAgent("opencode", "main")
+	perms := openCodePermissionsForAgent(eff)
 
-	if !strings.Contains(content, "name: test-agent") {
+	if !strings.Contains(perms, "read: deny") {
+		t.Fatalf("expected read: deny (blocked by default):\n%s", perms)
+	}
+	if !strings.Contains(perms, "edit: deny") {
+		t.Fatalf("expected edit: deny (blocked by default):\n%s", perms)
+	}
+	if !strings.Contains(perms, "bash: allow") {
+		t.Fatalf("expected bash: allow (not blocked):\n%s", perms)
+	}
+	if !strings.Contains(perms, `"aracne_*": deny`) {
+		t.Fatalf("missing deny all:\n%s", perms)
+	}
+	if !strings.Contains(perms, `"aracne_read": allow`) {
+		t.Fatalf("expected aracne_read: allow:\n%s", perms)
+	}
+}
+
+func TestClaudeMCPServersFrontmatter(t *testing.T) {
+	fm := claudeMCPServersFrontmatter("bug-hunter")
+	if !strings.Contains(fm, "mcpServers:") {
+		t.Fatal("expected mcpServers section")
+	}
+	if !strings.Contains(fm, "--tool-profile") {
+		t.Fatal("expected --tool-profile in args")
+	}
+	if !strings.Contains(fm, "bug-hunter") {
+		t.Fatalf("expected agent name in args: %s", fm)
+	}
+	if !strings.Contains(fm, "claude_code") {
+		t.Fatalf("expected --harness claude_code in args: %s", fm)
+	}
+}
+
+func TestClaudeAgentContent_ContainsFrontmatterAndPrompt(t *testing.T) {
+	eff := helper.DefaultConfig().EffectiveAgent("claude_code", "bug-hunter")
+	content := claudeAgentContent("bug-hunter", "Test agent", eff, "This is the prompt")
+
+	if !strings.Contains(content, "name: bug-hunter") {
 		t.Fatal("missing name in frontmatter")
 	}
 	if !strings.Contains(content, "description: Test agent") {
@@ -434,13 +270,8 @@ func TestClaudeAgentContent_ContainsFrontmatterAndPrompt(t *testing.T) {
 }
 
 func TestOpenCodeAgentContent_ContainsPermissionsAndPrompt(t *testing.T) {
-	modes := helper.ToolModes{
-		Read:  helper.ReadModeNative,
-		Edit:  helper.EditModeNative,
-		Other: helper.OtherModeMCP,
-		Grep:  helper.GrepModeNative,
-	}
-	content := openCodeAgentContent("test-agent", "Test agent", ToolProfileDefault, modes, nil, "This is the prompt")
+	eff := helper.DefaultConfig().EffectiveAgent("opencode", "bug-hunter")
+	content := openCodeAgentContent("Test agent", eff, "This is the prompt")
 
 	if !strings.Contains(content, "description: Test agent") {
 		t.Fatal("missing description in frontmatter")
@@ -453,172 +284,6 @@ func TestOpenCodeAgentContent_ContainsPermissionsAndPrompt(t *testing.T) {
 	}
 	if !strings.Contains(content, "This is the prompt") {
 		t.Fatal("missing prompt section")
-	}
-	if !strings.Contains(content, "read: allow") {
-		t.Fatal("missing read: allow (native mode)")
-	}
-	if !strings.Contains(content, "edit: allow") {
-		t.Fatal("missing edit: allow (native mode)")
-	}
-}
-
-func TestClaudeMCPServersFrontmatter_WithMCP(t *testing.T) {
-	modes := helper.ToolModes{
-		Read:  helper.ReadModeMCP,
-		Edit:  helper.EditModeNative,
-		Other: helper.OtherModeMCP,
-		Grep:  helper.GrepModeNative,
-	}
-	fm := claudeMCPServersFrontmatter(modes, ToolProfileBugHunter)
-	if !strings.Contains(fm, "mcpServers:") {
-		t.Fatal("expected mcpServers section")
-	}
-	if !strings.Contains(fm, "tool-profile") {
-		t.Fatal("expected tool-profile in args")
-	}
-	if !strings.Contains(fm, string(ToolProfileBugHunter)) {
-		t.Fatalf("expected %s in args", ToolProfileBugHunter)
-	}
-}
-
-func TestClaudeMCPServersFrontmatter_WithoutMCP(t *testing.T) {
-	modes := helper.ToolModes{
-		Read:  helper.ReadModeNative,
-		Edit:  helper.EditModeNative,
-		Other: helper.OtherModeTerminal,
-		Grep:  helper.GrepModeNative,
-	}
-	fm := claudeMCPServersFrontmatter(modes, ToolProfileDefault)
-	if fm != "" {
-		t.Fatalf("expected empty string, got: %s", fm)
-	}
-}
-
-func TestTerminalGuidance_EmptyWhenNoTerminalModes(t *testing.T) {
-	modes := helper.ToolModes{
-		Read:  helper.ReadModeMCP,
-		Edit:  helper.EditModeNative,
-		Other: helper.OtherModeMCP,
-		Grep:  helper.GrepModeNative,
-	}
-	guidance := terminalGuidance(modes, ToolProfileDefault, nil)
-	if guidance != "" {
-		t.Fatalf("expected empty for no terminal modes, got: %s", guidance)
-	}
-}
-
-func TestTerminalGuidance_ReadTerminal(t *testing.T) {
-	modes := helper.ToolModes{
-		Read:  helper.ReadModeNative,
-		Edit:  helper.EditModeNative,
-		Other: helper.OtherModeTerminal,
-		Grep:  helper.GrepModeNative,
-	}
-	guidance := terminalGuidance(modes, ToolProfileDefault, nil)
-	if !strings.Contains(guidance, "arac warnings list") {
-		t.Fatalf("expected terminal commands for other tools:\n%s", guidance)
-	}
-}
-
-func TestAllowedMCPToolNames_DefaultModes(t *testing.T) {
-	modes := helper.ToolModes{
-		Read:  helper.ReadModeMCP,
-		Edit:  helper.EditModeNative,
-		Other: helper.OtherModeMCP,
-		Grep:  helper.GrepModeNative,
-	}
-	names := allowedMCPToolNames(modes, ToolProfileDefault, nil)
-	hasRead := false
-	hasWarnings := false
-	for _, n := range names {
-		if n == "read" {
-			hasRead = true
-		}
-		if n == "warnings_list" {
-			hasWarnings = true
-		}
-	}
-	if !hasRead {
-		t.Fatalf("expected 'read' in allowed names: %v", names)
-	}
-	if !hasWarnings {
-		t.Fatalf("expected 'warnings_list' in allowed names: %v", names)
-	}
-	for _, n := range names {
-		if n == "edit" || n == "write" || n == "grep" {
-			t.Fatalf("should not include native-mode tool %q in MCP names: %v", n, names)
-		}
-	}
-}
-
-func TestAllowedMCPToolNames_WithMCPGrep(t *testing.T) {
-	modes := helper.ToolModes{
-		Read:  helper.ReadModeNative,
-		Edit:  helper.EditModeNative,
-		Other: helper.OtherModeMCP,
-		Grep:  helper.GrepModeMCP,
-	}
-	names := allowedMCPToolNames(modes, ToolProfileDefault, nil)
-	hasGrep := false
-	for _, n := range names {
-		if n == "grep" {
-			hasGrep = true
-		}
-	}
-	if !hasGrep {
-		t.Fatalf("expected 'grep' in allowed names when grep=mcp: %v", names)
-	}
-}
-
-func TestClaudeToolsForProfile_DefaultModes(t *testing.T) {
-	modes := helper.ToolModes{
-		Read:  helper.ReadModeNative,
-		Edit:  helper.EditModeNative,
-		Other: helper.OtherModeMCP,
-		Grep:  helper.GrepModeNative,
-	}
-	tools := claudeToolsForProfile(modes, ToolProfileDefault, nil)
-	hasRead := false
-	hasWarnings := false
-	hasBash := false
-	for _, tool := range tools {
-		if tool == "Read" {
-			hasRead = true
-		}
-		if strings.Contains(tool, "warnings_list") {
-			hasWarnings = true
-		}
-		if tool == "Bash" {
-			hasBash = true
-		}
-	}
-	if !hasRead {
-		t.Fatalf("expected 'Read' (native mode) in tools: %v", tools)
-	}
-	if !hasWarnings {
-		t.Fatalf("expected mcp__aracne__warnings_list in tools: %v", tools)
-	}
-	if hasBash {
-		t.Fatalf("should not have Bash when no terminal modes: %v", tools)
-	}
-}
-
-func TestClaudeToolsForProfile_WithTerminalModes(t *testing.T) {
-	modes := helper.ToolModes{
-		Read:  helper.ReadModeTerminal,
-		Edit:  helper.EditModeNative,
-		Other: helper.OtherModeMCP,
-		Grep:  helper.GrepModeNative,
-	}
-	tools := claudeToolsForProfile(modes, ToolProfileDefault, nil)
-	hasBash := false
-	for _, tool := range tools {
-		if tool == "Bash" {
-			hasBash = true
-		}
-	}
-	if !hasBash {
-		t.Fatalf("expected 'Bash' when read=terminal: %v", tools)
 	}
 }
 
@@ -771,157 +436,5 @@ func TestWriteMarkdownIntegrationFile_ReplacesExistingSegment(t *testing.T) {
 	}
 	if strings.Contains(content, "old") {
 		t.Fatal("old content should be replaced")
-	}
-}
-
-func TestOpenCodePermissions_DefaultModes(t *testing.T) {
-	modes := helper.ToolModes{
-		Read:  helper.ReadModeNative,
-		Edit:  helper.EditModeNative,
-		Other: helper.OtherModeMCP,
-		Grep:  helper.GrepModeNative,
-	}
-	perms := openCodePermissions(modes, ToolProfileDefault, nil)
-
-	if !strings.Contains(perms, "read: allow") {
-		t.Fatalf("missing read: allow:\n%s", perms)
-	}
-	if !strings.Contains(perms, "edit: allow") {
-		t.Fatalf("missing edit: allow:\n%s", perms)
-	}
-	if !strings.Contains(perms, `"aracne_*": deny`) {
-		t.Fatalf("missing deny all:\n%s", perms)
-	}
-	if strings.Contains(perms, "bash: allow") {
-		t.Fatal("should not have bash: allow when no terminal modes")
-	}
-}
-
-func TestOpenCodePermissions_WithTerminal(t *testing.T) {
-	modes := helper.ToolModes{
-		Read:  helper.ReadModeTerminal,
-		Edit:  helper.EditModeNative,
-		Other: helper.OtherModeMCP,
-		Grep:  helper.GrepModeNative,
-	}
-	perms := openCodePermissions(modes, ToolProfileDefault, nil)
-
-	if !strings.Contains(perms, "bash: allow") {
-		t.Fatalf("missing bash: allow when read=terminal:\n%s", perms)
-	}
-}
-
-func TestOpenCodePermissions_ReadMCP(t *testing.T) {
-	modes := helper.ToolModes{
-		Read:  helper.ReadModeMCP,
-		Edit:  helper.EditModeNative,
-		Other: helper.OtherModeMCP,
-		Grep:  helper.GrepModeNative,
-	}
-	perms := openCodePermissions(modes, ToolProfileDefault, nil)
-
-	if !strings.Contains(perms, "read: deny") {
-		t.Fatalf("expected read: deny when read=MCP:\n%s", perms)
-	}
-	if !strings.Contains(perms, `"aracne_read": allow`) {
-		t.Fatalf("expected aracne_read: allow:\n%s", perms)
-	}
-}
-
-func TestClaudeToolsForProfile_WithMCPEdit(t *testing.T) {
-	modes := helper.ToolModes{
-		Read:  helper.ReadModeNative,
-		Edit:  helper.EditModeMCP,
-		Other: helper.OtherModeMCP,
-		Grep:  helper.GrepModeNative,
-	}
-	tools := claudeToolsForProfile(modes, ToolProfileDefault, nil)
-	hasEdit := false
-	hasWrite := false
-	for _, tool := range tools {
-		if strings.Contains(tool, "mcp__aracne__edit") {
-			hasEdit = true
-		}
-		if strings.Contains(tool, "mcp__aracne__write") {
-			hasWrite = true
-		}
-	}
-	if !hasEdit {
-		t.Fatalf("expected mcp__aracne__edit when edit=MCP: %v", tools)
-	}
-	if !hasWrite {
-		t.Fatalf("expected mcp__aracne__write when edit=MCP: %v", tools)
-	}
-}
-
-func TestClaudeToolsForProfile_NotBashForMCPRead(t *testing.T) {
-	modes := helper.ToolModes{
-		Read:  helper.ReadModeMCP,
-		Edit:  helper.EditModeNative,
-		Other: helper.OtherModeMCP,
-		Grep:  helper.GrepModeNative,
-	}
-	tools := claudeToolsForProfile(modes, ToolProfileDefault, nil)
-	for _, tool := range tools {
-		if tool == "Bash" {
-			t.Fatalf("Bash should not be in tools when no terminal modes: %v", tools)
-		}
-	}
-}
-
-func TestAllowedMCPToolNames_WithReadSplit(t *testing.T) {
-	modes := helper.ToolModes{
-		Read:  helper.ReadModeMCP,
-		Edit:  helper.EditModeNative,
-		Other: helper.OtherModeMCP,
-		Grep:  helper.GrepModeNative,
-	}
-	readSplit := map[domain.ResourceKind]bool{
-		domain.ResourceFunction: true,
-		domain.ResourceType:     true,
-	}
-
-	names := allowedMCPToolNames(modes, ToolProfileDefault, readSplit)
-	hasReadFunc := false
-	hasReadStruct := false
-	hasRead := false
-	for _, n := range names {
-		if n == "read_function" {
-			hasReadFunc = true
-		}
-		if n == "read_struct" {
-			hasReadStruct = true
-		}
-		if n == "read" {
-			hasRead = true
-		}
-	}
-	if !hasReadFunc {
-		t.Fatalf("expected read_function in split: %v", names)
-	}
-	if !hasReadStruct {
-		t.Fatalf("expected read_struct in split: %v", names)
-	}
-	if hasRead {
-		t.Fatalf("should NOT have read when using splits: %v", names)
-	}
-}
-
-func TestClaudeToolsForProfile_WithGrepNative(t *testing.T) {
-	modes := helper.ToolModes{
-		Read:  helper.ReadModeNative,
-		Edit:  helper.EditModeNative,
-		Other: helper.OtherModeMCP,
-		Grep:  helper.GrepModeNative,
-	}
-	tools := claudeToolsForProfile(modes, ToolProfileDefault, nil)
-	hasGrep := false
-	for _, tool := range tools {
-		if tool == "Grep" {
-			hasGrep = true
-		}
-	}
-	if !hasGrep {
-		t.Fatalf("expected Grep (native) when grep=native: %v", tools)
 	}
 }

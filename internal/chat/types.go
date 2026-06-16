@@ -45,6 +45,7 @@ type Session struct {
 	Provider         ProviderName      `json:"provider"`
 	Model            string            `json:"model,omitempty"`
 	Agent            string            `json:"agent"`
+	Pinned           bool              `json:"pinned,omitempty"`
 	Running          bool              `json:"running,omitempty"`
 	Messages         []SessionMessage  `json:"messages"`
 	LLMMessages      []llm.Message     `json:"llm_messages"`
@@ -64,6 +65,7 @@ type SessionSummary struct {
 	Provider         ProviderName `json:"provider"`
 	Model            string       `json:"model,omitempty"`
 	Agent            string       `json:"agent"`
+	Pinned           bool         `json:"pinned,omitempty"`
 	MessageCount     int          `json:"message_count"`
 	PendingApprovals int          `json:"pending_approvals"`
 	PendingQuestions int          `json:"pending_questions"`
@@ -174,6 +176,7 @@ func summarizeSession(s *Session) SessionSummary {
 		Provider:         s.Provider,
 		Model:            s.Model,
 		Agent:            s.Agent,
+		Pinned:           s.Pinned,
 		MessageCount:     len(s.Messages),
 		PendingApprovals: len(s.PendingApprovals),
 		PendingQuestions: len(s.PendingQuestions),

@@ -11,11 +11,13 @@ import (
 
 	"aracne/internal/helper"
 	"aracne/internal/llm/languages/gotools"
+	"aracne/internal/llm/languages/jstools"
 	"aracne/internal/llm/languages/pythontools"
 	"aracne/internal/llm/tools"
 	"aracne/internal/topology"
 	"aracne/internal/topology/domain"
 	"aracne/internal/topology/golang"
+	"aracne/internal/topology/javascript"
 	"aracne/internal/topology/python"
 )
 
@@ -83,6 +85,12 @@ func (r *UniversalReadFunction) Run(args json.RawMessage) (string, error) {
 			return "", fmt.Errorf("read function: %w", err)
 		}
 		return pythontools.FormatPythonFunctionContext(ctx), nil
+	case "javascript", "typescript":
+		ctx, err := javascript.NewJavaScriptManager(r.mgr).ReadFunction(target.id)
+		if err != nil {
+			return "", fmt.Errorf("read function: %w", err)
+		}
+		return jstools.FormatJavaScriptFunctionContext(ctx), nil
 	default:
 		return "", unsupportedLanguage("read_function", target)
 	}
@@ -117,6 +125,12 @@ func (r *UniversalReadStruct) Run(args json.RawMessage) (string, error) {
 			return "", fmt.Errorf("read class: %w", err)
 		}
 		return pythontools.FormatPythonClassContext(ctx), nil
+	case "javascript", "typescript":
+		ctx, err := javascript.NewJavaScriptManager(r.mgr).ReadClass(target.id)
+		if err != nil {
+			return "", fmt.Errorf("read class: %w", err)
+		}
+		return jstools.FormatJavaScriptClassContext(ctx), nil
 	default:
 		return "", unsupportedLanguage("read_struct", target)
 	}
@@ -152,6 +166,12 @@ func (r *UniversalReadInterface) Run(args json.RawMessage) (string, error) {
 		return gotools.FormatGoInterfaceContext(ctx), nil
 	case "python":
 		return pythonInterfaceSummary(r.mgr, target.id)
+	case "typescript":
+		ctx, err := javascript.NewJavaScriptManager(r.mgr).ReadInterface(target.id)
+		if err != nil {
+			return "", fmt.Errorf("read interface: %w", err)
+		}
+		return jstools.FormatJavaScriptInterfaceContext(ctx), nil
 	default:
 		return "", unsupportedLanguage("read_interface", target)
 	}
@@ -184,12 +204,22 @@ func (r *UniversalReadFile) Run(args json.RawMessage) (string, error) {
 				return "", fmt.Errorf("read module: %w", err)
 			}
 			return pythontools.FormatPythonModuleContext(ctx), nil
+		case "javascript", "typescript":
+			ctx, err := javascript.NewJavaScriptManager(r.mgr).ReadModule(target.id)
+			if err != nil {
+				return "", fmt.Errorf("read module: %w", err)
+			}
+			return jstools.FormatJavaScriptModuleContext(ctx), nil
 		}
 	}
 	return readRawFileContent(name)
 }
 
 func readRawFileContent(path string) (string, error) {
+	maxSize := helper.LoadConfig(helper.ConfigPath(".aracne/topology.db")).EffectiveMaxFileSize()
+	if info, err := os.Stat(path); err == nil && info.Size() > maxSize {
+		return "", fmt.Errorf("file %q is %d bytes, exceeding the configured read.max_file_size of %d bytes", path, info.Size(), maxSize)
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("file %q not found in topology and cannot be read as file: %w", path, err)
@@ -237,6 +267,12 @@ func (r *UniversalReadPackage) Run(args json.RawMessage) (string, error) {
 			return "", fmt.Errorf("read package: %w", err)
 		}
 		return pythontools.FormatPythonPackageContext(ctx), nil
+	case "javascript", "typescript":
+		ctx, err := javascript.NewJavaScriptManager(r.mgr).ReadPackage(target.id)
+		if err != nil {
+			return "", fmt.Errorf("read package: %w", err)
+		}
+		return jstools.FormatJavaScriptPackageContext(ctx), nil
 	default:
 		return "", unsupportedLanguage("read_package", target)
 	}
@@ -271,6 +307,12 @@ func (r *UniversalReadDependency) Run(args json.RawMessage) (string, error) {
 			return "", fmt.Errorf("read dependency: %w", err)
 		}
 		return pythontools.FormatPythonDependencyContext(ctx), nil
+	case "javascript", "typescript":
+		ctx, err := javascript.NewJavaScriptManager(r.mgr).ReadDependency(target.id)
+		if err != nil {
+			return "", fmt.Errorf("read dependency: %w", err)
+		}
+		return jstools.FormatJavaScriptDependencyContext(ctx), nil
 	default:
 		return "", unsupportedLanguage("read_dependency", target)
 	}
@@ -292,14 +334,22 @@ func (r *UniversalReadNamedType) Run(args json.RawMessage) (string, error) {
 	if err != nil || message != "" {
 		return message, err
 	}
-	if target.res.Language != "go" {
+	switch target.res.Language {
+	case "go":
+		ctx, err := golang.NewGoManager(r.mgr).ReadNamedType(target.id)
+		if err != nil {
+			return "", fmt.Errorf("read named type: %w", err)
+		}
+		return gotools.FormatGoNamedTypeContext(ctx), nil
+	case "typescript":
+		ctx, err := javascript.NewJavaScriptManager(r.mgr).ReadNamedType(target.id)
+		if err != nil {
+			return "", fmt.Errorf("read named type: %w", err)
+		}
+		return jstools.FormatJavaScriptNamedTypeContext(ctx), nil
+	default:
 		return "", unsupportedLanguage("read_named_type", target)
 	}
-	ctx, err := golang.NewGoManager(r.mgr).ReadNamedType(target.id)
-	if err != nil {
-		return "", fmt.Errorf("read named type: %w", err)
-	}
-	return gotools.FormatGoNamedTypeContext(ctx), nil
 }
 
 func nameParam(description string) []tools.Parameter {
