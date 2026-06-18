@@ -16,7 +16,6 @@ func FromGeneric(topo *domain.Topology) *PythonTopology {
 		Classes:      make(map[ClassID]PythonClass),
 		ExternalVars: make(map[ExternalVarID]PythonExternalVar),
 		Modules:      make(map[ModuleID]PythonModule),
-		Packages:     make(map[PackagePath]PythonPackage),
 		Errors:       topo.Errors,
 	}
 
@@ -108,14 +107,6 @@ func FromGeneric(topo *domain.Topology) *PythonTopology {
 				mod.FromPackage = PackagePath(fp)
 			}
 			gt.Modules[mod.ID] = mod
-
-		case domain.ResourcePackage:
-			p := PythonPackage{
-				Path:        PackagePath(id),
-				Description: res.Description,
-				Connections: mapKindConn(res.Connections),
-			}
-			gt.Packages[p.Path] = p
 
 		case domain.ResourceDependency:
 			gt.Dependencies = append(gt.Dependencies, PythonDependancy{
@@ -215,16 +206,6 @@ func ToGeneric(gt *PythonTopology) *domain.Topology {
 			Description: m.Description,
 			Properties:  props,
 			Connections: stringMapConn(m.Connections),
-		}
-	}
-
-	for id, p := range gt.Packages {
-		topo.Resources[string(id)] = domain.Resource{
-			ID:          string(id),
-			Kind:        domain.ResourcePackage,
-			Name:        string(p.Path),
-			Description: p.Description,
-			Connections: stringMapConn(p.Connections),
 		}
 	}
 

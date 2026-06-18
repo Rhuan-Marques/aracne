@@ -133,31 +133,6 @@ func TestPythonModuleAccessors(t *testing.T) {
 	}
 }
 
-func TestPythonPackageAccessors(t *testing.T) {
-	p := PythonPackage{
-		Path: "mypackage",
-		Connections: map[ConnectionKind][]string{
-			ConnHasFile:  {"mod1.py", "mod2.py"},
-			ConnHasFunc:  {"mod.Func1"},
-			ConnHasClass: {"mod.MyClass"},
-			ConnHasVar:   {"mod.Global"},
-		},
-	}
-
-	if files := p.Files(); len(files) != 2 {
-		t.Errorf("Files() = %v", files)
-	}
-	if funcs := p.HasFunctions(); len(funcs) != 1 {
-		t.Errorf("HasFunctions() = %v", funcs)
-	}
-	if classes := p.HasClasses(); len(classes) != 1 {
-		t.Errorf("HasClasses() = %v", classes)
-	}
-	if vars := p.HasExternalVars(); len(vars) != 1 {
-		t.Errorf("HasExternalVars() = %v", vars)
-	}
-}
-
 func TestPythonFromGenericNil(t *testing.T) {
 	result := FromGeneric(nil)
 	if result != nil {
@@ -310,9 +285,6 @@ func TestPythonFromGeneric(t *testing.T) {
 	}
 	if len(gt.Modules) != 1 {
 		t.Errorf("expected 1 module, got %d", len(gt.Modules))
-	}
-	if len(gt.Packages) != 1 {
-		t.Errorf("expected 1 package, got %d", len(gt.Packages))
 	}
 	if len(gt.Dependencies) != 1 {
 		t.Errorf("expected 1 dependency, got %d", len(gt.Dependencies))

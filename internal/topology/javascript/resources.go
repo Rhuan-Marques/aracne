@@ -35,7 +35,6 @@ type JavaScriptTopology struct {
 	NamedTypes   map[NamedTypeID]JavaScriptNamedType
 	ExternalVars map[ExternalVarID]JavaScriptExternalVar
 	Modules      map[ModuleID]JavaScriptModule
-	Packages     map[PackagePath]JavaScriptPackage
 	Dependencies []JavaScriptDependancy
 	Errors       map[string]string
 }
@@ -117,12 +116,6 @@ type JavaScriptModule struct {
 	// (or CommonJS `module.exports = name`), used to resolve default imports.
 	DefaultExport string
 	Connections   map[ConnectionKind][]string
-}
-
-type JavaScriptPackage struct {
-	Path        PackagePath
-	Description string
-	Connections map[ConnectionKind][]string
 }
 
 type JavaScriptExternalVar struct {

@@ -58,6 +58,13 @@ func resourceSignature(res domain.Resource) string {
 	return b.String()
 }
 
+// ResourceSignatureOf returns the canonical fingerprint of a single resource
+// (see resourceSignature). It lets callers diff one post-update resource against
+// a precomputed signature without rebuilding the whole map.
+func ResourceSignatureOf(res domain.Resource) string {
+	return resourceSignature(res)
+}
+
 // ResourceSignatures fingerprints every resource (see resourceSignature). Call
 // it on the freshly-read topology BEFORE applying a scoped update, then pass the
 // result to DiffResources after the update to compute the changed set.
@@ -87,6 +94,96 @@ func DiffResources(beforeSigs map[string]string, after map[string]domain.Resourc
 		}
 	}
 	return upserts, deletes
+}
+
+// WriteScopedResources persists a scoped change WITHOUT a full topology in
+// memory (the Phase-3 partial path). It rewrites the small warnings table
+// wholesale from the provided map and applies row-level resource/connection
+// deltas (delete the removed IDs, upsert the changed ones, dropping each
+// upserted source's stale outgoing edges). It deliberately leaves the info
+// table untouched: the partial path is used only for single-language edits that
+// cannot change root/language/languages, so info is already correct from the
+// prior full scan. bugs are reconciled separately by CleanupOrphanedBugsScoped.
+func WriteScopedResources(dbPath string, upserts []domain.Resource, deletes []string, warnings map[string]domain.TopologyWarning) error {
+	return withSQLiteWrite(dbPath, func(db *sql.DB) error {
+		if err := createSchema(db); err != nil {
+			return err
+		}
+		tx, err := db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+
+		// warnings: full rewrite (small table; warnings shift globally per update).
+		if _, err := tx.Exec("DELETE FROM warnings"); err != nil {
+			return err
+		}
+		warnStmt, err := tx.Prepare("INSERT INTO warnings VALUES (?, ?, ?, ?, ?)")
+		if err != nil {
+			return err
+		}
+		defer warnStmt.Close()
+		for id, w := range warnings {
+			if _, err := warnStmt.Exec(id, w.SourceID, string(w.Kind), w.TargetID, w.Message); err != nil {
+				return err
+			}
+		}
+
+		// resources/connections: scoped deletes then upserts.
+		for _, chunk := range chunkStrings(deletes, sqliteMaxVariables) {
+			args := make([]interface{}, len(chunk))
+			for i, id := range chunk {
+				args[i] = id
+			}
+			ph := placeholders(len(chunk))
+			if _, err := tx.Exec("DELETE FROM connections WHERE source_id IN ("+ph+")", args...); err != nil {
+				return err
+			}
+			if _, err := tx.Exec("DELETE FROM resources WHERE id IN ("+ph+")", args...); err != nil {
+				return err
+			}
+		}
+
+		if len(upserts) > 0 {
+			resStmt, err := tx.Prepare("INSERT OR REPLACE INTO resources (id, kind, name, language, description, properties_json, starts_at, ends_at, loc_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+			if err != nil {
+				return err
+			}
+			defer resStmt.Close()
+			connStmt, err := tx.Prepare("INSERT OR REPLACE INTO connections VALUES (?, ?, ?)")
+			if err != nil {
+				return err
+			}
+			defer connStmt.Close()
+
+			for _, res := range upserts {
+				startsAt, endsAt := 0, 0
+				locPath := ""
+				if res.Location.Path != "" {
+					startsAt = res.Location.StartsAt
+					endsAt = res.Location.EndsAt
+					locPath = res.Location.Path
+				}
+				if _, err := resStmt.Exec(res.ID, string(res.Kind), res.Name, res.Language,
+					res.Description, toJSON(res.Properties), startsAt, endsAt, locPath); err != nil {
+					return err
+				}
+				if _, err := tx.Exec("DELETE FROM connections WHERE source_id = ?", res.ID); err != nil {
+					return err
+				}
+				for kind, targets := range res.Connections {
+					for _, target := range targets {
+						if _, err := connStmt.Exec(res.ID, kind, target); err != nil {
+							return err
+						}
+					}
+				}
+			}
+		}
+
+		return tx.Commit()
+	})
 }
 
 // WriteIncremental persists a scoped topology update in one transaction. The

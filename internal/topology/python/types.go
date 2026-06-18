@@ -101,11 +101,6 @@ type ModuleCut struct {
 	Cut string
 }
 
-type PackageCut struct {
-	PythonPackage
-	Cut string
-}
-
 type PythonModuleContext struct {
 	Module       *ModuleCut
 	FromPackage  PackagePath
@@ -113,16 +108,6 @@ type PythonModuleContext struct {
 	Classes      []ClassUsage
 	ExtVars      []SimplifiedExtVar
 	Imports      []PackagePath
-	Dependencies []DependancyPath
-	Blocks       []ContextBlock
-}
-
-type PythonPackageContext struct {
-	Package      *PackageCut
-	Files        []ModuleID
-	Functions    []SimplifiedFunction
-	Classes      []ClassUsage
-	ExtVars      []SimplifiedExtVar
 	Dependencies []DependancyPath
 	Blocks       []ContextBlock
 }

@@ -158,6 +158,95 @@ func TestServerGraphModes(t *testing.T) {
 	}
 }
 
+// TestServerPackagesAndModulesHybrid verifies the renamed "Packages & Modules"
+// view is hybrid: Python/JS files appear as module nodes joined by file->file
+// imports_module edges, while a Go package still appears as a package node.
+func TestServerPackagesAndModulesHybrid(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "topology.db")
+	topo := &domain.Topology{
+		Root:     dir,
+		Language: "multi",
+		Resources: map[string]domain.Resource{
+			"proj/consumer.py": {
+				ID:       "proj/consumer.py",
+				Kind:     domain.ResourceFile,
+				Name:     "consumer.py",
+				Language: "python",
+				Connections: map[string][]string{
+					"imports_module": {"proj/shapes.py"},
+				},
+			},
+			"proj/shapes.py": {
+				ID:       "proj/shapes.py",
+				Kind:     domain.ResourceFile,
+				Name:     "shapes.py",
+				Language: "python",
+			},
+			"pkg/a": {
+				ID:       "pkg/a",
+				Kind:     domain.ResourcePackage,
+				Name:     "pkg/a",
+				Language: "go",
+				Connections: map[string][]string{
+					"has_file": {"a.go"},
+				},
+			},
+			"pkg/b": {
+				ID:       "pkg/b",
+				Kind:     domain.ResourcePackage,
+				Name:     "pkg/b",
+				Language: "go",
+			},
+			"a.go": {
+				ID:          "a.go",
+				Kind:        domain.ResourceFile,
+				Name:        "a.go",
+				Language:    "go",
+				Properties:  map[string]any{"from_package": "pkg/a"},
+				Connections: map[string][]string{"imports_package": {"pkg/b"}},
+			},
+		},
+		Errors: map[string]string{},
+	}
+	if err := helper.WriteDb(topo, dbPath); err != nil {
+		t.Fatalf("WriteDb: %v", err)
+	}
+
+	server := httptest.NewServer(NewServer(dbPath))
+	defer server.Close()
+
+	var graph GraphResponse
+	getJSON(t, server.URL+"/api/graph?mode=packages", &graph)
+
+	// Nodes: 2 python module (file) nodes + 2 go package nodes. Go files are NOT
+	// nodes in this view.
+	if len(graph.Nodes) != 4 {
+		t.Fatalf("expected 4 nodes (2 py modules + 2 go packages), got %d: %+v", len(graph.Nodes), graph.Nodes)
+	}
+	for _, n := range graph.Nodes {
+		if n.ID == "a.go" {
+			t.Fatalf("go file should not be a node in the packages view: %+v", n)
+		}
+	}
+
+	var moduleEdge, pkgEdge bool
+	for _, e := range graph.Edges {
+		if e.Type == "imports_module" && e.Source == "proj/consumer.py" && e.Target == "proj/shapes.py" {
+			moduleEdge = true
+		}
+		if e.Type == "imports_package" && e.Source == "pkg/a" && e.Target == "pkg/b" {
+			pkgEdge = true
+		}
+	}
+	if !moduleEdge {
+		t.Errorf("expected file->file imports_module edge consumer.py -> shapes.py, got edges %+v", graph.Edges)
+	}
+	if !pkgEdge {
+		t.Errorf("expected Go package->package imports_package edge pkg/a -> pkg/b, got edges %+v", graph.Edges)
+	}
+}
+
 func TestOptimizationRulesCollapseAndPersistDefaults(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, ".aracne", "topology.db")

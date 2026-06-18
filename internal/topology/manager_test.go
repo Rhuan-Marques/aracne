@@ -288,7 +288,7 @@ func TestPyUpdateFileAddsNewModule(t *testing.T) {
 		t.Fatalf("expected new module %s to be present", newPath)
 	}
 
-	funcID := python.FunctionID(filepath.Base(root) + ".added")
+	funcID := python.FunctionID(filepath.Base(root) + "/added.added")
 	if _, ok := gt.Functions[funcID]; !ok {
 		t.Fatalf("expected new function %s to be present", funcID)
 	}

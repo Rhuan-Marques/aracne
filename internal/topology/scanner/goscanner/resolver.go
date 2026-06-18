@@ -351,67 +351,37 @@ func (ba *bodyAnalyzer) resolveQualifiedCall(xName, selName string) {
 	}
 
 	if structID, ok := ba.varTypeMap[xName]; ok {
+		// A concrete struct-typed variable resolves to the concrete method only.
+		// We deliberately do NOT consult interface.ImplementedBy() here: a cold
+		// Scan runs body analysis BEFORE matchStructsToInterfaces, so those edges
+		// are empty at this point and a concrete call yields no uses_interface
+		// edge. The incremental path loads a gt with those edges already present,
+		// so reading them would add a ghost uses_interface edge that the cold scan
+		// never produces (see atscale GhostUsesInterfaceOnReparse). Keeping this
+		// resolution ImplementedBy-independent makes the two paths agree.
 		if str, ok := ba.gt.Structs[structID]; ok {
-			foundDirect := false
 			for _, mid := range str.Methods() {
 				m, ok := ba.gt.Functions[mid]
 				if ok && m.Name == selName {
 					ba.add(golang.ConnCalls, string(mid))
 					ba.add(golang.ConnUsesStruct, string(structID))
-					foundDirect = true
 					break
 				}
-			}
-			// Always check interfaces for ConnUsesIface tracking
-			for _, iface := range ba.gt.Interfaces {
-				if !isImplementedBy(iface, structID) {
-					continue
-				}
-				for _, reqMethod := range iface.Methods {
-					if reqMethod.Name == selName {
-						ba.add(golang.ConnUsesIface, string(iface.ID))
-						if !foundDirect {
-							for _, implStructID := range iface.ImplementedBy() {
-								implStr, ok := ba.gt.Structs[implStructID]
-								if !ok {
-									continue
-								}
-								for _, mid := range implStr.Methods() {
-									m, ok := ba.gt.Functions[mid]
-									if ok && m.Name == selName {
-										ba.add(golang.ConnCalls, string(mid))
-									}
-								}
-							}
-						}
-						return
-					}
-				}
-			}
-			if foundDirect {
-				return
 			}
 		}
 		return
 	}
 
 	if ifaceID, ok := ba.varIfaceMap[xName]; ok {
+		// An interface-typed variable records only the interface usage. As above,
+		// we do NOT fan out to iface.ImplementedBy() implementers' methods: those
+		// edges are empty during a cold Scan's body analysis, so adding them on the
+		// incremental path (where they are populated) would diverge from the cold
+		// scan. Stay ImplementedBy-independent.
 		if iface, ok := ba.gt.Interfaces[ifaceID]; ok {
 			for _, reqMethod := range iface.Methods {
 				if reqMethod.Name == selName {
 					ba.add(golang.ConnUsesIface, string(ifaceID))
-					for _, implStructID := range iface.ImplementedBy() {
-						implStr, ok := ba.gt.Structs[implStructID]
-						if !ok {
-							continue
-						}
-						for _, mid := range implStr.Methods() {
-							m, ok := ba.gt.Functions[mid]
-							if ok && m.Name == selName {
-								ba.add(golang.ConnCalls, string(mid))
-							}
-						}
-					}
 					return
 				}
 			}
@@ -430,15 +400,6 @@ func (ba *bodyAnalyzer) resolveQualifiedCall(xName, selName string) {
 			}
 		}
 	}
-}
-
-func isImplementedBy(iface golang.GolangInterface, structID golang.StructID) bool {
-	for _, implID := range iface.ImplementedBy() {
-		if implID == structID {
-			return true
-		}
-	}
-	return false
 }
 
 func (ba *bodyAnalyzer) resolveCompositeLit(lit *ast.CompositeLit) {

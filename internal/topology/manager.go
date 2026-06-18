@@ -17,6 +17,17 @@ import (
 
 var bugIDCounter int64
 
+// partialIncrementalCount counts how many changed files were persisted through
+// the scoped partial change-path (no full ReadDb). It is observable by tests via
+// PartialIncrementalCount to prove the fast path is actually exercised.
+var partialIncrementalCount int64
+
+// PartialIncrementalCount returns the number of files persisted via the scoped
+// partial change-path since process start. Intended for tests.
+func PartialIncrementalCount() int64 {
+	return atomic.LoadInt64(&partialIncrementalCount)
+}
+
 type TopologyManager struct {
 	dbPath string
 }
@@ -111,6 +122,16 @@ func (m *TopologyManager) IncrementalScan(root string, reg *scanner.Registry) ([
 		return nil, nil
 	}
 
+	// Phase 3: the scoped partial change-path. When it is safe — no deleted
+	// files (deletes need a whole-graph referrer sweep) and every changed file's
+	// scanner can update without loading the whole graph — persist each changed
+	// file's delta directly from the DB, never reading or rewriting the full
+	// graph. Correctness over coverage: anything unsafe falls through to the
+	// existing full path below, unchanged.
+	if handled, warnings, err := m.tryPartialIncremental(root, reg, added, modified, deleted); handled {
+		return warnings, err
+	}
+
 	// A change exists; only now is it worth loading the full graph.
 	topo, err := helper.ReadDb(m.dbPath)
 	if err != nil {
@@ -161,6 +182,93 @@ func (m *TopologyManager) IncrementalScan(root string, reg *scanner.Registry) ([
 	helper.SyncManifest(topo, m.dbPath)
 
 	return allWarnings, nil
+}
+
+// partialUpdaterFor returns the scanner for path if and only if it implements
+// the scoped PartialUpdater interface; otherwise it returns nil so the caller
+// falls back to the full path.
+func partialUpdaterFor(reg *scanner.Registry, path string) scanner.PartialUpdater {
+	if os.Getenv("ARAC_NO_PARTIAL") != "" {
+		return nil
+	}
+	ls := reg.DetectFile(path)
+	if ls == nil {
+		return nil
+	}
+	pu, ok := ls.(scanner.PartialUpdater)
+	if !ok {
+		return nil
+	}
+	if !helper.IsSourceFile(path, ls.Name()) {
+		return nil
+	}
+	return pu
+}
+
+// tryPartialIncremental attempts the scoped change-path. It returns handled=true
+// only when it actually persisted the change without loading the full graph; on
+// handled=false the caller must run the existing full path. It is safe ONLY when
+// there are no deletions and every added/modified file's scanner implements
+// PartialUpdater (file deletes and unknown/non-source files route to fallback).
+func (m *TopologyManager) tryPartialIncremental(root string, reg *scanner.Registry, added, modified, deleted []string) (bool, []domain.TopologyWarning, error) {
+	if len(deleted) != 0 {
+		return false, nil, nil
+	}
+	changed := append(append([]string(nil), added...), modified...)
+	if len(changed) == 0 {
+		return false, nil, nil
+	}
+	updaters := make([]scanner.PartialUpdater, len(changed))
+	for i, path := range changed {
+		pu := partialUpdaterFor(reg, path)
+		if pu == nil {
+			return false, nil, nil
+		}
+		updaters[i] = pu
+	}
+
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return false, nil, nil
+	}
+
+	var allWarnings []domain.TopologyWarning
+	// Process each changed file in turn, persisting its scoped delta before the
+	// next so cross-file dependencies (and warnings) see prior changes. For the
+	// dominant single-file edit this is exactly one DB write.
+	for i, path := range changed {
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			return false, nil, nil
+		}
+		upserts, deletes, warnings, err := updaters[i].UpdateFilePartial(m.dbPath, absRoot, absPath)
+		if err != nil {
+			// Either the scanner asked to fall back (ErrPartialFallback) or a
+			// genuine error occurred. In both cases route to the full ReadDb
+			// path, which re-derives everything from scratch and is idempotent
+			// with any deltas already written for earlier files in this batch.
+			return false, nil, nil
+		}
+		if err := helper.WriteScopedResources(m.dbPath, upserts, deletes, warnings); err != nil {
+			return true, allWarnings, fmt.Errorf("write topology db: %w", err)
+		}
+		atomic.AddInt64(&partialIncrementalCount, 1)
+		// Surface only newly-added "changed/removed" warnings to the caller, the
+		// same subset the full path reports.
+		for _, w := range warnings {
+			if w.Kind == domain.WarnSignatureChanged || w.Kind == domain.WarnNodeRemoved {
+				allWarnings = append(allWarnings, w)
+			}
+		}
+	}
+
+	if err := helper.CleanupOrphanedBugsScoped(m.dbPath); err != nil {
+		return true, allWarnings, fmt.Errorf("cleanup bugs: %w", err)
+	}
+	if err := helper.SyncManifestFiles(m.dbPath, changed); err != nil {
+		return true, allWarnings, fmt.Errorf("sync manifest: %w", err)
+	}
+	return true, allWarnings, nil
 }
 
 func (m *TopologyManager) FullReScan(root string, reg *scanner.Registry) ([]domain.TopologyWarning, error) {

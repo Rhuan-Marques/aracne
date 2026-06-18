@@ -295,6 +295,36 @@ func ReadReverseConnections(dbPath string, targetIDs []string, connType string) 
 	return out, err
 }
 
+// ReadAllWarnings loads the entire warnings table into a map keyed by warning
+// ID. The table is small (warnings shift globally per update), so the partial
+// path loads it wholesale, lets the scanner's add/clear logic run, and rewrites
+// it from the returned map.
+func ReadAllWarnings(dbPath string) (map[string]domain.TopologyWarning, error) {
+	out := make(map[string]domain.TopologyWarning)
+	err := withSQLiteRead(dbPath, func(db *sql.DB) error {
+		rows, err := db.Query("SELECT id, source_id, kind, target_id, message FROM warnings")
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id, sourceID, kind, targetID, message string
+			if err := rows.Scan(&id, &sourceID, &kind, &targetID, &message); err != nil {
+				return err
+			}
+			out[id] = domain.TopologyWarning{
+				ID:       id,
+				SourceID: sourceID,
+				Kind:     domain.WarningKind(kind),
+				TargetID: targetID,
+				Message:  message,
+			}
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
 // WriteDelta applies a scoped change in a single transaction: it removes the
 // resources named in deletes (and their outgoing connection rows), then upserts
 // the given resources, replacing each upserted resource's outgoing connections

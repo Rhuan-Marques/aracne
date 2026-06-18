@@ -454,8 +454,8 @@ func (m *JavaScriptManager) ReadModule(id string, opts ...topology.TopologyOptio
 		}
 	}
 
-	for _, p := range mod.PackagesImported() {
-		ctx.Imports = append(ctx.Imports, p)
+	for _, target := range mod.ModulesImported() {
+		ctx.Imports = append(ctx.Imports, target)
 	}
 
 	var blocks []ContextBlock
@@ -487,103 +487,6 @@ func (m *JavaScriptManager) ReadModule(id string, opts ...topology.TopologyOptio
 			Line: ev.Location.StartsAt, Title: fmt.Sprintf("var %s", ev.Name),
 		})
 	}
-	ctx.Blocks = sortBlocks(blocks)
-
-	return ctx, nil
-}
-
-func (m *JavaScriptManager) ReadPackage(id string, opts ...topology.TopologyOption) (*JavaScriptPackageContext, error) {
-	opt := &topology.TopologyOptions{}
-	for _, o := range opts {
-		o(opt)
-	}
-
-	topo, err := m.generic.ReadAll()
-	if err != nil {
-		return nil, err
-	}
-	gt := FromGeneric(topo)
-
-	pkgPath := PackagePath(id)
-	pkg, ok := gt.Packages[pkgPath]
-	if !ok {
-		return nil, fmt.Errorf("package %s not found in topology", id)
-	}
-
-	ctx := &JavaScriptPackageContext{}
-	ctx.Package = &PackageCut{JavaScriptPackage: pkg}
-
-	var blocks []ContextBlock
-
-	if opt.HasResource(domain.ResourceFile) {
-		for _, fID := range pkg.Files() {
-			ctx.Files = append(ctx.Files, fID)
-			blocks = append(blocks, ContextBlock{
-				Kind: "module", FileID: ModuleID(fID), Line: 1,
-				Title: fmt.Sprintf("module %s", fID),
-			})
-		}
-	}
-
-	if opt.HasResource(domain.ResourceFunction) {
-		for _, fnID := range pkg.HasFunctions() {
-			fn, ok := gt.Functions[fnID]
-			if !ok {
-				continue
-			}
-			ctx.Functions = append(ctx.Functions, simplifyFunction(fn))
-			blocks = append(blocks, ContextBlock{
-				Kind: "function", FileID: ModuleID(fn.Loc.Path),
-				Line: fn.Loc.StartsAt, Title: fmt.Sprintf("function %s", fn.Name),
-			})
-		}
-	}
-
-	if opt.HasResource(domain.ResourceType) {
-		for _, cID := range pkg.HasClasses() {
-			c, ok := gt.Classes[cID]
-			if !ok {
-				continue
-			}
-			usage := classUsageWithMethods(gt, c)
-			ctx.Classes = append(ctx.Classes, usage)
-			blocks = append(blocks, ContextBlock{
-				Kind: "class", FileID: ModuleID(c.Loc.Path),
-				Line: c.Loc.StartsAt, Title: fmt.Sprintf("class %s", c.Name),
-			})
-			for _, mm := range usage.Methods {
-				blocks = append(blocks, ContextBlock{
-					Kind: "method", FileID: ModuleID(mm.Location.Path),
-					Line: mm.Location.StartsAt, Title: fmt.Sprintf("%s.%s", c.Name, mm.Name),
-				})
-			}
-		}
-	}
-
-	if opt.HasResource(domain.ResourceVariable) {
-		for _, vID := range pkg.HasExternalVars() {
-			v, ok := gt.ExternalVars[vID]
-			if !ok {
-				continue
-			}
-			ctx.ExtVars = append(ctx.ExtVars, simplifyExtVar(v))
-			blocks = append(blocks, ContextBlock{
-				Kind: "extvar", FileID: ModuleID(v.Location.Path),
-				Line: v.Location.StartsAt, Title: fmt.Sprintf("var %s", v.Name),
-			})
-		}
-	}
-
-	if opt.HasResource(domain.ResourceDependency) {
-		depSet := make(map[DependancyPath]bool)
-		for _, d := range pkg.Connections[ConnImportsDep] {
-			depSet[DependancyPath(d)] = true
-		}
-		for d := range depSet {
-			ctx.Dependencies = append(ctx.Dependencies, d)
-		}
-	}
-
 	ctx.Blocks = sortBlocks(blocks)
 
 	return ctx, nil

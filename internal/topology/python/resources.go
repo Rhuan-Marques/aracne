@@ -33,7 +33,6 @@ type PythonTopology struct {
 	Classes      map[ClassID]PythonClass
 	ExternalVars map[ExternalVarID]PythonExternalVar
 	Modules      map[ModuleID]PythonModule
-	Packages     map[PackagePath]PythonPackage
 	Dependencies []PythonDependancy
 	Errors       map[string]string
 }
@@ -70,12 +69,6 @@ type PythonModule struct {
 	Name        string
 	Description string
 	FromPackage PackagePath
-	Connections map[ConnectionKind][]string
-}
-
-type PythonPackage struct {
-	Path        PackagePath
-	Description string
 	Connections map[ConnectionKind][]string
 }
 

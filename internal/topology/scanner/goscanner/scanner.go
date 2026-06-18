@@ -224,20 +224,53 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.Top
 		return warnings, nil
 	}
 
+	dir := filepath.Dir(absPath)
+	pkgPath := getPackagePath(rootPath, dir, modulePath)
+
+	pr, err := ParseFile(absPath, pkgPath, modulePath, rootPath)
+	if err != nil {
+		gt.Errors[absPath] = err.Error()
+		topo.Resources = golang.ToGeneric(gt).Resources
+		topo.Errors = gt.Errors
+		topo.Warnings = gt.Warnings
+		return warnings, nil
+	}
+
+	warnings, err = s.applyFileUpdate(gt, pr, absPath, pkgPath, s.fullPasses())
+	if err != nil {
+		return nil, err
+	}
+
+	topo.Resources = golang.ToGeneric(gt).Resources
+	topo.Errors = gt.Errors
+	topo.Warnings = gt.Warnings
+	return warnings, nil
+}
+
+// fullPasses returns the whole-graph relationship passes used by the full
+// UpdateFile path (unchanged behavior).
+func (s *GoScanner) fullPasses() gtPasses {
+	return gtPasses{
+		getCallers:      s.getCallers,
+		structMethods:   func(gt *golang.GolangTopology, _ *ParseResult) { populateStructMethods(gt) },
+		constructors:    func(gt *golang.GolangTopology, _ *ParseResult) { detectConstructors(gt) },
+		matchInterfaces: func(gt *golang.GolangTopology, _ *ParseResult, _ map[golang.StructID]golang.GolangStruct, _ map[golang.FunctionID]golang.GolangFunction) { matchStructsToInterfaces(gt) },
+		collectDeps:     collectDependencies,
+	}
+}
+
+// applyFileUpdate mutates gt to reflect the (re)parsed file pr at absPath, using
+// the supplied relationship passes. It unifies the new-file and existing-file
+// cases: when the file already exists in gt it carries over descriptions,
+// computes removed/signature-changed warnings, cleans up caller edges, and
+// removes the old members; otherwise those steps are skipped. It returns the
+// caller-facing warnings (signature-changed + node-removed) but does NOT write
+// back to any domain.Topology (callers convert gt as needed).
+func (s *GoScanner) applyFileUpdate(gt *golang.GolangTopology, pr *ParseResult, absPath string, pkgPath golang.PackagePath, passes gtPasses) ([]domain.TopologyWarning, error) {
+	var warnings []domain.TopologyWarning
 	oldFile, hasFile := gt.Files[golang.FileID(absPath)]
+
 	if !hasFile {
-		dir := filepath.Dir(absPath)
-		pkgPath := getPackagePath(rootPath, dir, modulePath)
-
-		pr, err := ParseFile(absPath, pkgPath, modulePath, rootPath)
-		if err != nil {
-			gt.Errors[absPath] = err.Error()
-			topo.Resources = golang.ToGeneric(gt).Resources
-			topo.Errors = gt.Errors
-			topo.Warnings = gt.Warnings
-			return warnings, nil
-		}
-
 		fileConns := make(map[golang.ConnectionKind][]string)
 		for _, ip := range pr.InternalImports {
 			fileConns[golang.ConnImportsPkg] = append(fileConns[golang.ConnImportsPkg], string(ip))
@@ -306,18 +339,13 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.Top
 			}
 		}
 
-		populateStructMethods(gt)
-		detectConstructors(gt)
+		passes.structMethods(gt, pr)
+		passes.constructors(gt, pr)
 		populateNamedTypeUsage(gt, []*ParseResult{pr})
 		s.resolveWarnings(gt, pr, nil, nil, nil)
-		matchStructsToInterfaces(gt)
-		collectDependencies(gt)
+		passes.matchInterfaces(gt, pr, nil, nil)
+		passes.collectDeps(gt)
 		delete(gt.Errors, absPath)
-
-		topo.Resources = golang.ToGeneric(gt).Resources
-		topo.Errors = gt.Errors
-		topo.Warnings = gt.Warnings
-
 		return warnings, nil
 	}
 
@@ -350,18 +378,6 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.Top
 		if v, ok := gt.ExternalVars[vid]; ok {
 			oldExtVars[vid] = v
 		}
-	}
-
-	dir := filepath.Dir(absPath)
-	pkgPath := getPackagePath(rootPath, dir, modulePath)
-
-	pr, err := ParseFile(absPath, pkgPath, modulePath, rootPath)
-	if err != nil {
-		gt.Errors[absPath] = err.Error()
-		topo.Resources = golang.ToGeneric(gt).Resources
-		topo.Errors = gt.Errors
-		topo.Warnings = gt.Warnings
-		return warnings, nil
 	}
 
 	for i, fi := range pr.Functions {
@@ -400,7 +416,7 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.Top
 			if fi.Function.ID == fid {
 				found = true
 				if !signaturesEqualFn(oldFunc, fi.Function) {
-					callers := s.getCallers(gt, string(fid), string(golang.ConnCalls))
+					callers := passes.getCallers(gt, string(fid), string(golang.ConnCalls))
 					for _, callerID := range callers {
 						if _, isOld := oldFunctions[golang.FunctionID(callerID)]; isOld {
 							continue
@@ -454,7 +470,7 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.Top
 	}
 
 	for fid, oldFunc := range removedFuncs {
-		callers := s.getCallers(gt, string(fid), string(golang.ConnCalls))
+		callers := passes.getCallers(gt, string(fid), string(golang.ConnCalls))
 		for _, callerID := range callers {
 			if _, isOld := oldFunctions[golang.FunctionID(callerID)]; isOld {
 				continue
@@ -475,7 +491,7 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.Top
 			}
 		}
 
-		structUsers := s.getCallers(gt, string(fid), string(golang.ConnUsesStruct))
+		structUsers := passes.getCallers(gt, string(fid), string(golang.ConnUsesStruct))
 		for _, sourceID := range structUsers {
 			if _, isOld := oldFunctions[golang.FunctionID(sourceID)]; isOld {
 				continue
@@ -488,7 +504,7 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.Top
 	}
 
 	for sid, oldStruct := range removedStructs {
-		structUsers := s.getCallers(gt, string(sid), string(golang.ConnUsesStruct))
+		structUsers := passes.getCallers(gt, string(sid), string(golang.ConnUsesStruct))
 		for _, sourceID := range structUsers {
 			if sourceFn, ok := gt.Functions[golang.FunctionID(sourceID)]; ok {
 				sourceFn.Connections[golang.ConnUsesStruct] = removeString(sourceFn.Connections[golang.ConnUsesStruct], string(sid))
@@ -508,7 +524,7 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.Top
 	}
 
 	for nid, oldNT := range removedNamedTypes {
-		ntUsers := s.getCallers(gt, string(nid), string(golang.ConnUsesNamedType))
+		ntUsers := passes.getCallers(gt, string(nid), string(golang.ConnUsesNamedType))
 		for _, sourceID := range ntUsers {
 			if sourceFn, ok := gt.Functions[golang.FunctionID(sourceID)]; ok {
 				sourceFn.Connections[golang.ConnUsesNamedType] = removeString(sourceFn.Connections[golang.ConnUsesNamedType], string(nid))
@@ -602,8 +618,8 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.Top
 	pkg.Connections = uniqueConns(pkg.Connections)
 	gt.Packages[pkgPath] = pkg
 
-	populateStructMethods(gt)
-	detectConstructors(gt)
+	passes.structMethods(gt, pr)
+	passes.constructors(gt, pr)
 	populateNamedTypeUsage(gt, []*ParseResult{pr})
 
 	for _, fi := range pr.Functions {
@@ -624,13 +640,9 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.Top
 
 	s.resolveWarnings(gt, pr, removedFuncs, removedStructs, removedNamedTypes)
 
-	matchStructsToInterfaces(gt)
-	collectDependencies(gt)
+	passes.matchInterfaces(gt, pr, removedStructs, removedFuncs)
+	passes.collectDeps(gt)
 	delete(gt.Errors, absPath)
-
-	topo.Resources = golang.ToGeneric(gt).Resources
-	topo.Errors = gt.Errors
-	topo.Warnings = gt.Warnings
 
 	return warnings, nil
 }

@@ -18,7 +18,6 @@ func FromGeneric(topo *domain.Topology) *JavaScriptTopology {
 		NamedTypes:   make(map[NamedTypeID]JavaScriptNamedType),
 		ExternalVars: make(map[ExternalVarID]JavaScriptExternalVar),
 		Modules:      make(map[ModuleID]JavaScriptModule),
-		Packages:     make(map[PackagePath]JavaScriptPackage),
 		Errors:       topo.Errors,
 	}
 
@@ -178,14 +177,6 @@ func FromGeneric(topo *domain.Topology) *JavaScriptTopology {
 			}
 			gt.Modules[mod.ID] = mod
 
-		case domain.ResourcePackage:
-			p := JavaScriptPackage{
-				Path:        PackagePath(id),
-				Description: res.Description,
-				Connections: mapKindConn(res.Connections),
-			}
-			gt.Packages[p.Path] = p
-
 		case domain.ResourceDependency:
 			gt.Dependencies = append(gt.Dependencies, JavaScriptDependancy{
 				PackagePath: DependancyPath(id),
@@ -324,16 +315,6 @@ func ToGeneric(gt *JavaScriptTopology, language string) *domain.Topology {
 			Description: m.Description,
 			Properties:  props,
 			Connections: stringMapConn(m.Connections),
-		}
-	}
-
-	for id, p := range gt.Packages {
-		topo.Resources[string(id)] = domain.Resource{
-			ID:          string(id),
-			Kind:        domain.ResourcePackage,
-			Name:        string(p.Path),
-			Description: p.Description,
-			Connections: stringMapConn(p.Connections),
 		}
 	}
 

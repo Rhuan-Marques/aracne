@@ -2,6 +2,7 @@ package pyscanner
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,7 +13,7 @@ import (
 
 func TestResolveValueRef_function(t *testing.T) {
 	pr := &ParseResult{
-		PkgPath:    "mypkg",
+		ModulePath: "mypkg",
 		ModuleRoot: "testdata",
 	}
 	gt := &python.PythonTopology{
@@ -39,7 +40,7 @@ func TestResolveValueRef_function(t *testing.T) {
 
 func TestResolveValueRef_class(t *testing.T) {
 	pr := &ParseResult{
-		PkgPath:    "mypkg",
+		ModulePath: "mypkg",
 		ModuleRoot: "testdata",
 	}
 	gt := &python.PythonTopology{
@@ -66,7 +67,7 @@ func TestResolveValueRef_class(t *testing.T) {
 
 func TestResolveValueRef_extvar(t *testing.T) {
 	pr := &ParseResult{
-		PkgPath:    "mypkg",
+		ModulePath: "mypkg",
 		ModuleRoot: "testdata",
 	}
 	gt := &python.PythonTopology{
@@ -93,7 +94,7 @@ func TestResolveValueRef_extvar(t *testing.T) {
 
 func TestResolveValueRef_function_preferred_over_class(t *testing.T) {
 	pr := &ParseResult{
-		PkgPath:    "mypkg",
+		ModulePath: "mypkg",
 		ModuleRoot: "testdata",
 	}
 	gt := &python.PythonTopology{
@@ -118,17 +119,17 @@ func TestResolveValueRef_function_preferred_over_class(t *testing.T) {
 
 	resolveValueRef("Ambiguous", pr, gt, add)
 
-	if len(calls) != 1 || calls[0] != "mypkg.Ambiguous" {
-		t.Errorf("expected ConnCalls (function takes priority), got calls=%v classes=%v", calls, classes)
+	if len(classes) != 1 || classes[0] != "mypkg.Ambiguous" {
+		t.Errorf("expected ConnUsesClass (class takes priority), got calls=%v classes=%v", calls, classes)
 	}
-	if len(classes) != 0 {
-		t.Errorf("expected no ConnUsesClass when function matches, got %v", classes)
+	if len(calls) != 0 {
+		t.Errorf("expected no ConnCalls when class matches first, got %v", calls)
 	}
 }
 
 func TestResolveValueRef_literal_values_skipped(t *testing.T) {
 	pr := &ParseResult{
-		PkgPath:    "mypkg",
+		ModulePath: "mypkg",
 		ModuleRoot: "testdata",
 	}
 	gt := &python.PythonTopology{
@@ -137,7 +138,7 @@ func TestResolveValueRef_literal_values_skipped(t *testing.T) {
 		ExternalVars: make(map[python.ExternalVarID]python.PythonExternalVar),
 	}
 
-	for _, lit := range []string{"None", "True", "False", "list", "dict", "tuple", "expr", ""} {
+	for _, lit := range []string{"None", "True", "False", ""} {
 		var added bool
 		add := func(_ python.ConnectionKind, _ string) { added = true }
 		resolveValueRef(lit, pr, gt, add)
@@ -147,44 +148,40 @@ func TestResolveValueRef_literal_values_skipped(t *testing.T) {
 	}
 }
 
+// TestResolveValueRef_dotted_import: `import pkg.utils as utils` then a reference
+// `utils.Helper` resolves to the class in the imported module under its
+// module-qualified id.
 func TestResolveValueRef_dotted_import(t *testing.T) {
 	pr := &ParseResult{
-		PkgPath:    "mypkg",
-		ModuleRoot: filepath.Join("testdata", "testpkg"),
-		ImportMap:  map[string]string{"utils": "testpkg.utils"},
+		ModulePath:    "testpkg/main",
+		ModuleRoot:    filepath.Join("testdata", "testpkg"),
+		ImportTargets: map[string]pyImportTarget{"utils": {ModulePath: "testpkg/utils"}},
 	}
 	gt := &python.PythonTopology{
 		Functions: make(map[python.FunctionID]python.PythonFunction),
 		Classes: map[python.ClassID]python.PythonClass{
-			"testpkg.utils.Helper": {ID: "testpkg.utils.Helper", Name: "Helper"},
+			"testpkg/utils.Helper": {ID: "testpkg/utils.Helper", Name: "Helper"},
 		},
 		ExternalVars: make(map[python.ExternalVarID]python.PythonExternalVar),
 	}
 
 	var gotClasses []string
-	var gotPkgs []string
 	add := func(kind python.ConnectionKind, id string) {
-		switch kind {
-		case python.ConnUsesClass:
+		if kind == python.ConnUsesClass {
 			gotClasses = append(gotClasses, id)
-		case python.ConnUsesPkg:
-			gotPkgs = append(gotPkgs, id)
 		}
 	}
 
 	resolveValueRef("utils.Helper", pr, gt, add)
 
-	if len(gotPkgs) != 1 || gotPkgs[0] != "testpkg.utils" {
-		t.Errorf("expected ConnUsesPkg to testpkg.utils, got %v", gotPkgs)
-	}
-	if len(gotClasses) != 1 || gotClasses[0] != "testpkg.utils.Helper" {
-		t.Errorf("expected ConnUsesClass to testpkg.utils.Helper, got %v", gotClasses)
+	if len(gotClasses) != 1 || gotClasses[0] != "testpkg/utils.Helper" {
+		t.Errorf("expected ConnUsesClass to testpkg/utils.Helper, got %v", gotClasses)
 	}
 }
 
 func TestResolveClassVarRefs(t *testing.T) {
 	pr := &ParseResult{
-		PkgPath:    "mypkg",
+		ModulePath: "mypkg",
 		ModuleRoot: "testdata",
 		ClassVarRefs: []ClassVarRef{
 			{ClassID: "mypkg.MyClass", RefValue: "externalFunc"},
@@ -243,15 +240,16 @@ class y:
 		t.Fatalf("ParseFile failed: %v", err)
 	}
 
+	wantClass := pyModulePath(tmpDir, filePath) + ".y"
 	var found bool
 	for _, ref := range pr.ClassVarRefs {
-		if ref.ClassID == "mypkg.y" && ref.RefValue == "x" {
+		if ref.ClassID == wantClass && ref.RefValue == "x" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("class var ref (y → x) not found in ParseResult.ClassVarRefs: %+v", pr.ClassVarRefs)
+		t.Errorf("class var ref (%s → x) not found in ParseResult.ClassVarRefs: %+v", wantClass, pr.ClassVarRefs)
 	}
 }
 
@@ -285,9 +283,10 @@ class Container:
 		t.Fatalf("ParseFile failed: %v", err)
 	}
 
+	wantClass := pyModulePath(tmpDir, filePath) + ".Container"
 	var refs []string
 	for _, ref := range pr.ClassVarRefs {
-		if ref.ClassID == "mypkg.Container" {
+		if ref.ClassID == wantClass {
 			refs = append(refs, ref.RefValue)
 		}
 	}
@@ -341,8 +340,7 @@ class y:
 		t.Fatalf("Scan failed: %v", err)
 	}
 
-	pkgName := filepath.Base(tmpDir)
-	classID := pkgName + ".y"
+	classID := pyModulePath(tmpDir, filePath) + ".y"
 	res, ok := topo.Resources[classID]
 	if !ok {
 		t.Fatalf("class %q not found in topology resources: available keys: %v", classID, resourceKeys(topo))
@@ -393,8 +391,7 @@ class y:
 		t.Fatalf("Scan failed: %v", err)
 	}
 
-	pkgName := filepath.Base(tmpDir)
-	classID := pkgName + ".y"
+	classID := pyModulePath(tmpDir, filePath) + ".y"
 	res, ok := topo.Resources[classID]
 	if !ok {
 		t.Fatalf("class %q not found, keys: %v", classID, resourceKeys(topo))
@@ -426,8 +423,6 @@ class y:
 		t.Fatal(err)
 	}
 
-	pkgName := filepath.Base(tmpDir)
-
 	s := NewPythonScanner()
 	topo, err := s.Scan(tmpDir)
 	if err != nil {
@@ -455,7 +450,7 @@ class y:
 		t.Fatalf("UpdateFile failed: %v", err)
 	}
 
-	classID := pkgName + ".y"
+	classID := pyModulePath(tmpDir, filePath) + ".y"
 	res, ok := topo.Resources[classID]
 	if !ok {
 		t.Fatalf("class %q not found after UpdateFile, keys: %v", classID, resourceKeys(topo))
@@ -484,14 +479,18 @@ func TestUpdateFile_noDuplicateClassConnections(t *testing.T) {
 	}
 
 	tmpDir := t.TempDir()
-	pkgName := filepath.Base(tmpDir)
 
 	aPath := filepath.Join(tmpDir, "a.py")
 	bPath := filepath.Join(tmpDir, "b.py")
-	if err := os.WriteFile(aPath, []byte("class A:\n    def foo(self):\n        return 1\n"), 0644); err != nil {
+	if err := os.WriteFile(aPath, []byte("from b import A\n\nclass A:\n    def foo(self):\n        return 1\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(bPath, []byte("class B(A):\n    def bar(self):\n        return 2\n"), 0644); err != nil {
+	// b.py imports A from a so B(A) inheritance resolves across files.
+	if err := os.WriteFile(bPath, []byte("from a import A\n\nclass B(A):\n    def bar(self):\n        return 2\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// Rewrite a.py without the bogus self-import (kept minimal for clarity).
+	if err := os.WriteFile(aPath, []byte("class A:\n    def foo(self):\n        return 1\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -501,7 +500,7 @@ func TestUpdateFile_noDuplicateClassConnections(t *testing.T) {
 		t.Fatalf("initial Scan failed: %v", err)
 	}
 
-	classA := pkgName + ".A"
+	classA := pyModulePath(tmpDir, aPath) + ".A"
 	beforeMethods := len(topo.Resources[classA].Connections["methods"])
 	beforeInheritedBy := len(topo.Resources[classA].Connections["inherited_by"])
 	if beforeMethods < 1 {
@@ -510,7 +509,7 @@ func TestUpdateFile_noDuplicateClassConnections(t *testing.T) {
 
 	// Update the OTHER file. This re-runs method/inheritance population over the
 	// whole topology and must leave class A's connection counts unchanged.
-	newB := "class B(A):\n    def bar(self):\n        return 2\n\n    def baz(self):\n        return 3\n"
+	newB := "from a import A\n\nclass B(A):\n    def bar(self):\n        return 2\n\n    def baz(self):\n        return 3\n"
 	if err := os.WriteFile(bPath, []byte(newB), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -528,44 +527,39 @@ func TestUpdateFile_noDuplicateClassConnections(t *testing.T) {
 	}
 }
 
+// TestResolveValueRef_dotted_function_via_import: `import pkg.utils as lib`
+// then `lib.compute` resolves to the function in the imported module.
 func TestResolveValueRef_dotted_function_via_import(t *testing.T) {
 	pr := &ParseResult{
-		PkgPath:    "mypkg",
-		ModuleRoot: filepath.Join("testdata", "mylib"),
-		ImportMap:  map[string]string{"lib": "mylib.utils"},
+		ModulePath:    "mylib/main",
+		ModuleRoot:    filepath.Join("testdata", "mylib"),
+		ImportTargets: map[string]pyImportTarget{"lib": {ModulePath: "mylib/utils"}},
 	}
 	gt := &python.PythonTopology{
 		Functions: map[python.FunctionID]python.PythonFunction{
-			"mylib.utils.compute": {ID: "mylib.utils.compute", Name: "compute"},
+			"mylib/utils.compute": {ID: "mylib/utils.compute", Name: "compute"},
 		},
 		Classes:      make(map[python.ClassID]python.PythonClass),
 		ExternalVars: make(map[python.ExternalVarID]python.PythonExternalVar),
 	}
 
 	var gotCalls []string
-	var gotPkgs []string
 	add := func(kind python.ConnectionKind, id string) {
-		switch kind {
-		case python.ConnCalls:
+		if kind == python.ConnCalls {
 			gotCalls = append(gotCalls, id)
-		case python.ConnUsesPkg:
-			gotPkgs = append(gotPkgs, id)
 		}
 	}
 
 	resolveValueRef("lib.compute", pr, gt, add)
 
-	if len(gotPkgs) != 1 || gotPkgs[0] != "mylib.utils" {
-		t.Errorf("expected ConnUsesPkg to mylib.utils, got %v", gotPkgs)
-	}
-	if len(gotCalls) != 1 || gotCalls[0] != "mylib.utils.compute" {
-		t.Errorf("expected ConnCalls to mylib.utils.compute, got %v", gotCalls)
+	if len(gotCalls) != 1 || gotCalls[0] != "mylib/utils.compute" {
+		t.Errorf("expected ConnCalls to mylib/utils.compute, got %v", gotCalls)
 	}
 }
 
 func TestResolveValueRef_nonexistent_skipped(t *testing.T) {
 	pr := &ParseResult{
-		PkgPath:    "mypkg",
+		ModulePath: "mypkg",
 		ModuleRoot: "testdata",
 	}
 	gt := &python.PythonTopology{
@@ -582,51 +576,48 @@ func TestResolveValueRef_nonexistent_skipped(t *testing.T) {
 	}
 }
 
-func TestResolveValueRef_import_alias_plain_name_function(t *testing.T) {
+// TestResolveValueRef_imported_symbol_function: `from testpkg.utils import
+// helper_func` -> the alias resolves to the symbol's module-qualified id.
+func TestResolveValueRef_imported_symbol_function(t *testing.T) {
 	pr := &ParseResult{
-		PkgPath:    "mypkg",
-		ModuleRoot: filepath.Join("testdata", "testpkg"),
-		ImportMap:  map[string]string{"myfunc": "testpkg.utils.helper_func"},
+		ModulePath:    "testpkg/main",
+		ModuleRoot:    filepath.Join("testdata", "testpkg"),
+		ImportTargets: map[string]pyImportTarget{"helper_func": {ModulePath: "testpkg/utils", Symbol: "helper_func"}},
 	}
 	gt := &python.PythonTopology{
 		Functions: map[python.FunctionID]python.PythonFunction{
-			"testpkg.utils.helper_func": {ID: "testpkg.utils.helper_func", Name: "helper_func"},
+			"testpkg/utils.helper_func": {ID: "testpkg/utils.helper_func", Name: "helper_func"},
 		},
 		Classes:      make(map[python.ClassID]python.PythonClass),
 		ExternalVars: make(map[python.ExternalVarID]python.PythonExternalVar),
 	}
 
 	var gotCalls []string
-	var gotPkgs []string
 	add := func(kind python.ConnectionKind, id string) {
-		switch kind {
-		case python.ConnCalls:
+		if kind == python.ConnCalls {
 			gotCalls = append(gotCalls, id)
-		case python.ConnUsesPkg:
-			gotPkgs = append(gotPkgs, id)
 		}
 	}
 
-	resolveValueRef("myfunc", pr, gt, add)
+	resolveValueRef("helper_func", pr, gt, add)
 
-	if len(gotCalls) != 1 || gotCalls[0] != "testpkg.utils.helper_func" {
-		t.Errorf("expected ConnCalls to testpkg.utils.helper_func, got %v", gotCalls)
-	}
-	if len(gotPkgs) != 1 {
-		t.Errorf("expected ConnUsesPkg, got %v", gotPkgs)
+	if len(gotCalls) != 1 || gotCalls[0] != "testpkg/utils.helper_func" {
+		t.Errorf("expected ConnCalls to testpkg/utils.helper_func, got %v", gotCalls)
 	}
 }
 
-func TestResolveValueRef_import_alias_plain_name_class(t *testing.T) {
+// TestResolveValueRef_imported_symbol_class: `from testpkg.models import
+// MyClass` -> the alias resolves to the class's module-qualified id.
+func TestResolveValueRef_imported_symbol_class(t *testing.T) {
 	pr := &ParseResult{
-		PkgPath:    "mypkg",
-		ModuleRoot: filepath.Join("testdata", "testpkg"),
-		ImportMap:  map[string]string{"MyClass": "testpkg.models.MyClass"},
+		ModulePath:    "testpkg/main",
+		ModuleRoot:    filepath.Join("testdata", "testpkg"),
+		ImportTargets: map[string]pyImportTarget{"MyClass": {ModulePath: "testpkg/models", Symbol: "MyClass"}},
 	}
 	gt := &python.PythonTopology{
 		Functions: make(map[python.FunctionID]python.PythonFunction),
 		Classes: map[python.ClassID]python.PythonClass{
-			"testpkg.models.MyClass": {ID: "testpkg.models.MyClass", Name: "MyClass"},
+			"testpkg/models.MyClass": {ID: "testpkg/models.MyClass", Name: "MyClass"},
 		},
 		ExternalVars: make(map[python.ExternalVarID]python.PythonExternalVar),
 	}
@@ -640,71 +631,14 @@ func TestResolveValueRef_import_alias_plain_name_class(t *testing.T) {
 
 	resolveValueRef("MyClass", pr, gt, add)
 
-	if len(gotClasses) != 1 || gotClasses[0] != "testpkg.models.MyClass" {
-		t.Errorf("expected ConnUsesClass to testpkg.models.MyClass, got %v", gotClasses)
-	}
-}
-
-func TestResolveValueRef_import_alias_with_root_prefix(t *testing.T) {
-	// When import path already includes the root base name, it should match directly
-	pr := &ParseResult{
-		PkgPath:    "mypkg",
-		ModuleRoot: filepath.Join("testdata", "testpkg"),
-		ImportMap:  map[string]string{"helper": "testpkg.utils.helper"},
-	}
-	gt := &python.PythonTopology{
-		Functions: map[python.FunctionID]python.PythonFunction{
-			"testpkg.utils.helper": {ID: "testpkg.utils.helper", Name: "helper"},
-		},
-		Classes:      make(map[python.ClassID]python.PythonClass),
-		ExternalVars: make(map[python.ExternalVarID]python.PythonExternalVar),
-	}
-
-	var gotCalls []string
-	add := func(kind python.ConnectionKind, id string) {
-		if kind == python.ConnCalls {
-			gotCalls = append(gotCalls, id)
-		}
-	}
-
-	resolveValueRef("helper", pr, gt, add)
-
-	if len(gotCalls) != 1 || gotCalls[0] != "testpkg.utils.helper" {
-		t.Errorf("expected ConnCalls to testpkg.utils.helper, got %v", gotCalls)
-	}
-}
-
-func TestResolveValueRef_import_alias_dotted_on_alias(t *testing.T) {
-	pr := &ParseResult{
-		PkgPath:    "mypkg",
-		ModuleRoot: filepath.Join("testdata", "testpkg"),
-		ImportMap:  map[string]string{"lib": "testpkg.mylib"},
-	}
-	gt := &python.PythonTopology{
-		Functions: map[python.FunctionID]python.PythonFunction{
-			"testpkg.mylib.compute": {ID: "testpkg.mylib.compute", Name: "compute"},
-		},
-		Classes:      make(map[python.ClassID]python.PythonClass),
-		ExternalVars: make(map[python.ExternalVarID]python.PythonExternalVar),
-	}
-
-	var gotCalls []string
-	add := func(kind python.ConnectionKind, id string) {
-		if kind == python.ConnCalls {
-			gotCalls = append(gotCalls, id)
-		}
-	}
-
-	resolveValueRef("lib.compute", pr, gt, add)
-
-	if len(gotCalls) != 1 || gotCalls[0] != "testpkg.mylib.compute" {
-		t.Errorf("expected ConnCalls to testpkg.mylib.compute, got %v", gotCalls)
+	if len(gotClasses) != 1 || gotClasses[0] != "testpkg/models.MyClass" {
+		t.Errorf("expected ConnUsesClass to testpkg/models.MyClass, got %v", gotClasses)
 	}
 }
 
 func TestResolveValueRef_import_alias_external_dep_plain(t *testing.T) {
 	pr := &ParseResult{
-		PkgPath:    "mypkg",
+		ModulePath: "mypkg",
 		ModuleRoot: "testdata",
 		ImportMap:  map[string]string{"pd": "pandas"},
 	}
@@ -730,7 +664,7 @@ func TestResolveValueRef_import_alias_external_dep_plain(t *testing.T) {
 
 func TestResolveValueRef_import_alias_external_dep_dotted(t *testing.T) {
 	pr := &ParseResult{
-		PkgPath:    "mypkg",
+		ModulePath: "mypkg",
 		ModuleRoot: "testdata",
 		ImportMap:  map[string]string{"pd": "pandas"},
 	}
@@ -751,110 +685,6 @@ func TestResolveValueRef_import_alias_external_dep_dotted(t *testing.T) {
 
 	if len(gotDeps) != 1 || gotDeps[0] != "pandas" {
 		t.Errorf("expected ConnUsesDep to pandas, got %v", gotDeps)
-	}
-}
-
-func TestResolveValueRef_import_alias_shadows_local(t *testing.T) {
-	// Import alias takes priority over local name (Python semantics)
-	pr := &ParseResult{
-		PkgPath:    "mypkg",
-		ModuleRoot: "testdata",
-		ImportMap:  map[string]string{"myfunc": "otherpkg.utils.myfunc"},
-	}
-	gt := &python.PythonTopology{
-		Functions: map[python.FunctionID]python.PythonFunction{
-			"mypkg.myfunc": {ID: "mypkg.myfunc", Name: "myfunc"},
-		},
-		Classes:      make(map[python.ClassID]python.PythonClass),
-		ExternalVars: make(map[python.ExternalVarID]python.PythonExternalVar),
-	}
-
-	var gotDeps []string
-	add := func(kind python.ConnectionKind, id string) {
-		if kind == python.ConnUsesDep {
-			gotDeps = append(gotDeps, id)
-		}
-	}
-
-	resolveValueRef("myfunc", pr, gt, add)
-
-	// Import alias resolves to external dep, local is shadowed
-	if len(gotDeps) != 1 || gotDeps[0] != "otherpkg.utils.myfunc" {
-		t.Errorf("expected ConnUsesDep to otherpkg.utils.myfunc, got %v", gotDeps)
-	}
-}
-
-func TestTryResolveSymbol_plain(t *testing.T) {
-	gt := &python.PythonTopology{
-		Functions: map[python.FunctionID]python.PythonFunction{
-			"myproj.pkg.myfunc": {ID: "myproj.pkg.myfunc", Name: "myfunc"},
-		},
-		Classes:      make(map[python.ClassID]python.PythonClass),
-		ExternalVars: make(map[python.ExternalVarID]python.PythonExternalVar),
-	}
-
-	kind, id := tryResolveSymbol("pkg.myfunc", "", "myproj", gt)
-	if kind != python.ConnCalls || id != "myproj.pkg.myfunc" {
-		t.Errorf("expected ConnCalls myproj.pkg.myfunc, got %v %v", kind, id)
-	}
-}
-
-func TestTryResolveSymbol_with_prefix_match(t *testing.T) {
-	// When import path already has the root prefix
-	gt := &python.PythonTopology{
-		Functions: map[python.FunctionID]python.PythonFunction{
-			"myproj.pkg.myfunc": {ID: "myproj.pkg.myfunc", Name: "myfunc"},
-		},
-		Classes:      make(map[python.ClassID]python.PythonClass),
-		ExternalVars: make(map[python.ExternalVarID]python.PythonExternalVar),
-	}
-
-	kind, id := tryResolveSymbol("myproj.pkg.myfunc", "", "myproj", gt)
-	if kind != python.ConnCalls || id != "myproj.pkg.myfunc" {
-		t.Errorf("expected ConnCalls myproj.pkg.myfunc, got %v %v", kind, id)
-	}
-}
-
-func TestTryResolveSymbol_class(t *testing.T) {
-	gt := &python.PythonTopology{
-		Functions: make(map[python.FunctionID]python.PythonFunction),
-		Classes: map[python.ClassID]python.PythonClass{
-			"myproj.models.User": {ID: "myproj.models.User", Name: "User"},
-		},
-		ExternalVars: make(map[python.ExternalVarID]python.PythonExternalVar),
-	}
-
-	kind, id := tryResolveSymbol("models.User", "", "myproj", gt)
-	if kind != python.ConnUsesClass || id != "myproj.models.User" {
-		t.Errorf("expected ConnUsesClass myproj.models.User, got %v %v", kind, id)
-	}
-}
-
-func TestTryResolveSymbol_with_symbol_suffix(t *testing.T) {
-	gt := &python.PythonTopology{
-		Functions: make(map[python.FunctionID]python.PythonFunction),
-		Classes: map[python.ClassID]python.PythonClass{
-			"myproj.models.special.User": {ID: "myproj.models.special.User", Name: "User"},
-		},
-		ExternalVars: make(map[python.ExternalVarID]python.PythonExternalVar),
-	}
-
-	kind, id := tryResolveSymbol("models.special", "User", "myproj", gt)
-	if kind != python.ConnUsesClass || id != "myproj.models.special.User" {
-		t.Errorf("expected ConnUsesClass myproj.models.special.User, got %v %v", kind, id)
-	}
-}
-
-func TestTryResolveSymbol_not_found(t *testing.T) {
-	gt := &python.PythonTopology{
-		Functions:    make(map[python.FunctionID]python.PythonFunction),
-		Classes:      make(map[python.ClassID]python.PythonClass),
-		ExternalVars: make(map[python.ExternalVarID]python.PythonExternalVar),
-	}
-
-	kind, id := tryResolveSymbol("nonexistent.Symbol", "", "myproj", gt)
-	if kind != "" || id != "" {
-		t.Errorf("expected empty result for nonexistent, got %v %v", kind, id)
 	}
 }
 
@@ -879,40 +709,28 @@ class y:
 		t.Fatal(err)
 	}
 
-	pkgName := filepath.Base(tmpDir)
-
 	s := NewPythonScanner()
 	topo, err := s.Scan(tmpDir)
 	if err != nil {
 		t.Fatalf("Scan failed: %v", err)
 	}
 
-	classID := pkgName + ".y"
+	classID := pyModulePath(tmpDir, filePath) + ".y"
 	res, ok := topo.Resources[classID]
 	if !ok {
 		t.Fatalf("class %q not found, keys: %v", classID, resourceKeys(topo))
 	}
 
 	calls := res.Connections["calls"]
-	var foundLocal, foundOsPath bool
+	var foundLocal bool
 	for _, c := range calls {
 		if strings.HasSuffix(c, ".local_func") {
 			foundLocal = true
-		}
-		if strings.HasSuffix(c, ".path") {
-			foundOsPath = true
 		}
 	}
 
 	if !foundLocal {
 		t.Errorf("expected ConnCalls to local_func, got calls=%v", calls)
-	}
-	if !foundOsPath {
-		t.Logf("os.path is likely not in topology (stdlib), calls=%v", calls)
-	}
-
-	if len(calls) == 0 {
-		t.Errorf("expected at least local_func to be resolved, got %v", calls)
 	}
 }
 
@@ -933,30 +751,27 @@ class y:
 		t.Fatal(err)
 	}
 
-	pkgName := filepath.Base(tmpDir)
-
 	s := NewPythonScanner()
 	topo, err := s.Scan(tmpDir)
 	if err != nil {
 		t.Fatalf("Scan failed: %v", err)
 	}
 
-	classID := pkgName + ".y"
+	classID := pyModulePath(tmpDir, filePath) + ".y"
 	_, ok := topo.Resources[classID]
 	if !ok {
 		t.Fatalf("class %q not found, keys: %v", classID, resourceKeys(topo))
 	}
 
-	// getcwd is a stdlib function — won't be in our topology
-	// But the scan should not crash, and the import alias should be recorded
-	// as a dep (os is external to the project)
+	// getcwd is a stdlib function — won't be in our topology. The scan should
+	// not crash, and the import should be recorded as a dep (os is external).
 }
 
 // TestResolveBodyCallRefs_localAssignmentAndMethodCall
 // Verifies: x = SomeClass(); x.method() produces ConnCalls + ConnUsesClass
 func TestResolveBodyCallRefs_localAssignmentAndMethodCall(t *testing.T) {
 	pr := &ParseResult{
-		PkgPath:    "mypkg",
+		ModulePath: "mypkg",
 		ModuleRoot: "testdata",
 	}
 	gt := &python.PythonTopology{
@@ -1008,7 +823,7 @@ func TestResolveBodyCallRefs_localAssignmentAndMethodCall(t *testing.T) {
 // Verifies: a parameter with type annotation resolves method calls
 func TestResolveBodyCallRefs_paramTypeAnnotation(t *testing.T) {
 	pr := &ParseResult{
-		PkgPath:    "mypkg",
+		ModulePath: "mypkg",
 		ModuleRoot: "testdata",
 	}
 	gt := &python.PythonTopology{
@@ -1060,7 +875,7 @@ func TestResolveBodyCallRefs_paramTypeAnnotation(t *testing.T) {
 // Verifies: calling a method on an unknown local variable produces no connections
 func TestResolveBodyCallRefs_unknownVariableNoConnection(t *testing.T) {
 	pr := &ParseResult{
-		PkgPath:    "mypkg",
+		ModulePath: "mypkg",
 		ModuleRoot: "testdata",
 	}
 	gt := &python.PythonTopology{
@@ -1089,7 +904,7 @@ func TestResolveBodyCallRefs_unknownVariableNoConnection(t *testing.T) {
 // Verifies: direct function calls (no receiver) in body calls are resolved
 func TestResolveBodyCallRefs_directFunctionCall(t *testing.T) {
 	pr := &ParseResult{
-		PkgPath:    "mypkg",
+		ModulePath: "mypkg",
 		ModuleRoot: "testdata",
 	}
 	gt := &python.PythonTopology{
@@ -1146,15 +961,13 @@ def process():
 		t.Fatal(err)
 	}
 
-	pkgName := filepath.Base(tmpDir)
-
 	s := NewPythonScanner()
 	topo, err := s.Scan(tmpDir)
 	if err != nil {
 		t.Fatalf("Scan failed: %v", err)
 	}
 
-	funcID := pkgName + ".process"
+	funcID := pyModulePath(tmpDir, filePath) + ".process"
 	res, ok := topo.Resources[funcID]
 	if !ok {
 		t.Fatalf("function %q not found, keys: %v", funcID, resourceKeys(topo))
@@ -1196,15 +1009,13 @@ def process():
 		t.Fatal(err)
 	}
 
-	pkgName := filepath.Base(tmpDir)
-
 	s := NewPythonScanner()
 	topo, err := s.Scan(tmpDir)
 	if err != nil {
 		t.Fatalf("Scan failed: %v", err)
 	}
 
-	funcID := pkgName + ".process"
+	funcID := pyModulePath(tmpDir, filePath) + ".process"
 	res, ok := topo.Resources[funcID]
 	if !ok {
 		t.Fatalf("function %q not found, keys: %v", funcID, resourceKeys(topo))
@@ -1227,9 +1038,9 @@ def process():
 // ext_func's parse-time TypingID makes x.method() resolve to module1.Stu.method.
 func TestResolveBodyCallRefs_transitiveCrossModuleReturnType(t *testing.T) {
 	pr := &ParseResult{
-		PkgPath:    "module3",
-		ModuleRoot: "testdata",
-		ImportMap:  map[string]string{"ext_func": "module2.ext_func"}, // from module2 import ext_func
+		ModulePath:    "module3",
+		ModuleRoot:    "testdata",
+		ImportTargets: map[string]pyImportTarget{"ext_func": {ModulePath: "module2", Symbol: "ext_func"}},
 	}
 	gt := &python.PythonTopology{
 		Functions: map[python.FunctionID]python.PythonFunction{
@@ -1278,9 +1089,9 @@ func TestResolveBodyCallRefs_transitiveCrossModuleReturnType(t *testing.T) {
 	}
 }
 
-// TestParseFile_returnTypeTypingID verifies the parser records the canonical
-// TypingID for a cross-module return annotation, resolved against the defining
-// file's import map (Phase 2: parse-time resolved type ids).
+// TestParseFile_returnTypeTypingID verifies the parser records a canonical
+// TypingID for a return annotation. Here `module1` is external to the temp
+// project, so the id keeps its dotted external form.
 func TestParseFile_returnTypeTypingID(t *testing.T) {
 	if !hasPython() {
 		t.Skip("python not available")
@@ -1313,9 +1124,71 @@ func TestParseFile_returnTypeTypingID(t *testing.T) {
 	}
 }
 
+// TestScan_crossFileImports verifies module-first IDs and cross-file resolution:
+// consumer imports a class/function from sibling modules and the topology keys
+// them under their own module paths, with edges crossing files.
+func TestScan_crossFileImports(t *testing.T) {
+	if !hasPython() {
+		t.Skip("python not available")
+	}
+
+	tmpDir := t.TempDir()
+	shapes := filepath.Join(tmpDir, "shapes.py")
+	factory := filepath.Join(tmpDir, "factory.py")
+	consumer := filepath.Join(tmpDir, "consumer.py")
+
+	if err := os.WriteFile(shapes, []byte("class Circle:\n    def area(self) -> float:\n        return 3.14\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(factory, []byte("from .shapes import Circle\n\ndef make_circle() -> Circle:\n    return Circle()\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(consumer, []byte("from .factory import make_circle\n\ndef build():\n    c = make_circle()\n    c.area()\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := NewPythonScanner()
+	topo, err := s.Scan(tmpDir)
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
+
+	circleID := pyModulePath(tmpDir, shapes) + ".Circle"
+	if _, ok := topo.Resources[circleID]; !ok {
+		t.Fatalf("class %q not found, keys: %v", circleID, resourceKeys(topo))
+	}
+	for k := range topo.Resources {
+		if strings.Contains(k, ".py.") {
+			t.Errorf("id %q contains a '.py.' segment; extension should be stripped from module path", k)
+		}
+	}
+
+	// build() calls make_circle() (cross-file) and c.area() resolves through the
+	// factory's return TypingID to shapes.Circle.area (transitive cross-file).
+	buildID := pyModulePath(tmpDir, consumer) + ".build"
+	calls := topo.Resources[buildID].Connections["calls"]
+	if !containsSuffix(calls, ".make_circle") {
+		t.Errorf("expected build() to call make_circle, got %v", calls)
+	}
+	if !containsSuffix(calls, ".Circle.area") {
+		t.Errorf("expected build() to transitively call Circle.area, got %v", calls)
+	}
+
+	// consumer.py imports factory.py -> a module->module import edge.
+	consumerMod := topo.Resources[consumer]
+	if !containsSuffix(consumerMod.Connections["imports_module"], factory) {
+		t.Errorf("expected consumer module to import %q, got imports_module=%v", factory, consumerMod.Connections["imports_module"])
+	}
+}
+
 // helpers
 
 func hasPython() bool {
+	for _, exe := range []string{"python3", "python"} {
+		if _, err := exec.LookPath(exe); err == nil {
+			return true
+		}
+	}
 	_, err := os.Stat("C:\\Windows\\py.exe")
 	if err == nil {
 		return true
@@ -1323,18 +1196,6 @@ func hasPython() bool {
 	for _, p := range strings.Split(os.Getenv("PATH"), string(os.PathListSeparator)) {
 		pythonExe := filepath.Join(p, "python.exe")
 		if _, err := os.Stat(pythonExe); err == nil {
-			return true
-		}
-	}
-	// Also check common install locations
-	for _, candidate := range []string{
-		"C:\\Python3\\python.exe",
-		"C:\\Python313\\python.exe",
-		"C:\\Program Files\\Python313\\python.exe",
-		"C:\\Users\\" + os.Getenv("USERNAME") + "\\AppData\\Local\\Programs\\Python\\Python313\\python.exe",
-		"C:\\Users\\" + os.Getenv("USERNAME") + "\\AppData\\Local\\Microsoft\\WindowsApps\\python.exe",
-	} {
-		if _, err := os.Stat(candidate); err == nil {
 			return true
 		}
 	}

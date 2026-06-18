@@ -24,6 +24,11 @@ var (
 	ConnUsesInterface ConnectionKind = "uses_interface"
 	ConnHasInterface  ConnectionKind = "has_interface"
 	ConnHasNamedType  ConnectionKind = "has_named_type"
+	// ConnImportsModule is a module->module import edge: its targets are module
+	// (file) IDs, resolved from an import specifier to the specific file it pulls
+	// in. This is the real file-to-file import relationship surfaced in the
+	// "Packages & Modules" viz.
+	ConnImportsModule ConnectionKind = "imports_module"
 )
 
 func (f *JavaScriptFunction) Calls() []FunctionID {
@@ -126,36 +131,16 @@ func (m *JavaScriptModule) PackagesImported() []PackagePath {
 	return castSlice[PackagePath](m.Connections[ConnImportsPkg])
 }
 
+func (m *JavaScriptModule) ModulesImported() []ModuleID {
+	return castSlice[ModuleID](m.Connections[ConnImportsModule])
+}
+
 func (m *JavaScriptModule) DependenciesImported() []JavaScriptDependancy {
 	var result []JavaScriptDependancy
 	for _, d := range m.Connections[ConnImportsDep] {
 		result = append(result, JavaScriptDependancy{PackagePath: DependancyPath(d)})
 	}
 	return result
-}
-
-func (p *JavaScriptPackage) Files() []ModuleID {
-	return castSlice[ModuleID](p.Connections[ConnHasFile])
-}
-
-func (p *JavaScriptPackage) HasFunctions() []FunctionID {
-	return castSlice[FunctionID](p.Connections[ConnHasFunc])
-}
-
-func (p *JavaScriptPackage) HasClasses() []ClassID {
-	return castSlice[ClassID](p.Connections[ConnHasClass])
-}
-
-func (p *JavaScriptPackage) HasExternalVars() []ExternalVarID {
-	return castSlice[ExternalVarID](p.Connections[ConnHasVar])
-}
-
-func (p *JavaScriptPackage) HasInterfaces() []InterfaceID {
-	return castSlice[InterfaceID](p.Connections[ConnHasInterface])
-}
-
-func (p *JavaScriptPackage) HasNamedTypes() []NamedTypeID {
-	return castSlice[NamedTypeID](p.Connections[ConnHasNamedType])
 }
 
 func castSlice[T ~string](ids []string) []T {

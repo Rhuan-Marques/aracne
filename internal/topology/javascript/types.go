@@ -108,11 +108,6 @@ type ModuleCut struct {
 	Cut string
 }
 
-type PackageCut struct {
-	JavaScriptPackage
-	Cut string
-}
-
 type JavaScriptModuleContext struct {
 	Module       *ModuleCut
 	FromPackage  PackagePath
@@ -120,16 +115,6 @@ type JavaScriptModuleContext struct {
 	Classes      []ClassUsage
 	ExtVars      []SimplifiedExtVar
 	Imports      []PackagePath
-	Dependencies []DependancyPath
-	Blocks       []ContextBlock
-}
-
-type JavaScriptPackageContext struct {
-	Package      *PackageCut
-	Files        []ModuleID
-	Functions    []SimplifiedFunction
-	Classes      []ClassUsage
-	ExtVars      []SimplifiedExtVar
 	Dependencies []DependancyPath
 	Blocks       []ContextBlock
 }

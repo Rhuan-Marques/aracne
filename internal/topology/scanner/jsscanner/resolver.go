@@ -78,23 +78,24 @@ func resolveExport(gt *js.JavaScriptTopology, abs, modulePath, importedName stri
 	return exportRef{}, false
 }
 
-// resolveModuleImports returns the internal package paths a module imports,
-// resolved against modules already in the topology.
-func resolveModuleImports(pr *ParseResult, gt *js.JavaScriptTopology) []js.PackagePath {
-	var pkgs []js.PackagePath
-	seen := make(map[js.PackagePath]bool)
+// resolveModuleImports resolves a file's internal import specifiers to the
+// specific module (file) IDs they pull in, deduped. These become module->module
+// import edges surfaced in the "Packages & Modules" viz.
+func resolveModuleImports(pr *ParseResult, gt *js.JavaScriptTopology) []js.ModuleID {
+	var mods []js.ModuleID
+	seen := make(map[js.ModuleID]bool)
 	for _, source := range pr.InternalImports {
 		abs, ok := resolveSpecifier(pr.FileID, source, gt)
 		if !ok {
 			continue
 		}
-		pkg := gt.Modules[abs].FromPackage
-		if pkg != "" && !seen[pkg] {
-			seen[pkg] = true
-			pkgs = append(pkgs, pkg)
+		mid := js.ModuleID(abs)
+		if mid != "" && !seen[mid] {
+			seen[mid] = true
+			mods = append(mods, mid)
 		}
 	}
-	return pkgs
+	return mods
 }
 
 func analyzeFunctionBody(body *jsFunc, pr *ParseResult, gt *js.JavaScriptTopology, receiverClass *js.ClassID) map[js.ConnectionKind][]string {
@@ -262,7 +263,6 @@ func resolveDirectCall(name string, pr *ParseResult, gt *js.JavaScriptTopology, 
 	if !ok {
 		return
 	}
-	add(js.ConnUsesPkg, gt.Modules[abs].FromPackage)
 	imported := info.ImportedName
 	if imported == "" {
 		imported = name
@@ -310,7 +310,6 @@ func resolveMethodCall(call jsBodyCall, pr *ParseResult, gt *js.JavaScriptTopolo
 			return
 		}
 		if abs, ok := resolveSpecifier(pr.FileID, info.Source, gt); ok {
-			add(js.ConnUsesPkg, gt.Modules[abs].FromPackage)
 			if ref, ok := resolveExport(gt, abs, moduleKey(abs, pr), call.MethodName); ok {
 				add(ref.Kind, ref.ID)
 			}

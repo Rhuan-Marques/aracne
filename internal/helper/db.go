@@ -521,3 +521,63 @@ func CleanupOrphanedBugs(dbPath string, topo *domain.Topology) error {
 	}
 	return nil
 }
+
+// CleanupOrphanedBugsScoped is the partial-path equivalent of CleanupOrphanedBugs:
+// it deletes bugs whose NodeID no longer exists, using a targeted per-bug
+// existence check instead of an in-memory resource set. When there are no bugs
+// it does nothing (the common case), so it costs one cheap query.
+func CleanupOrphanedBugsScoped(dbPath string) error {
+	bugs, err := ReadBugs(dbPath, "", "")
+	if err != nil {
+		return err
+	}
+	if len(bugs) == 0 {
+		return nil
+	}
+	nodeIDs := make([]string, 0, len(bugs))
+	seen := make(map[string]bool, len(bugs))
+	for _, bug := range bugs {
+		if !seen[bug.NodeID] {
+			seen[bug.NodeID] = true
+			nodeIDs = append(nodeIDs, bug.NodeID)
+		}
+	}
+	existing := make(map[string]bool, len(nodeIDs))
+	err = withSQLiteRead(dbPath, func(db *sql.DB) error {
+		for _, chunk := range chunkStrings(nodeIDs, sqliteMaxVariables) {
+			args := make([]interface{}, len(chunk))
+			for i, id := range chunk {
+				args[i] = id
+			}
+			rows, qerr := db.Query("SELECT id FROM resources WHERE id IN ("+placeholders(len(chunk))+")", args...)
+			if qerr != nil {
+				return qerr
+			}
+			for rows.Next() {
+				var id string
+				if serr := rows.Scan(&id); serr != nil {
+					rows.Close()
+					return serr
+				}
+				existing[id] = true
+			}
+			if rerr := rows.Err(); rerr != nil {
+				rows.Close()
+				return rerr
+			}
+			rows.Close()
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	for _, bug := range bugs {
+		if !existing[bug.NodeID] {
+			if derr := DeleteBug(dbPath, bug.ID); derr != nil {
+				fmt.Printf("Warning: failed to delete orphaned bug %s: %v\n", bug.ID, derr)
+			}
+		}
+	}
+	return nil
+}

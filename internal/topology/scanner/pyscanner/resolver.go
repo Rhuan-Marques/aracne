@@ -1,7 +1,6 @@
 package pyscanner
 
 import (
-	"path/filepath"
 	"strings"
 
 	"aracne/internal/topology/python"
@@ -74,10 +73,9 @@ func resolveBodyCallRefs(bodyCalls []pyBodyCall, bodyAssigns []pyBodyAssign, pr 
 	// Resolve method calls
 	for _, call := range bodyCalls {
 		if call.ObjectName == "" || call.MethodName == "" {
-			// Direct function call - try to resolve
-			funcID := python.FunctionID(string(pr.PkgPath) + "." + call.Func)
-			if _, exists := gt.Functions[funcID]; exists {
-				add(python.ConnCalls, string(funcID))
+			// Direct function call: resolve via same-module or imported name.
+			if fid := lookupFuncByName(call.Func, pr, gt); fid != "" {
+				add(python.ConnCalls, string(fid))
 			}
 			continue
 		}
@@ -123,51 +121,60 @@ var pyBuiltinTypes = map[string]bool{
 	"Literal": true, "Type": true,
 }
 
-// canonicalTypeID returns the canonical topology class ID for the type named by
-// `typing`, resolved against the DEFINING file's import map. It returns "" for
+// canonicalTypeID returns the canonical topology ID for the type named by
+// `typing`, resolved against the DEFINING file's imports. It returns "" for
 // builtin/typing names, collapsed generics, and unknown aliases. The result is a
-// candidate id — consumers must still verify it exists. Computing it at parse
-// time lets cross-package consumers resolve a type without the defining file's
-// import context.
-func canonicalTypeID(typing string, pkgPath python.PackagePath, importMap map[string]string) string {
+// candidate id — consumers must still verify it exists. Now that IDs are
+// module-qualified, an imported type resolves to the target module's path plus
+// the imported symbol, so a caller in another file can follow it without the
+// defining file's import context.
+func canonicalTypeID(typing string, modulePath string, importMap map[string]string, importTargets map[string]pyImportTarget) string {
 	t := typing
 	if t == "" || strings.ContainsAny(t, " \t[](){}|,'\"") {
 		return ""
 	}
-	// `from mod import Name` -> importMap[Name] == "mod.Name" (full path).
-	if impPath, ok := importMap[t]; ok {
-		return impPath
+	// `from m import Name` -> alias Name binds a symbol of internal module m.
+	if tgt, ok := importTargets[t]; ok && tgt.Symbol != "" {
+		return tgt.ModulePath + "." + tgt.Symbol
 	}
-	// `mod.Name` via `import mod` -> importMap[mod] == "mod".
+	// `m.Name` via `import m` / `from . import m` (m is a module alias).
 	if i := strings.Index(t, "."); i > 0 {
-		if impPath, ok := importMap[t[:i]]; ok {
+		alias := t[:i]
+		if tgt, ok := importTargets[alias]; ok {
+			return tgt.ModulePath + "." + t[i+1:]
+		}
+		if impPath, ok := importMap[alias]; ok {
+			// External dependency: keep the dotted path (it won't match an
+			// internal id, but preserves the prior behaviour for ext types).
 			return impPath + "." + t[i+1:]
 		}
 		return ""
 	}
+	// Bare external symbol (`from numpy import ndarray`): keep the dotted path.
+	if impPath, ok := importMap[t]; ok {
+		return impPath
+	}
 	if pyBuiltinTypes[t] {
 		return ""
 	}
-	return string(pkgPath) + "." + t
+	return modulePath + "." + t
 }
 
 // lookupClassByName resolves a class reference name to a ClassID using the
-// current file's context: same package, a `from m import Name` (importMap[name]
-// holds the full path), or a dotted `m.Name` reference (importMap[alias]).
+// current file's context: same module, an imported symbol (`from m import Name`),
+// or a dotted `m.Name` reference where m is an imported module alias.
 func lookupClassByName(name string, pr *ParseResult, gt *python.PythonTopology) python.ClassID {
-	cid := python.ClassID(string(pr.PkgPath) + "." + name)
-	if _, ok := gt.Classes[cid]; ok {
+	if cid := python.ClassID(pr.ModulePath + "." + name); classExists(cid, gt) {
 		return cid
 	}
-	if impPath, ok := pr.ImportMap[name]; ok {
-		if _, ok := gt.Classes[python.ClassID(impPath)]; ok {
-			return python.ClassID(impPath)
+	if tgt, ok := pr.ImportTargets[name]; ok && tgt.Symbol != "" {
+		if cid := python.ClassID(tgt.ModulePath + "." + tgt.Symbol); classExists(cid, gt) {
+			return cid
 		}
 	}
 	if i := strings.Index(name, "."); i > 0 {
-		if impPath, ok := pr.ImportMap[name[:i]]; ok {
-			cid = python.ClassID(impPath + "." + name[i+1:])
-			if _, ok := gt.Classes[cid]; ok {
+		if tgt, ok := pr.ImportTargets[name[:i]]; ok {
+			if cid := python.ClassID(tgt.ModulePath + "." + name[i+1:]); classExists(cid, gt) {
 				return cid
 			}
 		}
@@ -176,21 +183,19 @@ func lookupClassByName(name string, pr *ParseResult, gt *python.PythonTopology) 
 }
 
 // lookupFuncByName resolves a function call name to a FunctionID using the same
-// rules as lookupClassByName (same package, from-import, dotted reference).
+// rules as lookupClassByName (same module, imported symbol, dotted reference).
 func lookupFuncByName(name string, pr *ParseResult, gt *python.PythonTopology) python.FunctionID {
-	fid := python.FunctionID(string(pr.PkgPath) + "." + name)
-	if _, ok := gt.Functions[fid]; ok {
+	if fid := python.FunctionID(pr.ModulePath + "." + name); funcExists(fid, gt) {
 		return fid
 	}
-	if impPath, ok := pr.ImportMap[name]; ok {
-		if _, ok := gt.Functions[python.FunctionID(impPath)]; ok {
-			return python.FunctionID(impPath)
+	if tgt, ok := pr.ImportTargets[name]; ok && tgt.Symbol != "" {
+		if fid := python.FunctionID(tgt.ModulePath + "." + tgt.Symbol); funcExists(fid, gt) {
+			return fid
 		}
 	}
 	if i := strings.Index(name, "."); i > 0 {
-		if impPath, ok := pr.ImportMap[name[:i]]; ok {
-			fid = python.FunctionID(impPath + "." + name[i+1:])
-			if _, ok := gt.Functions[fid]; ok {
+		if tgt, ok := pr.ImportTargets[name[:i]]; ok {
+			if fid := python.FunctionID(tgt.ModulePath + "." + name[i+1:]); funcExists(fid, gt) {
 				return fid
 			}
 		}
@@ -198,12 +203,48 @@ func lookupFuncByName(name string, pr *ParseResult, gt *python.PythonTopology) p
 	return ""
 }
 
+// lookupExtVarByName resolves a module-level variable reference to an
+// ExternalVarID using same-module and imported-symbol resolution.
+func lookupExtVarByName(name string, pr *ParseResult, gt *python.PythonTopology) python.ExternalVarID {
+	if vid := python.ExternalVarID(pr.ModulePath + "." + name); extVarExists(vid, gt) {
+		return vid
+	}
+	if tgt, ok := pr.ImportTargets[name]; ok && tgt.Symbol != "" {
+		if vid := python.ExternalVarID(tgt.ModulePath + "." + tgt.Symbol); extVarExists(vid, gt) {
+			return vid
+		}
+	}
+	if i := strings.Index(name, "."); i > 0 {
+		if tgt, ok := pr.ImportTargets[name[:i]]; ok {
+			if vid := python.ExternalVarID(tgt.ModulePath + "." + name[i+1:]); extVarExists(vid, gt) {
+				return vid
+			}
+		}
+	}
+	return ""
+}
+
+func classExists(id python.ClassID, gt *python.PythonTopology) bool {
+	_, ok := gt.Classes[id]
+	return ok
+}
+
+func funcExists(id python.FunctionID, gt *python.PythonTopology) bool {
+	_, ok := gt.Functions[id]
+	return ok
+}
+
+func extVarExists(id python.ExternalVarID, gt *python.PythonTopology) bool {
+	_, ok := gt.ExternalVars[id]
+	return ok
+}
+
 // classIDForType resolves a VariableDefinition's annotated type to a class ID,
 // preferring the precomputed canonical TypingID (resolved in the defining file's
 // context) and falling back to name-based resolution in the current file.
 func classIDForType(vd python.VariableDefinition, pr *ParseResult, gt *python.PythonTopology) (python.ClassID, bool) {
 	if vd.TypingID != "" {
-		if _, ok := gt.Classes[python.ClassID(vd.TypingID)]; ok {
+		if classExists(python.ClassID(vd.TypingID), gt) {
 			return python.ClassID(vd.TypingID), true
 		}
 	}
@@ -216,9 +257,9 @@ func classIDForType(vd python.VariableDefinition, pr *ParseResult, gt *python.Py
 // resolveAssignClassID infers the class type of `x` in `x = <valueType>(...)`.
 // valueType is the callee/name: a constructor (x is that class) or a function (x
 // is the function's return type). For function calls it prefers the callee's
-// precomputed return TypingID so cross-package return types resolve without the
+// precomputed return TypingID so cross-file return types resolve without the
 // callee's import context (fixing transitive `x = make(); x.method()`), and
-// falls back to a same-package return type when TypingID is absent.
+// falls back to a return type resolved in the callee's own module.
 func resolveAssignClassID(valueType string, pr *ParseResult, gt *python.PythonTopology) (python.ClassID, bool) {
 	if cid := lookupClassByName(valueType, pr, gt); cid != "" {
 		return cid, true
@@ -227,14 +268,12 @@ func resolveAssignClassID(valueType string, pr *ParseResult, gt *python.PythonTo
 		fn := gt.Functions[fid]
 		if len(fn.Output) > 0 {
 			out := fn.Output[0]
-			if out.TypingID != "" {
-				if _, ok := gt.Classes[python.ClassID(out.TypingID)]; ok {
-					return python.ClassID(out.TypingID), true
-				}
+			if out.TypingID != "" && classExists(python.ClassID(out.TypingID), gt) {
+				return python.ClassID(out.TypingID), true
 			}
 			if out.Typing != "" {
-				cid := python.ClassID(string(pr.PkgPath) + "." + out.Typing)
-				if _, ok := gt.Classes[cid]; ok {
+				calleeModule := pyModulePath(pr.ModuleRoot, fn.Loc.Path)
+				if cid := python.ClassID(calleeModule + "." + out.Typing); classExists(cid, gt) {
 					return cid, true
 				}
 			}
@@ -263,63 +302,85 @@ func resolveBodyReferences(body *pyFunc, pr *ParseResult, gt *python.PythonTopol
 }
 
 func resolveDecoratorRef(dec string, pr *ParseResult, gt *python.PythonTopology, add func(kind python.ConnectionKind, id string), seen map[string]bool) {
-	parts := strings.Split(dec, ".")
-	if len(parts) >= 2 {
-		alias := parts[0]
-		if impPath, ok := pr.ImportMap[alias]; ok {
-			if isInternal(impPath, pr.ModuleRoot) {
-				add(python.ConnUsesPkg, string(impPath))
-			} else {
-				add(python.ConnUsesDep, string(impPath))
-			}
-		}
-	}
-}
-
-func resolveTypeRef(typeName string, pr *ParseResult, gt *python.PythonTopology, add func(kind python.ConnectionKind, id string), seen map[string]bool) {
-	clean := strings.TrimPrefix(typeName, "*")
-	clean = strings.TrimSuffix(clean, "?")
-	if strings.Contains(clean, "[") {
-		clean = clean[:strings.Index(clean, "[")]
-	}
-
-	rootBase := filepath.Base(pr.ModuleRoot)
-
-	if strings.Contains(clean, ".") {
-		parts := strings.Split(clean, ".")
-		if len(parts) >= 2 {
-			alias := parts[0]
-			if impPath, ok := pr.ImportMap[alias]; ok {
-				if isInternal(impPath, pr.ModuleRoot) {
-					add(python.ConnUsesPkg, string(impPath))
-					symbol := strings.Join(parts[1:], ".")
-					if kind, id := tryResolveSymbol(string(impPath), symbol, rootBase, gt); kind != "" {
-						add(kind, id)
-					}
-				} else {
-					add(python.ConnUsesDep, string(impPath))
-				}
-			}
+	if fid := lookupFuncByName(dec, pr, gt); fid != "" {
+		if !seen[string(fid)] {
+			seen[string(fid)] = true
+			add(python.ConnCalls, string(fid))
 		}
 		return
 	}
+	if cid := lookupClassByName(dec, pr, gt); cid != "" {
+		add(python.ConnUsesClass, string(cid))
+		return
+	}
+	addExternalDep(dec, pr, add)
+}
 
-	classID := python.ClassID(string(pr.PkgPath) + "." + clean)
-	if _, exists := gt.Classes[classID]; exists {
-		add(python.ConnUsesClass, string(classID))
+func resolveTypeRef(typeName string, pr *ParseResult, gt *python.PythonTopology, add func(kind python.ConnectionKind, id string), seen map[string]bool) {
+	clean := cleanTypeName(typeName)
+	if clean == "" {
+		return
 	}
 
-	funcID := PythonFunctionID(string(pr.PkgPath) + "." + clean)
-	if _, exists := gt.Functions[python.FunctionID(funcID)]; exists && !seen[funcID] {
-		seen[funcID] = true
-		add(python.ConnCalls, funcID)
+	if cid := lookupClassByName(clean, pr, gt); cid != "" {
+		add(python.ConnUsesClass, string(cid))
+		return
 	}
-
-	if impPath, ok := pr.ImportMap[clean]; ok {
-		if kind, id := tryResolveSymbol(impPath, "", rootBase, gt); kind != "" {
-			add(kind, id)
+	if fid := lookupFuncByName(clean, pr, gt); fid != "" {
+		if !seen[string(fid)] {
+			seen[string(fid)] = true
+			add(python.ConnCalls, string(fid))
 		}
+		return
 	}
+	addExternalDep(clean, pr, add)
+}
+
+// resolveValueRef resolves a bare or dotted value reference (a class-var
+// initializer) to the class/function/variable it names.
+func resolveValueRef(value string, pr *ParseResult, gt *python.PythonTopology, add func(kind python.ConnectionKind, id string)) {
+	if value == "" || value == "None" || value == "True" || value == "False" {
+		return
+	}
+	if cid := lookupClassByName(value, pr, gt); cid != "" {
+		add(python.ConnUsesClass, string(cid))
+		return
+	}
+	if fid := lookupFuncByName(value, pr, gt); fid != "" {
+		add(python.ConnCalls, string(fid))
+		return
+	}
+	if vid := lookupExtVarByName(value, pr, gt); vid != "" {
+		add(python.ConnUsesExtVar, string(vid))
+		return
+	}
+	addExternalDep(value, pr, add)
+}
+
+// addExternalDep records a uses_dependency edge when `ref`'s top-level alias is
+// an external (non-internal) import.
+func addExternalDep(ref string, pr *ParseResult, add func(kind python.ConnectionKind, id string)) {
+	alias := ref
+	if i := strings.Index(ref, "."); i > 0 {
+		alias = ref[:i]
+	}
+	if _, internal := pr.ImportTargets[alias]; internal {
+		return
+	}
+	if impPath, ok := pr.ImportMap[alias]; ok {
+		add(python.ConnUsesDep, impPath)
+	}
+}
+
+// cleanTypeName strips pointer/optional markers and generic parameters from a
+// type expression, leaving the bare (possibly dotted) type name.
+func cleanTypeName(typeName string) string {
+	clean := strings.TrimPrefix(typeName, "*")
+	clean = strings.TrimSuffix(clean, "?")
+	if i := strings.Index(clean, "["); i >= 0 {
+		clean = clean[:i]
+	}
+	return clean
 }
 
 func detectConstructors(gt *python.PythonTopology) {
@@ -409,82 +470,4 @@ func resolveClassVarRefs(pr *ParseResult, gt *python.PythonTopology) {
 		resolveValueRef(ref.RefValue, pr, gt, add)
 		gt.Classes[ref.ClassID] = cls
 	}
-}
-
-func resolveValueRef(value string, pr *ParseResult, gt *python.PythonTopology, add func(kind python.ConnectionKind, id string)) {
-	if value == "" || value == "None" || value == "True" || value == "False" {
-		return
-	}
-
-	rootBase := filepath.Base(pr.ModuleRoot)
-
-	if strings.Contains(value, ".") {
-		parts := strings.Split(value, ".")
-		if len(parts) >= 2 {
-			alias := parts[0]
-			if impPath, ok := pr.ImportMap[alias]; ok {
-				if isInternal(impPath, pr.ModuleRoot) {
-					add(python.ConnUsesPkg, string(impPath))
-				} else {
-					add(python.ConnUsesDep, string(impPath))
-				}
-				symbol := strings.Join(parts[1:], ".")
-				if kind, id := tryResolveSymbol(impPath, symbol, rootBase, gt); kind != "" {
-					add(kind, id)
-				}
-				return
-			}
-		}
-		return
-	}
-
-	if impPath, ok := pr.ImportMap[value]; ok {
-		if isInternal(impPath, pr.ModuleRoot) {
-			add(python.ConnUsesPkg, string(impPath))
-		} else {
-			add(python.ConnUsesDep, string(impPath))
-		}
-		if kind, id := tryResolveSymbol(impPath, "", rootBase, gt); kind != "" {
-			add(kind, id)
-		}
-		return
-	}
-
-	funcID := python.FunctionID(string(pr.PkgPath) + "." + value)
-	if _, exists := gt.Functions[python.FunctionID(funcID)]; exists {
-		add(python.ConnCalls, funcID)
-		return
-	}
-
-	classID := python.ClassID(string(pr.PkgPath) + "." + value)
-	if _, exists := gt.Classes[classID]; exists {
-		add(python.ConnUsesClass, string(classID))
-		return
-	}
-
-	extVarID := python.ExternalVarID(string(pr.PkgPath) + "." + value)
-	if _, exists := gt.ExternalVars[extVarID]; exists {
-		add(python.ConnUsesExtVar, string(extVarID))
-		return
-	}
-}
-
-func tryResolveSymbol(impPath string, symbol string, rootBase string, gt *python.PythonTopology) (python.ConnectionKind, string) {
-	fullPath := impPath
-	if symbol != "" {
-		fullPath = impPath + "." + symbol
-	}
-
-	candidates := []string{fullPath, rootBase + "." + fullPath}
-
-	for _, candidate := range candidates {
-		if _, exists := gt.Classes[python.ClassID(candidate)]; exists {
-			return python.ConnUsesClass, candidate
-		}
-		if _, exists := gt.Functions[python.FunctionID(candidate)]; exists {
-			return python.ConnCalls, candidate
-		}
-	}
-
-	return "", ""
 }

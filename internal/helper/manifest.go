@@ -83,6 +83,32 @@ func SyncManifest(topo *domain.Topology, dbPath string) {
 	}
 }
 
+// SyncManifestFiles updates the manifest entries for only the given file paths
+// (the partial-path equivalent of SyncManifest, which enumerates every file in a
+// full topology). Each path is stamped with its on-disk mtime so the next
+// IncrementalScan diff sees it as unchanged. Paths that no longer exist on disk
+// should not reach here (the partial path only handles added/modified files), so
+// no deletion sweep is performed.
+func SyncManifestFiles(dbPath string, paths []string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	manifestPath := ManifestPath(dbPath)
+	manifest := ReadManifest(manifestPath)
+	for _, path := range paths {
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			abs = path
+		}
+		if fi, statErr := os.Stat(abs); statErr == nil {
+			manifest[abs] = fi.ModTime().UTC().Format(time.RFC3339Nano)
+		} else {
+			manifest[abs] = time.Now().UTC().Format(time.RFC3339Nano)
+		}
+	}
+	return WriteManifest(manifest, manifestPath)
+}
+
 func CollectSourceFiles(root, language string) ([]string, error) {
 	var files []string
 	absRoot, err := filepath.Abs(root)

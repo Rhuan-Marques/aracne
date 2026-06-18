@@ -931,12 +931,18 @@ func (idx *graphIndex) resourceGraph(query string, kindSet map[string]bool, path
 	return GraphResponse{Nodes: nodes, Edges: edges, Truncated: truncated, Limit: limit, TotalMatch: total}
 }
 
+// packageGraph builds the "Packages & Modules" view. It is hybrid: Go is shown
+// at package granularity (package nodes joined by package->package import edges,
+// rolled up from file-level imports_package), while Python/JS/TS are shown at
+// module granularity (file nodes joined by file->file imports_module edges).
+// This reflects that a package is a real unit in Go but just a directory in the
+// other languages, where the module (file) is the meaningful unit.
 func (idx *graphIndex) packageGraph(query string, language string, limit int) GraphResponse {
 	query = strings.ToLower(query)
 	membership := idx.packageMembership()
-	packageIDs := make([]string, 0)
+	nodeIDs := make([]string, 0)
 	for id, res := range idx.topo.Resources {
-		if res.Kind != domain.ResourcePackage {
+		if !idx.isPackagesAndModulesNode(res) {
 			continue
 		}
 		if language != "" && idx.resourceLanguage(res) != language {
@@ -945,39 +951,50 @@ func (idx *graphIndex) packageGraph(query string, language string, limit int) Gr
 		if query != "" && !strings.Contains(strings.ToLower(id), query) && !strings.Contains(strings.ToLower(res.Name), query) && !strings.Contains(strings.ToLower(res.Description), query) {
 			continue
 		}
-		packageIDs = append(packageIDs, id)
+		nodeIDs = append(nodeIDs, id)
 	}
-	sort.Strings(packageIDs)
-	total := len(packageIDs)
+	sort.Strings(nodeIDs)
+	total := len(nodeIDs)
 	truncated := total > limit
 	if truncated {
-		packageIDs = packageIDs[:limit]
+		nodeIDs = nodeIDs[:limit]
 	}
-	selected := idSet(packageIDs)
+	selected := idSet(nodeIDs)
 	inDegree := make(map[string]int)
 	outDegree := make(map[string]int)
 	edgeMap := make(map[string]GraphEdge)
 	for sourceID, res := range idx.topo.Resources {
-		sourcePkg := packageFor(sourceID, res, membership)
-		if sourcePkg == "" || !selected[sourcePkg] {
-			continue
-		}
 		for connType, targets := range res.Connections {
-			if !isPackageImportEdge(connType) {
+			// imports_module is a direct file->file edge carried by the module
+			// resource itself; imports_package/uses_package are file/member edges
+			// rolled up to the owning package node (Go).
+			var sourceNode string
+			direct := connType == string(jsConnImportsModule)
+			if direct {
+				sourceNode = sourceID
+			} else if isPackageImportEdge(connType) {
+				sourceNode = packageFor(sourceID, res, membership)
+			} else {
+				continue
+			}
+			if sourceNode == "" || !selected[sourceNode] {
 				continue
 			}
 			for _, targetID := range targets {
-				targetPkg := idx.targetPackage(targetID, membership)
-				if targetPkg == "" || targetPkg == sourcePkg || !selected[targetPkg] {
+				targetNode := targetID
+				if !direct {
+					targetNode = idx.targetPackage(targetID, membership)
+				}
+				if targetNode == "" || targetNode == sourceNode || !selected[targetNode] {
 					continue
 				}
-				key := sourcePkg + "\x00" + targetPkg + "\x00" + connType
+				key := sourceNode + "\x00" + targetNode + "\x00" + connType
 				if _, exists := edgeMap[key]; exists {
 					continue
 				}
-				edgeMap[key] = GraphEdge{Source: sourcePkg, Target: targetPkg, Type: connType}
-				outDegree[sourcePkg]++
-				inDegree[targetPkg]++
+				edgeMap[key] = GraphEdge{Source: sourceNode, Target: targetNode, Type: connType}
+				outDegree[sourceNode]++
+				inDegree[targetNode]++
 			}
 		}
 	}
@@ -986,8 +1003,8 @@ func (idx *graphIndex) packageGraph(query string, language string, limit int) Gr
 		edges = append(edges, edge)
 	}
 	sortEdges(edges)
-	nodes := make([]GraphNode, 0, len(packageIDs))
-	for _, id := range packageIDs {
+	nodes := make([]GraphNode, 0, len(nodeIDs))
+	for _, id := range nodeIDs {
 		node := idx.nodeDTO(id)
 		node.InDegree = inDegree[id]
 		node.OutDegree = outDegree[id]
@@ -995,6 +1012,25 @@ func (idx *graphIndex) packageGraph(query string, language string, limit int) Gr
 	}
 	return GraphResponse{Nodes: nodes, Edges: edges, Truncated: truncated, Limit: limit, TotalMatch: total}
 }
+
+// isPackagesAndModulesNode reports whether a resource is a node in the
+// "Packages & Modules" view: a Go package, or a Python/JS/TS module (file).
+func (idx *graphIndex) isPackagesAndModulesNode(res domain.Resource) bool {
+	if res.Kind == domain.ResourcePackage {
+		return true
+	}
+	if res.Kind == domain.ResourceFile {
+		switch idx.resourceLanguage(res) {
+		case "python", "javascript", "typescript":
+			return true
+		}
+	}
+	return false
+}
+
+// jsConnImportsModule is the module->module import edge kind (shared spelling
+// across the Python and JavaScript domains).
+const jsConnImportsModule = "imports_module"
 
 func (idx *graphIndex) packageMembership() map[string]string {
 	membership := make(map[string]string)
@@ -1267,6 +1303,7 @@ func isContainmentEdge(edgeType string) bool {
 func packageKinds() map[string]bool {
 	return map[string]bool{
 		"package": true,
+		"file":    true,
 	}
 }
 
@@ -1274,6 +1311,7 @@ func packageEdges() map[string]bool {
 	return map[string]bool{
 		"imports_package": true,
 		"uses_package":    true,
+		"imports_module":  true,
 	}
 }
 

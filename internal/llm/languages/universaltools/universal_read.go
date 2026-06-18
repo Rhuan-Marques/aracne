@@ -283,19 +283,9 @@ func (r *UniversalReadPackage) Run(args json.RawMessage) (string, error) {
 			return "", fmt.Errorf("read package: %w", err)
 		}
 		return gotools.FormatGoPackageContext(ctx), nil
-	case "python":
-		ctx, err := python.NewPythonManager(r.mgr).ReadPackage(target.id)
-		if err != nil {
-			return "", fmt.Errorf("read package: %w", err)
-		}
-		return pythontools.FormatPythonPackageContext(ctx), nil
-	case "javascript", "typescript":
-		ctx, err := javascript.NewJavaScriptManager(r.mgr).ReadPackage(target.id)
-		if err != nil {
-			return "", fmt.Errorf("read package: %w", err)
-		}
-		return jstools.FormatJavaScriptPackageContext(ctx), nil
 	default:
+		// Python and JS/TS have no package resource; the module (file) is the
+		// unit there — use read_file instead.
 		return "", unsupportedLanguage("read_package", target)
 	}
 }

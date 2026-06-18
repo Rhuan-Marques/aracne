@@ -128,14 +128,24 @@ type ParseResult struct {
 	FileID          string
 	FileDescription string
 	PkgPath         python.PackagePath
+	// ModulePath is the module-qualified ID prefix for this file's resources
+	// (root base name + relative path, extension stripped, "/"-separated), e.g.
+	// "proj/pkg/shapes". All functions/classes/vars defined here are keyed under it.
+	ModulePath      string
 	ModuleRoot      string
 	InternalImports []python.PackagePath
-	ExternalImports []python.PythonDependancy
-	Classes         []python.PythonClass
-	Functions       []FunctionParse
-	ExternalVars    []python.PythonExternalVar
-	ImportMap       map[string]string
-	ClassVarRefs    []ClassVarRef
+	// InternalImportRecords keeps the structured internal imports (name, module,
+	// level) so module->module import edges can be resolved against the topology.
+	InternalImportRecords []pyImport
+	ExternalImports       []python.PythonDependancy
+	Classes               []python.PythonClass
+	Functions             []FunctionParse
+	ExternalVars          []python.PythonExternalVar
+	ImportMap             map[string]string
+	// ImportTargets maps each internal-import alias to the module it resolves to,
+	// used to build cross-file symbol IDs (alias -> target module path + symbol).
+	ImportTargets map[string]pyImportTarget
+	ClassVarRefs  []ClassVarRef
 }
 
 type FunctionParse struct {
@@ -156,12 +166,16 @@ func ParseFile(filePath string, pkgPath python.PackagePath, moduleRoot string) (
 		return nil, err
 	}
 
+	modulePath := pyModulePath(moduleRoot, filePath)
+
 	pr := &ParseResult{
 		FileID:          filePath,
 		FileDescription: raw.Docstring,
 		PkgPath:         pkgPath,
+		ModulePath:      modulePath,
 		ModuleRoot:      moduleRoot,
 		ImportMap:       raw.ImportMap,
+		ImportTargets:   make(map[string]pyImportTarget),
 	}
 
 	for _, imp := range raw.Imports {
@@ -169,6 +183,14 @@ func ParseFile(filePath string, pkgPath python.PackagePath, moduleRoot string) (
 		// definition, regardless of how their dotted name resolves.
 		if imp.Level > 0 || isInternal(imp.Name, moduleRoot) || (imp.Module != "" && isInternal(imp.Module, moduleRoot)) {
 			pr.InternalImports = append(pr.InternalImports, python.PackagePath(imp.Name))
+			pr.InternalImportRecords = append(pr.InternalImportRecords, imp)
+			if tgt, ok := resolveInternalImport(imp, filePath, moduleRoot); ok {
+				alias := imp.Alias
+				if alias == "" {
+					alias = imp.Name
+				}
+				pr.ImportTargets[alias] = tgt
+			}
 		} else {
 			pr.ExternalImports = append(pr.ExternalImports, python.PythonDependancy{
 				PackagePath: python.DependancyPath(imp.Name),
@@ -177,7 +199,7 @@ func ParseFile(filePath string, pkgPath python.PackagePath, moduleRoot string) (
 	}
 
 	for _, cls := range raw.Classes {
-		c := convertClass(cls, filePath, pkgPath)
+		c := convertClass(cls, filePath, modulePath)
 		pr.Classes = append(pr.Classes, c)
 
 		for _, cv := range cls.ClassVars {
@@ -190,18 +212,18 @@ func ParseFile(filePath string, pkgPath python.PackagePath, moduleRoot string) (
 		}
 
 		for _, method := range cls.Methods {
-			f := convertFunction(method, filePath, pkgPath, &c.ID, pr.ImportMap)
+			f := convertFunction(method, filePath, modulePath, &c.ID, pr.ImportMap, pr.ImportTargets)
 			pr.Functions = append(pr.Functions, FunctionParse{Function: f, Body: &method, BodyCalls: method.BodyCalls, BodyAssigns: method.BodyAssign})
 		}
 	}
 
 	for _, fn := range raw.Functions {
-		f := convertFunction(fn, filePath, pkgPath, nil, pr.ImportMap)
+		f := convertFunction(fn, filePath, modulePath, nil, pr.ImportMap, pr.ImportTargets)
 		pr.Functions = append(pr.Functions, FunctionParse{Function: f, Body: &fn, BodyCalls: fn.BodyCalls, BodyAssigns: fn.BodyAssign})
 	}
 
 	for _, v := range raw.Variables {
-		id := python.ExternalVarID(string(pkgPath) + "." + v.Name)
+		id := python.ExternalVarID(modulePath + "." + v.Name)
 		var val *any
 		if v.Value != "" && v.Value != "None" {
 			var x any = v.Value
@@ -224,8 +246,8 @@ func ParseFile(filePath string, pkgPath python.PackagePath, moduleRoot string) (
 	return pr, nil
 }
 
-func convertClass(cls pyClass, filePath string, pkgPath python.PackagePath) python.PythonClass {
-	id := python.ClassID(string(pkgPath) + "." + cls.Name)
+func convertClass(cls pyClass, filePath string, modulePath string) python.PythonClass {
+	id := python.ClassID(modulePath + "." + cls.Name)
 	return python.PythonClass{
 		ID:                 id,
 		Name:               cls.Name,
@@ -240,26 +262,26 @@ func convertClass(cls pyClass, filePath string, pkgPath python.PackagePath) pyth
 	}
 }
 
-func convertFunction(fn pyFunc, filePath string, pkgPath python.PackagePath, classID *python.ClassID, importMap map[string]string) python.PythonFunction {
+func convertFunction(fn pyFunc, filePath string, modulePath string, classID *python.ClassID, importMap map[string]string, importTargets map[string]pyImportTarget) python.PythonFunction {
 	var input []python.VariableDefinition
 	for _, p := range fn.Params {
 		if p.Name == "self" || p.Name == "cls" {
 			continue
 		}
-		input = append(input, python.VariableDefinition{Name: p.Name, Typing: p.Typing, TypingID: canonicalTypeID(p.Typing, pkgPath, importMap)})
+		input = append(input, python.VariableDefinition{Name: p.Name, Typing: p.Typing, TypingID: canonicalTypeID(p.Typing, modulePath, importMap, importTargets)})
 	}
 
 	var output []python.VariableDefinition
 	for _, r := range fn.Results {
-		output = append(output, python.VariableDefinition{Name: r.Name, Typing: r.Typing, TypingID: canonicalTypeID(r.Typing, pkgPath, importMap)})
+		output = append(output, python.VariableDefinition{Name: r.Name, Typing: r.Typing, TypingID: canonicalTypeID(r.Typing, modulePath, importMap, importTargets)})
 	}
 
 	var id python.FunctionID
 	if classID != nil {
-		// classID already carries the package prefix; do not double it.
+		// classID already carries the module prefix; do not double it.
 		id = python.FunctionID(string(*classID) + "." + fn.Name)
 	} else {
-		id = python.FunctionID(string(pkgPath) + "." + fn.Name)
+		id = python.FunctionID(modulePath + "." + fn.Name)
 	}
 
 	return python.PythonFunction{
@@ -282,6 +304,25 @@ func isInternal(importPath, moduleRoot string) bool {
 		return false
 	}
 	return strings.EqualFold(parts[0], filepath.Base(moduleRoot))
+}
+
+// pyModulePath returns the module-qualified ID namespace for a source file: the
+// project-root base name joined with the file's path relative to root, extension
+// stripped, "/"-separated. Mirrors jsModulePath so Python and JS share one
+// file-first ID scheme (e.g. root "/x/proj", file "/x/proj/pkg/shapes.py" ->
+// "proj/pkg/shapes").
+func pyModulePath(root, file string) string {
+	base := filepath.Base(root)
+	rel, err := filepath.Rel(root, file)
+	if err != nil {
+		rel = filepath.Base(file)
+	}
+	rel = strings.ReplaceAll(rel, "\\", "/")
+	rel = strings.TrimSuffix(rel, filepath.Ext(rel))
+	if rel == "." || rel == "" {
+		return base
+	}
+	return base + "/" + rel
 }
 
 // pyRefValueRE matches a bare identifier or dotted path that could name a

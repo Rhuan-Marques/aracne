@@ -549,8 +549,11 @@ func TestAnalyzeFunctionBody_interfaceParamMethodCall(t *testing.T) {
 	if len(usesIface) != 1 || usesIface[0] != string(ifaceID) {
 		t.Errorf("expected ConnUsesIface to %q, got %v", ifaceID, usesIface)
 	}
-	if len(calls) != 1 || calls[0] != string(methodID) {
-		t.Errorf("expected ConnCalls to %q, got %v", methodID, calls)
+	// Body analysis is ImplementedBy-independent (in a cold scan it runs before
+	// matchStructsToInterfaces), so an interface method call records only the
+	// interface usage, never a fan-out call into each implementer's method.
+	if len(calls) != 0 {
+		t.Errorf("expected no ConnCalls (no implementer fan-out), got %v", calls)
 	}
 }
 
@@ -608,8 +611,11 @@ func TestAnalyzeFunctionBody_structImplementsInterfaceMethod(t *testing.T) {
 	if len(usesStruct) != 1 || usesStruct[0] != string(structID) {
 		t.Errorf("expected ConnUsesStruct to %q, got %v", structID, usesStruct)
 	}
-	if len(usesIface) != 1 || usesIface[0] != string(ifaceID) {
-		t.Errorf("expected ConnUsesIface to %q, got %v", ifaceID, usesIface)
+	// A concrete struct variable's method call resolves to the concrete method
+	// only; body analysis no longer emits a ghost uses_interface edge for the
+	// interface the struct happens to implement (a cold scan never does).
+	if len(usesIface) != 0 {
+		t.Errorf("expected no ConnUsesIface for a concrete call, got %v", usesIface)
 	}
 	if len(calls) != 1 || calls[0] != string(methodID) {
 		t.Errorf("expected ConnCalls to %q, got %v", methodID, calls)
@@ -730,8 +736,10 @@ func TestAnalyzeFunctionBody_interfaceAssignAndMethodCall(t *testing.T) {
 	if len(usesIface) != 1 || usesIface[0] != string(ifaceID) {
 		t.Errorf("expected ConnUsesIface to %q, got %v", ifaceID, usesIface)
 	}
-	if len(calls) != 1 || calls[0] != string(methodID) {
-		t.Errorf("expected ConnCalls to %q, got %v", methodID, calls)
+	// Interface usage is recorded; no implementer-method fan-out (cold scan has
+	// no implemented_by edges at body-analysis time).
+	if len(calls) != 0 {
+		t.Errorf("expected no ConnCalls (no implementer fan-out), got %v", calls)
 	}
 }
 

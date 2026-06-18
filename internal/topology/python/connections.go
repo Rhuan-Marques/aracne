@@ -18,6 +18,11 @@ var (
 	ConnHasFile     ConnectionKind = "has_file"
 	ConnImportsPkg  ConnectionKind = "imports_package"
 	ConnImportsDep  ConnectionKind = "imports_dependency"
+	// ConnImportsModule is a module->module import edge: its targets are module
+	// (file) IDs, resolved from a Python import to the specific file it pulls in.
+	// Unlike ConnImportsPkg (a directory-level grouping), this is the real
+	// file-to-file import relationship surfaced in the "Packages & Modules" viz.
+	ConnImportsModule ConnectionKind = "imports_module"
 )
 
 func (f *PythonFunction) Calls() []FunctionID {
@@ -80,28 +85,16 @@ func (m *PythonModule) PackagesImported() []PackagePath {
 	return castSlice[PackagePath](m.Connections[ConnImportsPkg])
 }
 
+func (m *PythonModule) ModulesImported() []ModuleID {
+	return castSlice[ModuleID](m.Connections[ConnImportsModule])
+}
+
 func (m *PythonModule) DependenciesImported() []PythonDependancy {
 	var result []PythonDependancy
 	for _, d := range m.Connections[ConnImportsDep] {
 		result = append(result, PythonDependancy{PackagePath: DependancyPath(d)})
 	}
 	return result
-}
-
-func (p *PythonPackage) Files() []ModuleID {
-	return castSlice[ModuleID](p.Connections[ConnHasFile])
-}
-
-func (p *PythonPackage) HasFunctions() []FunctionID {
-	return castSlice[FunctionID](p.Connections[ConnHasFunc])
-}
-
-func (p *PythonPackage) HasClasses() []ClassID {
-	return castSlice[ClassID](p.Connections[ConnHasClass])
-}
-
-func (p *PythonPackage) HasExternalVars() []ExternalVarID {
-	return castSlice[ExternalVarID](p.Connections[ConnHasVar])
 }
 
 func castSlice[T ~string](ids []string) []T {

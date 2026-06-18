@@ -639,8 +639,8 @@ func (m *PythonManager) ReadModule(id string, opts ...topology.TopologyOption) (
 		}
 	}
 
-	for _, p := range mod.PackagesImported() {
-		ctx.Imports = append(ctx.Imports, p)
+	for _, target := range mod.ModulesImported() {
+		ctx.Imports = append(ctx.Imports, target)
 	}
 
 	var blocks []ContextBlock
@@ -672,140 +672,6 @@ func (m *PythonManager) ReadModule(id string, opts ...topology.TopologyOption) (
 			Line: ev.Location.StartsAt, Title: fmt.Sprintf("var %s", ev.Name),
 		})
 	}
-	sort.SliceStable(blocks, func(i, j int) bool {
-		if blocks[i].FileID != blocks[j].FileID {
-			return blocks[i].FileID < blocks[j].FileID
-		}
-		return blocks[i].Line < blocks[j].Line
-	})
-	ctx.Blocks = blocks
-
-	return ctx, nil
-}
-
-func (m *PythonManager) ReadPackage(id string, opts ...topology.TopologyOption) (*PythonPackageContext, error) {
-	opt := &topology.TopologyOptions{}
-	for _, o := range opts {
-		o(opt)
-	}
-
-	topo, err := m.generic.ReadAll()
-	if err != nil {
-		return nil, err
-	}
-	gt := FromGeneric(topo)
-
-	pkgPath := PackagePath(id)
-	pkg, ok := gt.Packages[pkgPath]
-	if !ok {
-		return nil, fmt.Errorf("package %s not found in topology", id)
-	}
-
-	ctx := &PythonPackageContext{}
-	ctx.Package = &PackageCut{PythonPackage: pkg}
-
-	var blocks []ContextBlock
-
-	if opt.HasResource(domain.ResourceFile) {
-		for _, fID := range pkg.Files() {
-			ctx.Files = append(ctx.Files, fID)
-			blocks = append(blocks, ContextBlock{
-				Kind: "module", FileID: ModuleID(fID), Line: 1,
-				Title: fmt.Sprintf("module %s", fID),
-			})
-		}
-	}
-
-	if opt.HasResource(domain.ResourceFunction) {
-		for _, fnID := range pkg.HasFunctions() {
-			fn, ok := gt.Functions[fnID]
-			if !ok {
-				continue
-			}
-			ctx.Functions = append(ctx.Functions, SimplifiedFunction{
-				ID:          fn.ID,
-				Name:        fn.Name,
-				Description: fn.Description,
-				Input:       fn.Input,
-				Output:      fn.Output,
-				Location:    fn.Loc,
-			})
-			blocks = append(blocks, ContextBlock{
-				Kind: "function", FileID: ModuleID(fn.Loc.Path),
-				Line: fn.Loc.StartsAt, Title: fmt.Sprintf("def %s", fn.Name),
-			})
-		}
-	}
-
-	if opt.HasResource(domain.ResourceType) {
-		for _, cID := range pkg.HasClasses() {
-			c, ok := gt.Classes[cID]
-			if !ok {
-				continue
-			}
-			usage := ClassUsage{
-				ID:          c.ID,
-				Name:        c.Name,
-				Description: c.Description,
-				Location:    c.Loc,
-			}
-			for _, mID := range c.Methods() {
-				method, ok := gt.Functions[mID]
-				if !ok {
-					continue
-				}
-				usage.Methods = append(usage.Methods, SimplifiedFunction{
-					ID:          method.ID,
-					Name:        method.Name,
-					Description: method.Description,
-					Input:       method.Input,
-					Output:      method.Output,
-					Location:    method.Loc,
-				})
-			}
-			ctx.Classes = append(ctx.Classes, usage)
-			blocks = append(blocks, ContextBlock{
-				Kind: "class", FileID: ModuleID(c.Loc.Path),
-				Line: c.Loc.StartsAt, Title: fmt.Sprintf("class %s", c.Name),
-			})
-			for _, m := range usage.Methods {
-				blocks = append(blocks, ContextBlock{
-					Kind: "method", FileID: ModuleID(m.Location.Path),
-					Line: m.Location.StartsAt, Title: fmt.Sprintf("%s.%s", c.Name, m.Name),
-				})
-			}
-		}
-	}
-
-	if opt.HasResource(domain.ResourceVariable) {
-		for _, vID := range pkg.HasExternalVars() {
-			v, ok := gt.ExternalVars[vID]
-			if !ok {
-				continue
-			}
-			ctx.ExtVars = append(ctx.ExtVars, SimplifiedExtVar{
-				ID:          v.ID,
-				Name:        v.Name,
-				Description: v.Description,
-				Location:    v.Location,
-			})
-			blocks = append(blocks, ContextBlock{
-				Kind: "extvar", FileID: ModuleID(v.Location.Path),
-				Line: v.Location.StartsAt, Title: fmt.Sprintf("var %s", v.Name),
-			})
-		}
-	}
-
-	if opt.HasResource(domain.ResourceDependency) {
-		depSet := make(map[DependancyPath]bool)
-		for _, d := range pkg.Connections[ConnImportsDep] {
-			depSet[DependancyPath(d)] = true
-		}
-		for d := range depSet {
-			ctx.Dependencies = append(ctx.Dependencies, d)
-		}
-	}
-
 	sort.SliceStable(blocks, func(i, j int) bool {
 		if blocks[i].FileID != blocks[j].FileID {
 			return blocks[i].FileID < blocks[j].FileID

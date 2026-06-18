@@ -67,14 +67,14 @@
   };
   function routeNodeColor(n) {}
   var modeHelp = {
-    packages: 'Packages view aggregates package import relationships only.',
+    packages: 'Packages & Modules shows import relationships: Go packages (package→package), and Python/JS/TS modules as files (file→file).',
     data_flow: 'Data Flow shows functions, methods, structs/classes, named types, and interfaces with call/use/type relationships.',
     custom: 'Custom exposes all filters for hand-built graph slices.'
   };
   var defaultEdgeTypes = [
     'calls', 'constructor', 'has_class', 'has_extvar', 'has_file', 'has_function',
     'has_interface', 'has_named_type', 'has_struct', 'implemented_by', 'implements',
-    'imports_dependency', 'imports_package', 'inherited_by', 'inherits', 'methods',
+    'imports_dependency', 'imports_module', 'imports_package', 'inherited_by', 'inherits', 'methods',
     'uses_class', 'uses_dependency', 'uses_extvar', 'uses_interface', 'uses_named_type',
     'uses_package', 'uses_struct'
   ];
@@ -934,7 +934,7 @@
     var mode = el('mode').value;
     var kinds;
     if (mode === 'packages') {
-      kinds = ['package'];
+      kinds = ['package', 'file'];
     } else if (mode === 'data_flow') {
       kinds = ['function', 'method', 'type', 'interface'];
     } else {

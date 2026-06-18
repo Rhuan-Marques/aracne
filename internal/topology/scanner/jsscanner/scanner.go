@@ -151,7 +151,6 @@ func newTopology(absRoot string) *js.JavaScriptTopology {
 		NamedTypes:   make(map[js.NamedTypeID]js.JavaScriptNamedType),
 		ExternalVars: make(map[js.ExternalVarID]js.JavaScriptExternalVar),
 		Modules:      make(map[js.ModuleID]js.JavaScriptModule),
-		Packages:     make(map[js.PackagePath]js.JavaScriptPackage),
 		Errors:       make(map[string]string),
 	}
 }
@@ -159,15 +158,6 @@ func newTopology(absRoot string) *js.JavaScriptTopology {
 // applyParsedFile inserts a parsed file's module, resources, and ownership edges
 // into the topology. Relationship resolution happens later in resolveTopology.
 func applyParsedFile(gt *js.JavaScriptTopology, pr *ParseResult) {
-	pkgPath := pr.PkgPath
-	pkg, ok := gt.Packages[pkgPath]
-	if !ok {
-		pkg = js.JavaScriptPackage{Path: pkgPath, Connections: make(map[js.ConnectionKind][]string)}
-	}
-	if pkg.Connections == nil {
-		pkg.Connections = make(map[js.ConnectionKind][]string)
-	}
-
 	modConns := make(map[js.ConnectionKind][]string)
 	for _, dep := range pr.ExternalImports {
 		modConns[js.ConnImportsDep] = append(modConns[js.ConnImportsDep], string(dep.PackagePath))
@@ -175,7 +165,7 @@ func applyParsedFile(gt *js.JavaScriptTopology, pr *ParseResult) {
 	mod := js.JavaScriptModule{
 		ID:            js.ModuleID(pr.FileID),
 		Name:          filepath.Base(pr.FileID),
-		FromPackage:   pkgPath,
+		FromPackage:   pr.PkgPath,
 		DefaultExport: pr.Exports["default"],
 		Connections:   modConns,
 	}
@@ -183,32 +173,25 @@ func applyParsedFile(gt *js.JavaScriptTopology, pr *ParseResult) {
 	for _, c := range pr.Classes {
 		gt.Classes[c.ID] = c
 		mod.Connections[js.ConnHasClass] = append(mod.Connections[js.ConnHasClass], string(c.ID))
-		pkg.Connections[js.ConnHasClass] = append(pkg.Connections[js.ConnHasClass], string(c.ID))
 	}
 	for _, fp := range pr.Functions {
 		gt.Functions[fp.Function.ID] = fp.Function
 		mod.Connections[js.ConnHasFunc] = append(mod.Connections[js.ConnHasFunc], string(fp.Function.ID))
-		pkg.Connections[js.ConnHasFunc] = append(pkg.Connections[js.ConnHasFunc], string(fp.Function.ID))
 	}
 	for _, v := range pr.ExternalVars {
 		gt.ExternalVars[v.ID] = v
 		mod.Connections[js.ConnHasVar] = append(mod.Connections[js.ConnHasVar], string(v.ID))
-		pkg.Connections[js.ConnHasVar] = append(pkg.Connections[js.ConnHasVar], string(v.ID))
 	}
 	for _, iface := range pr.Interfaces {
 		gt.Interfaces[iface.ID] = iface
 		mod.Connections[js.ConnHasInterface] = append(mod.Connections[js.ConnHasInterface], string(iface.ID))
-		pkg.Connections[js.ConnHasInterface] = append(pkg.Connections[js.ConnHasInterface], string(iface.ID))
 	}
 	for _, nt := range pr.NamedTypes {
 		gt.NamedTypes[nt.ID] = nt
 		mod.Connections[js.ConnHasNamedType] = append(mod.Connections[js.ConnHasNamedType], string(nt.ID))
-		pkg.Connections[js.ConnHasNamedType] = append(pkg.Connections[js.ConnHasNamedType], string(nt.ID))
 	}
 
-	pkg.Connections[js.ConnHasFile] = append(pkg.Connections[js.ConnHasFile], pr.FileID)
 	gt.Modules[js.ModuleID(pr.FileID)] = mod
-	gt.Packages[pkgPath] = pkg
 }
 
 // resolveTopology runs the relationship passes. The structural passes run over
@@ -221,11 +204,11 @@ func resolveTopology(gt *js.JavaScriptTopology, results []*ParseResult) {
 	matchImplementsAndInterfaceExtends(gt)
 
 	for _, pr := range results {
-		pkgs := resolveModuleImports(pr, gt)
-		if len(pkgs) > 0 {
+		imports := resolveModuleImports(pr, gt)
+		if len(imports) > 0 {
 			mod := gt.Modules[js.ModuleID(pr.FileID)]
-			for _, p := range pkgs {
-				mod.Connections[js.ConnImportsPkg] = append(mod.Connections[js.ConnImportsPkg], string(p))
+			for _, target := range imports {
+				mod.Connections[js.ConnImportsModule] = append(mod.Connections[js.ConnImportsModule], string(target))
 			}
 			mod.Connections = uniqueConns(mod.Connections)
 			gt.Modules[js.ModuleID(pr.FileID)] = mod
@@ -318,17 +301,6 @@ func removeModule(gt *js.JavaScriptTopology, mod js.JavaScriptModule) {
 	}
 	for _, id := range namedTypeIDs {
 		delete(gt.NamedTypes, id)
-	}
-
-	pkg, ok := gt.Packages[mod.FromPackage]
-	if ok {
-		pkg.Connections[js.ConnHasFile] = removeStrings(pkg.Connections[js.ConnHasFile], string(mod.ID))
-		pkg.Connections[js.ConnHasFunc] = removeStrings(pkg.Connections[js.ConnHasFunc], toStrings(funcIDs)...)
-		pkg.Connections[js.ConnHasClass] = removeStrings(pkg.Connections[js.ConnHasClass], toStrings(classIDs)...)
-		pkg.Connections[js.ConnHasVar] = removeStrings(pkg.Connections[js.ConnHasVar], toStrings(varIDs)...)
-		pkg.Connections[js.ConnHasInterface] = removeStrings(pkg.Connections[js.ConnHasInterface], toStrings(ifaceIDs)...)
-		pkg.Connections[js.ConnHasNamedType] = removeStrings(pkg.Connections[js.ConnHasNamedType], toStrings(namedTypeIDs)...)
-		gt.Packages[mod.FromPackage] = pkg
 	}
 
 	delete(gt.Modules, mod.ID)

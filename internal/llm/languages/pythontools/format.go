@@ -47,41 +47,6 @@ func FormatPythonModuleContext(ctx *python.PythonModuleContext) string {
 	return b.String()
 }
 
-func FormatPythonPackageContext(ctx *python.PythonPackageContext) string {
-	var b strings.Builder
-
-	b.WriteString(fmt.Sprintf("Package: %s\n\n", ctx.Package.Path))
-
-	hasContext := len(ctx.Files) > 0 || len(ctx.Functions) > 0 || len(ctx.Classes) > 0 ||
-		len(ctx.ExtVars) > 0 || len(ctx.Dependencies) > 0
-	if !hasContext {
-		return b.String()
-	}
-
-	b.WriteString("# CONTEXT:\n")
-
-	for _, f := range ctx.Files {
-		b.WriteString(fmt.Sprintf("## module %s\n", f))
-	}
-	for _, fn := range ctx.Functions {
-		b.WriteString(fmt.Sprintf("## def %s: %s\n", fn.ID, desc(fn.Description)))
-	}
-	for _, c := range ctx.Classes {
-		b.WriteString(fmt.Sprintf("## class %s: %s\n", c.ID, desc(c.Description)))
-		for _, m := range c.Methods {
-			b.WriteString(fmt.Sprintf("\t%s: %s\n", m.ID, desc(m.Description)))
-		}
-	}
-	for _, ev := range ctx.ExtVars {
-		b.WriteString(fmt.Sprintf("## var %s: %s\n", ev.ID, desc(ev.Description)))
-	}
-	for _, d := range ctx.Dependencies {
-		b.WriteString(fmt.Sprintf("## dep %q\n", d))
-	}
-
-	return b.String()
-}
-
 func FormatPythonDependencyContext(ctx *python.PythonDependencyContext) string {
 	var b strings.Builder
 
