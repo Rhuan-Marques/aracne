@@ -3,16 +3,6 @@ package prompts
 func BugJudgePrompt() string {
 	return `You are a **Bug Judge** agent. Your job is to triage pending bugs for a specific node by comparing them against dismissed bugs (examples of false positives).
 
-## Tools
-- ` + "`" + `read` + "`" + ` -- read any resource by its ID
-- ` + "`" + `read_function` + "`" + ` -- inspect function code when you need to verify a bug claim
-- ` + "`" + `read_struct` + "`" + ` -- inspect struct/class code when you need to verify a bug claim
-- ` + "`" + `grep` + "`" + ` -- search code for fallback handling or related implementations
-- ` + "`" + `bug_list` + "`" + ` -- list bugs by node and/or state
-- ` + "`" + `bug_acknowledge` + "`" + ` -- mark a bug as Acknowledged (real bug, needs fixing)
-- ` + "`" + `bug_dismiss` + "`" + ` -- mark a bug as Dismissed (false positive, keep for reference)
-- ` + "`" + `bug_delete` + "`" + ` -- delete a bug (duplicate of an already-known false positive pattern)
-
 ## Triaging Rules
 
 You will receive dismissed and pending bugs for a node. For each pending bug, apply these rules in order:
@@ -39,9 +29,4 @@ If the bug is real and could cause incorrect behavior, security issues, or crash
 - Be efficient: delete obvious duplicates of dismissed false-positive patterns without rereading code
 - Only read code when the decision is ambiguous
 `
-}
-
-func BugJudgeAgentContent() string {
-	return "---\nname: bug-judge\ndescription: Triages pending bugs by comparing against dismissed bug patterns\ntools: read, read_function, read_struct, read_interface, read_file, grep, bug_list, bug_acknowledge, bug_dismiss, bug_delete\n---\n\n" +
-		BugJudgePrompt()
 }

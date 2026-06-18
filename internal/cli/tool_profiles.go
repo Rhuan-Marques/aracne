@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"sort"
+
 	"aracne/internal/helper"
 	"aracne/internal/llm/languages/gotools"
 	"aracne/internal/llm/languages/jstools"
@@ -15,16 +17,75 @@ import (
 	"aracne/internal/topology/scanner"
 )
 
-// allMCPToolNames is the full universe of registerable MCP tools (the special
-// "all" profile used by the chat MCP server).
-func allMCPToolNames() []string {
-	return []string{
-		"read", "grep", "edit", "write",
-		"read_struct", "read_function", "read_interface", "read_named_type",
-		"read_file", "read_package", "read_dependency",
-		"warnings_list", "bug_report", "bug_list", "bug_acknowledge",
-		"bug_dismiss", "bug_delete", "node_list_no_description", "update_description",
+// toolDeps carries everything an MCP tool constructor may need.
+type toolDeps struct {
+	manager    *topology.TopologyManager
+	scannerReg *scanner.Registry
+	lang       string
+	targets    []domain.ResourceKind
+	batchSize  int
+}
+
+// mcpToolConstructors maps each MCP tool name to its constructor. It is the
+// single source of truth for which tools can be registered: allMCPToolNames and
+// BuildToolRegistry both derive from it, and a test asserts its key set matches
+// the toolspec catalog so config names, validation, and registration can't drift.
+var mcpToolConstructors = map[string]func(toolDeps) tools.Tool{
+	"read":                     func(d toolDeps) tools.Tool { return tools.NewRead(d.manager) },
+	"read_function":            func(d toolDeps) tools.Tool { return universaltools.NewReadFunction(d.manager) },
+	"read_struct":              func(d toolDeps) tools.Tool { return universaltools.NewReadStruct(d.manager) },
+	"read_interface":           func(d toolDeps) tools.Tool { return universaltools.NewReadInterface(d.manager) },
+	"read_named_type":          func(d toolDeps) tools.Tool { return universaltools.NewReadNamedType(d.manager) },
+	"read_file":                func(d toolDeps) tools.Tool { return universaltools.NewReadFile(d.manager) },
+	"read_package":             func(d toolDeps) tools.Tool { return universaltools.NewReadPackage(d.manager) },
+	"read_dependency":          func(d toolDeps) tools.Tool { return universaltools.NewReadDependency(d.manager) },
+	"grep":                     func(d toolDeps) tools.Tool { return tools.NewGrep(d.manager) },
+	"edit":                     func(d toolDeps) tools.Tool { return tools.NewEdit(d.manager, d.scannerReg) },
+	"write":                    func(d toolDeps) tools.Tool { return tools.NewWrite(d.manager, d.scannerReg) },
+	"warnings_list":            func(d toolDeps) tools.Tool { return tools.NewWarningsList(d.manager) },
+	"bug_report":               func(d toolDeps) tools.Tool { return tools.NewBugReport(d.manager) },
+	"bug_list":                 func(d toolDeps) tools.Tool { return tools.NewBugList(d.manager) },
+	"bug_acknowledge":          func(d toolDeps) tools.Tool { return tools.NewBugAcknowledge(d.manager) },
+	"bug_dismiss":              func(d toolDeps) tools.Tool { return tools.NewBugDismiss(d.manager) },
+	"bug_delete":               func(d toolDeps) tools.Tool { return tools.NewBugDelete(d.manager) },
+	"update_description":       buildUpdateDescriptionTool,
+	"node_list_no_description": buildNodeListNoDescriptionTool,
+}
+
+// buildUpdateDescriptionTool and buildNodeListNoDescriptionTool are the only
+// language-dispatched constructors: the language maintenance tools differ per
+// topology language.
+func buildUpdateDescriptionTool(d toolDeps) tools.Tool {
+	switch d.lang {
+	case "python":
+		return pythontools.NewUpdateDescriptionTool(python.NewPythonManager(d.manager))
+	case "javascript", "typescript":
+		return jstools.NewUpdateDescriptionTool(javascript.NewJavaScriptManager(d.manager))
+	default:
+		return gotools.NewUpdateDescriptionTool(golang.NewGoManager(d.manager))
 	}
+}
+
+func buildNodeListNoDescriptionTool(d toolDeps) tools.Tool {
+	switch d.lang {
+	case "python":
+		return pythontools.NewNodeListNoDescription(python.NewPythonManager(d.manager), d.targets).SetBatchSize(d.batchSize)
+	case "javascript", "typescript":
+		return jstools.NewNodeListNoDescription(javascript.NewJavaScriptManager(d.manager), d.targets).SetBatchSize(d.batchSize)
+	default:
+		return gotools.NewNodeListNoDescription(golang.NewGoManager(d.manager), d.targets).SetBatchSize(d.batchSize)
+	}
+}
+
+// allMCPToolNames returns every registerable MCP tool name, sorted. Used by the
+// synthetic "all" profile (the chat MCP server).
+func allMCPToolNames() []string {
+	names := make([]string, 0, len(mcpToolConstructors))
+	for n := range mcpToolConstructors {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // ValidAgentProfile reports whether name is usable as a --tool-profile value:
@@ -67,95 +128,19 @@ func effectiveMCPToolSet(cfg *helper.Config, harness, agentName string) map[stri
 func BuildToolRegistry(manager *topology.TopologyManager, scannerReg *scanner.Registry, cfg *helper.Config, harness, agentName string) *tools.Registry {
 	registry := tools.NewRegistry()
 	allowed := effectiveMCPToolSet(cfg, harness, agentName)
-
-	if allowed["read"] {
-		registry.Register(tools.NewRead(manager))
+	deps := toolDeps{
+		manager:    manager,
+		scannerReg: scannerReg,
+		lang:       GetLanguage(manager),
+		targets:    cfg.Descriptions.Kinds,
+		batchSize:  cfg.AgentParam(harness, agentName, "max-batch-size", helper.DefaultDescriptionBatchSize),
 	}
-	if allowed["read_function"] {
-		registry.Register(universaltools.NewReadFunction(manager))
-	}
-	if allowed["read_struct"] {
-		registry.Register(universaltools.NewReadStruct(manager))
-	}
-	if allowed["read_interface"] {
-		registry.Register(universaltools.NewReadInterface(manager))
-	}
-	if allowed["read_named_type"] {
-		registry.Register(universaltools.NewReadNamedType(manager))
-	}
-	if allowed["read_file"] {
-		registry.Register(universaltools.NewReadFile(manager))
-	}
-	if allowed["read_package"] {
-		registry.Register(universaltools.NewReadPackage(manager))
-	}
-	if allowed["read_dependency"] {
-		registry.Register(universaltools.NewReadDependency(manager))
-	}
-	if allowed["grep"] {
-		registry.Register(tools.NewGrep(manager))
-	}
-	if allowed["edit"] {
-		registry.Register(tools.NewEdit(manager, scannerReg))
-	}
-	if allowed["write"] {
-		registry.Register(tools.NewWrite(manager, scannerReg))
-	}
-	if allowed["warnings_list"] {
-		registry.Register(tools.NewWarningsList(manager))
-	}
-	if allowed["bug_report"] {
-		registry.Register(tools.NewBugReport(manager))
-	}
-	if allowed["bug_list"] {
-		registry.Register(tools.NewBugList(manager))
-	}
-	if allowed["bug_acknowledge"] {
-		registry.Register(tools.NewBugAcknowledge(manager))
-	}
-	if allowed["bug_dismiss"] {
-		registry.Register(tools.NewBugDismiss(manager))
-	}
-	if allowed["bug_delete"] {
-		registry.Register(tools.NewBugDelete(manager))
-	}
-
-	batchSize := cfg.AgentParam(harness, agentName, "max-batch-size", helper.DefaultDescriptionBatchSize)
-	targets := cfg.Descriptions.Kinds
-	switch GetLanguage(manager) {
-	case "python":
-		registerPythonTopologyTools(registry, python.NewPythonManager(manager), allowed, targets, batchSize)
-	case "javascript", "typescript":
-		registerJavaScriptTopologyTools(registry, javascript.NewJavaScriptManager(manager), allowed, targets, batchSize)
-	default:
-		registerGoTopologyTools(registry, golang.NewGoManager(manager), allowed, targets, batchSize)
+	readScan := cfg.EffectiveReadScan()
+	for _, name := range allMCPToolNames() {
+		if allowed[name] {
+			t := tools.WrapWithReadScan(mcpToolConstructors[name](deps), manager, scannerReg, readScan)
+			registry.Register(t)
+		}
 	}
 	return registry
-}
-
-func registerGoTopologyTools(registry *tools.Registry, mgr *golang.GoManager, allowed map[string]bool, describeTargets []domain.ResourceKind, descriptionBatchSize int) {
-	if allowed["update_description"] {
-		registry.Register(gotools.NewUpdateDescriptionTool(mgr))
-	}
-	if allowed["node_list_no_description"] {
-		registry.Register(gotools.NewNodeListNoDescription(mgr, describeTargets).SetBatchSize(descriptionBatchSize))
-	}
-}
-
-func registerPythonTopologyTools(registry *tools.Registry, mgr *python.PythonManager, allowed map[string]bool, describeTargets []domain.ResourceKind, descriptionBatchSize int) {
-	if allowed["update_description"] {
-		registry.Register(pythontools.NewUpdateDescriptionTool(mgr))
-	}
-	if allowed["node_list_no_description"] {
-		registry.Register(pythontools.NewNodeListNoDescription(mgr, describeTargets).SetBatchSize(descriptionBatchSize))
-	}
-}
-
-func registerJavaScriptTopologyTools(registry *tools.Registry, mgr *javascript.JavaScriptManager, allowed map[string]bool, describeTargets []domain.ResourceKind, descriptionBatchSize int) {
-	if allowed["update_description"] {
-		registry.Register(jstools.NewUpdateDescriptionTool(mgr))
-	}
-	if allowed["node_list_no_description"] {
-		registry.Register(jstools.NewNodeListNoDescription(mgr, describeTargets).SetBatchSize(descriptionBatchSize))
-	}
 }

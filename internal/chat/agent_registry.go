@@ -7,27 +7,53 @@ import (
 	"sort"
 	"strings"
 
+	"aracne/internal/helper"
 	"aracne/internal/prompts"
 )
 
-func ensureDefaultAgentFiles(dir string) error {
+// defaultChatAgentDefs lists the proprietary-chat sub-agents and the prompt
+// body each ships with. Their tool lists and the "## Tools" listing are filled
+// in from config (viz.chat.agents), never from the llm section.
+func defaultChatAgentDefs() []struct{ name, description, prompt string } {
+	return []struct{ name, description, prompt string }{
+		{"explorer", "Explores the codebase for focused Viz chat questions", prompts.ExplorerPrompt()},
+		{"descriptions-generation-executor", "Generates descriptions for one assigned batch of undocumented topology resources", prompts.DescriptionsGenerationExecutorPrompt()},
+		{"bug-hunter", "Scans the entire project topology looking for bugs", prompts.BugHunterPrompt()},
+		{"bug-judge", "Triages pending bugs by comparing against dismissed bug patterns", prompts.BugJudgePrompt()},
+		{"bug-solver", "Fixes acknowledged bugs in the codebase and removes them", prompts.BugSolverPrompt()},
+	}
+}
+
+// chatAgentTools resolves a chat sub-agent's tools from config, falling back to
+// the built-in defaults when cfg is nil or the agent is unset.
+func chatAgentTools(cfg *helper.Config, name string) []string {
+	if cfg != nil {
+		if ag, ok := cfg.Viz.Chat.Agents.Agents[name]; ok && len(ag.Tools) > 0 {
+			return ag.Tools
+		}
+	}
+	return helper.DefaultChatAgentTools(name)
+}
+
+// chatAgentMarkdown assembles a chat sub-agent .md: frontmatter (with the
+// resolved tools) plus the prompt body with a dynamic "## Tools" listing.
+func chatAgentMarkdown(name, description string, tools []string, prompt string) string {
+	body := prompts.WithToolsListing(prompt, tools)
+	return "---\nname: " + name + "\ndescription: " + description + "\ntools: " + strings.Join(tools, ", ") + "\n---\n\n" + body
+}
+
+func ensureDefaultAgentFiles(cfg *helper.Config, dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	defaults := map[string]string{
-		"explorer":                         prompts.ExplorerAgentContent(),
-		"descriptions-generation-executor": prompts.DescriptionsGenerationExecutorContent(),
-		"bug-hunter":                       prompts.BugHunterAgentContent(),
-		"bug-judge":                        prompts.BugJudgeAgentContent(),
-		"bug-solver":                       prompts.BugSolverAgentContent(),
-	}
-	for name, content := range defaults {
-		path := filepath.Join(dir, name+".md")
+	for _, def := range defaultChatAgentDefs() {
+		path := filepath.Join(dir, def.name+".md")
 		if _, err := os.Stat(path); err == nil {
 			continue
 		} else if !os.IsNotExist(err) {
 			return err
 		}
+		content := chatAgentMarkdown(def.name, def.description, chatAgentTools(cfg, def.name), def.prompt)
 		if err := os.WriteFile(path, []byte(strings.TrimSpace(content)+"\n"), 0o644); err != nil {
 			return err
 		}
@@ -36,7 +62,7 @@ func ensureDefaultAgentFiles(dir string) error {
 }
 
 func loadAgentKinds(dir string) ([]AgentKind, error) {
-	if err := ensureDefaultAgentFiles(dir); err != nil {
+	if err := ensureDefaultAgentFiles(nil, dir); err != nil {
 		return nil, err
 	}
 	entries, err := os.ReadDir(dir)

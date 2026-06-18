@@ -44,6 +44,8 @@ func main() {
 		}
 	case "update-file":
 		cli.RunUpdateFile(os.Args[2:])
+	case "guard":
+		cli.RunGuard(os.Args[2:])
 	case "read":
 		cli.RunRead()
 	case "grep":

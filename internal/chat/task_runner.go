@@ -356,8 +356,17 @@ func runAllowedTaskTool(toolMap map[string]tools.Tool, tc llm.ToolCall) (string,
 }
 
 func (m *Manager) toolsForAgentKind(kind AgentKind) (map[string]tools.Tool, error) {
-	allowed := make(map[string]bool, len(kind.Tools))
-	for _, name := range kind.Tools {
+	// The config's viz.chat.agents.<name>.tools is authoritative; the agent
+	// markdown's tools: frontmatter is the fallback. viz.chat never inherits
+	// from the llm section.
+	toolNames := kind.Tools
+	if m.config != nil {
+		if ag, ok := m.config.Viz.Chat.Agents.Agents[kind.Name]; ok && len(ag.Tools) > 0 {
+			toolNames = ag.Tools
+		}
+	}
+	allowed := make(map[string]bool, len(toolNames))
+	for _, name := range toolNames {
 		name = strings.TrimSpace(name)
 		if name != "" {
 			allowed[name] = true

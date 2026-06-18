@@ -1221,6 +1221,98 @@ def process():
 	}
 }
 
+// TestResolveBodyCallRefs_transitiveCrossModuleReturnType is the user's scenario
+// in Python: module3 does `x = ext_func(); x.method()` where ext_func (imported
+// from module2) returns module1.Stu. module3 does NOT import module1, so only
+// ext_func's parse-time TypingID makes x.method() resolve to module1.Stu.method.
+func TestResolveBodyCallRefs_transitiveCrossModuleReturnType(t *testing.T) {
+	pr := &ParseResult{
+		PkgPath:    "module3",
+		ModuleRoot: "testdata",
+		ImportMap:  map[string]string{"ext_func": "module2.ext_func"}, // from module2 import ext_func
+	}
+	gt := &python.PythonTopology{
+		Functions: map[python.FunctionID]python.PythonFunction{
+			"module2.ext_func": {
+				ID:   "module2.ext_func",
+				Name: "ext_func",
+				// Typing is the name as written in module2 ("Stu"); TypingID is
+				// the canonical class id resolved at module2's parse time.
+				Output: []python.VariableDefinition{{Typing: "Stu", TypingID: "module1.Stu"}},
+			},
+			"module1.Stu.method": {ID: "module1.Stu.method", Name: "method", MethodFrom: pkgPtr("module1.Stu")},
+		},
+		Classes: map[python.ClassID]python.PythonClass{
+			"module1.Stu": {
+				ID:   "module1.Stu",
+				Name: "Stu",
+				Connections: map[python.ConnectionKind][]string{
+					python.ConnHasMethod: {"module1.Stu.method"},
+				},
+			},
+		},
+		ExternalVars: make(map[python.ExternalVarID]python.PythonExternalVar),
+	}
+
+	var gotCalls []string
+	add := func(kind python.ConnectionKind, id string) {
+		if kind == python.ConnCalls {
+			gotCalls = append(gotCalls, id)
+		}
+	}
+
+	bodyAssigns := []pyBodyAssign{{Name: "x", ValueType: "ext_func", LineNo: 1}}
+	bodyCalls := []pyBodyCall{{ObjectName: "x", MethodName: "method", Func: "x.method", LineNo: 2}}
+
+	resolveBodyCallRefs(bodyCalls, bodyAssigns, pr, gt, add, nil, nil)
+
+	found := false
+	for _, c := range gotCalls {
+		if c == "module1.Stu.method" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected ConnCalls to include module1.Stu.method (transitive cross-module), got %v", gotCalls)
+	}
+}
+
+// TestParseFile_returnTypeTypingID verifies the parser records the canonical
+// TypingID for a cross-module return annotation, resolved against the defining
+// file's import map (Phase 2: parse-time resolved type ids).
+func TestParseFile_returnTypeTypingID(t *testing.T) {
+	if !hasPython() {
+		t.Skip("python not available")
+	}
+	tmpDir := t.TempDir()
+	src := filepath.Join(tmpDir, "ext.py")
+	if err := os.WriteFile(src, []byte("from module1 import Stu\n\ndef ext_func() -> Stu:\n    return Stu()\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	pr, err := ParseFile(src, "module2", tmpDir)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	var ext *python.PythonFunction
+	for i := range pr.Functions {
+		if pr.Functions[i].Function.Name == "ext_func" {
+			ext = &pr.Functions[i].Function
+			break
+		}
+	}
+	if ext == nil {
+		t.Fatal("ext_func not parsed")
+	}
+	if len(ext.Output) != 1 {
+		t.Fatalf("expected 1 output, got %v", ext.Output)
+	}
+	if got := ext.Output[0].TypingID; got != "module1.Stu" {
+		t.Errorf("expected Output[0].TypingID = %q, got %q (Typing=%q)",
+			"module1.Stu", got, ext.Output[0].Typing)
+	}
+}
+
 // helpers
 
 func hasPython() bool {

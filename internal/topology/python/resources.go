@@ -12,6 +12,13 @@ type DependancyPath = string
 type VariableDefinition struct {
 	Name   string
 	Typing string
+	// TypingID is the canonical topology class ID (pkgPath.Name) of the type
+	// named by Typing, resolved at PARSE TIME against the defining file's import
+	// map. It is "" for builtin/generic/unresolvable types. Storing it lets
+	// cross-package consumers (e.g. a caller inferring an imported function's
+	// return type) resolve the type without the callee's import context. It is a
+	// candidate id: consumers must still verify it exists.
+	TypingID string
 }
 
 type FunctionDefinition struct {

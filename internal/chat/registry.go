@@ -30,7 +30,12 @@ func NewScannerRegistry() *scanner.Registry {
 func BuildToolRegistry(manager *topology.TopologyManager, scannerReg *scanner.Registry, cfg *helper.Config, workspace string) *tools.Registry {
 	registry := tools.NewRegistry()
 	allowed := chatMainAgentToolSet(cfg)
+	readScan := helper.ReadScanNone
+	if cfg != nil {
+		readScan = cfg.EffectiveReadScan()
+	}
 	add := func(t tools.Tool) {
+		t = tools.WrapWithReadScan(t, manager, scannerReg, readScan)
 		if allowed == nil || allowed[t.Name()] {
 			registry.Register(t)
 		}
@@ -85,26 +90,33 @@ func configDescribeTargets(cfg *helper.Config) []domain.ResourceKind {
 
 func BuildAgentToolRegistry(manager *topology.TopologyManager, scannerReg *scanner.Registry, cfg *helper.Config, workspace string) *tools.Registry {
 	registry := tools.NewRegistry()
-	registry.Register(&tools.Ls{})
-	registry.Register(NewBashTool(workspace, manager, scannerReg))
-	registry.Register(NewGlobTool(workspace))
-	registry.Register(tools.NewRead(manager))
-	registry.Register(universaltools.NewReadFunction(manager))
-	registry.Register(universaltools.NewReadStruct(manager))
-	registry.Register(universaltools.NewReadInterface(manager))
-	registry.Register(universaltools.NewReadNamedType(manager))
-	registry.Register(universaltools.NewReadFile(manager))
-	registry.Register(universaltools.NewReadPackage(manager))
-	registry.Register(universaltools.NewReadDependency(manager))
-	registry.Register(tools.NewGrep(manager))
-	registry.Register(tools.NewEdit(manager, scannerReg))
-	registry.Register(tools.NewWrite(manager, scannerReg))
-	registry.Register(tools.NewWarningsList(manager))
-	registry.Register(tools.NewBugReport(manager))
-	registry.Register(tools.NewBugList(manager))
-	registry.Register(tools.NewBugAcknowledge(manager))
-	registry.Register(tools.NewBugDismiss(manager))
-	registry.Register(tools.NewBugDelete(manager))
+	readScan := helper.ReadScanNone
+	if cfg != nil {
+		readScan = cfg.EffectiveReadScan()
+	}
+	add := func(t tools.Tool) {
+		registry.Register(tools.WrapWithReadScan(t, manager, scannerReg, readScan))
+	}
+	add(&tools.Ls{})
+	add(NewBashTool(workspace, manager, scannerReg))
+	add(NewGlobTool(workspace))
+	add(tools.NewRead(manager))
+	add(universaltools.NewReadFunction(manager))
+	add(universaltools.NewReadStruct(manager))
+	add(universaltools.NewReadInterface(manager))
+	add(universaltools.NewReadNamedType(manager))
+	add(universaltools.NewReadFile(manager))
+	add(universaltools.NewReadPackage(manager))
+	add(universaltools.NewReadDependency(manager))
+	add(tools.NewGrep(manager))
+	add(tools.NewEdit(manager, scannerReg))
+	add(tools.NewWrite(manager, scannerReg))
+	add(tools.NewWarningsList(manager))
+	add(tools.NewBugReport(manager))
+	add(tools.NewBugList(manager))
+	add(tools.NewBugAcknowledge(manager))
+	add(tools.NewBugDismiss(manager))
+	add(tools.NewBugDelete(manager))
 	lang := getLanguage(manager)
 	registerLanguageMaintenanceTools(registry, nil, manager, lang, configDescribeTargets(cfg), configDescriptionBatchSize(cfg))
 	return registry

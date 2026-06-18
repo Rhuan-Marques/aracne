@@ -153,13 +153,3 @@ func pluralDescriptionInstruction(kind domain.ResourceKind) string {
 		return fmt.Sprintf("%s resources: write concise, accurate descriptions", kind)
 	}
 }
-
-func DescriptionsGenerationExecutorContent() string {
-	return `---
-name: descriptions-generation-executor
-description: Generates descriptions for one assigned batch of undocumented topology resources
-tools: read, grep, update_description
----
-
-` + DescriptionsGenerationExecutorPrompt()
-}

@@ -26,6 +26,17 @@ type NamedTypeCut struct {
 	Cut string
 }
 
+// FullBlock carries everything needed to render a neighbor as a full source
+// cut (relevant imports, an optional parent struct, and the resource's own
+// cut) without its own CONTEXT section. Path labels the fenced code block.
+type FullBlock struct {
+	Path      string
+	Imports   []PackagePath
+	Deps      []DependancyPath
+	ParentCut string
+	Cut       string
+}
+
 // Represents a lightweight summary of a function for context display, containing its ID, name, description, input/output parameters, and source location.
 type SimplifiedFunction struct {
 	ID          FunctionID
@@ -34,6 +45,8 @@ type SimplifiedFunction struct {
 	Input       []VariableDefinition
 	Output      []VariableDefinition
 	Location    domain.Location
+	Visibility  domain.Visibility
+	Full        *FullBlock
 }
 
 // Represents a struct used by a function or constructor, containing its ID, name, description, source location, and which methods were called on it.
@@ -43,6 +56,8 @@ type StructUsage struct {
 	Description string
 	Location    domain.Location
 	Methods     []SimplifiedFunction
+	Visibility  domain.Visibility
+	Full        *FullBlock
 }
 
 // Represents an interface used by a function or struct, including its ID, name, description, location, and a list of implementing structs with their relevant methods.
@@ -52,6 +67,8 @@ type InterfaceUsage struct {
 	Description     string
 	Location        domain.Location
 	Implementations []InterfaceImplementation
+	Visibility      domain.Visibility
+	Full            *FullBlock
 }
 
 // Represents a struct's implementation of an interface. Key fields include the struct ID and name, a description, the source location, and the list of simplified functions implementing the interface methods.
@@ -61,6 +78,8 @@ type InterfaceImplementation struct {
 	Description string
 	Location    domain.Location
 	Methods     []SimplifiedFunction
+	Visibility  domain.Visibility
+	Full        *FullBlock
 }
 
 // Simplified representation of an external variable for context output, containing ID, name, description, value (truncated), and source location.
@@ -70,6 +89,8 @@ type SimplifiedExtVar struct {
 	Description string
 	Value       string
 	Location    domain.Location
+	Visibility  domain.Visibility
+	Full        *FullBlock
 }
 
 // Represents a sorted block of contextual code with a Kind label, file ID, line number, title, and source cut, used for proximity rendering in function/struct context views.
@@ -109,6 +130,7 @@ type GoFunctionContext struct {
 	ExtVarsUsed     []SimplifiedExtVar
 	Dependencies    []DependancyPath
 	PackagesUsed    []PackagePath
+	Incoming        []domain.ResourceRef
 	Blocks          []ContextBlock
 }
 
@@ -123,6 +145,7 @@ type GoStructContext struct {
 	ExtVarsUsed    []SimplifiedExtVar
 	Dependencies   []DependancyPath
 	PackagesUsed   []PackagePath
+	Incoming       []domain.ResourceRef
 	Blocks         []ContextBlock
 }
 
@@ -132,6 +155,7 @@ type GoInterfaceContext struct {
 	Implementations []InterfaceImplementation
 	Dependencies    []DependancyPath
 	PackagesUsed    []PackagePath
+	Incoming        []domain.ResourceRef
 	Blocks          []ContextBlock
 }
 

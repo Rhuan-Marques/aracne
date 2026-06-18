@@ -190,13 +190,13 @@ func ParseFile(filePath string, pkgPath python.PackagePath, moduleRoot string) (
 		}
 
 		for _, method := range cls.Methods {
-			f := convertFunction(method, filePath, pkgPath, &c.ID)
+			f := convertFunction(method, filePath, pkgPath, &c.ID, pr.ImportMap)
 			pr.Functions = append(pr.Functions, FunctionParse{Function: f, Body: &method, BodyCalls: method.BodyCalls, BodyAssigns: method.BodyAssign})
 		}
 	}
 
 	for _, fn := range raw.Functions {
-		f := convertFunction(fn, filePath, pkgPath, nil)
+		f := convertFunction(fn, filePath, pkgPath, nil, pr.ImportMap)
 		pr.Functions = append(pr.Functions, FunctionParse{Function: f, Body: &fn, BodyCalls: fn.BodyCalls, BodyAssigns: fn.BodyAssign})
 	}
 
@@ -240,18 +240,18 @@ func convertClass(cls pyClass, filePath string, pkgPath python.PackagePath) pyth
 	}
 }
 
-func convertFunction(fn pyFunc, filePath string, pkgPath python.PackagePath, classID *python.ClassID) python.PythonFunction {
+func convertFunction(fn pyFunc, filePath string, pkgPath python.PackagePath, classID *python.ClassID, importMap map[string]string) python.PythonFunction {
 	var input []python.VariableDefinition
 	for _, p := range fn.Params {
 		if p.Name == "self" || p.Name == "cls" {
 			continue
 		}
-		input = append(input, python.VariableDefinition{Name: p.Name, Typing: p.Typing})
+		input = append(input, python.VariableDefinition{Name: p.Name, Typing: p.Typing, TypingID: canonicalTypeID(p.Typing, pkgPath, importMap)})
 	}
 
 	var output []python.VariableDefinition
 	for _, r := range fn.Results {
-		output = append(output, python.VariableDefinition{Name: r.Name, Typing: r.Typing})
+		output = append(output, python.VariableDefinition{Name: r.Name, Typing: r.Typing, TypingID: canonicalTypeID(r.Typing, pkgPath, importMap)})
 	}
 
 	var id python.FunctionID

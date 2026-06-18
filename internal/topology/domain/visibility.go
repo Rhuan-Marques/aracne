@@ -1,0 +1,98 @@
+package domain
+
+import "strings"
+
+// Visibility controls how a neighbor resource is rendered inside the
+// "# CONTEXT:" block of a read result. Higher values win when the same
+// resource is reachable at multiple visibilities (see ContextFilter docs).
+type Visibility int
+
+const (
+	// VisibilityHidden omits the resource entirely.
+	VisibilityHidden Visibility = 1
+	// VisibilityNormal renders the resource as "ID: description" (the default).
+	VisibilityNormal Visibility = 2
+	// VisibilityFull renders the resource as a fenced source-code cut.
+	VisibilityFull Visibility = 3
+)
+
+// ParseVisibility maps a config string to a Visibility, defaulting to
+// VisibilityNormal for empty or unrecognized values.
+func ParseVisibility(s string) Visibility {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "hidden":
+		return VisibilityHidden
+	case "full":
+		return VisibilityFull
+	default:
+		return VisibilityNormal
+	}
+}
+
+// Max returns the higher of two visibilities.
+func (v Visibility) Max(other Visibility) Visibility {
+	if other > v {
+		return other
+	}
+	return v
+}
+
+// ContextFilter is the resolved read.context_filter configuration. It decides,
+// per neighbor, whether it is hidden, rendered normally, or rendered in full.
+type ContextFilter struct {
+	// IncludeIncoming adds a "# USED BY:" section listing the resources that
+	// call/use the resource being read.
+	IncludeIncoming bool
+	// ExtVarsVisibility is the visibility applied to external variables.
+	ExtVarsVisibility Visibility
+	// SmallFnVisibility is the visibility applied to functions/methods whose
+	// line count is within SmallFnThreshold.
+	SmallFnVisibility Visibility
+	// SmallFnThreshold is the inclusive line-count ceiling for a "small"
+	// function. Ignored when SmallFnVisibility is Normal.
+	SmallFnThreshold int
+	// HideNoDescription hides resources that would render Normal but have no
+	// description. Full resources are exempt (they show code, not a description).
+	HideNoDescription bool
+}
+
+// DefaultContextFilter returns the all-Normal filter (current behavior): no
+// hiding, no full cuts, no incoming section.
+func DefaultContextFilter() ContextFilter {
+	return ContextFilter{
+		ExtVarsVisibility: VisibilityNormal,
+		SmallFnVisibility: VisibilityNormal,
+		SmallFnThreshold:  5,
+	}
+}
+
+// For computes the visibility of a single neighbor of the given kind. lineCount
+// is the neighbor's source line span (EndsAt-StartsAt+1); pass 0 when unknown.
+// hasDescription reports whether the neighbor carries a non-empty description.
+func (f ContextFilter) For(kind ResourceKind, lineCount int, hasDescription bool) Visibility {
+	vis := VisibilityNormal
+	switch kind {
+	case ResourceVariable:
+		vis = f.ExtVarsVisibility
+	case ResourceFunction, ResourceMethod:
+		if lineCount > 0 && lineCount <= f.SmallFnThreshold {
+			vis = f.SmallFnVisibility
+		}
+	}
+	// hide_no_description only suppresses resources rendered Normal; Full
+	// resources display the actual code so they stay.
+	if f.HideNoDescription && !hasDescription && vis == VisibilityNormal {
+		vis = VisibilityHidden
+	}
+	return vis
+}
+
+// ResourceRef is a lightweight, language-agnostic reference to a resource,
+// used for the always-Normal "# USED BY:" (incoming connections) section.
+type ResourceRef struct {
+	ID          string
+	Kind        ResourceKind
+	Name        string
+	Description string
+	Location    Location
+}

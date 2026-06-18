@@ -1252,3 +1252,141 @@ func TestAnalyzeFunctionBody_ignoresUnderscoreAssign(t *testing.T) {
 		t.Errorf("expected no ConnCalls for underscore var, got %v", conns[golang.ConnCalls])
 	}
 }
+
+// TestParseFile_returnTypeTypingID verifies the parser records the canonical
+// TypingID for a cross-package return type, resolved against the DEFINING file's
+// import map (Phase 2: parse-time resolved type ids).
+func TestParseFile_returnTypeTypingID(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module mod\n\ngo 1.21\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "pkg2"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	src := filepath.Join(dir, "pkg2", "ext.go")
+	if err := os.WriteFile(src, []byte(`package pkg2
+
+import "mod/pkg1"
+
+func ExtFunc() *pkg1.Stu { return nil }
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	pr, err := ParseFile(src, golang.PackagePath("mod/pkg2"), "mod", dir)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+
+	var ext *FunctionParse
+	for i := range pr.Functions {
+		if pr.Functions[i].Function.Name == "ExtFunc" {
+			ext = &pr.Functions[i]
+			break
+		}
+	}
+	if ext == nil {
+		t.Fatal("ExtFunc not parsed")
+	}
+	if len(ext.Function.Output) != 1 {
+		t.Fatalf("expected 1 output, got %v", ext.Function.Output)
+	}
+	if got := ext.Function.Output[0].TypingID; got != "mod/pkg1.Stu" {
+		t.Errorf("expected Output[0].TypingID = %q, got %q (Typing=%q)",
+			"mod/pkg1.Stu", got, ext.Function.Output[0].Typing)
+	}
+}
+
+// TestAnalyzeFunctionBody_transitiveCrossPackageReturnType is the user's
+// scenario: pkg3 calls pkg2.ExtFunc() which returns *pkg1.Stu, then x.Method().
+// pkg3 does NOT import pkg1, so resolving the return type in the caller's context
+// fails — only the parse-time TypingID (recorded in pkg2's context) makes the
+// transitive x.Method() -> pkg1.(Stu).Method edge resolvable. Exercises BOTH the
+// parser (TypingID population) and resolver (TypingID preference) halves.
+func TestAnalyzeFunctionBody_transitiveCrossPackageReturnType(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module mod\n\ngo 1.21\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	write := func(rel, content string) {
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("pkg1/stu.go", `package pkg1
+
+type Stu struct{}
+
+func (s *Stu) Method() {}
+`)
+	write("pkg2/ext.go", `package pkg2
+
+import "mod/pkg1"
+
+func ExtFunc() *pkg1.Stu { return nil }
+`)
+	write("pkg3/edit.go", `package pkg3
+
+import "mod/pkg2"
+
+func IWasEdited() {
+	x := pkg2.ExtFunc()
+	x.Method()
+}
+`)
+
+	pr1, err := ParseFile(filepath.Join(dir, "pkg1", "stu.go"), golang.PackagePath("mod/pkg1"), "mod", dir)
+	if err != nil {
+		t.Fatalf("ParseFile pkg1: %v", err)
+	}
+	pr2, err := ParseFile(filepath.Join(dir, "pkg2", "ext.go"), golang.PackagePath("mod/pkg2"), "mod", dir)
+	if err != nil {
+		t.Fatalf("ParseFile pkg2: %v", err)
+	}
+	pr3, err := ParseFile(filepath.Join(dir, "pkg3", "edit.go"), golang.PackagePath("mod/pkg3"), "mod", dir)
+	if err != nil {
+		t.Fatalf("ParseFile pkg3: %v", err)
+	}
+
+	gt := buildTestTopology(t, "mod", "mod/pkg3")
+	for _, pr := range []*ParseResult{pr1, pr2, pr3} {
+		for _, s := range pr.Structs {
+			gt.Structs[s.ID] = s
+		}
+		for _, fi := range pr.Functions {
+			gt.Functions[fi.Function.ID] = fi.Function
+		}
+	}
+	populateStructMethods(gt)
+
+	var caller *FunctionParse
+	for i := range pr3.Functions {
+		if pr3.Functions[i].Function.Name == "IWasEdited" {
+			caller = &pr3.Functions[i]
+			break
+		}
+	}
+	if caller == nil {
+		t.Fatal("IWasEdited not found")
+	}
+
+	conns := analyzeFunctionBody(caller.Body, pr3, gt, caller.Function.Input, caller.ReceiverName, caller.Function.MethodFrom, caller.Function.ID, caller.TypeParamNames)
+
+	methodID := "mod/pkg1.(Stu).Method"
+	found := false
+	for _, c := range conns[golang.ConnCalls] {
+		if c == methodID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected ConnCalls to include %q (transitive cross-package method), got %v",
+			methodID, conns[golang.ConnCalls])
+	}
+}

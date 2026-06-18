@@ -72,21 +72,22 @@ func (r *UniversalReadFunction) Run(args json.RawMessage) (string, error) {
 	if err != nil || message != "" {
 		return message, err
 	}
+	filter := filterOption(r.mgr)
 	switch target.res.Language {
 	case "go":
-		ctx, err := golang.NewGoManager(r.mgr).ReadFunction(target.id)
+		ctx, err := golang.NewGoManager(r.mgr).ReadFunction(target.id, filter)
 		if err != nil {
 			return "", fmt.Errorf("read function: %w", err)
 		}
 		return gotools.FormatGoFunctionContext(ctx), nil
 	case "python":
-		ctx, err := python.NewPythonManager(r.mgr).ReadFunction(target.id)
+		ctx, err := python.NewPythonManager(r.mgr).ReadFunction(target.id, filter)
 		if err != nil {
 			return "", fmt.Errorf("read function: %w", err)
 		}
 		return pythontools.FormatPythonFunctionContext(ctx), nil
 	case "javascript", "typescript":
-		ctx, err := javascript.NewJavaScriptManager(r.mgr).ReadFunction(target.id)
+		ctx, err := javascript.NewJavaScriptManager(r.mgr).ReadFunction(target.id, filter)
 		if err != nil {
 			return "", fmt.Errorf("read function: %w", err)
 		}
@@ -112,21 +113,22 @@ func (r *UniversalReadStruct) Run(args json.RawMessage) (string, error) {
 	if err != nil || message != "" {
 		return message, err
 	}
+	filter := filterOption(r.mgr)
 	switch target.res.Language {
 	case "go":
-		ctx, err := golang.NewGoManager(r.mgr).ReadStruct(target.id)
+		ctx, err := golang.NewGoManager(r.mgr).ReadStruct(target.id, filter)
 		if err != nil {
 			return "", fmt.Errorf("read struct: %w", err)
 		}
 		return gotools.FormatGoStructContext(ctx), nil
 	case "python":
-		ctx, err := python.NewPythonManager(r.mgr).ReadClass(target.id)
+		ctx, err := python.NewPythonManager(r.mgr).ReadClass(target.id, filter)
 		if err != nil {
 			return "", fmt.Errorf("read class: %w", err)
 		}
 		return pythontools.FormatPythonClassContext(ctx), nil
 	case "javascript", "typescript":
-		ctx, err := javascript.NewJavaScriptManager(r.mgr).ReadClass(target.id)
+		ctx, err := javascript.NewJavaScriptManager(r.mgr).ReadClass(target.id, filter)
 		if err != nil {
 			return "", fmt.Errorf("read class: %w", err)
 		}
@@ -157,9 +159,10 @@ func (r *UniversalReadInterface) Run(args json.RawMessage) (string, error) {
 	if err != nil || message != "" {
 		return message, err
 	}
+	filter := filterOption(r.mgr)
 	switch target.res.Language {
 	case "go":
-		ctx, err := golang.NewGoManager(r.mgr).ReadInterface(target.id)
+		ctx, err := golang.NewGoManager(r.mgr).ReadInterface(target.id, filter)
 		if err != nil {
 			return "", fmt.Errorf("read interface: %w", err)
 		}
@@ -167,7 +170,7 @@ func (r *UniversalReadInterface) Run(args json.RawMessage) (string, error) {
 	case "python":
 		return pythonInterfaceSummary(r.mgr, target.id)
 	case "typescript":
-		ctx, err := javascript.NewJavaScriptManager(r.mgr).ReadInterface(target.id)
+		ctx, err := javascript.NewJavaScriptManager(r.mgr).ReadInterface(target.id, filter)
 		if err != nil {
 			return "", fmt.Errorf("read interface: %w", err)
 		}
@@ -179,17 +182,36 @@ func (r *UniversalReadInterface) Run(args json.RawMessage) (string, error) {
 
 func (r *UniversalReadFile) Name() string { return "read_file" }
 func (r *UniversalReadFile) Description() string {
-	return "Read a file/module source and language-specific topology context."
+	return "Read a file/module source and language-specific topology context. Optionally pass start_line/end_line to read only a specific line range (raw lines, no context)."
 }
 func (r *UniversalReadFile) Parameters() []tools.Parameter {
-	return nameParam("The file path or name to read")
+	return []tools.Parameter{
+		{Name: "name", Type: "string", Description: "The file path or name to read", Required: true},
+		{Name: "start_line", Type: "integer", Description: "Optional 1-indexed first line to read. When set (with or without end_line), only the raw line range is returned, without topology context.", Required: false},
+		{Name: "end_line", Type: "integer", Description: "Optional 1-indexed last line to read, inclusive. Defaults to the end of the file when only start_line is given.", Required: false},
+	}
 }
 func (r *UniversalReadFile) Run(args json.RawMessage) (string, error) {
-	name, err := readNameArg(args)
+	name, startLine, endLine, err := readFileArgs(args)
 	if err != nil {
 		return "", err
 	}
 	target, message, err := resolveReadTarget(r.mgr, name, domain.ResourceFile)
+	if startLine > 0 || endLine > 0 {
+		path := name
+		if err == nil && message == "" {
+			path = target.id
+		}
+		content, last, rerr := helper.ReadFileRange(path, startLine, endLine)
+		if rerr != nil {
+			return "", rerr
+		}
+		first := startLine
+		if first <= 0 {
+			first = 1
+		}
+		return fmt.Sprintf("%s (lines %d-%d)\n%s", filepath.Base(path), first, last, content), nil
+	}
 	if err == nil && message == "" {
 		switch target.res.Language {
 		case "go":
@@ -356,6 +378,13 @@ func nameParam(description string) []tools.Parameter {
 	return []tools.Parameter{{Name: "name", Type: "string", Description: description, Required: true}}
 }
 
+// filterOption builds the context-block visibility option from the project
+// config so neighbor rendering honors read.context_filter.
+func filterOption(mgr *topology.TopologyManager) topology.TopologyOption {
+	cfg := helper.LoadConfig(helper.ConfigPath(mgr.DbPath()))
+	return topology.WithContextFilter(cfg.EffectiveContextFilter())
+}
+
 func readNameArg(args json.RawMessage) (string, error) {
 	var params struct {
 		Name string `json:"name"`
@@ -367,6 +396,21 @@ func readNameArg(args json.RawMessage) (string, error) {
 		return "", fmt.Errorf("missing required argument: name")
 	}
 	return params.Name, nil
+}
+
+func readFileArgs(args json.RawMessage) (string, int, int, error) {
+	var params struct {
+		Name      string `json:"name"`
+		StartLine int    `json:"start_line"`
+		EndLine   int    `json:"end_line"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return "", 0, 0, fmt.Errorf("invalid arguments: %w", err)
+	}
+	if params.Name == "" {
+		return "", 0, 0, fmt.Errorf("missing required argument: name")
+	}
+	return params.Name, params.StartLine, params.EndLine, nil
 }
 
 func resolveReadTarget(mgr *topology.TopologyManager, name string, kinds ...domain.ResourceKind) (readTarget, string, error) {

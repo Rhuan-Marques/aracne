@@ -777,6 +777,55 @@ func TestLoadConfigNewSchema(t *testing.T) {
 	}
 }
 
+func TestEffectiveReadScan(t *testing.T) {
+	if got := DefaultConfig().EffectiveReadScan(); got != ReadScanNone {
+		t.Fatalf("default EffectiveReadScan = %q, want none", got)
+	}
+	cases := map[string]ReadScanMode{
+		"":          ReadScanNone,
+		"none":      ReadScanNone,
+		"None":      ReadScanNone,
+		" default ": ReadScanDefault,
+		"FULL":      ReadScanFull,
+		"Hard":      ReadScanHard,
+		"bogus":     ReadScanNone,
+	}
+	for in, want := range cases {
+		c := &Config{Read: ReadSection{Scan: ReadScanMode(in)}}
+		if got := c.EffectiveReadScan(); got != want {
+			t.Fatalf("EffectiveReadScan(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestLoadConfigReadScan(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+
+	// A valid read.scan value survives loading.
+	if err := os.WriteFile(path, []byte(`{"scan":{"mode":"default"},"read":{"scan":"full"}}`), 0644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+	cfg, ok := LoadConfigStrict(path)
+	if !ok {
+		t.Fatal("config with read.scan should parse cleanly")
+	}
+	if cfg.Read.Scan != ReadScanFull {
+		t.Fatalf("Read.Scan = %q, want full", cfg.Read.Scan)
+	}
+
+	// An invalid read.scan value normalizes to none (preserving current behavior).
+	if err := os.WriteFile(path, []byte(`{"scan":{"mode":"default"},"read":{"scan":"bogus"}}`), 0644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+	cfg2, ok2 := LoadConfigStrict(path)
+	if !ok2 {
+		t.Fatal("config should parse cleanly")
+	}
+	if cfg2.Read.Scan != ReadScanNone {
+		t.Fatalf("invalid Read.Scan normalized to %q, want none", cfg2.Read.Scan)
+	}
+}
+
 func TestEffectiveAgentInheritanceAndOverride(t *testing.T) {
 	cfg := DefaultConfig()
 	hunter := cfg.EffectiveAgent("claude_code", "bug-hunter")
@@ -798,6 +847,34 @@ func TestEffectiveAgentInheritanceAndOverride(t *testing.T) {
 	}
 	if oc := cfg.EffectiveAgent("opencode", "bug-hunter"); oc.Model == "sonnet" {
 		t.Fatalf("opencode bug-hunter should not inherit claude_code override: %q", oc.Model)
+	}
+}
+
+func TestConfigValidate(t *testing.T) {
+	if err := DefaultConfig().Validate(); err != nil {
+		t.Fatalf("default config should validate: %v", err)
+	}
+
+	// Unknown MCP tool on a sub-agent.
+	cfg := DefaultConfig()
+	cfg.LLM.Any.Agents["bug-hunter"] = AgentConfig{MCPTools: []string{"read", "read_inferface"}}
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "read_inferface") {
+		t.Fatalf("expected unknown-tool error naming read_inferface, got: %v", err)
+	}
+
+	// Unknown chat tool.
+	cfg = DefaultConfig()
+	cfg.Viz.Chat.Agents.Agents["explorer"] = ChatAgentConfig{Tools: []string{"not_a_tool"}}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "not_a_tool") {
+		t.Fatalf("expected unknown chat-tool error, got: %v", err)
+	}
+
+	// A chat-only native tool is invalid as an MCP tool.
+	cfg = DefaultConfig()
+	cfg.LLM.Any.MainAgent.MCPTools = append(cfg.LLM.Any.MainAgent.MCPTools, "ls")
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ls") {
+		t.Fatalf("expected error for ls as MCP tool, got: %v", err)
 	}
 }
 

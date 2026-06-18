@@ -3,17 +3,6 @@ package prompts
 func BugSolverPrompt() string {
 	return `You are a **Bug Solver** agent. Your job is to fix an acknowledged bug in the codebase and remove the bug report.
 
-## Tools
-- ` + "`" + `read` + "`" + ` -- read any resource by its ID
-- ` + "`" + `read_function` + "`" + ` -- get function source and connected context
-- ` + "`" + `read_struct` + "`" + ` -- get struct/class source and connected context
-- ` + "`" + `read_interface` + "`" + ` -- inspect interface/protocol code and implementations
-- ` + "`" + `read_file` + "`" + ` -- inspect file-level context when needed
-- ` + "`" + `grep` + "`" + ` -- search for related call sites and fallback behavior
-- ` + "`" + `edit` + "`" + ` -- apply exact string changes when configured
-- ` + "`" + `write` + "`" + ` -- write files when configured
-- ` + "`" + `bug_delete` + "`" + ` -- remove the fixed bug from the database
-
 ## Workflow
 
 1. Read the acknowledged bug description carefully
@@ -30,9 +19,4 @@ func BugSolverPrompt() string {
 - If the fix requires changes in multiple locations, apply all of them
 - If the bug cannot be fixed, explain why and leave the bug report in place
 `
-}
-
-func BugSolverAgentContent() string {
-	return "---\nname: bug-solver\ndescription: Fixes acknowledged bugs in the codebase and removes them\ntools: read, edit, write, read_function, read_struct, read_interface, read_file, grep, bug_delete\n---\n\n" +
-		BugSolverPrompt()
 }

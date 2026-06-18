@@ -44,14 +44,7 @@ func newBodyAnalyzer(pr *ParseResult, gt *golang.GolangTopology, funcInput []gol
 		if param.Name != "_" {
 			ba.knownNames[param.Name] = true
 		}
-		if sid := paramTypeNameToStruct(param.Typing, pr.PkgPath, pr.ImportMap, pr.ModulePath); sid != nil {
-			if _, ok := gt.Structs[*sid]; ok {
-				ba.varTypeMap[param.Name] = *sid
-			}
-		}
-		if iid := paramTypeNameToInterface(param.Typing, pr.PkgPath, pr.ImportMap, pr.ModulePath, gt); iid != nil {
-			ba.varIfaceMap[param.Name] = *iid
-		}
+		ba.resolveVarType(param.Name, param)
 	}
 
 	if receiverName != "" && receiverStruct != nil {
@@ -106,6 +99,64 @@ func paramTypeNameToStruct(typing string, pkgPath golang.PackagePath, importMap 
 
 	sid := golang.StructID(string(pkgPath) + "." + t)
 	return &sid
+}
+
+// canonicalTypeID returns the canonical topology resource ID (pkgPath.Name) for
+// the simple named type written in `typing`, resolved against the DEFINING file's
+// import map. It returns "" for composite types ([]T, map, chan, func, generics),
+// predeclared/builtin types, and aliases absent from importMap. The result is a
+// CANDIDATE id — callers must still verify it exists (a miss is the correct
+// missing-node signal). This is computed at parse time so cross-package consumers
+// don't need the defining file's import context to resolve the type.
+func canonicalTypeID(typing string, pkgPath golang.PackagePath, importMap map[string]string) string {
+	t := strings.TrimPrefix(typing, "*")
+	if t == "" || strings.ContainsAny(t, " \t*[]{}()<>") {
+		return ""
+	}
+	if idx := strings.Index(t, "."); idx > 0 {
+		alias := t[:idx]
+		name := t[idx+1:]
+		if impPath, ok := importMap[alias]; ok {
+			return impPath + "." + name
+		}
+		return ""
+	}
+	if goBuiltins[t] {
+		return ""
+	}
+	return string(pkgPath) + "." + t
+}
+
+// resolveVarType records the struct/interface type of variable `name` from a
+// VariableDefinition. It prefers the precomputed canonical TypingID (resolved in
+// the type's defining file, so cross-package return types resolve correctly) and
+// falls back to the legacy string-based resolution in the current file's context.
+func (ba *bodyAnalyzer) resolveVarType(name string, vd golang.VariableDefinition) {
+	if name == "" {
+		return
+	}
+	if vd.TypingID != "" {
+		if _, ok := ba.gt.Structs[golang.StructID(vd.TypingID)]; ok {
+			ba.varTypeMap[name] = golang.StructID(vd.TypingID)
+			return
+		}
+		if _, ok := ba.gt.Interfaces[golang.InterfaceID(vd.TypingID)]; ok {
+			ba.varIfaceMap[name] = golang.InterfaceID(vd.TypingID)
+			return
+		}
+	}
+	if vd.Typing == "" {
+		return
+	}
+	if sid := paramTypeNameToStruct(vd.Typing, ba.pr.PkgPath, ba.pr.ImportMap, ba.pr.ModulePath); sid != nil {
+		if _, ok := ba.gt.Structs[*sid]; ok {
+			ba.varTypeMap[name] = *sid
+			return
+		}
+	}
+	if iid := paramTypeNameToInterface(vd.Typing, ba.pr.PkgPath, ba.pr.ImportMap, ba.pr.ModulePath, ba.gt); iid != nil {
+		ba.varIfaceMap[name] = *iid
+	}
 }
 
 func (ba *bodyAnalyzer) add(kind golang.ConnectionKind, id string) {
@@ -570,22 +621,7 @@ func (ba *bodyAnalyzer) resolveCallExprAssign(name string, call *ast.CallExpr) {
 	if len(targetFunc.Output) == 0 {
 		return
 	}
-
-	returnType := targetFunc.Output[0].Typing
-	if returnType == "" {
-		return
-	}
-
-	if sid := paramTypeNameToStruct(returnType, ba.pr.PkgPath, ba.pr.ImportMap, ba.pr.ModulePath); sid != nil {
-		if _, ok := ba.gt.Structs[*sid]; ok {
-			ba.varTypeMap[name] = *sid
-			return
-		}
-	}
-
-	if iid := paramTypeNameToInterface(returnType, ba.pr.PkgPath, ba.pr.ImportMap, ba.pr.ModulePath, ba.gt); iid != nil {
-		ba.varIfaceMap[name] = *iid
-	}
+	ba.resolveVarType(name, targetFunc.Output[0])
 }
 
 // resolveMultiValueCallAssign handles `a, b := f()` where one call feeds several
@@ -633,19 +669,7 @@ func (ba *bodyAnalyzer) resolveMultiValueCallAssign(lhs []ast.Expr, call *ast.Ca
 		if i >= len(targetFunc.Output) {
 			continue
 		}
-		returnType := targetFunc.Output[i].Typing
-		if returnType == "" {
-			continue
-		}
-		if sid := paramTypeNameToStruct(returnType, ba.pr.PkgPath, ba.pr.ImportMap, ba.pr.ModulePath); sid != nil {
-			if _, ok := ba.gt.Structs[*sid]; ok {
-				ba.varTypeMap[ident.Name] = *sid
-				continue
-			}
-		}
-		if iid := paramTypeNameToInterface(returnType, ba.pr.PkgPath, ba.pr.ImportMap, ba.pr.ModulePath, ba.gt); iid != nil {
-			ba.varIfaceMap[ident.Name] = *iid
-		}
+		ba.resolveVarType(ident.Name, targetFunc.Output[i])
 	}
 }
 

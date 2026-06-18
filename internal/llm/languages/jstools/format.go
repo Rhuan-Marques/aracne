@@ -30,7 +30,6 @@ func FormatJavaScriptModuleContext(ctx *javascript.JavaScriptModuleContext) stri
 	}
 
 	b.WriteString("# CONTEXT:\n")
-	b.WriteString(fmt.Sprintf("## Package: %s\n", ctx.FromPackage))
 
 	for _, fn := range ctx.Functions {
 		b.WriteString(fmt.Sprintf("## function %s: %s\n", fn.ID, desc(fn.Description)))
@@ -43,9 +42,6 @@ func FormatJavaScriptModuleContext(ctx *javascript.JavaScriptModuleContext) stri
 	}
 	for _, ev := range ctx.ExtVars {
 		b.WriteString(fmt.Sprintf("## var %s: %s\n", ev.ID, desc(ev.Description)))
-	}
-	for _, imp := range ctx.Imports {
-		b.WriteString(fmt.Sprintf("## import %q\n", imp))
 	}
 
 	return b.String()
@@ -130,38 +126,36 @@ func FormatJavaScriptFunctionContext(ctx *javascript.JavaScriptFunctionContext) 
 
 	hasContext := len(ctx.ClassesUsed) > 0 || len(ctx.InterfacesUsed) > 0 ||
 		len(ctx.NamedTypesUsed) > 0 || len(ctx.CalledFunctions) > 0 || len(ctx.ExtVarsUsed) > 0
-	if !hasContext {
-		return b.String()
-	}
-
-	b.WriteString("# CONTEXT:\n")
-
-	for _, cu := range ctx.ClassesUsed {
-		b.WriteString(fmt.Sprintf("## %s: %s\n", cu.ID, desc(cu.Description)))
-		for _, m := range cu.Methods {
-			b.WriteString(fmt.Sprintf("\t%s: %s\n", m.ID, desc(m.Description)))
+	if hasContext {
+		b.WriteString("# CONTEXT:\n")
+		for _, full := range []bool{true, false} {
+			for _, cu := range ctx.ClassesUsed {
+				if wantVis(cu.Visibility, full) {
+					renderClassUsage(&b, cu)
+				}
+			}
+			if !full {
+				for _, iu := range ctx.InterfacesUsed {
+					b.WriteString(fmt.Sprintf("## %s (interface): %s\n", iu.ID, desc(iu.Description)))
+				}
+				for _, nt := range ctx.NamedTypesUsed {
+					b.WriteString(fmt.Sprintf("## %s (type): %s\n", nt.ID, desc(nt.Description)))
+				}
+			}
+			for _, cf := range ctx.CalledFunctions {
+				if wantVis(cf.Visibility, full) {
+					renderFunc(&b, "## ", cf)
+				}
+			}
+			for _, ev := range ctx.ExtVarsUsed {
+				if wantVis(ev.Visibility, full) {
+					renderExtVar(&b, ev)
+				}
+			}
 		}
 	}
 
-	for _, iu := range ctx.InterfacesUsed {
-		b.WriteString(fmt.Sprintf("## %s (interface): %s\n", iu.ID, desc(iu.Description)))
-	}
-
-	for _, nt := range ctx.NamedTypesUsed {
-		b.WriteString(fmt.Sprintf("## %s (type): %s\n", nt.ID, desc(nt.Description)))
-	}
-
-	for _, cf := range ctx.CalledFunctions {
-		b.WriteString(fmt.Sprintf("## %s: %s\n", cf.ID, desc(cf.Description)))
-	}
-
-	for _, ev := range ctx.ExtVarsUsed {
-		valStr := ""
-		if ev.Value != "" {
-			valStr = fmt.Sprintf(" = %s", ev.Value)
-		}
-		b.WriteString(fmt.Sprintf("## %s%s\n", ev.ID, valStr))
-	}
+	writeUsedBy(&b, ctx.Incoming)
 
 	return b.String()
 }
@@ -176,20 +170,20 @@ func FormatJavaScriptInterfaceContext(ctx *javascript.JavaScriptInterfaceContext
 	}
 	b.WriteString("```\n\n")
 
-	if len(ctx.BaseInterfaces) == 0 && len(ctx.Implementations) == 0 {
-		return b.String()
-	}
-
-	b.WriteString("# CONTEXT:\n")
-	for _, base := range ctx.BaseInterfaces {
-		b.WriteString(fmt.Sprintf("## %s (extends): %s\n", base.ID, desc(base.Description)))
-	}
-	if len(ctx.Implementations) > 0 {
-		b.WriteString("## Implemented By\n")
-		for _, impl := range ctx.Implementations {
-			b.WriteString(fmt.Sprintf("\t%s: %s\n", impl.ID, desc(impl.Description)))
+	if len(ctx.BaseInterfaces) > 0 || len(ctx.Implementations) > 0 {
+		b.WriteString("# CONTEXT:\n")
+		for _, base := range ctx.BaseInterfaces {
+			b.WriteString(fmt.Sprintf("## %s (extends): %s\n", base.ID, desc(base.Description)))
+		}
+		if len(ctx.Implementations) > 0 {
+			b.WriteString("## Implemented By\n")
+			for _, impl := range ctx.Implementations {
+				b.WriteString(fmt.Sprintf("\t%s: %s\n", impl.ID, desc(impl.Description)))
+			}
 		}
 	}
+
+	writeUsedBy(&b, ctx.Incoming)
 
 	return b.String()
 }
@@ -239,34 +233,33 @@ func FormatJavaScriptClassContext(ctx *javascript.JavaScriptClassContext) string
 
 	hasContext := len(ctx.BaseClasses) > 0 || len(ctx.Methods) > 0 ||
 		len(ctx.ClassesUsed) > 0 || len(ctx.ExtVarsUsed) > 0
-	if !hasContext {
-		return b.String()
-	}
-
-	b.WriteString("# CONTEXT:\n")
-
-	for _, base := range ctx.BaseClasses {
-		b.WriteString(fmt.Sprintf("## %s (base class): %s\n", base.ID, desc(base.Description)))
-	}
-
-	for _, m := range ctx.Methods {
-		b.WriteString(fmt.Sprintf("## %s: %s\n", m.ID, desc(m.Description)))
-	}
-
-	for _, cu := range ctx.ClassesUsed {
-		b.WriteString(fmt.Sprintf("## %s: %s\n", cu.ID, desc(cu.Description)))
-		for _, m := range cu.Methods {
-			b.WriteString(fmt.Sprintf("\t%s: %s\n", m.ID, desc(m.Description)))
+	if hasContext {
+		b.WriteString("# CONTEXT:\n")
+		for _, full := range []bool{true, false} {
+			if !full {
+				for _, base := range ctx.BaseClasses {
+					b.WriteString(fmt.Sprintf("## %s (base class): %s\n", base.ID, desc(base.Description)))
+				}
+			}
+			for _, m := range ctx.Methods {
+				if wantVis(m.Visibility, full) {
+					renderFunc(&b, "## ", m)
+				}
+			}
+			for _, cu := range ctx.ClassesUsed {
+				if wantVis(cu.Visibility, full) {
+					renderClassUsage(&b, cu)
+				}
+			}
+			for _, ev := range ctx.ExtVarsUsed {
+				if wantVis(ev.Visibility, full) {
+					renderExtVar(&b, ev)
+				}
+			}
 		}
 	}
 
-	for _, ev := range ctx.ExtVarsUsed {
-		valStr := ""
-		if ev.Value != "" {
-			valStr = fmt.Sprintf(" = %s", ev.Value)
-		}
-		b.WriteString(fmt.Sprintf("## %s%s\n", ev.ID, valStr))
-	}
+	writeUsedBy(&b, ctx.Incoming)
 
 	return b.String()
 }

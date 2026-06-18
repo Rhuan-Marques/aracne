@@ -180,7 +180,7 @@ func TestAgentProfilesFromKinds(t *testing.T) {
 
 func TestEnsureDefaultAgentFiles(t *testing.T) {
 	dir := t.TempDir()
-	if err := ensureDefaultAgentFiles(dir); err != nil {
+	if err := ensureDefaultAgentFiles(nil, dir); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	entries, err := os.ReadDir(dir)
@@ -204,8 +204,16 @@ func TestEnsureDefaultAgentFiles(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(strings.TrimSpace(string(data))) == 0 {
+		content := string(data)
+		if len(strings.TrimSpace(content)) == 0 {
 			t.Errorf("file %s is empty", name)
+		}
+		// The "## Tools" listing is generated dynamically from the catalog.
+		if !strings.Contains(content, "## Tools") {
+			t.Errorf("file %s missing dynamic ## Tools section:\n%s", name, content)
+		}
+		if !strings.Contains(content, "- `grep` -- ") {
+			t.Errorf("file %s missing catalog tool description for grep:\n%s", name, content)
 		}
 	}
 }
@@ -215,7 +223,7 @@ func TestEnsureDefaultAgentFiles_SkipsExisting(t *testing.T) {
 	customPath := filepath.Join(dir, "bug-hunter.md")
 	os.WriteFile(customPath, []byte("custom content"), 0644)
 
-	if err := ensureDefaultAgentFiles(dir); err != nil {
+	if err := ensureDefaultAgentFiles(nil, dir); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	data, err := os.ReadFile(customPath)

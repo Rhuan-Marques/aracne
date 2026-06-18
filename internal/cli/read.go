@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"aracne/internal/helper"
@@ -21,7 +22,7 @@ import (
 
 func RunRead() {
 	args := os.Args[2:]
-	id, forcedKind, parseErr := parseReadArgs(args)
+	id, forcedKind, startLine, endLine, parseErr := parseReadArgs(args)
 	if parseErr != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", parseErr)
 		printReadUsage()
@@ -30,7 +31,13 @@ func RunRead() {
 
 	id = helper.NormalizeResourceID(id)
 
-	manager, _ := InitRegistry(".aracne/topology.db")
+	manager, reg := InitRegistry(".aracne/topology.db")
+	runReadScan(manager, reg)
+
+	if startLine > 0 || endLine > 0 {
+		readFileRange(manager, id, startLine, endLine)
+		return
+	}
 
 	topo, err := manager.ReadAll()
 	if err != nil {
@@ -81,24 +88,25 @@ func RunRead() {
 	}
 }
 
-func parseReadArgs(args []string) (string, domain.ResourceKind, error) {
+func parseReadArgs(args []string) (string, domain.ResourceKind, int, int, error) {
 	if len(args) < 1 {
-		return "", "", fmt.Errorf("missing resource ID")
+		return "", "", 0, 0, fmt.Errorf("missing resource ID")
 	}
 
 	var id string
 	var forcedKind domain.ResourceKind
+	var startLine, endLine int
 
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
 		case arg == "--kind":
 			if i+1 >= len(args) {
-				return "", "", fmt.Errorf("--kind requires a value")
+				return "", "", 0, 0, fmt.Errorf("--kind requires a value")
 			}
 			kind := MapResourceKind(args[i+1])
 			if kind == "" {
-				return "", "", fmt.Errorf("unknown resource kind %q", args[i+1])
+				return "", "", 0, 0, fmt.Errorf("unknown resource kind %q", args[i+1])
 			}
 			forcedKind = kind
 			i++
@@ -106,30 +114,89 @@ func parseReadArgs(args []string) (string, domain.ResourceKind, error) {
 			value := strings.TrimPrefix(arg, "--kind=")
 			kind := MapResourceKind(value)
 			if kind == "" {
-				return "", "", fmt.Errorf("unknown resource kind %q", value)
+				return "", "", 0, 0, fmt.Errorf("unknown resource kind %q", value)
 			}
 			forcedKind = kind
+		case arg == "--lines":
+			if i+1 >= len(args) {
+				return "", "", 0, 0, fmt.Errorf("--lines requires a value")
+			}
+			s, e, perr := parseLineRange(args[i+1])
+			if perr != nil {
+				return "", "", 0, 0, perr
+			}
+			startLine, endLine = s, e
+			i++
+		case strings.HasPrefix(arg, "--lines="):
+			s, e, perr := parseLineRange(strings.TrimPrefix(arg, "--lines="))
+			if perr != nil {
+				return "", "", 0, 0, perr
+			}
+			startLine, endLine = s, e
 		case strings.HasPrefix(arg, "-"):
-			return "", "", fmt.Errorf("unknown flag %q", arg)
+			return "", "", 0, 0, fmt.Errorf("unknown flag %q", arg)
 		default:
 			if id != "" {
-				return "", "", fmt.Errorf("unexpected extra argument %q", arg)
+				return "", "", 0, 0, fmt.Errorf("unexpected extra argument %q", arg)
 			}
 			id = arg
 		}
 	}
 
 	if id == "" {
-		return "", "", fmt.Errorf("missing resource ID")
+		return "", "", 0, 0, fmt.Errorf("missing resource ID")
 	}
-	return id, forcedKind, nil
+	return id, forcedKind, startLine, endLine, nil
+}
+
+// parseLineRange parses a --lines value: "start:end" (either side optional),
+// or a bare "N" for a single line. Returns 1-indexed bounds where 0 means unset.
+func parseLineRange(value string) (int, int, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, 0, fmt.Errorf("--lines requires a value like 10:40, 10:, :40, or 25")
+	}
+	parseInt := func(s string) (int, error) {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return 0, nil
+		}
+		n, err := strconv.Atoi(s)
+		if err != nil || n <= 0 {
+			return 0, fmt.Errorf("invalid line number %q in --lines", s)
+		}
+		return n, nil
+	}
+	if startStr, endStr, ok := strings.Cut(value, ":"); ok {
+		start, err := parseInt(startStr)
+		if err != nil {
+			return 0, 0, err
+		}
+		end, err := parseInt(endStr)
+		if err != nil {
+			return 0, 0, err
+		}
+		if start == 0 && end == 0 {
+			return 0, 0, fmt.Errorf("--lines requires at least one bound")
+		}
+		if start > 0 && end > 0 && end < start {
+			return 0, 0, fmt.Errorf("--lines end %d is before start %d", end, start)
+		}
+		return start, end, nil
+	}
+	n, err := parseInt(value)
+	if err != nil {
+		return 0, 0, err
+	}
+	return n, n, nil
 }
 
 func printReadUsage() {
-	fmt.Fprintln(os.Stderr, "Usage: arac read [--kind <kind>] <resource-id>")
+	fmt.Fprintln(os.Stderr, "Usage: arac read [--kind <kind>] [--lines <start>:<end>] <resource-id>")
 	fmt.Fprintln(os.Stderr, "Kinds: function, method, type, named_type, interface, variable, file, package, dependency")
 	fmt.Fprintln(os.Stderr, "Examples:")
 	fmt.Fprintln(os.Stderr, "  arac read internal/cli/read.go")
+	fmt.Fprintln(os.Stderr, "  arac read internal/cli/read.go --lines 10:40")
 	fmt.Fprintln(os.Stderr, "  arac read --kind function aracne/internal/topology/golang.(GoManager).ReadFunction")
 	fmt.Fprintln(os.Stderr, "  arac read aracne/internal/topology/golang.GoManager --kind type")
 }
@@ -148,6 +215,28 @@ func findReadResource(topo *domain.Topology, id string) (domain.Resource, string
 	}
 
 	return domain.Resource{}, "", false
+}
+
+// readFileRange prints only the requested line range of a file (no topology
+// context). It resolves the path to a topology file when possible, otherwise
+// treats the id as a filesystem path.
+func readFileRange(mgr *topology.TopologyManager, id string, start, end int) {
+	path := id
+	if topo, err := mgr.ReadAll(); err == nil {
+		if res, resourceID, ok := findReadResource(topo, id); ok && res.Kind == domain.ResourceFile {
+			path = resourceID
+		}
+	}
+	content, last, err := helper.ReadFileRange(path, start, end)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	first := start
+	if first <= 0 {
+		first = 1
+	}
+	fmt.Printf("%s (lines %d-%d)\n%s\n", filepath.Base(path), first, last, content)
 }
 
 func readRawFile(mgr *topology.TopologyManager, path string) {
@@ -587,10 +676,18 @@ func formatPythonFileContext(pt *python.PythonTopology, fileID string) {
 	}
 }
 
+// cliContextFilter builds the read.context_filter option from the project
+// config so the CLI read command renders neighbors like the MCP read tools.
+func cliContextFilter(mgr *topology.TopologyManager) topology.TopologyOption {
+	cfg := helper.LoadConfig(helper.ConfigPath(mgr.DbPath()))
+	return topology.WithContextFilter(cfg.EffectiveContextFilter())
+}
+
 func readAsFunction(mgr *topology.TopologyManager, lang string, id string) {
+	filter := cliContextFilter(mgr)
 	if lang == "python" {
 		pythonManager := python.NewPythonManager(mgr)
-		ctx, err := pythonManager.ReadFunction(id)
+		ctx, err := pythonManager.ReadFunction(id, filter)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -600,7 +697,7 @@ func readAsFunction(mgr *topology.TopologyManager, lang string, id string) {
 	}
 	if lang == "javascript" || lang == "typescript" {
 		jsManager := javascript.NewJavaScriptManager(mgr)
-		ctx, err := jsManager.ReadFunction(id)
+		ctx, err := jsManager.ReadFunction(id, filter)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -609,7 +706,7 @@ func readAsFunction(mgr *topology.TopologyManager, lang string, id string) {
 		return
 	}
 	goManager := golang.NewGoManager(mgr)
-	ctx, err := goManager.ReadFunction(id)
+	ctx, err := goManager.ReadFunction(id, filter)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
@@ -618,9 +715,10 @@ func readAsFunction(mgr *topology.TopologyManager, lang string, id string) {
 }
 
 func readAsStruct(mgr *topology.TopologyManager, lang string, id string) {
+	filter := cliContextFilter(mgr)
 	if lang == "python" {
 		pythonManager := python.NewPythonManager(mgr)
-		ctx, err := pythonManager.ReadClass(id)
+		ctx, err := pythonManager.ReadClass(id, filter)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -630,7 +728,7 @@ func readAsStruct(mgr *topology.TopologyManager, lang string, id string) {
 	}
 	if lang == "javascript" || lang == "typescript" {
 		jsManager := javascript.NewJavaScriptManager(mgr)
-		ctx, err := jsManager.ReadClass(id)
+		ctx, err := jsManager.ReadClass(id, filter)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -639,7 +737,7 @@ func readAsStruct(mgr *topology.TopologyManager, lang string, id string) {
 		return
 	}
 	goManager := golang.NewGoManager(mgr)
-	ctx, err := goManager.ReadStruct(id)
+	ctx, err := goManager.ReadStruct(id, filter)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
@@ -653,7 +751,7 @@ func readAsInterface(mgr *topology.TopologyManager, lang string, id string) {
 		return
 	}
 	if lang == "javascript" || lang == "typescript" {
-		ctx, err := javascript.NewJavaScriptManager(mgr).ReadInterface(id)
+		ctx, err := javascript.NewJavaScriptManager(mgr).ReadInterface(id, cliContextFilter(mgr))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -662,7 +760,7 @@ func readAsInterface(mgr *topology.TopologyManager, lang string, id string) {
 		return
 	}
 	goManager := golang.NewGoManager(mgr)
-	ctx, err := goManager.ReadInterface(id)
+	ctx, err := goManager.ReadInterface(id, cliContextFilter(mgr))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)

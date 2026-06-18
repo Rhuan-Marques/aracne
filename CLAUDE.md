@@ -13,7 +13,10 @@ The topology is a directed graph can enhance your information about the reposito
 **Note: Never try to use `read` native tool, use MCP lookups instead**
 
 ## MCP Lookup tools:
-- `mcp__aracne__read`: This command will give you the code and full context for any resource you want. These include: Files, Functions, Structs, etc. The tool receives a Resource ID, which can be the file's path or the ID of any resource.
+- `mcp__aracne__read_function`: Reads the function and context for resources it uses, receives a function ID.
+- `mcp__aracne__read_struct`: Reads the struct and context for resources it uses, receives a struct ID.
+- `mcp__aracne__read_interface`: Reads the interface and context for which resources it is implemented by, receives an interface ID.
+- `mcp__aracne__read_file`: Reads the content of a file, receives the file path.
 
 Note: Do *not* use "cat", "Get-Content" or any other OS command to read files## Grep/Search
 
@@ -53,6 +56,12 @@ After editing or writing, the context for the topology will be automatically upd
 
 - If you find a bug that is not relevant to your task, *do not fix it*. Instead, report it using `mcp__aracne__bug_report`
 - If you want to check for any topology warnings, you can do it using `mcp__aracne__warnings_list`
+
+## Tool Guard
+
+An `arac guard` hook watches your tool calls. Whenever you use a native tool (`Read`/`Grep`/`Edit`/`Write`) or a shell equivalent (`cat`/`head`/`tail`/`less`/`grep`/`rg`/`sed`/`awk`, or PowerShell `Get-Content`/`Select-String`), you are reminded to use the matching aracne MCP tool instead.
+
+Any tool listed in `blocked_tools` for the `claude_code` harness is blocked outright. Blocking `grep` also blocks `grep`/`rg`/`Select-String` run through the Bash tool; blocking `bash` blocks the Bash tool entirely. The guard uses the main agent's `blocked_tools`; per-sub-agent blocking is enforced by each sub-agent's tool allow-list, not by this hook.
 
 ## How to Navigate:
 

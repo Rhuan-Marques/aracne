@@ -120,6 +120,8 @@ func createSchema(db *sql.DB) error {
 		ends_at INT NOT NULL DEFAULT 0,
 		loc_path TEXT DEFAULT ''
 	);
+	CREATE INDEX IF NOT EXISTS idx_resources_loc_path ON resources(loc_path);
+	CREATE INDEX IF NOT EXISTS idx_resources_kind ON resources(kind);
 
 	CREATE TABLE IF NOT EXISTS connections (
 		source_id TEXT NOT NULL,

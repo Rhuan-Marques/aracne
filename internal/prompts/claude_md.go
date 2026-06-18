@@ -74,6 +74,11 @@ func agentInstructionsContent(eff helper.AgentConfig, mcpToolPrefix string) stri
 	b.WriteString(resourceContextSection(eff))
 	b.WriteString(editWriteSection(eff, mcpToolPrefix))
 	b.WriteString(otherSection(eff, mcpToolPrefix))
+	// The guard hook is a Claude Code feature (PreToolUse/PostToolUse);
+	// OpenCode enforces the same intent through its permission block instead.
+	if mcpToolPrefix == "mcp__aracne__" {
+		b.WriteString(guardNoteSection())
+	}
 	b.WriteString(howToNavigateSection())
 	b.WriteString(behavioralRulesSection())
 	b.WriteString(endingSection())
@@ -211,6 +216,17 @@ func otherSection(eff helper.AgentConfig, mcpToolPrefix string) string {
 	}
 	b.WriteString("\n")
 	return b.String()
+}
+
+func guardNoteSection() string {
+	return "## Tool Guard\n\n" +
+		"An `arac guard` hook watches your tool calls. Whenever you use a native tool " +
+		"(`Read`/`Grep`/`Edit`/`Write`) or a shell equivalent (`cat`/`head`/`tail`/`less`/`grep`/`rg`/`sed`/`awk`, " +
+		"or PowerShell `Get-Content`/`Select-String`), you are reminded to use the matching aracne MCP tool instead.\n\n" +
+		"Any tool listed in `blocked_tools` for the `claude_code` harness is blocked outright. Blocking `grep` also " +
+		"blocks `grep`/`rg`/`Select-String` run through the Bash tool; blocking `bash` blocks the Bash tool entirely. " +
+		"The guard uses the main agent's `blocked_tools`; per-sub-agent blocking is enforced by each sub-agent's tool " +
+		"allow-list, not by this hook.\n\n"
 }
 
 func howToNavigateSection() string {

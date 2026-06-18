@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"aracne/internal/toolspec"
 	"aracne/internal/topology/domain"
 )
 
@@ -17,6 +18,21 @@ const (
 	ScanModeDefault ScanMode = "default"
 	ScanModeHard    ScanMode = "hard"
 	ScanModeAll     ScanMode = "all"
+)
+
+// ReadScanMode controls whether a topology scan runs before read/grep
+// operations (CLI commands, MCP tools, and viz chat tools). "none" keeps the
+// current behavior (no scan); any other value triggers a scan first:
+//   - "default" = incremental scan (only changed files)
+//   - "full"    = re-scan all files (preserves descriptions)
+//   - "hard"    = rebuild from scratch (clears descriptions and bugs)
+type ReadScanMode string
+
+const (
+	ReadScanNone    ReadScanMode = "none"
+	ReadScanDefault ReadScanMode = "default"
+	ReadScanFull    ReadScanMode = "full"
+	ReadScanHard    ReadScanMode = "hard"
 )
 
 const DefaultDescriptionBatchSize = 5
@@ -34,7 +50,21 @@ type ScanSection struct {
 }
 
 type ReadSection struct {
-	MaxFileSize int64 `json:"max_file_size"`
+	MaxFileSize   int64                `json:"max_file_size"`
+	Scan          ReadScanMode         `json:"scan"`
+	ContextFilter ContextFilterSection `json:"context_filter"`
+}
+
+// ContextFilterSection tunes the "# CONTEXT:" block emitted by the read tools:
+// how verbosely each neighbor kind is rendered and whether incoming
+// (caller/user) connections are shown. Visibility fields take
+// "hidden" | "normal" | "full".
+type ContextFilterSection struct {
+	IncludeIncoming          bool   `json:"include_incoming"`
+	ExternalVarsVisibility   string `json:"external_vars_visibility"`
+	SmallFunctionsVisibility string `json:"small_functions_visibility"`
+	SmallFunctionThreshold   int    `json:"small_function_threshold"`
+	HideNoDescription        bool   `json:"hide_no_description"`
 }
 
 type ScannerSection struct {
@@ -156,8 +186,118 @@ func (c *Config) EffectiveMaxFileSize() int64 {
 	return c.Read.MaxFileSize
 }
 
+// normalizeReadScan coerces a raw read.scan string to a known ReadScanMode,
+// defaulting to ReadScanNone (which preserves the no-scan behavior).
+func normalizeReadScan(s string) ReadScanMode {
+	switch ReadScanMode(strings.ToLower(strings.TrimSpace(s))) {
+	case ReadScanDefault:
+		return ReadScanDefault
+	case ReadScanFull:
+		return ReadScanFull
+	case ReadScanHard:
+		return ReadScanHard
+	default:
+		return ReadScanNone
+	}
+}
+
+// EffectiveReadScan resolves read.scan, defaulting to ReadScanNone. A non-none
+// value asks read/grep entry points to run a scan before serving results.
+func (c *Config) EffectiveReadScan() ReadScanMode {
+	return normalizeReadScan(string(c.Read.Scan))
+}
+
+// normalizeVisibility coerces a raw visibility string to one of
+// "hidden" | "normal" | "full", defaulting to "normal".
+func normalizeVisibility(s string) string {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "hidden":
+		return "hidden"
+	case "full":
+		return "full"
+	default:
+		return "normal"
+	}
+}
+
+func (c *Config) EffectiveIncludeIncoming() bool {
+	return c.Read.ContextFilter.IncludeIncoming
+}
+
+func (c *Config) EffectiveExternalVarsVisibility() string {
+	return normalizeVisibility(c.Read.ContextFilter.ExternalVarsVisibility)
+}
+
+func (c *Config) EffectiveSmallFunctionsVisibility() string {
+	return normalizeVisibility(c.Read.ContextFilter.SmallFunctionsVisibility)
+}
+
+func (c *Config) EffectiveSmallFunctionThreshold() int {
+	if c.Read.ContextFilter.SmallFunctionThreshold <= 0 {
+		return 5
+	}
+	return c.Read.ContextFilter.SmallFunctionThreshold
+}
+
+func (c *Config) EffectiveHideNoDescription() bool {
+	return c.Read.ContextFilter.HideNoDescription
+}
+
+// EffectiveContextFilter composes the resolved read.context_filter settings
+// into a domain.ContextFilter used by the topology read managers.
+func (c *Config) EffectiveContextFilter() domain.ContextFilter {
+	return domain.ContextFilter{
+		IncludeIncoming:   c.EffectiveIncludeIncoming(),
+		ExtVarsVisibility: domain.ParseVisibility(c.EffectiveExternalVarsVisibility()),
+		SmallFnVisibility: domain.ParseVisibility(c.EffectiveSmallFunctionsVisibility()),
+		SmallFnThreshold:  c.EffectiveSmallFunctionThreshold(),
+		HideNoDescription: c.EffectiveHideNoDescription(),
+	}
+}
+
 func ConfigPath(dbPath string) string {
 	return filepath.Join(filepath.Dir(dbPath), "config.json")
+}
+
+// Validate checks every tool name referenced in the config against the tool
+// catalog (toolspec). It returns an error naming the offending agent and tool
+// so a typo fails fast at init time.
+func (c *Config) Validate() error {
+	checkAgent := func(path string, mcpTools, blockedTools []string) error {
+		if err := toolspec.ValidateMCPTools(mcpTools); err != nil {
+			return fmt.Errorf("%s: %w", path, err)
+		}
+		if err := toolspec.ValidateNativeTools(blockedTools); err != nil {
+			return fmt.Errorf("%s: %w", path, err)
+		}
+		return nil
+	}
+	for _, h := range []struct {
+		name    string
+		harness LLMHarness
+	}{
+		{"<any>", c.LLM.Any},
+		{"opencode", c.LLM.OpenCode},
+		{"claude_code", c.LLM.ClaudeCode},
+	} {
+		if err := checkAgent(fmt.Sprintf("llm.%s.main_agent", h.name), h.harness.MainAgent.MCPTools, h.harness.MainAgent.BlockedTools); err != nil {
+			return err
+		}
+		for agentName, ag := range h.harness.Agents {
+			if err := checkAgent(fmt.Sprintf("llm.%s.agents.%s", h.name, agentName), ag.MCPTools, ag.BlockedTools); err != nil {
+				return err
+			}
+		}
+	}
+	if err := toolspec.ValidateChatTools(c.Viz.Chat.MainAgent.Tools); err != nil {
+		return fmt.Errorf("viz.chat.main_agent: %w", err)
+	}
+	for agentName, ag := range c.Viz.Chat.Agents.Agents {
+		if err := toolspec.ValidateChatTools(ag.Tools); err != nil {
+			return fmt.Errorf("viz.chat.agents.%s: %w", agentName, err)
+		}
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -190,13 +330,13 @@ func DefaultAgentMCPTools(agentName string) []string {
 	case "descriptions-generation-executor", "descriptions-executor":
 		return []string{"read", "grep", "update_description"}
 	case "bug-hunter":
-		return []string{"read", "grep", "bug_report"}
+		return []string{"read_file", "read_function", "read_struct", "read_interface", "grep", "bug_report"}
 	case "bug-judge":
-		return []string{"read", "grep", "bug_list", "bug_acknowledge", "bug_dismiss", "bug_delete"}
+		return []string{"read_file", "read_function", "read_struct", "read_interface", "grep", "bug_list", "bug_acknowledge", "bug_dismiss", "bug_delete"}
 	case "bug-solver":
-		return []string{"read", "grep", "edit", "write", "bug_delete"}
+		return []string{"read_file", "read_function", "read_struct", "read_interface", "grep", "edit", "write", "bug_delete"}
 	default:
-		return []string{"read", "grep", "edit", "write", "warnings_list", "bug_report"}
+		return []string{"read_file", "read_function", "read_struct", "read_interface", "grep", "edit", "write", "warnings_list", "bug_report"}
 	}
 }
 
@@ -206,6 +346,25 @@ func defaultBlockedTools() []string {
 
 func defaultChatMainAgentTools() []string {
 	return []string{"ls", "bash", "glob", "ask_user_question", "CreateTasks", "grep", "read", "edit", "write", "warnings_list", "bug_report", "bug_list", "bug_acknowledge", "bug_dismiss", "bug_delete", "update_description", "node_list_no_description"}
+}
+
+// DefaultChatAgentTools returns the default tool list for a proprietary-chat
+// sub-agent (used by CreateTasks). These are independent from the llm section.
+func DefaultChatAgentTools(agentName string) []string {
+	switch agentName {
+	case "explorer":
+		return []string{"read", "read_function", "read_struct", "read_interface", "read_named_type", "read_file", "read_package", "read_dependency", "grep"}
+	case "descriptions-generation-executor":
+		return []string{"read", "grep", "update_description"}
+	case "bug-hunter":
+		return []string{"read", "read_function", "read_struct", "read_interface", "read_file", "grep", "bug_report"}
+	case "bug-judge":
+		return []string{"read", "read_function", "read_struct", "read_interface", "read_file", "grep", "bug_list", "bug_acknowledge", "bug_dismiss", "bug_delete"}
+	case "bug-solver":
+		return []string{"read", "edit", "write", "read_function", "read_struct", "read_interface", "read_file", "grep", "bug_delete"}
+	default:
+		return nil
+	}
 }
 
 func DefaultConfig() *Config {
@@ -221,8 +380,16 @@ func DefaultConfig() *Config {
 		return ac
 	}
 	return &Config{
-		Scan:         ScanSection{Mode: ScanModeDefault},
-		Read:         ReadSection{MaxFileSize: 512 * 1024},
+		Scan: ScanSection{Mode: ScanModeDefault},
+		Read: ReadSection{
+			MaxFileSize: 512 * 1024,
+			Scan:        ReadScanNone,
+			ContextFilter: ContextFilterSection{
+				ExternalVarsVisibility:   "normal",
+				SmallFunctionsVisibility: "normal",
+				SmallFunctionThreshold:   5,
+			},
+		},
 		Scanner:      ScannerSection{Mode: ScanModeDefault, UpdateFrequency: 200},
 		Descriptions: DescriptionsSection{Kinds: DefaultNeedDescription()},
 		LLM: LLMSection{
@@ -247,9 +414,19 @@ func DefaultConfig() *Config {
 			Graph: VizGraph{OptimizationRules: ".aracne/optimization_rules.json"},
 			Chat: VizChat{
 				MainAgent: ChatAgentConfig{Tools: defaultChatMainAgentTools()},
+				// viz.chat is fully self-contained: chat sub-agents are listed
+				// here with their own tools and never inherit from llm.<any>
+				// (which applies only to claude_code / opencode).
 				Agents: VizChatAgents{
 					Agents: map[string]ChatAgentConfig{
-						"descriptions-generation-executor": {Params: map[string]int{"max-batch-size": DefaultDescriptionBatchSize}},
+						"explorer":   {Tools: DefaultChatAgentTools("explorer")},
+						"bug-hunter": {Tools: DefaultChatAgentTools("bug-hunter")},
+						"bug-judge":  {Tools: DefaultChatAgentTools("bug-judge")},
+						"bug-solver": {Tools: DefaultChatAgentTools("bug-solver")},
+						"descriptions-generation-executor": {
+							Tools:  DefaultChatAgentTools("descriptions-generation-executor"),
+							Params: map[string]int{"max-batch-size": DefaultDescriptionBatchSize},
+						},
 					},
 				},
 			},
@@ -378,6 +555,12 @@ func normalizeConfig(c *Config) {
 	}
 	if c.Read.MaxFileSize <= 0 {
 		c.Read.MaxFileSize = 512 * 1024
+	}
+	c.Read.Scan = normalizeReadScan(string(c.Read.Scan))
+	c.Read.ContextFilter.ExternalVarsVisibility = normalizeVisibility(c.Read.ContextFilter.ExternalVarsVisibility)
+	c.Read.ContextFilter.SmallFunctionsVisibility = normalizeVisibility(c.Read.ContextFilter.SmallFunctionsVisibility)
+	if c.Read.ContextFilter.SmallFunctionThreshold <= 0 {
+		c.Read.ContextFilter.SmallFunctionThreshold = 5
 	}
 	if len(c.Descriptions.Kinds) == 0 {
 		c.Descriptions.Kinds = DefaultNeedDescription()

@@ -30,7 +30,6 @@ func FormatPythonModuleContext(ctx *python.PythonModuleContext) string {
 	}
 
 	b.WriteString("# CONTEXT:\n")
-	b.WriteString(fmt.Sprintf("## Package: %s\n", ctx.FromPackage))
 
 	for _, fn := range ctx.Functions {
 		b.WriteString(fmt.Sprintf("## def %s: %s\n", fn.ID, desc(fn.Description)))
@@ -43,9 +42,6 @@ func FormatPythonModuleContext(ctx *python.PythonModuleContext) string {
 	}
 	for _, ev := range ctx.ExtVars {
 		b.WriteString(fmt.Sprintf("## var %s: %s\n", ev.ID, desc(ev.Description)))
-	}
-	for _, imp := range ctx.Imports {
-		b.WriteString(fmt.Sprintf("## import %q\n", imp))
 	}
 
 	return b.String()
@@ -130,30 +126,28 @@ func FormatPythonFunctionContext(ctx *python.PythonFunctionContext) string {
 
 	hasContext := len(ctx.ClassesUsed) > 0 ||
 		len(ctx.CalledFunctions) > 0 || len(ctx.ExtVarsUsed) > 0
-	if !hasContext {
-		return b.String()
-	}
-
-	b.WriteString("# CONTEXT:\n")
-
-	for _, cu := range ctx.ClassesUsed {
-		b.WriteString(fmt.Sprintf("## %s: %s\n", cu.ID, desc(cu.Description)))
-		for _, m := range cu.Methods {
-			b.WriteString(fmt.Sprintf("\t%s: %s\n", m.ID, desc(m.Description)))
+	if hasContext {
+		b.WriteString("# CONTEXT:\n")
+		for _, full := range []bool{true, false} {
+			for _, cu := range ctx.ClassesUsed {
+				if wantVis(cu.Visibility, full) {
+					renderClassUsage(&b, cu)
+				}
+			}
+			for _, cf := range ctx.CalledFunctions {
+				if wantVis(cf.Visibility, full) {
+					renderFunc(&b, "## ", cf)
+				}
+			}
+			for _, ev := range ctx.ExtVarsUsed {
+				if wantVis(ev.Visibility, full) {
+					renderExtVar(&b, ev)
+				}
+			}
 		}
 	}
 
-	for _, cf := range ctx.CalledFunctions {
-		b.WriteString(fmt.Sprintf("## %s: %s\n", cf.ID, desc(cf.Description)))
-	}
-
-	for _, ev := range ctx.ExtVarsUsed {
-		valStr := ""
-		if ev.Value != "" {
-			valStr = fmt.Sprintf(" = %s", ev.Value)
-		}
-		b.WriteString(fmt.Sprintf("## %s%s\n", ev.ID, valStr))
-	}
+	writeUsedBy(&b, ctx.Incoming)
 
 	return b.String()
 }
@@ -185,39 +179,38 @@ func FormatPythonClassContext(ctx *python.PythonClassContext) string {
 
 	hasContext := len(ctx.BaseClasses) > 0 || len(ctx.Methods) > 0 ||
 		len(ctx.ClassesUsed) > 0 || len(ctx.ExtVarsUsed) > 0
-	if !hasContext {
-		return b.String()
-	}
-
-	b.WriteString("# CONTEXT:\n")
-
-	for _, base := range ctx.BaseClasses {
-		need := ""
-		if base.NeedToImplement {
-			methods := strings.Join(base.NeedToImplementMethods, ", ")
-			need = fmt.Sprintf(" [NEED TO IMPLEMENT: %s]", methods)
+	if hasContext {
+		b.WriteString("# CONTEXT:\n")
+		for _, full := range []bool{true, false} {
+			if !full {
+				for _, base := range ctx.BaseClasses {
+					need := ""
+					if base.NeedToImplement {
+						methods := strings.Join(base.NeedToImplementMethods, ", ")
+						need = fmt.Sprintf(" [NEED TO IMPLEMENT: %s]", methods)
+					}
+					b.WriteString(fmt.Sprintf("## %s (base class): %s%s\n", base.ID, desc(base.Description), need))
+				}
+			}
+			for _, m := range ctx.Methods {
+				if wantVis(m.Visibility, full) {
+					renderFunc(&b, "## ", m)
+				}
+			}
+			for _, cu := range ctx.ClassesUsed {
+				if wantVis(cu.Visibility, full) {
+					renderClassUsage(&b, cu)
+				}
+			}
+			for _, ev := range ctx.ExtVarsUsed {
+				if wantVis(ev.Visibility, full) {
+					renderExtVar(&b, ev)
+				}
+			}
 		}
-		b.WriteString(fmt.Sprintf("## %s (base class): %s%s\n", base.ID, desc(base.Description), need))
 	}
 
-	for _, m := range ctx.Methods {
-		b.WriteString(fmt.Sprintf("## %s: %s\n", m.ID, desc(m.Description)))
-	}
-
-	for _, cu := range ctx.ClassesUsed {
-		b.WriteString(fmt.Sprintf("## %s: %s\n", cu.ID, desc(cu.Description)))
-		for _, m := range cu.Methods {
-			b.WriteString(fmt.Sprintf("\t%s: %s\n", m.ID, desc(m.Description)))
-		}
-	}
-
-	for _, ev := range ctx.ExtVarsUsed {
-		valStr := ""
-		if ev.Value != "" {
-			valStr = fmt.Sprintf(" = %s", ev.Value)
-		}
-		b.WriteString(fmt.Sprintf("## %s%s\n", ev.ID, valStr))
-	}
+	writeUsedBy(&b, ctx.Incoming)
 
 	return b.String()
 }

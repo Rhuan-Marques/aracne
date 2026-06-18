@@ -19,7 +19,3 @@ Your job is to quickly investigate a focused question about the codebase and ret
 - Be concise, specific, and factual
 `
 }
-
-func ExplorerAgentContent() string {
-	return "---\nname: explorer\ndescription: Explores the codebase for focused Viz chat questions\ntools: read, read_function, read_struct, read_interface, read_named_type, read_file, read_package, read_dependency, grep\n---\n\n" + ExplorerPrompt()
-}

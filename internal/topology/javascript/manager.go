@@ -155,6 +155,8 @@ func (m *JavaScriptManager) ReadFunction(id string, opts ...topology.TopologyOpt
 		}
 	}
 
+	m.filterFunctionContext(gt, ctx, opt.ContextFilter(), fn.ID)
+
 	var blocks []ContextBlock
 
 	blocks = append(blocks, ContextBlock{
@@ -341,6 +343,8 @@ func (m *JavaScriptManager) ReadClass(id string, opts ...topology.TopologyOption
 			ctx.ModulesUsed = append(ctx.ModulesUsed, p)
 		}
 	}
+
+	m.filterClassContext(gt, ctx, opt.ContextFilter(), c.ID)
 
 	var blocks []ContextBlock
 
@@ -656,6 +660,11 @@ func (m *JavaScriptManager) ReadDependency(id string, opts ...topology.TopologyO
 }
 
 func (m *JavaScriptManager) ReadInterface(id string, opts ...topology.TopologyOption) (*JavaScriptInterfaceContext, error) {
+	opt := &topology.TopologyOptions{}
+	for _, o := range opts {
+		o(opt)
+	}
+
 	topo, err := m.generic.ReadAll()
 	if err != nil {
 		return nil, err
@@ -688,6 +697,8 @@ func (m *JavaScriptManager) ReadInterface(id string, opts ...topology.TopologyOp
 			})
 		}
 	}
+
+	m.filterInterfaceContext(gt, ctx, opt.ContextFilter(), iface.ID)
 
 	var blocks []ContextBlock
 	blocks = append(blocks, ContextBlock{

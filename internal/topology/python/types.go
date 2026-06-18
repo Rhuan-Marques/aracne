@@ -12,6 +12,17 @@ type ClassCut struct {
 	Cut string
 }
 
+// FullBlock carries everything needed to render a neighbor as a full source
+// cut (relevant imports, an optional parent class, and the resource's own cut)
+// without its own CONTEXT section. Path labels the fenced code block.
+type FullBlock struct {
+	Path      string
+	Imports   []PackagePath
+	Deps      []DependancyPath
+	ParentCut string
+	Cut       string
+}
+
 type SimplifiedFunction struct {
 	ID          FunctionID
 	Name        string
@@ -19,6 +30,8 @@ type SimplifiedFunction struct {
 	Input       []VariableDefinition
 	Output      []VariableDefinition
 	Location    domain.Location
+	Visibility  domain.Visibility
+	Full        *FullBlock
 }
 
 type ClassUsage struct {
@@ -27,6 +40,8 @@ type ClassUsage struct {
 	Description string
 	Location    domain.Location
 	Methods     []SimplifiedFunction
+	Visibility  domain.Visibility
+	Full        *FullBlock
 }
 
 type SimplifiedClass struct {
@@ -44,6 +59,8 @@ type SimplifiedExtVar struct {
 	Description string
 	Value       string
 	Location    domain.Location
+	Visibility  domain.Visibility
+	Full        *FullBlock
 }
 
 type ContextBlock struct {
@@ -62,6 +79,7 @@ type PythonFunctionContext struct {
 	ExtVarsUsed     []SimplifiedExtVar
 	Dependencies    []DependancyPath
 	ModulesUsed     []PackagePath
+	Incoming        []domain.ResourceRef
 	Blocks          []ContextBlock
 }
 
@@ -74,6 +92,7 @@ type PythonClassContext struct {
 	ExtVarsUsed  []SimplifiedExtVar
 	Dependencies []DependancyPath
 	ModulesUsed  []PackagePath
+	Incoming     []domain.ResourceRef
 	Blocks       []ContextBlock
 }
 

@@ -29,6 +29,36 @@ func (m *TopologyManager) DbPath() string {
 	return m.dbPath
 }
 
+// RunReadScan runs the topology scan requested by the read.scan config before a
+// read/grep operation. ReadScanNone (or an empty mode / nil registry) is a
+// no-op that preserves the existing behavior. The scan root is taken from the
+// stored topology, falling back to the working directory. It mirrors the modes
+// of `arac scan`: default => incremental, full => re-scan all files, hard =>
+// rebuild from scratch and clear bugs.
+func (m *TopologyManager) RunReadScan(reg *scanner.Registry, mode helper.ReadScanMode) error {
+	if reg == nil || mode == "" || mode == helper.ReadScanNone {
+		return nil
+	}
+	root := "."
+	if topo, err := helper.ReadDb(m.dbPath); err == nil && topo != nil && topo.Root != "" {
+		root = topo.Root
+	}
+	switch mode {
+	case helper.ReadScanFull:
+		_, err := m.FullReScan(root, reg)
+		return err
+	case helper.ReadScanHard:
+		if err := m.FullScan(root, reg); err != nil {
+			return err
+		}
+		m.DeleteAllBugs()
+		return nil
+	default:
+		_, err := m.IncrementalScan(root, reg)
+		return err
+	}
+}
+
 func (m *TopologyManager) FullScan(root string, reg *scanner.Registry) error {
 	topo, err := scanAllLanguages(root, reg)
 	if err != nil {
@@ -51,13 +81,14 @@ func (m *TopologyManager) IncrementalScan(root string, reg *scanner.Registry) ([
 		return nil, fmt.Errorf("no language scanner detected for %s", root)
 	}
 
-	topo, err := helper.ReadDb(m.dbPath)
-	if err != nil {
-		return m.FullReScan(root, reg)
-	}
-
+	// Change detection only needs the manifest plus a directory walk, so gate on
+	// the cheap files (db + manifest existence) here and defer the expensive graph
+	// load until we know there is actually work to do.
 	manifestPath := helper.ManifestPath(m.dbPath)
 	if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
+		return m.FullReScan(root, reg)
+	}
+	if _, err := os.Stat(m.dbPath); os.IsNotExist(err) {
 		return m.FullReScan(root, reg)
 	}
 
@@ -73,10 +104,21 @@ func (m *TopologyManager) IncrementalScan(root string, reg *scanner.Registry) ([
 		deleted = append(deleted, d...)
 	}
 
+	// Nothing changed: the manifest already matches the tree, so there is no
+	// reason to deserialize the topology graph (the only remaining work,
+	// SyncManifest, is a no-op when the diff is empty).
 	if len(added) == 0 && len(modified) == 0 && len(deleted) == 0 {
-		helper.SyncManifest(topo, m.dbPath)
 		return nil, nil
 	}
+
+	// A change exists; only now is it worth loading the full graph.
+	topo, err := helper.ReadDb(m.dbPath)
+	if err != nil {
+		return m.FullReScan(root, reg)
+	}
+	// Fingerprint the pre-update graph so we can persist only what actually
+	// changed (scoped write) instead of rewriting every row.
+	beforeSigs := helper.ResourceSignatures(topo.Resources)
 
 	var allWarnings []domain.TopologyWarning
 
@@ -110,7 +152,8 @@ func (m *TopologyManager) IncrementalScan(root string, reg *scanner.Registry) ([
 	helper.CleanupOrphanedWarnings(topo)
 	normalizeTopologyLanguages(topo)
 
-	if err := helper.WriteDb(topo, m.dbPath); err != nil {
+	upserts, deletes := helper.DiffResources(beforeSigs, topo.Resources)
+	if err := helper.WriteIncremental(m.dbPath, topo, upserts, deletes); err != nil {
 		return allWarnings, fmt.Errorf("write topology db: %w", err)
 	}
 
@@ -207,6 +250,7 @@ func (m *TopologyManager) UpdateFile(path string, reg *scanner.Registry) ([]doma
 	if err != nil {
 		return nil, fmt.Errorf("read topology db: %w", err)
 	}
+	beforeSigs := helper.ResourceSignatures(topo.Resources)
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return nil, err
@@ -217,7 +261,8 @@ func (m *TopologyManager) UpdateFile(path string, reg *scanner.Registry) ([]doma
 			topo.Warnings[w.ID] = w
 		}
 		helper.CleanupOrphanedWarnings(topo)
-		if err := helper.WriteDb(topo, m.dbPath); err != nil {
+		upserts, deletes := helper.DiffResources(beforeSigs, topo.Resources)
+		if err := helper.WriteIncremental(m.dbPath, topo, upserts, deletes); err != nil {
 			return nil, fmt.Errorf("write topology db: %w", err)
 		}
 		helper.CleanupOrphanedBugs(m.dbPath, topo)

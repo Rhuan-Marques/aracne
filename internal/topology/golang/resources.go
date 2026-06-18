@@ -14,6 +14,13 @@ type NamedTypeID = string
 type VariableDefinition struct {
 	Name   string
 	Typing string
+	// TypingID is the canonical topology resource ID (pkgPath.Name) of the
+	// type named by Typing, resolved at PARSE TIME against the defining file's
+	// import map. It is "" for builtin/composite/unresolvable types. Storing the
+	// resolved id here lets cross-package consumers (e.g. a caller inferring the
+	// return type of an imported function) resolve the type without the callee's
+	// import context. It is a candidate id: consumers must still verify it exists.
+	TypingID string
 }
 
 type FunctionDefinition struct {

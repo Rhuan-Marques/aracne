@@ -190,8 +190,8 @@ func (pr *ParseResult) processInterface(typeSpec *ast.TypeSpec, it *ast.Interfac
 		case *ast.FuncType:
 			def := golang.FunctionDefinition{
 				Name:   field.Names[0].Name,
-				Input:  parseFieldList(t.Params),
-				Output: parseFieldList(t.Results),
+				Input:  pr.parseFieldList(t.Params),
+				Output: pr.parseFieldList(t.Results),
 			}
 			methods = append(methods, def)
 			extractParamsTypeRefs(t.Params, pr.ImportMap, pr.ModulePath, refSeen, &pkgRefs, &depRefs)
@@ -260,8 +260,8 @@ func (pr *ParseResult) processNamedType(typeSpec *ast.TypeSpec, underlying ast.E
 
 func (pr *ParseResult) processFuncDecl(funcDecl *ast.FuncDecl, fset *token.FileSet) {
 	loc := locationFromNode(fset, funcDecl, pr.FileID)
-	params := parseFieldList(funcDecl.Type.Params)
-	results := parseFieldList(funcDecl.Type.Results)
+	params := pr.parseFieldList(funcDecl.Type.Params)
+	results := pr.parseFieldList(funcDecl.Type.Results)
 
 	f := golang.GolangFunction{
 		Name:        funcDecl.Name.Name,
@@ -356,20 +356,22 @@ func exprToString(expr ast.Expr) string {
 	}
 }
 
-func parseFieldList(fl *ast.FieldList) []golang.VariableDefinition {
+func (pr *ParseResult) parseFieldList(fl *ast.FieldList) []golang.VariableDefinition {
 	if fl == nil {
 		return nil
 	}
 	var result []golang.VariableDefinition
 	for _, field := range fl.List {
 		ft := exprToString(field.Type)
+		tid := canonicalTypeID(ft, pr.PkgPath, pr.ImportMap)
 		if len(field.Names) == 0 {
-			result = append(result, golang.VariableDefinition{Typing: ft})
+			result = append(result, golang.VariableDefinition{Typing: ft, TypingID: tid})
 		} else {
 			for _, name := range field.Names {
 				result = append(result, golang.VariableDefinition{
-					Name:   name.Name,
-					Typing: ft,
+					Name:     name.Name,
+					Typing:   ft,
+					TypingID: tid,
 				})
 			}
 		}

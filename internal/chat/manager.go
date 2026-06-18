@@ -63,9 +63,12 @@ func NewManager(dbPath, workspace string, emit func(Event)) (*Manager, error) {
 	}
 	scanners := NewScannerRegistry()
 	cfg := helper.EnsureConfig(helper.ConfigPath(dbPath))
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid .aracne/config.json: %w", err)
+	}
 	chatDir := filepath.Join(filepath.Dir(dbPath), "chat")
 	agentDir := filepath.Join(filepath.Dir(dbPath), "agents")
-	if err := ensureDefaultAgentFiles(agentDir); err != nil {
+	if err := ensureDefaultAgentFiles(cfg, agentDir); err != nil {
 		return nil, err
 	}
 	providerConfigPath := filepath.Join(filepath.Dir(dbPath), "providers.json")

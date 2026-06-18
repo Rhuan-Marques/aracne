@@ -215,6 +215,8 @@ func (m *GoManager) ReadFunction(id string, opts ...topology.TopologyOption) (*G
 		}
 	}
 
+	m.filterFunctionContext(gt, ctx, opt.ContextFilter(), fn.ID)
+
 	var blocks []ContextBlock
 
 	blocks = append(blocks, ContextBlock{
@@ -534,6 +536,8 @@ func (m *GoManager) ReadStruct(id string, opts ...topology.TopologyOption) (*GoS
 		}
 	}
 
+	m.filterStructContext(gt, ctx, opt.ContextFilter(), s.ID)
+
 	var blocks []ContextBlock
 
 	blocks = append(blocks, ContextBlock{
@@ -683,6 +687,8 @@ func (m *GoManager) ReadInterface(id string, opts ...topology.TopologyOption) (*
 	if opt.HasResource(domain.ResourcePackage) {
 		ctx.PackagesUsed = append(ctx.PackagesUsed, iface.UsesPkg()...)
 	}
+
+	m.filterInterfaceContext(gt, ctx, opt.ContextFilter(), iface.ID)
 
 	blocks := []ContextBlock{{
 		Kind: "interface", FileID: FileID(iface.Loc.Path), Line: iface.Loc.StartsAt,

@@ -103,9 +103,19 @@ func TestRemoveAracneHookFromSettings(t *testing.T) {
 			want:  `{"hooks": {"PostToolUse": [{"matcher": "other", "hooks": [{"type": "command", "command": "other-tool"}]}]}}`,
 		},
 		{
-			name:  "multiple hooks, not edit/write pattern",
+			name:  "aracne hook removed regardless of matcher",
 			input: `{"hooks": {"PostToolUse": [{"matcher": "Read", "hooks": [{"type": "command", "command": "arac read-hook"}]}]}}`,
-			want:  `{"hooks": {"PostToolUse": [{"matcher": "Read", "hooks": [{"type": "command", "command": "arac read-hook"}]}]}}`,
+			want:  `{}`,
+		},
+		{
+			name:  "aracne PreToolUse guard hook removed",
+			input: `{"hooks": {"PreToolUse": [{"matcher": "Read|Grep|Edit|Write|Bash", "hooks": [{"type": "command", "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-guard.sh", "shell": "bash"}]}]}}`,
+			want:  `{}`,
+		},
+		{
+			name:  "guard and edit-sync removed, user hooks kept across events",
+			input: `{"hooks": {"PreToolUse": [{"matcher": "Read|Grep|Edit|Write|Bash", "hooks": [{"command": "arac-guard.sh"}]}, {"matcher": "Bash", "hooks": [{"command": "my-linter"}]}], "PostToolUse": [{"matcher": "Edit|Write|MultiEdit", "hooks": [{"command": "arac update-file"}]}, {"matcher": "Read|Grep|Edit|Write|Bash", "hooks": [{"command": "arac-guard.sh"}]}]}}`,
+			want:  `{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"command": "my-linter"}]}]}}`,
 		},
 	}
 

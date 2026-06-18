@@ -148,6 +148,8 @@ func disableClaudeCode(global bool, autoYes bool) {
 	removeFiles(hooksDir, []string{
 		"arac-update-file.ps1",
 		"arac-update-file.sh",
+		"arac-guard.ps1",
+		"arac-guard.sh",
 	})
 
 	settingsPath := filepath.Join(filepath.Dir(commandsDir), "settings.json")
@@ -186,57 +188,15 @@ func removeAracneHookFromSettings(settingsPath string) {
 		return
 	}
 
-	postToolUse, ok := hooks["PostToolUse"].([]interface{})
-	if !ok {
-		return
-	}
-
-	filtered := make([]interface{}, 0, len(postToolUse))
 	changed := false
-	for _, entry := range postToolUse {
-		entryMap, ok := entry.(map[string]interface{})
-		if !ok {
-			filtered = append(filtered, entry)
-			continue
-		}
-		matcher, _ := entryMap["matcher"].(string)
-		if !strings.Contains(matcher, "Edit|Write|MultiEdit") {
-			filtered = append(filtered, entry)
-			continue
-		}
-		hooksList, ok := entryMap["hooks"].([]interface{})
-		if !ok {
-			filtered = append(filtered, entry)
-			continue
-		}
-		isAracne := false
-		for _, h := range hooksList {
-			hMap, ok := h.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			cmd, _ := hMap["command"].(string)
-			if strings.Contains(cmd, "arac") {
-				isAracne = true
-				break
-			}
-		}
-		if isAracne {
+	for _, event := range []string{"PreToolUse", "PostToolUse"} {
+		if removeAracneHookEntries(hooks, event) {
 			changed = true
-			fmt.Println("[Claude Code] Removed aracne PostToolUse hook from settings")
-			continue
 		}
-		filtered = append(filtered, entry)
 	}
 
 	if !changed {
 		return
-	}
-
-	if len(filtered) == 0 {
-		delete(hooks, "PostToolUse")
-	} else {
-		hooks["PostToolUse"] = filtered
 	}
 	if len(hooks) == 0 {
 		delete(config, "hooks")
@@ -245,6 +205,54 @@ func removeAracneHookFromSettings(settingsPath string) {
 	}
 	writeJSONConfig(settingsPath, config)
 	fmt.Printf("[Claude Code] Settings updated at %s\n", settingsPath)
+}
+
+// removeAracneHookEntries strips every aracne-installed entry (one whose hook
+// command references `arac`) from a hook-event list, covering both the
+// edit-sync and guard hooks while preserving any user entries. It reports
+// whether anything was removed.
+func removeAracneHookEntries(hooks map[string]interface{}, event string) bool {
+	entries, ok := hooks[event].([]interface{})
+	if !ok {
+		return false
+	}
+	filtered := make([]interface{}, 0, len(entries))
+	changed := false
+	for _, entry := range entries {
+		if isAracneHookEntry(entry) {
+			changed = true
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	if !changed {
+		return false
+	}
+	if len(filtered) == 0 {
+		delete(hooks, event)
+	} else {
+		hooks[event] = filtered
+	}
+	fmt.Printf("[Claude Code] Removed aracne %s hook from settings\n", event)
+	return true
+}
+
+// isAracneHookEntry reports whether a hook entry was installed by aracne,
+// identified by an `arac` reference in any of its hook commands.
+func isAracneHookEntry(entry interface{}) bool {
+	entryMap, ok := entry.(map[string]interface{})
+	if !ok {
+		return false
+	}
+	hooksList, _ := entryMap["hooks"].([]interface{})
+	for _, h := range hooksList {
+		if hMap, ok := h.(map[string]interface{}); ok {
+			if cmd, _ := hMap["command"].(string); strings.Contains(cmd, "arac") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func removeAracneIntegrationSection(path, label string) {

@@ -14,6 +14,11 @@ type DependancyPath = string
 type VariableDefinition struct {
 	Name   string
 	Typing string
+	// TypingID is the canonical topology resource ID that Typing resolves to (a class,
+	// interface, or named type), or "" when the type is a built-in/external/unresolved.
+	// It is resolved in the DEFINING file's import context during resolveTopology, so a
+	// caller in another file can follow a return type without the callee's imports.
+	TypingID string
 }
 
 type FunctionDefinition struct {

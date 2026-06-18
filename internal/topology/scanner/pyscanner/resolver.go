@@ -56,17 +56,8 @@ func resolveBodyCallRefs(bodyCalls []pyBodyCall, bodyAssigns []pyBodyAssign, pr 
 		if param.Typing == "" || param.Name == "" || param.Name == "self" || param.Name == "cls" {
 			continue
 		}
-		classID := python.ClassID(string(pr.PkgPath) + "." + param.Typing)
-		if _, exists := gt.Classes[classID]; exists {
-			varTypeMap[param.Name] = classID
-		} else if strings.Contains(param.Typing, ".") {
-			parts := strings.SplitN(param.Typing, ".", 2)
-			if impPath, ok := pr.ImportMap[parts[0]]; ok {
-				classID = python.ClassID(impPath + "." + parts[1])
-				if _, exists := gt.Classes[classID]; exists {
-					varTypeMap[param.Name] = classID
-				}
-			}
+		if cid, ok := classIDForType(param, pr, gt); ok {
+			varTypeMap[param.Name] = cid
 		}
 	}
 
@@ -75,28 +66,8 @@ func resolveBodyCallRefs(bodyCalls []pyBodyCall, bodyAssigns []pyBodyAssign, pr 
 		if assign.ValueType == "" || assign.Name == "" {
 			continue
 		}
-		classID := python.ClassID(string(pr.PkgPath) + "." + assign.ValueType)
-		if _, exists := gt.Classes[classID]; exists {
-			varTypeMap[assign.Name] = classID
-		} else if strings.Contains(assign.ValueType, ".") {
-			parts := strings.SplitN(assign.ValueType, ".", 2)
-			if impPath, ok := pr.ImportMap[parts[0]]; ok {
-				classID = python.ClassID(impPath + "." + parts[1])
-				if _, exists := gt.Classes[classID]; exists {
-					varTypeMap[assign.Name] = classID
-				}
-			}
-		} else {
-			funcID := python.FunctionID(string(pr.PkgPath) + "." + assign.ValueType)
-			if fn, exists := gt.Functions[funcID]; exists && len(fn.Output) > 0 {
-				retType := fn.Output[0].Typing
-				if retType != "" {
-					retClassID := python.ClassID(string(pr.PkgPath) + "." + retType)
-					if _, ok := gt.Classes[retClassID]; ok {
-						varTypeMap[assign.Name] = retClassID
-					}
-				}
-			}
+		if cid, ok := resolveAssignClassID(assign.ValueType, pr, gt); ok {
+			varTypeMap[assign.Name] = cid
 		}
 	}
 
@@ -134,6 +105,142 @@ func resolveBodyCallRefs(bodyCalls []pyBodyCall, bodyAssigns []pyBodyAssign, pr 
 			}
 		}
 	}
+}
+
+// pyBuiltinTypes are predeclared/typing names that are never topology classes,
+// so canonicalTypeID skips producing a (bogus) candidate id for them.
+var pyBuiltinTypes = map[string]bool{
+	"str": true, "int": true, "float": true, "bool": true, "bytes": true,
+	"complex": true, "bytearray": true, "memoryview": true, "None": true,
+	"object": true, "type": true, "list": true, "dict": true, "set": true,
+	"tuple": true, "frozenset": true, "range": true,
+	"Any": true, "List": true, "Dict": true, "Set": true, "Tuple": true,
+	"FrozenSet": true, "Optional": true, "Union": true, "Callable": true,
+	"Iterable": true, "Iterator": true, "Sequence": true, "Mapping": true,
+	"MutableMapping": true, "Awaitable": true, "Coroutine": true,
+	"Generator": true, "AsyncIterator": true, "AsyncIterable": true,
+	"Self": true, "ClassVar": true, "Final": true, "Annotated": true,
+	"Literal": true, "Type": true,
+}
+
+// canonicalTypeID returns the canonical topology class ID for the type named by
+// `typing`, resolved against the DEFINING file's import map. It returns "" for
+// builtin/typing names, collapsed generics, and unknown aliases. The result is a
+// candidate id — consumers must still verify it exists. Computing it at parse
+// time lets cross-package consumers resolve a type without the defining file's
+// import context.
+func canonicalTypeID(typing string, pkgPath python.PackagePath, importMap map[string]string) string {
+	t := typing
+	if t == "" || strings.ContainsAny(t, " \t[](){}|,'\"") {
+		return ""
+	}
+	// `from mod import Name` -> importMap[Name] == "mod.Name" (full path).
+	if impPath, ok := importMap[t]; ok {
+		return impPath
+	}
+	// `mod.Name` via `import mod` -> importMap[mod] == "mod".
+	if i := strings.Index(t, "."); i > 0 {
+		if impPath, ok := importMap[t[:i]]; ok {
+			return impPath + "." + t[i+1:]
+		}
+		return ""
+	}
+	if pyBuiltinTypes[t] {
+		return ""
+	}
+	return string(pkgPath) + "." + t
+}
+
+// lookupClassByName resolves a class reference name to a ClassID using the
+// current file's context: same package, a `from m import Name` (importMap[name]
+// holds the full path), or a dotted `m.Name` reference (importMap[alias]).
+func lookupClassByName(name string, pr *ParseResult, gt *python.PythonTopology) python.ClassID {
+	cid := python.ClassID(string(pr.PkgPath) + "." + name)
+	if _, ok := gt.Classes[cid]; ok {
+		return cid
+	}
+	if impPath, ok := pr.ImportMap[name]; ok {
+		if _, ok := gt.Classes[python.ClassID(impPath)]; ok {
+			return python.ClassID(impPath)
+		}
+	}
+	if i := strings.Index(name, "."); i > 0 {
+		if impPath, ok := pr.ImportMap[name[:i]]; ok {
+			cid = python.ClassID(impPath + "." + name[i+1:])
+			if _, ok := gt.Classes[cid]; ok {
+				return cid
+			}
+		}
+	}
+	return ""
+}
+
+// lookupFuncByName resolves a function call name to a FunctionID using the same
+// rules as lookupClassByName (same package, from-import, dotted reference).
+func lookupFuncByName(name string, pr *ParseResult, gt *python.PythonTopology) python.FunctionID {
+	fid := python.FunctionID(string(pr.PkgPath) + "." + name)
+	if _, ok := gt.Functions[fid]; ok {
+		return fid
+	}
+	if impPath, ok := pr.ImportMap[name]; ok {
+		if _, ok := gt.Functions[python.FunctionID(impPath)]; ok {
+			return python.FunctionID(impPath)
+		}
+	}
+	if i := strings.Index(name, "."); i > 0 {
+		if impPath, ok := pr.ImportMap[name[:i]]; ok {
+			fid = python.FunctionID(impPath + "." + name[i+1:])
+			if _, ok := gt.Functions[fid]; ok {
+				return fid
+			}
+		}
+	}
+	return ""
+}
+
+// classIDForType resolves a VariableDefinition's annotated type to a class ID,
+// preferring the precomputed canonical TypingID (resolved in the defining file's
+// context) and falling back to name-based resolution in the current file.
+func classIDForType(vd python.VariableDefinition, pr *ParseResult, gt *python.PythonTopology) (python.ClassID, bool) {
+	if vd.TypingID != "" {
+		if _, ok := gt.Classes[python.ClassID(vd.TypingID)]; ok {
+			return python.ClassID(vd.TypingID), true
+		}
+	}
+	if cid := lookupClassByName(vd.Typing, pr, gt); cid != "" {
+		return cid, true
+	}
+	return "", false
+}
+
+// resolveAssignClassID infers the class type of `x` in `x = <valueType>(...)`.
+// valueType is the callee/name: a constructor (x is that class) or a function (x
+// is the function's return type). For function calls it prefers the callee's
+// precomputed return TypingID so cross-package return types resolve without the
+// callee's import context (fixing transitive `x = make(); x.method()`), and
+// falls back to a same-package return type when TypingID is absent.
+func resolveAssignClassID(valueType string, pr *ParseResult, gt *python.PythonTopology) (python.ClassID, bool) {
+	if cid := lookupClassByName(valueType, pr, gt); cid != "" {
+		return cid, true
+	}
+	if fid := lookupFuncByName(valueType, pr, gt); fid != "" {
+		fn := gt.Functions[fid]
+		if len(fn.Output) > 0 {
+			out := fn.Output[0]
+			if out.TypingID != "" {
+				if _, ok := gt.Classes[python.ClassID(out.TypingID)]; ok {
+					return python.ClassID(out.TypingID), true
+				}
+			}
+			if out.Typing != "" {
+				cid := python.ClassID(string(pr.PkgPath) + "." + out.Typing)
+				if _, ok := gt.Classes[cid]; ok {
+					return cid, true
+				}
+			}
+		}
+	}
+	return "", false
 }
 
 func resolveBodyReferences(body *pyFunc, pr *ParseResult, gt *python.PythonTopology, add func(kind python.ConnectionKind, id string)) {

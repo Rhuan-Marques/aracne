@@ -42,40 +42,33 @@ func FormatGoFunctionContext(ctx *golang.GoFunctionContext) string {
 
 	hasContext := len(ctx.InterfacesUsed) > 0 || len(ctx.StructsUsed) > 0 ||
 		len(ctx.CalledFunctions) > 0 || len(ctx.ExtVarsUsed) > 0
-	if !hasContext {
-		return b.String()
-	}
-
-	b.WriteString("# CONTEXT:\n")
-
-	for _, iu := range ctx.InterfacesUsed {
-		b.WriteString(fmt.Sprintf("## %s: %s\n", iu.ID, desc(iu.Description)))
-		for _, impl := range iu.Implementations {
-			b.WriteString(fmt.Sprintf("\t%s: %s\n", impl.StructID, desc(impl.Description)))
-			for _, m := range impl.Methods {
-				b.WriteString(fmt.Sprintf("\t\t%s: %s\n", m.ID, desc(m.Description)))
+	if hasContext {
+		b.WriteString("# CONTEXT:\n")
+		for _, full := range []bool{true, false} {
+			for _, iu := range ctx.InterfacesUsed {
+				if wantVis(iu.Visibility, full) {
+					renderInterfaceUsage(&b, iu)
+				}
+			}
+			for _, su := range ctx.StructsUsed {
+				if wantVis(su.Visibility, full) {
+					renderStructUsage(&b, su)
+				}
+			}
+			for _, cf := range ctx.CalledFunctions {
+				if wantVis(cf.Visibility, full) {
+					renderFunc(&b, "## ", cf)
+				}
+			}
+			for _, ev := range ctx.ExtVarsUsed {
+				if wantVis(ev.Visibility, full) {
+					renderExtVar(&b, ev)
+				}
 			}
 		}
 	}
 
-	for _, su := range ctx.StructsUsed {
-		b.WriteString(fmt.Sprintf("## %s: %s\n", su.ID, desc(su.Description)))
-		for _, m := range su.Methods {
-			b.WriteString(fmt.Sprintf("\t%s: %s\n", m.ID, desc(m.Description)))
-		}
-	}
-
-	for _, cf := range ctx.CalledFunctions {
-		b.WriteString(fmt.Sprintf("## %s: %s\n", cf.ID, desc(cf.Description)))
-	}
-
-	for _, ev := range ctx.ExtVarsUsed {
-		valStr := ""
-		if ev.Value != "" {
-			valStr = fmt.Sprintf(" = %s", ev.Value)
-		}
-		b.WriteString(fmt.Sprintf("## %s%s\n", ev.ID, valStr))
-	}
+	writeUsedBy(&b, ctx.Incoming)
 
 	return b.String()
 }
@@ -109,48 +102,42 @@ func FormatGoStructContext(ctx *golang.GoStructContext) string {
 
 	hasContext := len(ctx.Interfaces) > 0 || len(ctx.Methods) > 0 ||
 		len(ctx.StructsUsed) > 0 || len(ctx.InterfacesUsed) > 0 || len(ctx.ExtVarsUsed) > 0
-	if !hasContext {
-		return b.String()
-	}
-
-	b.WriteString("# CONTEXT:\n")
-
-	for _, iface := range ctx.Interfaces {
-		need := ""
-		if iface.NeedToImplement {
-			need = " [NEED TO IMPLEMENT]"
-		}
-		b.WriteString(fmt.Sprintf("## %s: %s%s\n", iface.ID, desc(iface.Description), need))
-	}
-
-	for _, m := range ctx.Methods {
-		b.WriteString(fmt.Sprintf("## %s: %s\n", m.ID, desc(m.Description)))
-	}
-
-	for _, su := range ctx.StructsUsed {
-		b.WriteString(fmt.Sprintf("## %s: %s\n", su.ID, desc(su.Description)))
-		for _, m := range su.Methods {
-			b.WriteString(fmt.Sprintf("\t%s: %s\n", m.ID, desc(m.Description)))
-		}
-	}
-
-	for _, iu := range ctx.InterfacesUsed {
-		b.WriteString(fmt.Sprintf("## %s: %s\n", iu.ID, desc(iu.Description)))
-		for _, impl := range iu.Implementations {
-			b.WriteString(fmt.Sprintf("\t%s: %s\n", impl.StructID, desc(impl.Description)))
-			for _, m := range impl.Methods {
-				b.WriteString(fmt.Sprintf("\t\t%s: %s\n", m.ID, desc(m.Description)))
+	if hasContext {
+		b.WriteString("# CONTEXT:\n")
+		for _, full := range []bool{true, false} {
+			if !full {
+				for _, iface := range ctx.Interfaces {
+					need := ""
+					if iface.NeedToImplement {
+						need = " [NEED TO IMPLEMENT]"
+					}
+					b.WriteString(fmt.Sprintf("## %s: %s%s\n", iface.ID, desc(iface.Description), need))
+				}
+			}
+			for _, m := range ctx.Methods {
+				if wantVis(m.Visibility, full) {
+					renderFunc(&b, "## ", m)
+				}
+			}
+			for _, su := range ctx.StructsUsed {
+				if wantVis(su.Visibility, full) {
+					renderStructUsage(&b, su)
+				}
+			}
+			for _, iu := range ctx.InterfacesUsed {
+				if wantVis(iu.Visibility, full) {
+					renderInterfaceUsage(&b, iu)
+				}
+			}
+			for _, ev := range ctx.ExtVarsUsed {
+				if wantVis(ev.Visibility, full) {
+					renderExtVar(&b, ev)
+				}
 			}
 		}
 	}
 
-	for _, ev := range ctx.ExtVarsUsed {
-		valStr := ""
-		if ev.Value != "" {
-			valStr = fmt.Sprintf(" = %s", ev.Value)
-		}
-		b.WriteString(fmt.Sprintf("## %s%s\n", ev.ID, valStr))
-	}
+	writeUsedBy(&b, ctx.Incoming)
 
 	return b.String()
 }
@@ -164,18 +151,19 @@ func FormatGoInterfaceContext(ctx *golang.GoInterfaceContext) string {
 	b.WriteString(ctx.Interface.Cut)
 	b.WriteString("\n```\n\n")
 
-	if len(ctx.Implementations) == 0 {
-		return b.String()
-	}
-
-	b.WriteString("# CONTEXT:\n")
-	b.WriteString("## Implemented By\n")
-	for _, impl := range ctx.Implementations {
-		b.WriteString(fmt.Sprintf("\t%s: %s\n", impl.StructID, desc(impl.Description)))
-		for _, m := range impl.Methods {
-			b.WriteString(fmt.Sprintf("\t\t%s: %s\n", m.ID, desc(m.Description)))
+	if len(ctx.Implementations) > 0 {
+		b.WriteString("# CONTEXT:\n")
+		b.WriteString("## Implemented By\n")
+		for _, full := range []bool{true, false} {
+			for _, impl := range ctx.Implementations {
+				if wantVis(impl.Visibility, full) {
+					renderImpl(&b, "\t", impl)
+				}
+			}
 		}
 	}
+
+	writeUsedBy(&b, ctx.Incoming)
 
 	return b.String()
 }
@@ -234,7 +222,6 @@ func FormatGoFileContext(ctx *golang.GoFileContext) string {
 	}
 
 	b.WriteString("# CONTEXT:\n")
-	b.WriteString(fmt.Sprintf("## Package: %s\n", ctx.FromPackage))
 
 	for _, fn := range ctx.Functions {
 		b.WriteString(fmt.Sprintf("## func %s: %s\n", fn.ID, desc(fn.Description)))
@@ -253,9 +240,6 @@ func FormatGoFileContext(ctx *golang.GoFileContext) string {
 	}
 	for _, ev := range ctx.ExtVars {
 		b.WriteString(fmt.Sprintf("## var %s: %s\n", ev.ID, desc(ev.Description)))
-	}
-	for _, imp := range ctx.Imports {
-		b.WriteString(fmt.Sprintf("## import %q\n", imp))
 	}
 
 	return b.String()

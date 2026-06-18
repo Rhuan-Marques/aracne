@@ -17,6 +17,10 @@ func RunServe(args []string) {
 
 	manager, reg := InitRegistry(".aracne/topology.db")
 	cfg := helper.EnsureConfig(helper.ConfigPath(".aracne/topology.db"))
+	if err := cfg.Validate(); err != nil {
+		fmt.Fprintf(os.Stderr, "Invalid .aracne/config.json: %v\n", err)
+		os.Exit(1)
+	}
 	if !ValidAgentProfile(cfg, *profileName) {
 		fmt.Fprintf(os.Stderr, "invalid --tool-profile %q\n", *profileName)
 		os.Exit(1)

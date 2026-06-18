@@ -23,7 +23,8 @@ func RunGrep(args []string) {
 		path = fs.Arg(1)
 	}
 
-	manager, _ := InitRegistry(*dbPath)
+	manager, reg := InitRegistry(*dbPath)
+	runReadScan(manager, reg)
 	topo, err := manager.ReadAll()
 	if err != nil {
 		topo = nil

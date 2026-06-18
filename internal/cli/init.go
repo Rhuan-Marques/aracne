@@ -43,6 +43,10 @@ func RunInit(args []string) {
 	}
 
 	cfg := helper.EnsureConfig(helper.ConfigPath(".aracne/topology.db"))
+	if err := cfg.Validate(); err != nil {
+		fmt.Fprintf(os.Stderr, "Invalid .aracne/config.json: %v\n", err)
+		os.Exit(1)
+	}
 
 	if *opencode {
 		initOpenCode(*global, cfg, *yes)
@@ -148,6 +152,12 @@ func initClaudeCode(global bool, cfg *helper.Config, autoYes bool) {
 	writeAgent(agentsDir, "bug-solver", claudeAgentContent("bug-solver", "Fixes acknowledged bugs in the codebase and removes them", cfg.EffectiveAgent("claude_code", "bug-solver"), prompts.BugSolverPrompt()), autoYes)
 
 	writeClaudePlugins(mainEff.Plugins, claudeBaseDir, autoYes)
+	// The guard hook is installed unconditionally (independent of plugins): it
+	// must always warn on native/shell tool usage and block per blocked_tools.
+	writeClaudeGuardHook(filepath.Join(claudeBaseDir, "settings.json"), filepath.Join(claudeBaseDir, "hooks"), autoYes)
+	// Pre-approve the aracne MCP tools so Claude Code does not prompt on every
+	// lookup/edit call in modes that would otherwise ask.
+	writeClaudePermissions(filepath.Join(claudeBaseDir, "settings.json"))
 	writeMarkdownIntegrationFile(claudeMdPath, "Claude Code CLAUDE.md", prompts.ClaudeMdContentForAgent(mainEff))
 	fmt.Println("[Claude Code] Restart Claude Code to activate the topology workflow.")
 }
@@ -246,11 +256,13 @@ func bugSolverCommandForAgent(agentRef string) string {
 }
 
 func claudeAgentContent(name, description string, eff helper.AgentConfig, prompt string) string {
-	return fmt.Sprintf("---\nname: %s\ndescription: %s\ntools: %s\n%s---\n\n%s\n", name, description, strings.Join(claudeToolsForAgent(eff), ", "), claudeMCPServersFrontmatter(name), prompt)
+	body := prompts.WithToolsListing(prompt, eff.MCPTools)
+	return fmt.Sprintf("---\nname: %s\ndescription: %s\ntools: %s\n%s---\n\n%s\n", name, description, strings.Join(claudeToolsForAgent(eff), ", "), claudeMCPServersFrontmatter(name), body)
 }
 
 func openCodeAgentContent(description string, eff helper.AgentConfig, prompt string) string {
-	return fmt.Sprintf("---\ndescription: %s\nmode: subagent\npermission:\n%s---\n\n%s\n", description, openCodePermissionsForAgent(eff), prompt)
+	body := prompts.WithToolsListing(prompt, eff.MCPTools)
+	return fmt.Sprintf("---\ndescription: %s\nmode: subagent\npermission:\n%s---\n\n%s\n", description, openCodePermissionsForAgent(eff), body)
 }
 
 func claudeMCPServersFrontmatter(agentName string) string {

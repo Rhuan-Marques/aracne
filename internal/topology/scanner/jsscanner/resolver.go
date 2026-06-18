@@ -152,6 +152,31 @@ func analyzeFunctionBody(body *jsFunc, pr *ParseResult, gt *js.JavaScriptTopolog
 		}
 	}
 
+	// Instances learned by following a function's return type: `const x = f()` types x as the
+	// class f returns (its Output[0].TypingID, resolved in f's defining file), and `const x = y`
+	// aliases an already-typed variable. Both then drive method-call resolution via varTypeMap.
+	for _, a := range body.BodyAssigns {
+		if a.Name == "" {
+			continue
+		}
+		switch {
+		case a.CallFunc != "":
+			if fid, ok := resolveFunctionID(a.CallFunc, pr, gt); ok {
+				if f, ok := gt.Functions[fid]; ok && len(f.Output) > 0 {
+					if cid := js.ClassID(f.Output[0].TypingID); cid != "" {
+						if _, ok := gt.Classes[cid]; ok {
+							varTypeMap[a.Name] = cid
+						}
+					}
+				}
+			}
+		case a.AliasOf != "":
+			if cid, ok := varTypeMap[a.AliasOf]; ok {
+				varTypeMap[a.Name] = cid
+			}
+		}
+	}
+
 	for _, call := range body.BodyCalls {
 		switch {
 		case call.IsNew:
@@ -171,6 +196,47 @@ func analyzeFunctionBody(body *jsFunc, pr *ParseResult, gt *js.JavaScriptTopolog
 	}
 
 	return conn
+}
+
+// resolveFunctionTypingIDs resolves each parsed function's parameter and return type names
+// to canonical resource IDs and stores them on the function's Input/Output VariableDefinitions
+// (TypingID). Resolution happens here, where the topology store is available, so an imported
+// type resolves against the DEFINING file's context. Storing the canonical id lets a caller in
+// another file follow a return type (const x = f(); x.method()) without f's import context.
+// This must run BEFORE body analysis so callees' TypingIDs are set when callers are analysed.
+func resolveFunctionTypingIDs(gt *js.JavaScriptTopology, results []*ParseResult) {
+	for _, pr := range results {
+		for _, fp := range pr.Functions {
+			f, ok := gt.Functions[fp.Function.ID]
+			if !ok {
+				continue
+			}
+			changed := false
+			for i := range f.Output {
+				if id := typingID(f.Output[i].Typing, pr, gt); id != "" && f.Output[i].TypingID != id {
+					f.Output[i].TypingID = id
+					changed = true
+				}
+			}
+			for i := range f.Input {
+				if id := typingID(f.Input[i].Typing, pr, gt); id != "" && f.Input[i].TypingID != id {
+					f.Input[i].TypingID = id
+					changed = true
+				}
+			}
+			if changed {
+				gt.Functions[f.ID] = f
+			}
+		}
+	}
+}
+
+// typingID resolves a type-annotation name to its canonical resource ID (or "" when the type
+// is a built-in/external/unresolved), discarding the usage kind. It is the id half of
+// resolveTypeName.
+func typingID(typeName string, pr *ParseResult, gt *js.JavaScriptTopology) string {
+	_, id, _ := resolveTypeName(typeName, pr, gt)
+	return id
 }
 
 func resolveDirectCall(name string, pr *ParseResult, gt *js.JavaScriptTopology, add func(js.ConnectionKind, string)) {
@@ -204,6 +270,36 @@ func resolveDirectCall(name string, pr *ParseResult, gt *js.JavaScriptTopology, 
 	if ref, ok := resolveExport(gt, abs, moduleKey(abs, pr), imported); ok {
 		add(ref.Kind, ref.ID)
 	}
+}
+
+// resolveFunctionID resolves a called name to the topology FunctionID it refers to: a local
+// function in the current file, or an imported function resolved through the import map and the
+// target module's ID namespace. It mirrors the function branch of resolveDirectCall but returns
+// the id (so callers can read the function's return type) instead of adding edges.
+func resolveFunctionID(name string, pr *ParseResult, gt *js.JavaScriptTopology) (js.FunctionID, bool) {
+	if name == "" {
+		return "", false
+	}
+	localID := pr.ModulePath + "." + name
+	if isFunc(gt, localID) {
+		return js.FunctionID(localID), true
+	}
+	info, ok := pr.ImportMap[name]
+	if !ok || !info.Internal {
+		return "", false
+	}
+	abs, ok := resolveSpecifier(pr.FileID, info.Source, gt)
+	if !ok {
+		return "", false
+	}
+	imported := info.ImportedName
+	if imported == "" {
+		imported = name
+	}
+	if ref, ok := resolveExport(gt, abs, moduleKey(abs, pr), imported); ok && ref.Kind == js.ConnCalls {
+		return js.FunctionID(ref.ID), true
+	}
+	return "", false
 }
 
 func resolveMethodCall(call jsBodyCall, pr *ParseResult, gt *js.JavaScriptTopology, varTypeMap map[string]js.ClassID, receiverClass *js.ClassID, add func(js.ConnectionKind, string)) {

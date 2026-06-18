@@ -166,6 +166,8 @@ func (m *PythonManager) ReadFunction(id string, opts ...topology.TopologyOption)
 		}
 	}
 
+	m.filterFunctionContext(gt, ctx, opt.ContextFilter(), fn.ID)
+
 	var blocks []ContextBlock
 
 	blocks = append(blocks, ContextBlock{
@@ -444,6 +446,8 @@ func (m *PythonManager) ReadClass(id string, opts ...topology.TopologyOption) (*
 			ctx.ModulesUsed = append(ctx.ModulesUsed, p)
 		}
 	}
+
+	m.filterClassContext(gt, ctx, opt.ContextFilter(), c.ID)
 
 	var blocks []ContextBlock
 

@@ -172,7 +172,7 @@ func (m *Manager) runSubAgent(systemPrompt, input string, toolMap map[string]too
 
 func (m *Manager) descriptionWorkflowTools() map[string]tools.Tool {
 	reg := tools.NewRegistry()
-	reg.Register(tools.NewRead(m.manager))
+	reg.Register(tools.WrapWithReadScan(tools.NewRead(m.manager), m.manager, m.scanners, m.config.EffectiveReadScan()))
 	registerLanguageMaintenanceTools(reg, nil, m.manager, getLanguage(m.manager), m.config.Descriptions.Kinds, configDescriptionBatchSize(m.config))
 	return toolMap(reg, allowedToolSet("read", "update_description"))
 }

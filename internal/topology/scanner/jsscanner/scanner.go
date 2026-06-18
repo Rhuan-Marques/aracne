@@ -232,6 +232,10 @@ func resolveTopology(gt *js.JavaScriptTopology, results []*ParseResult) {
 		}
 	}
 
+	// Resolve return/param type IDs before body analysis so a caller can follow a callee's
+	// return type (const x = f(); x.method()) even across files.
+	resolveFunctionTypingIDs(gt, results)
+
 	for _, pr := range results {
 		for _, fp := range pr.Functions {
 			if fp.Body == nil {
