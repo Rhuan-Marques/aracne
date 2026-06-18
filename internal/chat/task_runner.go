@@ -256,6 +256,7 @@ func (m *Manager) runAgentTask(ctx context.Context, sessionID, groupID, taskID s
 		m.recordTaskFailure(sessionID, groupID, taskID, sessionErr)
 		return
 	}
+	settings = m.chatAgentProviderOverride(kind.Name, settings)
 	provider, err := newProvider(settings)
 	if err != nil {
 		m.recordTaskFailure(sessionID, groupID, taskID, err)
@@ -353,6 +354,37 @@ func runAllowedTaskTool(toolMap map[string]tools.Tool, tc llm.ToolCall) (string,
 		return "Error: " + result, "error"
 	}
 	return result, taskStatusCompleted
+}
+
+// chatAgentProviderOverride layers a chat sub-agent's per-agent model and
+// thinking budget (from viz.chat.agents.<name>) on top of the session provider,
+// so a judgment-heavy agent like bug-judge can run on a stronger model with
+// extended reasoning while cheaper agents keep the session default.
+func (m *Manager) chatAgentProviderOverride(agentName string, settings ProviderSettings) ProviderSettings {
+	if m.config == nil {
+		return settings
+	}
+	ag, ok := m.config.Viz.Chat.Agents.Agents[agentName]
+	if !ok {
+		return settings
+	}
+	if model := chatAgentModelID(ag.Model); model != "" {
+		settings.Model = model
+	}
+	if budget := ag.Params["thinking"]; budget > 0 {
+		settings.ThinkingBudget = budget
+	}
+	return settings
+}
+
+// chatAgentModelID strips an optional "provider/" prefix from a configured
+// model id, matching how the chat-wide model selection is resolved.
+func chatAgentModelID(model string) string {
+	model = strings.TrimSpace(model)
+	if idx := strings.LastIndex(model, "/"); idx >= 0 {
+		model = strings.TrimSpace(model[idx+1:])
+	}
+	return model
 }
 
 func (m *Manager) toolsForAgentKind(kind AgentKind) (map[string]tools.Tool, error) {

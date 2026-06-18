@@ -15,9 +15,10 @@ import (
 )
 
 type Anthropic struct {
-	apiKey  string
-	model   string
-	baseURL string
+	apiKey         string
+	model          string
+	baseURL        string
+	thinkingBudget int
 }
 
 type anthropicRequest struct {
@@ -27,6 +28,18 @@ type anthropicRequest struct {
 	Messages  []anthropicMessage `json:"messages"`
 	Tools     []anthropicTool    `json:"tools,omitempty"`
 	Stream    bool               `json:"stream,omitempty"`
+	Thinking  *anthropicThinking `json:"thinking,omitempty"`
+}
+
+type anthropicThinking struct {
+	Type         string `json:"type"`
+	BudgetTokens int    `json:"budget_tokens"`
+}
+
+// SetThinkingBudget enables Anthropic extended thinking with the given token
+// budget. A non-positive budget leaves thinking disabled.
+func (a *Anthropic) SetThinkingBudget(budget int) {
+	a.thinkingBudget = budget
 }
 
 type anthropicMessage struct {
@@ -94,6 +107,18 @@ func (a *Anthropic) StreamChatContext(ctx context.Context, messages []llm.Messag
 			Description: tool.Description,
 			InputSchema: tool.Parameters,
 		})
+	}
+	if a.thinkingBudget > 0 {
+		budget := a.thinkingBudget
+		if budget < 1024 {
+			budget = 1024
+		}
+		if budget > 32000 {
+			budget = 32000
+		}
+		reqBody.Thinking = &anthropicThinking{Type: "enabled", BudgetTokens: budget}
+		// max_tokens must exceed the thinking budget; keep room for the answer.
+		reqBody.MaxTokens = budget + 8192
 	}
 
 	body, err := json.Marshal(reqBody)

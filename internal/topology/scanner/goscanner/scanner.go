@@ -734,21 +734,50 @@ func (s *GoScanner) resolveUseMissingWarning(gt *golang.GolangTopology, w domain
 		return
 	}
 
+	// When a use-missing warning resolves to a type in another package, the cold
+	// path always pairs the type edge (uses_struct/uses_named_type/uses_interface
+	// or the call edge) with the sibling uses_package edge for that type's
+	// package (see resolveCompositeLit / resolveQualifiedCall). Reproduce that
+	// rollup here so the incremental path does not drop uses_package when a
+	// previously-missing cross-package type later appears.
+	srcPkg := s.sourceFunctionPackage(sourceFn)
+	addCrossPkg := func() {
+		tgtPkg := trimLastDotSegment(w.TargetID)
+		if tgtPkg != "" && tgtPkg != srcPkg {
+			sourceFn.Connections[golang.ConnUsesPkg] = append(sourceFn.Connections[golang.ConnUsesPkg], tgtPkg)
+		}
+	}
+
 	switch {
 	case s.existsInFunctions(gt, w.TargetID):
 		sourceFn.Connections[golang.ConnCalls] = append(sourceFn.Connections[golang.ConnCalls], w.TargetID)
+		addCrossPkg()
 	case s.existsInStructs(gt, w.TargetID):
 		sourceFn.Connections[golang.ConnUsesStruct] = append(sourceFn.Connections[golang.ConnUsesStruct], w.TargetID)
+		addCrossPkg()
 	case s.existsInNamedTypes(gt, w.TargetID):
 		sourceFn.Connections[golang.ConnUsesNamedType] = append(sourceFn.Connections[golang.ConnUsesNamedType], w.TargetID)
+		addCrossPkg()
 	case s.existsInInterfaces(gt, w.TargetID):
 		sourceFn.Connections[golang.ConnUsesIface] = append(sourceFn.Connections[golang.ConnUsesIface], w.TargetID)
+		addCrossPkg()
 	case s.existsInExtVars(gt, w.TargetID):
 		sourceFn.Connections[golang.ConnUsesExtVar] = append(sourceFn.Connections[golang.ConnUsesExtVar], w.TargetID)
 	}
 
 	sourceFn.Connections = uniqueConns(sourceFn.Connections)
 	gt.Functions[golang.FunctionID(w.SourceID)] = sourceFn
+}
+
+// sourceFunctionPackage returns the package path of fn. Methods carry their
+// owning package in MethodFrom (a "pkg.Recv" struct id); plain funcs carry it
+// in their own "pkg.Name" id. Both reduce to the package by dropping the final
+// ".Name"/".Recv" segment.
+func (s *GoScanner) sourceFunctionPackage(fn golang.GolangFunction) string {
+	if fn.MethodFrom != nil {
+		return trimLastDotSegment(string(*fn.MethodFrom))
+	}
+	return trimLastDotSegment(string(fn.ID))
 }
 
 func (s *GoScanner) existsInFunctions(gt *golang.GolangTopology, id string) bool {

@@ -4,17 +4,19 @@ package tests_test
 // each asserted under incremental / full / hard and checked for strict
 // cross-mode equality (see atscale_harness_test.go).
 //
-// KNOWN-RED (deterministic): the strict cross-mode check currently surfaces real
-// incremental-scanner bugs (filed via bug_report). The per-scenario targeted
-// assertions pass (the mechanic works in a cold scan); the cross-mode equality
-// fails because the incremental path diverges. Mapping:
-//   bug ..._1 spurious uses_interface->Shape on re-parse : G1, G4a, G4b, G7,
-//             G8 (and the isolated repro GhostUsesInterfaceOnReparse)
-//   bug ..._2 intra-scan ordering staleness             : G2, G3, G3b, G8
-//   bug ..._3 dropped uses_package on re-parse           : G2
-// G3 is an intentional divergence probe (dependent not re-parsed); G3b/G8 show
-// re-parsing the dependent is not enough (ordering). G5, G6 pass: structural
-// reverse-edges (implemented_by) are recomputed globally and stay consistent.
+// Status (current working tree): G4a/G4b/G5/G6/G7 and GhostUsesInterfaceOnReparse
+// PASS — the spurious-uses_interface ghost (bug ..._1) no longer reproduces, so
+// the Ghost repro now acts as a regression guard. The remaining red tests are
+// cross-file edits where the incremental path diverges from a cold scan:
+//   G1  cross-package fn rename + consumer call update  -> stale (bug ..._2)
+//   G2  struct rename across packages                   -> stale body edges + dropped
+//                                                          uses_package (bugs ..._2/..._3)
+//   G3  return-type change, consumer NOT re-parsed       -> divergence probe (..._2)
+//   G3b same change, consumer re-saved                   -> still stale (intra-scan order)
+//   G8  add method on returned struct, both files edited -> stale (intra-scan order)
+// Structural reverse-edges (implemented_by) are recomputed globally and stay
+// consistent (G5/G6/G7). Per-scenario targeted asserts encode the correct
+// cold-scan behavior; the cross-mode check catches the incremental divergence.
 
 import (
 	"testing"

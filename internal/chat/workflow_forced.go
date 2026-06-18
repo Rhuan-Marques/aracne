@@ -117,7 +117,8 @@ func (m *Manager) buildWorkflowTaskSpecs(req WorkflowRequest) ([]createTaskSpec,
 		}
 		result := make([]createTaskSpec, 0, len(pending))
 		for _, bug := range pending {
-			prompt := m.bugJudgeWorkflowPrompt(bug, byNode[bug.NodeID])
+			crossNode := dismissedPatternDigest(allBugs, bug.NodeID, maxCrossNodeDismissedPatterns)
+			prompt := m.bugJudgeWorkflowPrompt(bug, byNode[bug.NodeID], crossNode)
 			result = append(result, createTaskSpec{AgentKind: "bug-judge", Prompt: prompt, NeedResult: false})
 		}
 		return result, nil
@@ -150,33 +151,79 @@ func (m *Manager) descriptionWorkflowPrompt(batch []workflowResource) string {
 	return prompts.DescriptionsGenerationExecutorInput(resources)
 }
 
-func (m *Manager) bugJudgeWorkflowPrompt(assigned domain.KnownBug, nodeBugs []domain.KnownBug) string {
-	var b strings.Builder
-	b.WriteString("You are validating exactly one assigned pending bug. Do not triage unrelated bugs.\n\n")
-	b.WriteString("Assigned bug:\n")
-	b.WriteString(fmt.Sprintf("- ID: %s\n  Node: %s\n  State: %s\n  Description: %s\n\n", assigned.ID, assigned.NodeID, assigned.State, assigned.Description))
-	b.WriteString("Other bugs on the same node, for duplicate checking only:\n")
-	wroteOther := false
+func (m *Manager) bugJudgeWorkflowPrompt(assigned domain.KnownBug, nodeBugs []domain.KnownBug, crossNodeDismissed []domain.KnownBug) string {
+	var dismissedSame, dupCandidates []domain.KnownBug
 	for _, bug := range nodeBugs {
 		if bug.ID == assigned.ID {
 			continue
 		}
-		wroteOther = true
-		b.WriteString(fmt.Sprintf("- ID: %s\n  State: %s\n  Description: %s\n", bug.ID, bug.State, bug.Description))
+		if bug.State == domain.BugDismissed {
+			dismissedSame = append(dismissedSame, bug)
+		} else {
+			dupCandidates = append(dupCandidates, bug)
+		}
 	}
-	if !wroteOther {
+
+	var b strings.Builder
+	b.WriteString("You are validating exactly one assigned pending bug. Do not triage unrelated bugs.\n\n")
+	b.WriteString("Assigned bug:\n")
+	b.WriteString(fmt.Sprintf("- ID: %s\n  Node: %s\n  State: %s\n  Description: %s\n\n", assigned.ID, assigned.NodeID, assigned.State, assigned.Description))
+
+	b.WriteString("Known false-positive patterns (previously dismissed) — if the assigned bug is the same kind of issue, DELETE it (Rule 1):\n")
+	wrotePattern := false
+	for _, bug := range dismissedSame {
+		wrotePattern = true
+		b.WriteString(fmt.Sprintf("- [same node] %s\n", bug.Description))
+	}
+	for _, bug := range crossNodeDismissed {
+		wrotePattern = true
+		b.WriteString(fmt.Sprintf("- [%s] %s\n", bug.NodeID, bug.Description))
+	}
+	if !wrotePattern {
 		b.WriteString("- None\n")
 	}
+
+	b.WriteString("\nDuplicate candidates (other live bugs on this node) — if the assigned bug duplicates one, DELETE the weaker description (Rule 2):\n")
+	if len(dupCandidates) == 0 {
+		b.WriteString("- None\n")
+	} else {
+		for _, bug := range dupCandidates {
+			b.WriteString(fmt.Sprintf("- ID: %s\n  State: %s\n  Description: %s\n", bug.ID, bug.State, bug.Description))
+		}
+	}
+
 	b.WriteString("\nAssigned resource read:\n\n```text\n")
 	b.WriteString(m.readResourceForPrompt(assigned.NodeID))
 	b.WriteString("\n```\n\n")
 	b.WriteString("Orders, in order:\n")
-	b.WriteString("\n1. Check duplicates: if the assigned bug duplicates another bug listed above, delete the assigned bug with bug_delete.")
-	b.WriteString("\n2. Investigate the bug: read relevant resources and explore around it. If the bug is not actually present right now, dismiss it with bug_dismiss.")
-	b.WriteString("\n3. Question the bug: decide whether it is an intended feature. If it is intended and correctly implemented, dismiss it.")
-	b.WriteString("\n4. Look for fallbacks: search for fallback handling elsewhere. If fallbacks cover the entire problem, dismiss it.")
-	b.WriteString("\n5. If it is not a duplicate, actually exists, is not an intended correct feature, and has no complete fallback, acknowledge it with bug_acknowledge.\n")
+	b.WriteString("\n1. Rule 1 — Dismissed pattern: if the assigned bug matches any known false-positive pattern above, delete it with bug_delete.")
+	b.WriteString("\n2. Rule 2 — Duplicate: if it duplicates a live duplicate candidate above, delete the weaker bug with bug_delete and keep the clearest description.")
+	b.WriteString("\n3. Rule 3 — False positive: read the resource and the context around it. If the code is correct, the bug is a misunderstanding, it describes intended behavior, or a complete fallback already handles it, dismiss it with bug_dismiss.")
+	b.WriteString("\n4. Rule 4 — Genuine: if it is really present and could cause incorrect behavior, a crash, or a security problem, acknowledge it with bug_acknowledge.")
+	b.WriteString("\n5. If genuinely unsure, take no action and report the bug as undecided.\n")
 	return b.String()
+}
+
+// maxCrossNodeDismissedPatterns caps how many dismissed bugs from other nodes
+// are surfaced to a judge task as general false-positive patterns.
+const maxCrossNodeDismissedPatterns = 12
+
+// dismissedPatternDigest returns a deterministic, capped sample of dismissed
+// bugs from nodes other than excludeNode. Dismissed bugs are kept as a library
+// of false-positive patterns, and those patterns generalize across nodes, so a
+// judge validating one bug benefits from seeing them.
+func dismissedPatternDigest(allBugs []domain.KnownBug, excludeNode string, limit int) []domain.KnownBug {
+	var dismissed []domain.KnownBug
+	for _, bug := range allBugs {
+		if bug.State == domain.BugDismissed && bug.NodeID != excludeNode {
+			dismissed = append(dismissed, bug)
+		}
+	}
+	sortKnownBugs(dismissed)
+	if limit > 0 && len(dismissed) > limit {
+		dismissed = dismissed[:limit]
+	}
+	return dismissed
 }
 
 func (m *Manager) bugSolverWorkflowPrompt(bug domain.KnownBug) string {

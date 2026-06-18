@@ -14,6 +14,39 @@ import (
 	"aracne/internal/topology/domain"
 )
 
+func TestChatAgentProviderOverride_BugJudgeThinking(t *testing.T) {
+	manager := setupWorkflowManager(t, "", false)
+	base := ProviderSettings{Provider: ProviderAnthropic, Model: "claude-sonnet-4"}
+
+	judge := manager.chatAgentProviderOverride("bug-judge", base)
+	if judge.ThinkingBudget != helper.DefaultBugJudgeThinkingBudget {
+		t.Fatalf("bug-judge thinking budget = %d, want %d", judge.ThinkingBudget, helper.DefaultBugJudgeThinkingBudget)
+	}
+	if hunter := manager.chatAgentProviderOverride("bug-hunter", base); hunter.ThinkingBudget != 0 {
+		t.Fatalf("bug-hunter thinking budget = %d, want 0", hunter.ThinkingBudget)
+	}
+}
+
+func TestOpenAIReasoningHelpers(t *testing.T) {
+	if isOpenAIReasoningModel("gpt-4.1") {
+		t.Fatal("gpt-4.1 is not a reasoning model")
+	}
+	for _, m := range []string{"o1-preview", "o3", "o4-mini", "gpt-5"} {
+		if !isOpenAIReasoningModel(m) {
+			t.Fatalf("%s should be a reasoning model", m)
+		}
+	}
+	if got := openAIReasoningEffort(0); got != "" {
+		t.Fatalf("budget 0 -> %q, want empty", got)
+	}
+	if got := openAIReasoningEffort(4096); got != "medium" {
+		t.Fatalf("budget 4096 -> %q, want medium", got)
+	}
+	if got := openAIReasoningEffort(8000); got != "high" {
+		t.Fatalf("budget 8000 -> %q, want high", got)
+	}
+}
+
 func setupWorkflowManager(t *testing.T, serverURL string, populateTopo bool) *Manager {
 	t.Helper()
 	dir := t.TempDir()

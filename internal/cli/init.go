@@ -102,7 +102,7 @@ func initOpenCode(global bool, cfg *helper.Config, autoYes bool) {
 	writeOpenCodeCommand(commandsDir, "descriptions-apply", "Write topology descriptions back into source files as doc comments", "build", prompts.DescriptionsApplyCommand(), autoYes)
 	writeOpenCodeCommand(commandsDir, "descriptions_clear", "Clear stored topology descriptions", "build", prompts.DescriptionsClearCommand(), autoYes)
 	writeOpenCodeCommand(commandsDir, "bug-hunter", "Launch a Bug Hunter sub-agent to scan the entire topology for bugs", "bug-hunter", bugHunterCommandForAgent("bug-hunter"), autoYes)
-	writeOpenCodeCommand(commandsDir, "bug-judge", "Triage pending bugs by launching Bug Judge sub-agents for each node", "bug-judge", bugJudgeCommandForAgent("bug-judge"), autoYes)
+	writeOpenCodeCommand(commandsDir, "bug-judge", "Triage every pending bug by fanning out Bug Judge sub-agents in parallel", "bug-judge", bugJudgeCommandForAgent("bug-judge"), autoYes)
 	writeOpenCodeCommand(commandsDir, "bug-solver", "Fix acknowledged bugs by launching Bug Solver sub-agents", "bug-solver", bugSolverCommandForAgent("bug-solver"), autoYes)
 
 	writeAgent(agentsDir, "descriptions-generation-executor", openCodeAgentContent("Generates descriptions for one assigned batch of undocumented topology resources", cfg.EffectiveAgent("opencode", "descriptions-generation-executor"), prompts.DescriptionsGenerationExecutorPrompt()), autoYes)
@@ -143,7 +143,7 @@ func initClaudeCode(global bool, cfg *helper.Config, autoYes bool) {
 	writeCommand(commandsDir, "descriptions-apply", "Write topology descriptions back into source files as doc comments", prompts.DescriptionsApplyCommand(), autoYes)
 	writeCommand(commandsDir, "descriptions_clear", "Clear stored topology descriptions", prompts.DescriptionsClearCommand(), autoYes)
 	writeCommand(commandsDir, "bug-hunter", "Launch a Bug Hunter sub-agent to scan the entire topology for bugs", bugHunterCommandForAgent(".claude/agents/bug-hunter.md"), autoYes)
-	writeCommand(commandsDir, "bug-judge", "Triage pending bugs by launching Bug Judge sub-agents for each node", bugJudgeCommandForAgent(".claude/agents/bug-judge.md"), autoYes)
+	writeCommand(commandsDir, "bug-judge", "Triage every pending bug by fanning out Bug Judge sub-agents in parallel", bugJudgeCommandForAgent(".claude/agents/bug-judge.md"), autoYes)
 	writeCommand(commandsDir, "bug-solver", "Fix acknowledged bugs by launching Bug Solver sub-agents", bugSolverCommandForAgent(".claude/agents/bug-solver.md"), autoYes)
 
 	writeAgent(agentsDir, "descriptions-generation-executor", claudeAgentContent("descriptions-generation-executor", "Generates descriptions for one assigned batch of undocumented topology resources", cfg.EffectiveAgent("claude_code", "descriptions-generation-executor"), prompts.DescriptionsGenerationExecutorPrompt()), autoYes)
@@ -248,7 +248,15 @@ func bugHunterCommandForAgent(agentRef string) string {
 }
 
 func bugJudgeCommandForAgent(agentRef string) string {
-	return "Use the " + agentRef + " agent to triage pending bugs. It must compare pending bugs with dismissed examples, then acknowledge real bugs, dismiss false positives, and delete duplicates."
+	return strings.Join([]string{
+		"Triage every pending bug by fanning out the " + agentRef + " agent — one run per pending bug, run in parallel.",
+		"",
+		"1. Call bug_list with state=pending to get the bugs to triage, and bug_list with state=dismissed to get the known false-positive patterns.",
+		"2. Group the pending bugs by node_id.",
+		"3. Launch the " + agentRef + " agent once per pending bug, running as many concurrently as the platform allows (in a single batch). Give each run only its assigned bug plus, for context: the other live bugs on the same node (duplicate candidates) and the dismissed bug descriptions (false-positive patterns, same node first).",
+		"4. Each run applies, in order: (1) matches a dismissed pattern -> bug_delete; (2) duplicates another live bug -> bug_delete the weaker one; (3) false positive, intended, or fully guarded on inspection -> bug_dismiss; (4) genuine -> bug_acknowledge. If genuinely unsure, leave the bug untouched.",
+		"5. After all runs finish, report how many bugs were acknowledged, dismissed, deleted, and left undecided.",
+	}, "\n")
 }
 
 func bugSolverCommandForAgent(agentRef string) string {
@@ -257,12 +265,24 @@ func bugSolverCommandForAgent(agentRef string) string {
 
 func claudeAgentContent(name, description string, eff helper.AgentConfig, prompt string) string {
 	body := prompts.WithToolsListing(prompt, eff.MCPTools)
-	return fmt.Sprintf("---\nname: %s\ndescription: %s\ntools: %s\n%s---\n\n%s\n", name, description, strings.Join(claudeToolsForAgent(eff), ", "), claudeMCPServersFrontmatter(name), body)
+	return fmt.Sprintf("---\nname: %s\ndescription: %s\ntools: %s\n%s%s---\n\n%s\n", name, description, strings.Join(claudeToolsForAgent(eff), ", "), agentModelFrontmatter(eff.Model), claudeMCPServersFrontmatter(name), body)
 }
 
 func openCodeAgentContent(description string, eff helper.AgentConfig, prompt string) string {
 	body := prompts.WithToolsListing(prompt, eff.MCPTools)
-	return fmt.Sprintf("---\ndescription: %s\nmode: subagent\npermission:\n%s---\n\n%s\n", description, openCodePermissionsForAgent(eff), body)
+	return fmt.Sprintf("---\ndescription: %s\nmode: subagent\n%spermission:\n%s---\n\n%s\n", description, agentModelFrontmatter(eff.Model), openCodePermissionsForAgent(eff), body)
+}
+
+// agentModelFrontmatter renders a `model:` frontmatter line for a generated
+// agent file when the resolved per-agent config pins a model. An empty or
+// "<inherits>" model yields no line, so the harness falls back to its default
+// (inherit the main agent's model).
+func agentModelFrontmatter(model string) string {
+	model = strings.TrimSpace(model)
+	if model == "" || model == "<inherits>" {
+		return ""
+	}
+	return fmt.Sprintf("model: %s\n", model)
 }
 
 func claudeMCPServersFrontmatter(agentName string) string {

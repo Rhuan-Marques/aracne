@@ -1,6 +1,7 @@
 package topology
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -141,9 +142,77 @@ func (m *TopologyManager) IncrementalScan(root string, reg *scanner.Registry) ([
 	// changed (scoped write) instead of rewriting every row.
 	beforeSigs := helper.ResourceSignatures(topo.Resources)
 
+	// Snapshot the pre-update resources so that, once the changed files have
+	// been re-registered, we can tell which resources were removed/renamed or
+	// had their signature changed. A signature change of a resource invalidates
+	// the body resolution of its callers in *other* files (e.g. a return-type
+	// change re-points a consumer's method call), so those caller files must be
+	// re-resolved too even though they were not edited on disk. This is what a
+	// cold full/hard scan does implicitly by re-resolving the whole graph.
+	beforeResources := make(map[string]domain.Resource, len(topo.Resources))
+	beforeSigKeys := make(map[string]string, len(topo.Resources))
+	for id, res := range topo.Resources {
+		beforeResources[id] = res
+		beforeSigKeys[id] = resourceSignatureKey(res)
+	}
+
 	var allWarnings []domain.TopologyWarning
 
-	for _, path := range append(added, modified...) {
+	changedFiles := append(append([]string(nil), added...), modified...)
+
+	// Phase 1: register/parse EVERY changed file into the working topology
+	// first. After this pass the structural state of the graph (which symbols
+	// exist, their signatures) is complete and final for this batch, so no file
+	// resolved later observes a stale sibling. Body edges produced here may
+	// still be stale for files processed before their dependencies, so they are
+	// recomputed in phase 2.
+	for _, path := range changedFiles {
+		langScanner := reg.DetectFile(path)
+		if langScanner == nil {
+			continue
+		}
+		warnings, err := updateFileWithScanner(topo, langScanner, path)
+		if err != nil {
+			allWarnings = append(allWarnings, domain.TopologyWarning{
+				ID:       "error:" + path,
+				SourceID: path,
+				Kind:     "",
+				Message:  fmt.Sprintf("error updating %s: %v", path, err),
+			})
+		} else {
+			allWarnings = append(allWarnings, warnings...)
+		}
+	}
+
+	// Expand the re-resolve set with the files of forward-transitive callers of
+	// any resource whose identity (removed/renamed) or signature changed in this
+	// batch. Those callers live in files that were not necessarily edited, so
+	// without this they would keep stale edges to the old symbol. The reverse
+	// callers come straight from the pre-update DB (still holding the stale
+	// edges), keeping this language-agnostic.
+	resolveSet := make(map[string]bool, len(changedFiles))
+	for _, path := range changedFiles {
+		if abs, absErr := filepath.Abs(path); absErr == nil {
+			resolveSet[abs] = true
+		} else {
+			resolveSet[path] = true
+		}
+	}
+	callerFiles := m.reverseCallerFiles(topo, beforeResources, beforeSigKeys, resolveSet)
+	for f := range callerFiles {
+		resolveSet[f] = true
+	}
+
+	// Phase 2: re-resolve every changed file AND every reverse-caller file
+	// against the now-complete graph, so body edges (calls / uses_*) point at
+	// the final sibling state. Re-running an already-registered file is
+	// idempotent: the scanner re-parses it and recomputes its edges.
+	resolvePaths := make([]string, 0, len(resolveSet))
+	for f := range resolveSet {
+		resolvePaths = append(resolvePaths, f)
+	}
+	sort.Strings(resolvePaths)
+	for _, path := range resolvePaths {
 		langScanner := reg.DetectFile(path)
 		if langScanner == nil {
 			continue
@@ -218,6 +287,15 @@ func (m *TopologyManager) tryPartialIncremental(root string, reg *scanner.Regist
 	if len(changed) == 0 {
 		return false, nil, nil
 	}
+	// A multi-file batch may need cross-file re-resolution (a file resolved
+	// early would observe a stale sibling changed later in the same batch). The
+	// scoped fast path resolves each file in isolation, so route multi-file
+	// batches to the full two-phase path which parses everything first, then
+	// resolves once against the complete graph. The dominant single-file edit
+	// stays on the fast path.
+	if len(changed) > 1 {
+		return false, nil, nil
+	}
 	updaters := make([]scanner.PartialUpdater, len(changed))
 	for i, path := range changed {
 		pu := partialUpdaterFor(reg, path)
@@ -247,6 +325,17 @@ func (m *TopologyManager) tryPartialIncremental(root string, reg *scanner.Regist
 			// genuine error occurred. In both cases route to the full ReadDb
 			// path, which re-derives everything from scratch and is idempotent
 			// with any deltas already written for earlier files in this batch.
+			return false, nil, nil
+		}
+		// If this edit removed/renamed a symbol or changed a symbol's signature
+		// that is referenced by a caller in ANOTHER file, that caller keeps a
+		// stale edge unless it is re-resolved. The scoped fast path does not
+		// re-resolve other files, so route to the full two-phase path (which
+		// expands the batch with reverse-caller files) for correctness. The
+		// common edit — adding/removing a local call with no signature/identity
+		// change of a cross-file-referenced symbol — has no such target and
+		// stays on the fast path.
+		if m.partialNeedsCrossFileResolve(absPath, upserts, deletes) {
 			return false, nil, nil
 		}
 		if err := helper.WriteScopedResources(m.dbPath, upserts, deletes, warnings); err != nil {
@@ -441,6 +530,169 @@ func updateFileWithScanner(topo *domain.Topology, langScanner scanner.LanguageSc
 	return warnings, nil
 }
 
+// crossFileBodyConnTypes are the edge kinds produced by body resolution that
+// can re-point to a different target when a referenced symbol's signature or
+// identity changes (a return-type change re-points a call; a rename moves the
+// edge to the new id). They are the edges we must re-resolve in callers living
+// in other files. Structural reverse edges (implemented_by/inherited_by) are
+// recomputed globally by each scanner's passes, so they are not listed here.
+var crossFileBodyConnTypes = []string{
+	"calls",
+	"uses_struct",
+	"uses_class",
+	"uses_interface",
+	"uses_named_type",
+}
+
+// resourceSignatureKey returns a fingerprint of the parts of a resource whose
+// change invalidates a *caller's* body resolution: its name and its declared
+// input/output types (the signature). Connections are deliberately excluded —
+// a body-edge change in the resource itself does not, by itself, invalidate its
+// callers. Used to detect signature changes across an incremental batch in a
+// language-agnostic way (the typed Input/Output live in Properties).
+func resourceSignatureKey(res domain.Resource) string {
+	var b strings.Builder
+	b.WriteString(res.Name)
+	b.WriteByte('|')
+	if res.Properties != nil {
+		if in, ok := res.Properties["input"]; ok {
+			j, _ := json.Marshal(in)
+			b.Write(j)
+		}
+		b.WriteByte('|')
+		if out, ok := res.Properties["output"]; ok {
+			j, _ := json.Marshal(out)
+			b.Write(j)
+		}
+		b.WriteByte('|')
+		if u, ok := res.Properties["underlying"]; ok {
+			j, _ := json.Marshal(u)
+			b.Write(j)
+		}
+	}
+	return b.String()
+}
+
+// reverseCallerFiles returns the set of files (absolute paths) that contain
+// forward-transitive callers of any resource that was removed/renamed or had
+// its signature changed during phase 1 of an incremental batch. Such callers
+// keep stale body edges (to the old id, or resolved against the old signature)
+// unless they are re-resolved, which is exactly what a cold full/hard scan does
+// implicitly. The reverse callers are read from the pre-update resource set
+// (before), which still carries the stale edges. Files already in alreadyResolving
+// are skipped (they will be re-resolved anyway).
+func (m *TopologyManager) reverseCallerFiles(topo *domain.Topology, before map[string]domain.Resource, beforeSigKeys map[string]string, alreadyResolving map[string]bool) map[string]bool {
+	// Collect the ids whose identity or signature changed in this batch.
+	changedTargets := make(map[string]bool)
+	for id := range before {
+		newRes, stillPresent := topo.Resources[id]
+		if !stillPresent {
+			// Removed or renamed: its old callers reference an id that no longer
+			// exists and must be re-resolved to the new symbol.
+			changedTargets[id] = true
+			continue
+		}
+		if beforeSigKeys[id] != resourceSignatureKey(newRes) {
+			changedTargets[id] = true
+		}
+	}
+	if len(changedTargets) == 0 {
+		return nil
+	}
+
+	files := make(map[string]bool)
+	addCaller := func(callerID string) {
+		caller, ok := before[callerID]
+		if !ok {
+			return
+		}
+		path := caller.Location.Path
+		if path == "" {
+			return
+		}
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			abs = path
+		}
+		if alreadyResolving[abs] {
+			return
+		}
+		files[abs] = true
+	}
+
+	for targetID := range changedTargets {
+		for _, connType := range crossFileBodyConnTypes {
+			callers, err := helper.GetCallers(m.dbPath, targetID, connType)
+			if err != nil {
+				continue
+			}
+			for _, callerID := range callers {
+				addCaller(callerID)
+			}
+		}
+	}
+	return files
+}
+
+// partialNeedsCrossFileResolve reports whether a single-file scoped update must
+// be escalated to the full two-phase path because it changed (removed, renamed,
+// or re-signatured) a symbol that a caller in a DIFFERENT file references. Such
+// a caller keeps a stale body edge (to the old id, or resolved against the old
+// signature) unless it is re-resolved, which only the full path does. absPath is
+// the changed file (absolute); upserts/deletes are the scoped delta the partial
+// updater produced. A miss (no cross-file caller) keeps the edit on the fast
+// path, preserving the dominant single-file case.
+func (m *TopologyManager) partialNeedsCrossFileResolve(absPath string, upserts []domain.Resource, deletes []string) bool {
+	// Old resources of the changed file, straight from the (pre-write) DB.
+	oldRes, err := helper.ReadResourcesByFile(m.dbPath, absPath)
+	if err != nil || len(oldRes) == 0 {
+		// No prior members (brand-new file) or DB hiccup: there is nothing whose
+		// signature/identity could have changed out from under a caller.
+		return false
+	}
+
+	newByID := make(map[string]domain.Resource, len(upserts))
+	for _, r := range upserts {
+		newByID[r.ID] = r
+	}
+
+	// Targets whose identity or signature changed in this file.
+	changedTargets := make(map[string]bool)
+	for _, id := range deletes {
+		if _, wasInFile := oldRes[id]; wasInFile {
+			changedTargets[id] = true // removed or renamed
+		}
+	}
+	for id, old := range oldRes {
+		if nr, ok := newByID[id]; ok {
+			if resourceSignatureKey(old) != resourceSignatureKey(nr) {
+				changedTargets[id] = true // signature changed
+			}
+		}
+	}
+	if len(changedTargets) == 0 {
+		return false
+	}
+
+	// Any caller of a changed target that lives in a different file forces the
+	// full path. Callers come from the pre-write DB (still holding stale edges).
+	for targetID := range changedTargets {
+		for _, connType := range crossFileBodyConnTypes {
+			callers, cerr := helper.GetCallers(m.dbPath, targetID, connType)
+			if cerr != nil {
+				continue
+			}
+			for _, callerID := range callers {
+				if _, sameFile := oldRes[callerID]; sameFile {
+					continue // caller is in this file; re-resolved already
+				}
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func languageSubTopology(topo *domain.Topology, language string) *domain.Topology {
 	sub := &domain.Topology{
 		Root:      topo.Root,
@@ -528,6 +780,16 @@ func removeLanguageResources(topo *domain.Topology, language string) {
 	removed := make(map[string]bool)
 	for id, res := range topo.Resources {
 		if resourceLanguage(res, topo.Language) == language {
+			// Dependency resources are language-neutral shared nodes: although a
+			// dependency is tagged with whichever language happened to register it
+			// first, the SAME external package can be imported from files of other
+			// languages. Pruning its incoming edges here would drop a sibling
+			// language's imports_dependency edge that the merging sub-topology
+			// (which only carries this language's files) cannot restore. Skip it
+			// from edge pruning; the merge re-adds the dependency resource.
+			if res.Kind == domain.ResourceDependency {
+				continue
+			}
 			removed[id] = true
 			delete(topo.Resources, id)
 		}

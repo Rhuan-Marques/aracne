@@ -40,10 +40,17 @@ import (
 // ---------------------------------------------------------------------------
 
 const (
-	connCalls      = "calls"
-	connUsesStruct = "uses_struct"
-	connImplBy     = "implemented_by"
-	connImplements = "implements"
+	connCalls         = "calls"
+	connUsesStruct    = "uses_struct"
+	connImplBy        = "implemented_by"
+	connImplements    = "implements"
+	connUsesClass     = "uses_class"
+	connInherits      = "inherits"
+	connInheritedBy   = "inherited_by"
+	connUsesInterface = "uses_interface"
+	connUsesNamedType = "uses_named_type"
+	connImportsDep    = "imports_dependency"
+	connMethods       = "methods"
 )
 
 // ---------------------------------------------------------------------------
@@ -144,6 +151,28 @@ func removeCorpusFile(t *testing.T, root, rel string) {
 	if err := os.Remove(corpusFile(root, rel)); err != nil {
 		t.Fatalf("remove %s: %v", rel, err)
 	}
+}
+
+// dropCorpusFiles deletes files from the pristine copy in a scenario's setup
+// (before the baseline scan), so a mechanic can be tested in isolation. Used to
+// remove the react-importing component files that otherwise trip the
+// cross-language dependency bug on every JS/TS incremental scan.
+func dropCorpusFiles(t *testing.T, root string, rels ...string) {
+	t.Helper()
+	for _, rel := range rels {
+		if err := os.Remove(corpusFile(root, rel)); err != nil {
+			t.Fatalf("drop %s: %v", rel, err)
+		}
+	}
+}
+
+// dropReactComponents removes both react-importing component files. Used as the
+// setup for JS/TS *core* mechanic scenarios so the cross-language react
+// dependency bug (filed as ..._4) does not mask the mechanic under test; the
+// bug itself is owned by the dedicated xlang and JSX/TSX scenarios.
+func dropReactComponents(t *testing.T, root string) {
+	t.Helper()
+	dropCorpusFiles(t, root, "jsfamily/components.jsx", "tsfamily/components.tsx")
 }
 
 // replaceInCorpusFile applies a set of literal old->new replacements to a corpus

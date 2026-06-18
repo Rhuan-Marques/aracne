@@ -33,6 +33,10 @@ type ProviderSettings struct {
 	KeyEnv   string       `json:"key_env,omitempty"`
 	Contract ProviderName `json:"chat_contract,omitempty"`
 	Custom   bool         `json:"custom,omitempty"`
+	// ThinkingBudget, when > 0, requests extended reasoning from providers that
+	// support it (Anthropic thinking budget; OpenAI reasoning effort on
+	// reasoning-capable models). Ignored by providers/models without support.
+	ThinkingBudget int `json:"thinking_budget,omitempty"`
 }
 
 type Session struct {

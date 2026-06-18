@@ -16,16 +16,24 @@ import (
 )
 
 type OpenAI struct {
-	apiKey  string
-	model   string
-	baseURL string
+	apiKey          string
+	model           string
+	baseURL         string
+	reasoningEffort string
 }
 
 type openAIRequest struct {
-	Model    string          `json:"model"`
-	Messages []openAIMessage `json:"messages"`
-	Tools    []openAITool    `json:"tools,omitempty"`
-	Stream   bool            `json:"stream,omitempty"`
+	Model           string          `json:"model"`
+	Messages        []openAIMessage `json:"messages"`
+	Tools           []openAITool    `json:"tools,omitempty"`
+	Stream          bool            `json:"stream,omitempty"`
+	ReasoningEffort string          `json:"reasoning_effort,omitempty"`
+}
+
+// SetReasoningEffort sets the reasoning effort ("low"/"medium"/"high") sent on
+// requests. Only valid for reasoning-capable models; leave empty otherwise.
+func (o *OpenAI) SetReasoningEffort(effort string) {
+	o.reasoningEffort = effort
 }
 
 type openAIMessage struct {
@@ -85,7 +93,7 @@ func (o *OpenAI) StreamChatContext(ctx context.Context, messages []llm.Message, 
 		return nil, fmt.Errorf("OPENAI_API_KEY is not configured")
 	}
 
-	reqBody := openAIRequest{Model: o.model, Messages: toOpenAIMessages(messages), Tools: toOpenAITools(tools), Stream: true}
+	reqBody := openAIRequest{Model: o.model, Messages: toOpenAIMessages(messages), Tools: toOpenAITools(tools), Stream: true, ReasoningEffort: o.reasoningEffort}
 
 	body, err := json.Marshal(reqBody)
 	if err != nil {

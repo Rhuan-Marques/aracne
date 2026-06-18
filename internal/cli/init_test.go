@@ -288,6 +288,37 @@ func TestOpenCodeAgentContent_ContainsPermissionsAndPrompt(t *testing.T) {
 	}
 }
 
+func TestAgentModelFrontmatter(t *testing.T) {
+	if got := agentModelFrontmatter(""); got != "" {
+		t.Fatalf("empty model should yield no line, got %q", got)
+	}
+	if got := agentModelFrontmatter("<inherits>"); got != "" {
+		t.Fatalf("inherited model should yield no line, got %q", got)
+	}
+	if got := agentModelFrontmatter("opus"); got != "model: opus\n" {
+		t.Fatalf("model line = %q", got)
+	}
+}
+
+func TestClaudeAgentContent_EmitsConfiguredModel(t *testing.T) {
+	eff := helper.AgentConfig{Model: "opus", MCPTools: []string{"bug_list"}}
+	if content := claudeAgentContent("bug-judge", "Test", eff, "Prompt body"); !strings.Contains(content, "\nmodel: opus\n") {
+		t.Fatalf("expected model frontmatter, got:\n%s", content)
+	}
+	// A default (inherited) agent must not emit a model line.
+	def := helper.DefaultConfig().EffectiveAgent("claude_code", "bug-judge")
+	if strings.Contains(claudeAgentContent("bug-judge", "Test", def, "Prompt body"), "\nmodel:") {
+		t.Fatal("inherited model should not emit a model line")
+	}
+}
+
+func TestOpenCodeAgentContent_EmitsConfiguredModel(t *testing.T) {
+	eff := helper.AgentConfig{Model: "anthropic/claude-opus-4-8", MCPTools: []string{"bug_list"}}
+	if content := openCodeAgentContent("Test", eff, "Prompt body"); !strings.Contains(content, "\nmodel: anthropic/claude-opus-4-8\n") {
+		t.Fatalf("expected model frontmatter, got:\n%s", content)
+	}
+}
+
 func TestWriteMarkdownFile_CreatesWithContent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.md")

@@ -988,14 +988,24 @@ func newProvider(settings ProviderSettings) (llm.Provider, error) {
 	var provider llm.Provider
 	switch contract {
 	case ProviderOpenAI:
-		provider = providers.NewOpenAI(settings.APIKey, settings.Model, settings.BaseURL)
+		op := providers.NewOpenAI(settings.APIKey, settings.Model, settings.BaseURL)
+		if settings.ThinkingBudget > 0 && isOpenAIReasoningModel(settings.Model) {
+			op.SetReasoningEffort(openAIReasoningEffort(settings.ThinkingBudget))
+		}
+		provider = op
 	case ProviderAnthropic:
-		provider = providers.NewAnthropic(settings.APIKey, settings.Model, settings.BaseURL)
+		ap := providers.NewAnthropic(settings.APIKey, settings.Model, settings.BaseURL)
+		if settings.ThinkingBudget > 0 {
+			ap.SetThinkingBudget(settings.ThinkingBudget)
+		}
+		provider = ap
 	case ProviderDeepSeek:
 		apiKey := settings.APIKey
 		if apiKey == "" {
 			apiKey = os.Getenv("DEEPSEEK_API_KEY")
 		}
+		// DeepSeek selects reasoning via the model (deepseek-reasoner), not a
+		// request parameter, so ThinkingBudget is handled by model choice.
 		provider = providers.NewDeepSeekWithConfig(apiKey, settings.Model, settings.BaseURL)
 	default:
 		return nil, fmt.Errorf("unsupported provider contract: %s", contract)
@@ -1004,6 +1014,40 @@ func newProvider(settings ProviderSettings) (llm.Provider, error) {
 		provider = contractGuardProvider{provider: provider}
 	}
 	return provider, nil
+}
+
+// isOpenAIReasoningModel reports whether an OpenAI model accepts the
+// reasoning_effort parameter. Sending it to a non-reasoning model is an API
+// error, so reasoning is only applied when the model is reasoning-capable.
+func isOpenAIReasoningModel(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	if m == "" {
+		return false
+	}
+	if strings.Contains(m, "reason") {
+		return true
+	}
+	for _, prefix := range []string{"o1", "o3", "o4", "gpt-5"} {
+		if strings.HasPrefix(m, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// openAIReasoningEffort maps a thinking-token budget to an OpenAI reasoning
+// effort tier.
+func openAIReasoningEffort(budget int) string {
+	switch {
+	case budget <= 0:
+		return ""
+	case budget < 2048:
+		return "low"
+	case budget < 6000:
+		return "medium"
+	default:
+		return "high"
+	}
 }
 
 type contractGuardProvider struct {

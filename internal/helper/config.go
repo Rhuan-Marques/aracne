@@ -104,8 +104,9 @@ type VizGraph struct {
 }
 
 // ChatAgentConfig is the proprietary-chat agent shape: a flat tool list plus
-// optional params (no mcp/native split).
+// optional model override and params (no mcp/native split).
 type ChatAgentConfig struct {
+	Model  string         `json:"model,omitempty"`
 	Tools  []string       `json:"tools,omitempty"`
 	Params map[string]int `json:"params,omitempty"`
 }
@@ -367,6 +368,12 @@ func DefaultChatAgentTools(agentName string) []string {
 	}
 }
 
+// DefaultBugJudgeThinkingBudget is the default extended-reasoning token budget
+// for the proprietary-chat bug-judge sub-agent. Triage is a judgment task, so
+// it reasons harder than the default. It is a no-op for providers/models that
+// do not support reasoning (see chat newProvider).
+const DefaultBugJudgeThinkingBudget = 4096
+
 func DefaultConfig() *Config {
 	subAgent := func(name string) AgentConfig {
 		ac := AgentConfig{
@@ -421,7 +428,7 @@ func DefaultConfig() *Config {
 					Agents: map[string]ChatAgentConfig{
 						"explorer":   {Tools: DefaultChatAgentTools("explorer")},
 						"bug-hunter": {Tools: DefaultChatAgentTools("bug-hunter")},
-						"bug-judge":  {Tools: DefaultChatAgentTools("bug-judge")},
+						"bug-judge":  {Tools: DefaultChatAgentTools("bug-judge"), Params: map[string]int{"thinking": DefaultBugJudgeThinkingBudget}},
 						"bug-solver": {Tools: DefaultChatAgentTools("bug-solver")},
 						"descriptions-generation-executor": {
 							Tools:  DefaultChatAgentTools("descriptions-generation-executor"),
