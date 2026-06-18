@@ -1150,14 +1150,11 @@ func TestAnalyzeFunctionBody_interfaceConstructorAndMethodCall(t *testing.T) {
 	if len(usesIface) != 1 || usesIface[0] != string(ifaceID) {
 		t.Errorf("expected ConnUsesIface to %q, got %v", ifaceID, usesIface)
 	}
-	if len(calls) != 2 {
-		t.Fatalf("expected 2 ConnCalls (ctor + method), got %v", calls)
-	}
-	if calls[0] != string(ctorID) && calls[1] != string(ctorID) {
-		t.Errorf("expected ConnCalls to include %q, got %v", ctorID, calls)
-	}
-	if calls[0] != string(methodID) && calls[1] != string(methodID) {
-		t.Errorf("expected ConnCalls to include %q, got %v", methodID, calls)
+	// x is interface-typed (the constructor returns SomeInterface), so the method
+	// call records only interface usage; the constructor is the sole call edge
+	// (no implementer fan-out — cold scan has no implemented_by here).
+	if len(calls) != 1 || calls[0] != string(ctorID) {
+		t.Errorf("expected only the constructor call %q, got %v", ctorID, calls)
 	}
 }
 
@@ -1224,14 +1221,10 @@ func TestAnalyzeFunctionBody_qualifiedInterfaceConstructorAndMethodCall(t *testi
 	if len(usesIface) != 1 || usesIface[0] != string(ifaceID) {
 		t.Errorf("expected ConnUsesIface to %q, got %v", ifaceID, usesIface)
 	}
-	if len(calls) != 2 {
-		t.Fatalf("expected 2 ConnCalls (ctor + method), got %v", calls)
-	}
-	if calls[0] != string(ctorID) && calls[1] != string(ctorID) {
-		t.Errorf("expected ConnCalls to include %q, got %v", ctorID, calls)
-	}
-	if calls[0] != string(methodID) && calls[1] != string(methodID) {
-		t.Errorf("expected ConnCalls to include %q, got %v", methodID, calls)
+	// x is interface-typed across packages; the cross-package method call records
+	// only interface usage, leaving the constructor as the sole call edge.
+	if len(calls) != 1 || calls[0] != string(ctorID) {
+		t.Errorf("expected only the constructor call %q, got %v", ctorID, calls)
 	}
 }
 
