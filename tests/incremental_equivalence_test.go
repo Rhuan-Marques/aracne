@@ -150,3 +150,149 @@ func main() {
 		t.Errorf("expected main to call equiv.Helper2 after incremental update, got calls=%v", main.Connections["calls"])
 	}
 }
+
+// writeFileMk writes a file, creating parent directories as needed.
+func writeFileMk(t *testing.T, dir, rel, content string) {
+	t.Helper()
+	p := filepath.Join(dir, rel)
+	if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, p, content)
+}
+
+// assertIncrEqualsFull lays down files, full-scans, applies mutate, scans
+// incrementally, then full-scans a fresh db of the final tree and asserts the
+// two resource/connection graphs are identical. This is the core Phase 3 guard:
+// any change to the incremental path must keep it equivalent to a cold scan.
+func assertIncrEqualsFull(t *testing.T, files map[string]string, mutate func(t *testing.T, dir string)) {
+	t.Helper()
+	dir := t.TempDir()
+	for rel, content := range files {
+		writeFileMk(t, dir, rel, content)
+	}
+	incrDB := filepath.Join(dir, "incr.db")
+	mustRun(t, dir, "scan", "-root", dir, "-output", incrDB)
+	mutate(t, dir)
+	mustRun(t, dir, "scan", "-root", dir, "-output", incrDB)
+
+	fullDB := filepath.Join(dir, "full.db")
+	mustRun(t, dir, "scan", "-root", dir, "-output", fullDB)
+
+	incr, err := helper.ReadDb(incrDB)
+	if err != nil {
+		t.Fatalf("read incr db: %v", err)
+	}
+	full, err := helper.ReadDb(fullDB)
+	if err != nil {
+		t.Fatalf("read full db: %v", err)
+	}
+	assertSameGraph(t, incr, full)
+}
+
+// A struct gaining a method (in a newly added file) that makes it satisfy an
+// existing interface — exercises matchStructsToInterfaces on the incremental path.
+func TestIncrEquiv_AddMethodSatisfiesInterface(t *testing.T) {
+	assertIncrEqualsFull(t, map[string]string{
+		"go.mod": "module eq1\n\ngo 1.21\n",
+		"main.go": `package main
+
+type Greeter interface{ Greet() string }
+
+type E struct{}
+
+func use(g Greeter) string { return g.Greet() }
+`,
+	}, func(t *testing.T, dir string) {
+		writeFileMk(t, dir, "impl.go", `package main
+
+func (E) Greet() string { return "hi" }
+`)
+	})
+}
+
+// Deleting a file whose function has outbound edges (but is not referenced by
+// any surviving code) — exercises RemoveFileResources + scoped deletes. (A
+// deleted symbol that IS still referenced by survivors hits a pre-existing
+// incremental bug — see bug report on RemoveFileResources — so it is not
+// asserted here.)
+func TestIncrEquiv_DeleteFile(t *testing.T) {
+	assertIncrEqualsFull(t, map[string]string{
+		"go.mod": "module eq2\n\ngo 1.21\n",
+		"main.go": `package main
+
+func Keep() {}
+
+func main() {}
+`,
+		"extra.go": `package main
+
+func helper() { Keep() }
+`,
+	}, func(t *testing.T, dir string) {
+		if err := os.Remove(filepath.Join(dir, "extra.go")); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+// Changing a file in one package that another package depends on — exercises
+// cross-package incremental update without re-resolving the dependent file.
+func TestIncrEquiv_CrossPackageChange(t *testing.T) {
+	assertIncrEqualsFull(t, map[string]string{
+		"go.mod": "module eq3\n\ngo 1.21\n",
+		"lib/lib.go": `package lib
+
+type T struct{}
+
+func (t *T) M() {}
+
+func F() {}
+`,
+		"main.go": `package main
+
+import "eq3/lib"
+
+func main() {
+	lib.F()
+	x := &lib.T{}
+	x.M()
+}
+`,
+	}, func(t *testing.T, dir string) {
+		writeFileMk(t, dir, "lib/lib.go", `package lib
+
+type T struct{}
+
+func (t *T) M() {}
+
+func (t *T) N() {}
+
+func F() {}
+
+func G() {}
+`)
+	})
+}
+
+// Changing a function's signature in a file a caller in another file depends on.
+func TestIncrEquiv_ChangeSignatureCrossFile(t *testing.T) {
+	assertIncrEqualsFull(t, map[string]string{
+		"go.mod": "module eq4\n\ngo 1.21\n",
+		"lib/lib.go": `package lib
+
+func Do(x int) {}
+`,
+		"main.go": `package main
+
+import "eq4/lib"
+
+func main() { lib.Do(1) }
+`,
+	}, func(t *testing.T, dir string) {
+		writeFileMk(t, dir, "lib/lib.go", `package lib
+
+func Do(x string) {}
+`)
+	})
+}
