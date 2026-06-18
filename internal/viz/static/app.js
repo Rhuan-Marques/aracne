@@ -51,7 +51,14 @@
     dragging: false,
     dragMoved: false,
     dragStart: null,
-    running: false
+    running: false,
+    simGen: 0,
+    alpha: 0,
+    tickCount: 0,
+    grid: null,
+    neighbors: new Map(),
+    fitPending: false,
+    userTouched: false
   };
   var colors = {
     package: '#38bdf8',
@@ -65,6 +72,27 @@
     dependency: '#94a3b8',
     missing: '#fb7185'
   };
+  // Force-layout tunables (see plan: no-overlap collision + healthy spacing).
+  var SIM = {
+    pad: 6,            // px gap added to a node's render radius for collision -> visible edge gaps
+    repel: 900,        // global many-body repulsion strength (Barnes-Hut) -> spreads into branches
+    theta2: 0.7,       // Barnes-Hut accuracy: treat a cell as one mass when (cell.s^2 / d^2) < theta2
+    spring: 0.045,     // edge stiffness -> taut, visible branches along edges
+    springClamp: 30,   // max spring impulse per edge per tick
+    gravity: 0.0001,      // very weak pull to origin (alpha-scaled) -> bounds total spread without re-balling
+    clusterGravity: 0.03, // pull toward the node's live community centroid -> compacts communities into separate blobs
+    damping: 0.62,     // velocity retained per tick (lower = stable with strong global repulsion)
+    vmax: 30,          // hard per-tick velocity cap (world px) -> safety against explosions
+    alphaInit: 1.0,    // cooling temperature at start
+    alphaMin: 0.02,    // stop when alpha drops below this
+    alphaDecay: 0.985, // multiplicative cooling per tick
+    keStop: 0.03,      // stop when mean kinetic energy drops below this...
+    minTicks: 150,     // ...but never before this many ticks, so the layout has time to spread
+    maxTicks: 600,     // hard ceiling on simulation length
+    linkBase: 36       // additive edge rest-length on top of summed endpoint radii
+  };
+  var MAX_NODE_RADIUS = 14; // keep in sync with radius()
+  var SIM_CELL = 2 * (MAX_NODE_RADIUS + SIM.pad); // grid cell covers the largest node diameter
   function routeNodeColor(n) {}
   var modeHelp = {
     packages: 'Packages & Modules shows import relationships: Go packages (package→package), and Python/JS/TS modules as files (file→file).',
@@ -721,99 +749,305 @@
       });
     }
     state.nodeMap = new Map(state.nodes.map(function (n) { return [n.id, n]; }));
+    state.neighbors = buildNeighbors();
     state.pos = new Map();
     state.vel = new Map();
     state.selected = null;
     state.hoveredID = null;
     updateDepthControls();
+    computeClusters();
     seedPositions();
     el('inspector').innerHTML = '<div class="empty">Select a node.</div>';
     el('codePanel').innerHTML = '<div class="empty">No source available.</div>';
     el('codeTab').classList.add('disabled');
     switchInspectorTab('inspector');
     el('status').textContent = state.nodes.length + ' nodes, ' + state.edges.length + ' edges' + (data.truncated ? ' (truncated)' : '');
-    runSimulation(180);
+    state.fitPending = true;
+    state.userTouched = false;
+    runSimulation();
   }
 
-  function seedPositions() {
-    var rect = canvas.getBoundingClientRect();
-    var centers = languageCenters();
-    var grouped = new Map();
-    state.nodes.forEach(function (n) {
-      var lang = n.language || 'unknown';
-      if (!grouped.has(lang)) grouped.set(lang, []);
-      grouped.get(lang).push(n);
+  // --- community detection via deterministic label propagation -> sets n._cluster ---
+  function computeClusters() {
+    var nodes = state.nodes;
+    var idx = new Map();
+    nodes.forEach(function (n, i) { idx.set(n.id, i); });
+    var adj = [];
+    for (var a = 0; a < nodes.length; a++) adj.push([]);
+    state.edges.forEach(function (e) {
+      var s = idx.get(e.source), t = idx.get(e.target);
+      if (s === undefined || t === undefined || s === t) return;
+      adj[s].push(t);
+      adj[t].push(s);
     });
-    state.nodes.forEach(function (n) {
-      var langNodes = grouped.get(n.language || 'unknown') || state.nodes;
-      var i = langNodes.indexOf(n);
-      var center = centers.get(n.language || 'unknown') || {x: 0, y: 0};
-      var radius = Math.max(70, Math.min(rect.width, rect.height) * (centers.size > 1 ? 0.16 : 0.34));
-      var a = (Math.PI * 2 * i) / Math.max(1, langNodes.length);
-      state.pos.set(n.id, {x: center.x + Math.cos(a) * radius, y: center.y + Math.sin(a) * radius});
-      state.vel.set(n.id, {x: 0, y: 0});
-    });
-  }
-
-  function languageCenters() {
-    var selected = el('language') ? el('language').value : 'all';
-    var langs = [];
-    var seen = new Set();
-    state.nodes.forEach(function (n) {
-      var lang = n.language || 'unknown';
-      if (!seen.has(lang)) {
-        seen.add(lang);
-        langs.push(lang);
+    var label = new Array(nodes.length);
+    for (var k = 0; k < nodes.length; k++) label[k] = k;
+    for (var pass = 0; pass < 8; pass++) {
+      var changed = false;
+      for (var v = 0; v < nodes.length; v++) {
+        var nb = adj[v];
+        if (nb.length === 0) continue; // isolated node keeps its own singleton label
+        var counts = new Map();
+        for (var m = 0; m < nb.length; m++) {
+          var lbl = label[nb[m]];
+          counts.set(lbl, (counts.get(lbl) || 0) + 1);
+        }
+        var best = label[v];
+        var bestC = counts.get(best) || 0;
+        counts.forEach(function (c, l) {
+          if (c > bestC || (c === bestC && l < best)) { best = l; bestC = c; } // deterministic tie-break
+        });
+        if (best !== label[v]) { label[v] = best; changed = true; }
       }
-    });
-    langs.sort();
-    var centers = new Map();
-    if (selected !== 'all' || langs.length <= 1) {
-      langs.forEach(function (lang) { centers.set(lang, {x: 0, y: 0}); });
-      return centers;
+      if (!changed) break;
     }
-    var rect = canvas.getBoundingClientRect();
-    var spread = Math.max(260, Math.min(rect.width, rect.height) * 0.44);
-    langs.forEach(function (lang, i) {
-      var a = (Math.PI * 2 * i) / Math.max(1, langs.length);
-      centers.set(lang, {x: Math.cos(a) * spread, y: Math.sin(a) * spread});
+    nodes.forEach(function (n, i) { n._cluster = label[i]; });
+  }
+
+  function avgEr() {
+    var nodes = state.nodes;
+    if (!nodes.length) return MAX_NODE_RADIUS + SIM.pad;
+    var s = 0;
+    nodes.forEach(function (n) { s += er(n); });
+    return s / nodes.length;
+  }
+
+  // Initial spread-out center per community (big clusters inner, singletons outer). Just a
+  // starting point -> the live simulation then separates communities by repulsion.
+  function clusterSeedCenters() {
+    var sizes = new Map();
+    state.nodes.forEach(function (n) { sizes.set(n._cluster, (sizes.get(n._cluster) || 0) + 1); });
+    var arr = [];
+    sizes.forEach(function (size, id) { arr.push({id: id, size: size}); });
+    arr.sort(function (a, b) { return b.size - a.size || a.id - b.id; });
+    var GA = Math.PI * (3 - Math.sqrt(5));
+    var step = 2.4 * avgEr();
+    var centers = new Map();
+    var cum = 0;
+    arr.forEach(function (cl, k) {
+      var dist = step * Math.sqrt(cum + cl.size / 2); // sunflower packing weighted by cumulative size
+      cum += cl.size;
+      var ang = k * GA;
+      centers.set(cl.id, {x: Math.cos(ang) * dist, y: Math.sin(ang) * dist});
     });
     return centers;
   }
 
-  function runSimulation(ticks) {
-    if (state.running) return;
+  function seedPositions() {
+    var centers = clusterSeedCenters();
+    var grouped = new Map();
+    state.nodes.forEach(function (n) {
+      if (!grouped.has(n._cluster)) grouped.set(n._cluster, []);
+      grouped.get(n._cluster).push(n);
+    });
+    var GA = Math.PI * (3 - Math.sqrt(5)); // golden angle -> even area-filling spiral
+    grouped.forEach(function (clNodes, cid) {
+      var center = centers.get(cid) || {x: 0, y: 0};
+      var meanEr = 0;
+      clNodes.forEach(function (n) { meanEr += er(n); });
+      meanEr = clNodes.length ? meanEr / clNodes.length : (MAX_NODE_RADIUS + SIM.pad);
+      var spacing = 2.1 * meanEr; // arms ~one node-gap apart -> starts near non-overlapping
+      clNodes.forEach(function (n, i) {
+        var rr = spacing * Math.sqrt(i + 0.5);
+        var a = i * GA;
+        state.pos.set(n.id, {x: center.x + Math.cos(a) * rr, y: center.y + Math.sin(a) * rr});
+        state.vel.set(n.id, {x: 0, y: 0});
+      });
+    });
+  }
+
+  function runSimulation() {
+    state.simGen++;
+    var gen = state.simGen; // supersede any in-flight simulation
     state.running = true;
-    var remaining = ticks;
+    state.alpha = SIM.alphaInit;
+    state.tickCount = 0;
     function frame() {
-      if (remaining-- > 0) {
-        tick();
-        draw();
-        requestAnimationFrame(frame);
-      } else {
+      if (gen !== state.simGen) return;
+      var ke = tick();
+      state.alpha *= SIM.alphaDecay;
+      state.tickCount++;
+      draw();
+      var settled = (ke < SIM.keStop && state.tickCount >= SIM.minTicks) || state.alpha < SIM.alphaMin || state.tickCount >= SIM.maxTicks;
+      if (settled) {
         state.running = false;
-        draw();
+        if (state.fitPending && !state.userTouched) fit();
+        state.fitPending = false;
+        return;
       }
+      requestAnimationFrame(frame);
     }
     requestAnimationFrame(frame);
   }
 
+  function separate(a, pa, b, pb, dx, dy) {
+    // Position-based hard separation: guarantees node circles never overlap.
+    var minD = er(a) + er(b);
+    var d2 = dx * dx + dy * dy;
+    if (d2 >= minD * minD) return;
+    var d = Math.sqrt(d2);
+    var ux, uy;
+    if (d < 0.0001) {
+      var ang = hashAngle(a.id); // deterministic nudge for exactly-coincident nodes
+      ux = Math.cos(ang);
+      uy = Math.sin(ang);
+      d = 0.0001;
+    } else {
+      ux = dx / d;
+      uy = dy / d;
+    }
+    var half = (minD - d) * 0.5;
+    pa.x += ux * half;
+    pa.y += uy * half;
+    pb.x -= ux * half;
+    pb.y -= uy * half;
+  }
+
+  // --- Barnes-Hut quadtree: global O(n log n) many-body repulsion ---
+  function newCell(x, y, s) {
+    return {x: x, y: y, s: s, mass: 0, sx: 0, sy: 0, bx: 0, by: 0, bid: null, kids: null};
+  }
+  function buildTree(nodes) {
+    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (var i = 0; i < nodes.length; i++) {
+      var p = state.pos.get(nodes[i].id);
+      if (!p) continue;
+      if (p.x < minX) minX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y > maxY) maxY = p.y;
+    }
+    if (!isFinite(minX)) return null;
+    var root = newCell(minX, minY, Math.max(maxX - minX, maxY - minY, 1) + 1);
+    for (var j = 0; j < nodes.length; j++) {
+      var q = state.pos.get(nodes[j].id);
+      if (q) treeInsert(root, q.x, q.y, nodes[j].id);
+    }
+    return root;
+  }
+  function treeInsert(cell, x, y, id) {
+    cell.mass++;
+    cell.sx += x;
+    cell.sy += y;
+    if (cell.kids) { treeInsertChild(cell, x, y, id); return; }
+    if (cell.bid === null) { cell.bx = x; cell.by = y; cell.bid = id; return; }
+    if (cell.s < 1) return; // near-coincident bodies: stop subdividing, keep accumulated mass
+    cell.kids = [null, null, null, null];
+    treeInsertChild(cell, cell.bx, cell.by, cell.bid);
+    cell.bid = null;
+    treeInsertChild(cell, x, y, id);
+  }
+  function treeInsertChild(cell, x, y, id) {
+    var hs = cell.s / 2;
+    var qi = 0, nx = cell.x, ny = cell.y;
+    if (x >= cell.x + hs) { qi += 1; nx = cell.x + hs; }
+    if (y >= cell.y + hs) { qi += 2; ny = cell.y + hs; }
+    if (!cell.kids[qi]) cell.kids[qi] = newCell(nx, ny, hs);
+    treeInsert(cell.kids[qi], x, y, id);
+  }
+  function applyRepulsion(id, px, py, v, cell, alpha) {
+    if (!cell || cell.mass === 0) return;
+    var dx = px - cell.sx / cell.mass;
+    var dy = py - cell.sy / cell.mass;
+    var d2 = dx * dx + dy * dy + 0.5;
+    if (cell.kids && (cell.s * cell.s) / d2 >= SIM.theta2) {
+      applyRepulsion(id, px, py, v, cell.kids[0], alpha);
+      applyRepulsion(id, px, py, v, cell.kids[1], alpha);
+      applyRepulsion(id, px, py, v, cell.kids[2], alpha);
+      applyRepulsion(id, px, py, v, cell.kids[3], alpha);
+      return;
+    }
+    if (!cell.kids && cell.mass === 1 && cell.bid === id) return; // skip self
+    var d = Math.sqrt(d2);
+    var f = SIM.repel * cell.mass / d2 * alpha;
+    v.x += dx / d * f;
+    v.y += dy / d * f;
+  }
+
+  function clusterCentroids() {
+    // Live centroid of each community (recomputed per tick) -> gravity target for compaction.
+    var sums = new Map();
+    state.nodes.forEach(function (node) {
+      var p = state.pos.get(node.id);
+      if (!p) return;
+      var s = sums.get(node._cluster);
+      if (!s) { s = {x: 0, y: 0, c: 0}; sums.set(node._cluster, s); }
+      s.x += p.x;
+      s.y += p.y;
+      s.c++;
+    });
+    var cen = new Map();
+    sums.forEach(function (s, id) { cen.set(id, {x: s.x / s.c, y: s.y / s.c}); });
+    return cen;
+  }
+
+  function globalRecenter() {
+    // Translate the whole graph so its centroid sits at the origin. Pure framing -> no inward pull.
+    var sx = 0, sy = 0, c = 0;
+    state.nodes.forEach(function (node) {
+      var p = state.pos.get(node.id);
+      if (!p) return;
+      sx += p.x;
+      sy += p.y;
+      c++;
+    });
+    if (!c) return;
+    var ox = sx / c, oy = sy / c;
+    if (ox === 0 && oy === 0) return;
+    state.nodes.forEach(function (node) {
+      var p = state.pos.get(node.id);
+      if (p) { p.x -= ox; p.y -= oy; }
+    });
+  }
+
   function tick() {
     var nodes = state.nodes;
-    var repulseLimit = Math.min(nodes.length, 350);
-    for (var i = 0; i < repulseLimit; i++) {
-      for (var j = i + 1; j < repulseLimit; j++) {
-        var a = state.pos.get(nodes[i].id);
-        var b = state.pos.get(nodes[j].id);
-        var dx = a.x - b.x;
-        var dy = a.y - b.y;
-        var d2 = dx * dx + dy * dy + 20;
-        var f = Math.min(2.2, 900 / d2);
-        var d = Math.sqrt(d2);
-        push(nodes[i].id, dx / d * f, dy / d * f);
-        push(nodes[j].id, -dx / d * f, -dy / d * f);
+    var n = nodes.length;
+    if (n === 0) return 0;
+    var alpha = state.alpha;
+    var cell = SIM_CELL;
+
+    // --- global many-body repulsion (Barnes-Hut) -> spreads the graph into branches ---
+    var tree = buildTree(nodes);
+    if (tree) {
+      for (var r = 0; r < n; r++) {
+        var pr = state.pos.get(nodes[r].id);
+        var vr = state.vel.get(nodes[r].id);
+        if (pr && vr) applyRepulsion(nodes[r].id, pr.x, pr.y, vr, tree, alpha);
       }
     }
+
+    // --- local hard collision via spatial hash grid -> guarantees no overlap ---
+    var grid = state.grid || (state.grid = new Map());
+    grid.clear();
+    for (var i = 0; i < n; i++) {
+      var pi = state.pos.get(nodes[i].id);
+      if (!pi) continue;
+      var key = Math.floor(pi.x / cell) + ',' + Math.floor(pi.y / cell);
+      var bucket = grid.get(key);
+      if (!bucket) { bucket = []; grid.set(key, bucket); }
+      bucket.push(i);
+    }
+    for (var a1 = 0; a1 < n; a1++) {
+      var pa = state.pos.get(nodes[a1].id);
+      if (!pa) continue;
+      var bcx = Math.floor(pa.x / cell);
+      var bcy = Math.floor(pa.y / cell);
+      for (var ox = -1; ox <= 1; ox++) {
+        for (var oy = -1; oy <= 1; oy++) {
+          var nb2 = grid.get((bcx + ox) + ',' + (bcy + oy));
+          if (!nb2) continue;
+          for (var bi = 0; bi < nb2.length; bi++) {
+            var j = nb2[bi];
+            if (j <= a1) continue; // each unordered pair once
+            var pb = state.pos.get(nodes[j].id);
+            if (pb) separate(nodes[a1], pa, nodes[j], pb, pa.x - pb.x, pa.y - pb.y);
+          }
+        }
+      }
+    }
+
+    // --- springs with radius-aware rest length ---
     state.edges.forEach(function (e) {
       var a = state.pos.get(e.source);
       var b = state.pos.get(e.target);
@@ -821,23 +1055,40 @@
       var dx = b.x - a.x;
       var dy = b.y - a.y;
       var d = Math.sqrt(dx * dx + dy * dy) || 1;
-      var want = 100;
-      var f = (d - want) * 0.008;
+      var sa = state.nodeMap.get(e.source);
+      var sb = state.nodeMap.get(e.target);
+      var want = (sa ? er(sa) : 10) + (sb ? er(sb) : 10) + SIM.linkBase;
+      var f = Math.max(-SIM.springClamp, Math.min(SIM.springClamp, (d - want) * SIM.spring)) * alpha;
       push(e.source, dx / d * f, dy / d * f);
       push(e.target, -dx / d * f, -dy / d * f);
     });
-    var centers = languageCenters();
-    nodes.forEach(function (n) {
-      var p = state.pos.get(n.id);
-      var v = state.vel.get(n.id);
-      var center = centers.get(n.language || 'unknown') || {x: 0, y: 0};
-      v.x += (center.x - p.x) * 0.001;
-      v.y += (center.y - p.y) * 0.001;
-      v.x *= 0.82;
-      v.y *= 0.82;
+
+    // --- community compaction + weak containment, damping, velocity cap, integrate ---
+    var ccen = clusterCentroids();
+    var totalKE = 0;
+    nodes.forEach(function (node) {
+      var p = state.pos.get(node.id);
+      var v = state.vel.get(node.id);
+      if (!p || !v) return;
+      var cc = ccen.get(node._cluster) || {x: 0, y: 0};
+      v.x += (cc.x - p.x) * SIM.clusterGravity * alpha; // pull to community centroid -> compact, distinct blobs
+      v.y += (cc.y - p.y) * SIM.clusterGravity * alpha;
+      v.x += -p.x * SIM.gravity * alpha;                // weak pull to origin -> bounds total spread
+      v.y += -p.y * SIM.gravity * alpha;
+      v.x *= SIM.damping;
+      v.y *= SIM.damping;
+      var sp = Math.sqrt(v.x * v.x + v.y * v.y);
+      if (sp > SIM.vmax) {
+        var k = SIM.vmax / sp;
+        v.x *= k;
+        v.y *= k;
+      }
       p.x += v.x;
       p.y += v.y;
+      totalKE += v.x * v.x + v.y * v.y;
     });
+    globalRecenter(); // frame the graph without any inward pull
+    return totalKE / n;
   }
 
   function push(id, x, y) {
@@ -848,59 +1099,149 @@
     }
   }
 
+  function buildNeighbors() {
+    var m = new Map();
+    state.nodes.forEach(function (n) { m.set(n.id, new Set()); });
+    state.edges.forEach(function (e) {
+      if (e.source === e.target) return;
+      var s = m.get(e.source);
+      var t = m.get(e.target);
+      if (s) s.add(e.target);
+      if (t) t.add(e.source);
+    });
+    return m;
+  }
+
   function draw() {
     var rect = canvas.getBoundingClientRect();
     ctx.clearRect(0, 0, rect.width, rect.height);
     ctx.save();
     ctx.translate(rect.width / 2 + state.ox, rect.height / 2 + state.oy);
     ctx.scale(state.scale, state.scale);
-    ctx.lineWidth = 1 / state.scale;
+
+    var s = state.scale;
+    var hoverId = state.hoveredID;
+    var nbrs = hoverId ? state.neighbors.get(hoverId) : null;
+
+    // --- edges: normal first, hovered edges glow on top ---
+    var hiEdges = [];
+    ctx.lineWidth = 1 / s;
     ctx.globalAlpha = 0.45;
     state.edges.forEach(function (e) {
       var a = state.pos.get(e.source);
       var b = state.pos.get(e.target);
       if (!a || !b) return;
+      if (hoverId && (e.source === hoverId || e.target === hoverId)) { hiEdges.push([e, a, b]); return; }
       ctx.strokeStyle = edgeColor(e.type);
       ctx.beginPath();
       ctx.moveTo(a.x, a.y);
       ctx.lineTo(b.x, b.y);
       ctx.stroke();
     });
+    if (hiEdges.length) {
+      ctx.lineCap = 'round';
+      hiEdges.forEach(function (h) {
+        ctx.globalAlpha = 0.22; // soft glow underlay
+        ctx.strokeStyle = '#74d4ff';
+        ctx.lineWidth = 6 / s;
+        ctx.beginPath();
+        ctx.moveTo(h[1].x, h[1].y);
+        ctx.lineTo(h[2].x, h[2].y);
+        ctx.stroke();
+        ctx.globalAlpha = 0.95; // crisp colored edge on top
+        ctx.strokeStyle = edgeColor(h[0].type);
+        ctx.lineWidth = 2.5 / s;
+        ctx.beginPath();
+        ctx.moveTo(h[1].x, h[1].y);
+        ctx.lineTo(h[2].x, h[2].y);
+        ctx.stroke();
+      });
+      ctx.lineCap = 'butt';
+    }
     ctx.globalAlpha = 1;
+
+    // --- nodes ---
     state.nodes.forEach(function (n) {
       var p = state.pos.get(n.id);
       if (!p) return;
       var r = radius(n);
+      var isHover = n.id === hoverId;
+      var isNbr = !!(nbrs && nbrs.has(n.id));
+      if (isHover || isNbr) { // soft translucent halo behind the node
+        ctx.strokeStyle = isHover ? 'rgba(116,212,255,0.40)' : 'rgba(116,212,255,0.24)';
+        ctx.lineWidth = (isHover ? 16 : 10) / s;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        ctx.stroke();
+      }
       ctx.fillStyle = colors[n.kind] || '#e2e8f0';
       ctx.beginPath();
       ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
       ctx.fill();
       if (n.warning_count > 0 || n.bug_count > 0) {
         ctx.strokeStyle = n.bug_count > 0 ? '#fb7185' : '#facc15';
-        ctx.lineWidth = 3 / state.scale;
+        ctx.lineWidth = 3 / s;
         ctx.stroke();
       }
-      if (state.hoveredID === n.id) {
+      if (isNbr) {
         ctx.strokeStyle = '#74d4ff';
-        ctx.lineWidth = 7 / state.scale;
+        ctx.lineWidth = 3 / s;
+        ctx.stroke();
+      }
+      if (isHover) {
+        ctx.strokeStyle = '#74d4ff';
+        ctx.lineWidth = 7 / s;
         ctx.stroke();
       }
       if (state.selected && state.selected.id === n.id) {
         ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 4 / state.scale;
+        ctx.lineWidth = 4 / s;
         ctx.stroke();
       }
-      if (state.scale > 0.78 || r > 7 || (state.selected && state.selected.id === n.id) || state.hoveredID === n.id) {
+    });
+
+    // --- labels last so names are always on top of nodes & edges ---
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.lineJoin = 'round';
+    state.nodes.forEach(function (n) {
+      var p = state.pos.get(n.id);
+      if (!p) return;
+      var r = radius(n);
+      var isHover = n.id === hoverId;
+      var isNbr = !!(nbrs && nbrs.has(n.id));
+      var isSel = state.selected && state.selected.id === n.id;
+      var hi = isHover || isNbr;
+      if (!(hi || isSel || s > 0.78 || r > 7)) return;
+      var label = n.name || n.id;
+      var y = p.y + r + 4 / s;
+      if (hi) { // bigger + black outline so highlighted names pop over anything
+        ctx.font = (14 / s) + 'px sans-serif';
+        ctx.lineWidth = 3.5 / s;
+        ctx.strokeStyle = '#000000';
+        ctx.strokeText(label, p.x, y);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(label, p.x, y);
+      } else {
+        ctx.font = (12 / s) + 'px sans-serif';
         ctx.fillStyle = '#e8edf6';
-        ctx.font = (12 / state.scale) + 'px sans-serif';
-        ctx.fillText(n.name || n.id, p.x + r + 4 / state.scale, p.y + 4 / state.scale);
+        ctx.fillText(label, p.x, y);
       }
     });
+
     ctx.restore();
   }
 
   function radius(n) {
-    return Math.max(4, Math.min(14, 4 + Math.sqrt((n.in_degree || 0) + (n.out_degree || 0))));
+    return Math.max(4, Math.min(MAX_NODE_RADIUS, 4 + Math.sqrt((n.in_degree || 0) + (n.out_degree || 0))));
+  }
+  function er(n) {
+    return radius(n) + SIM.pad; // effective spacing radius used for collision/seeding
+  }
+  function hashAngle(id) {
+    var h = 0;
+    for (var i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+    return (h % 6283) / 1000; // deterministic angle in [0, ~2pi) for coincident-node jitter
   }
   function edgeColor(t) {
     var h = 0;
@@ -1041,25 +1382,55 @@
   }
   function nearest(x, y) {
     var w = screenToWorld(x, y);
+    var tol = 4 / state.scale; // small forgiving tolerance, grows when zoomed out
     var best = null;
-    var bestD = Infinity;
+    var nodes = state.nodes;
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i];
+      var p = state.pos.get(n.id);
+      if (!p) continue;
+      var r = radius(n) + tol;
+      var dx = p.x - w.x;
+      var dy = p.y - w.y;
+      if (dx * dx + dy * dy <= r * r) best = n; // later in draw order = on top -> keep last hit
+    }
+    return best;
+  }
+  function fit() {
+    if (!state.nodes.length) {
+      state.scale = 1;
+      state.ox = 0;
+      state.oy = 0;
+      draw();
+      return;
+    }
+    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     state.nodes.forEach(function (n) {
       var p = state.pos.get(n.id);
       if (!p) return;
-      var dx = p.x - w.x;
-      var dy = p.y - w.y;
-      var d = dx * dx + dy * dy;
-      if (d < bestD) {
-        bestD = d;
-        best = n;
-      }
+      var r = radius(n);
+      if (p.x - r < minX) minX = p.x - r;
+      if (p.x + r > maxX) maxX = p.x + r;
+      if (p.y - r < minY) minY = p.y - r;
+      if (p.y + r > maxY) maxY = p.y + r;
     });
-    return bestD < Math.pow(18 / state.scale, 2) ? best : null;
-  }
-  function fit() {
-    state.scale = 1;
-    state.ox = 0;
-    state.oy = 0;
+    if (!isFinite(minX)) {
+      state.scale = 1;
+      state.ox = 0;
+      state.oy = 0;
+      draw();
+      return;
+    }
+    var rect = canvas.getBoundingClientRect();
+    var pad = 40;
+    var bw = Math.max(1, maxX - minX);
+    var bh = Math.max(1, maxY - minY);
+    var sx = (rect.width - 2 * pad) / bw;
+    var sy = (rect.height - 2 * pad) / bh;
+    // draw() maps world->screen as rect/2 + offset + world*scale; center the bbox.
+    state.scale = Math.max(0.15, Math.min(4, Math.min(sx, sy)));
+    state.ox = -((minX + maxX) / 2) * state.scale;
+    state.oy = -((minY + maxY) / 2) * state.scale;
     draw();
   }
   function navigate(path, replace) {
@@ -2377,6 +2748,7 @@
   window.addEventListener('mousemove', function (e) {
     if (!state.dragging) return;
     if (Math.abs(e.clientX - state.dragStart.x) > 3 || Math.abs(e.clientY - state.dragStart.y) > 3) state.dragMoved = true;
+    state.userTouched = true;
     state.ox = state.dragStart.ox + e.clientX - state.dragStart.x;
     state.oy = state.dragStart.oy + e.clientY - state.dragStart.y;
     draw();
@@ -2393,6 +2765,7 @@
   });
   canvas.addEventListener('wheel', function (e) {
     e.preventDefault();
+    state.userTouched = true;
     state.scale *= e.deltaY > 0 ? 0.9 : 1.1;
     state.scale = Math.max(0.15, Math.min(4, state.scale));
     draw();
@@ -2457,8 +2830,8 @@
     switchInspectorTab('inspector');
     draw();
   };
-  el('zoomIn').onclick = function () { state.scale *= 1.15; draw(); };
-  el('zoomOut').onclick = function () { state.scale *= 0.85; draw(); };
+  el('zoomIn').onclick = function () { state.userTouched = true; state.scale *= 1.15; draw(); };
+  el('zoomOut').onclick = function () { state.userTouched = true; state.scale *= 0.85; draw(); };
   el('fit').onclick = fit;
   el('query').addEventListener('keydown', function (e) {
     if (e.key === 'Enter') loadGraph();
