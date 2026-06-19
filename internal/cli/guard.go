@@ -47,13 +47,14 @@ func runClaudeGuardHook(input io.Reader, output io.Writer) {
 		return
 	}
 
+	blocked, exemptPiped := loadGuardConfig()
 	switch event.HookEventName {
 	case "PreToolUse":
-		if d := decideGuard(event.ToolName, event.ToolInput, loadGuardBlockedSet()); d.Deny {
+		if d := decideGuard(event.ToolName, event.ToolInput, blocked, exemptPiped); d.Deny {
 			emitPreToolDeny(output, d.Message)
 		}
 	case "PostToolUse":
-		if msg := warningMessage(implicatedKeys(event.ToolName, event.ToolInput)); msg != "" {
+		if msg := warningMessage(implicatedKeys(event.ToolName, event.ToolInput, exemptPiped)); msg != "" {
 			emitPostToolWarning(output, msg)
 		}
 	}
@@ -66,8 +67,8 @@ type guardDecision struct {
 }
 
 // decideGuard reports whether a tool call must be blocked and the reason.
-func decideGuard(toolName string, toolInput map[string]interface{}, blocked map[string]bool) guardDecision {
-	keys := implicatedKeys(toolName, toolInput)
+func decideGuard(toolName string, toolInput map[string]interface{}, blocked map[string]bool, exemptPiped bool) guardDecision {
+	keys := implicatedKeys(toolName, toolInput, exemptPiped)
 	var denied []string
 	for _, k := range keys {
 		if blocked[k] {
@@ -89,10 +90,10 @@ func decideGuard(toolName string, toolInput map[string]interface{}, blocked map[
 // implicatedKeys returns the aracne tool keys a tool call stands in for. For
 // the Bash tool it parses the shell command for stand-in commands and always
 // includes "bash" (so a whole-Bash block via blocked_tools:["bash"] applies).
-func implicatedKeys(toolName string, toolInput map[string]interface{}) []string {
+func implicatedKeys(toolName string, toolInput map[string]interface{}, exemptPiped bool) []string {
 	if toolName == "Bash" {
 		cmd, _ := toolInput["command"].(string)
-		return append(commandKeys(cmd), "bash")
+		return append(commandKeys(cmd, exemptPiped), "bash")
 	}
 	if key, ok := toolspec.NativeToolKey(toolName); ok {
 		return []string{key}
@@ -117,14 +118,16 @@ func warningMessage(keys []string) string {
 	return strings.Join(parts, " ")
 }
 
-// loadGuardBlockedSet resolves the claude_code main agent's blocked_tools. A
-// missing/unparseable config fails open (empty set → warn-only, never block).
-func loadGuardBlockedSet() map[string]bool {
+// loadGuardConfig resolves the guard inputs from the claude_code main agent
+// config: the blocked_tools set and whether piped read/grep commands are exempt
+// (read.pipe_passthrough). A missing/unparseable config fails open: no blocks
+// and the exemption on, so the session is never broken.
+func loadGuardConfig() (blocked map[string]bool, exemptPiped bool) {
 	cfg, ok := helper.LoadConfigStrict(helper.ConfigPath(".aracne/topology.db"))
 	if !ok {
-		return map[string]bool{}
+		return map[string]bool{}, true
 	}
-	return toolNameSet(cfg.EffectiveAgent("claude_code", "main").BlockedTools)
+	return toolNameSet(cfg.EffectiveAgent("claude_code", "main").BlockedTools), cfg.EffectivePipePassthrough()
 }
 
 // ---------------------------------------------------------------------------
@@ -138,18 +141,30 @@ func loadGuardBlockedSet() map[string]bool {
 // `grep`) and ignores command names that appear only inside quoted arguments.
 // Residual false positives (heredocs, aliases, complex subshells) are
 // accepted; the worst case is an extra warning.
-func commandKeys(command string) []string {
+//
+// When exemptPiped is set, a read/grep command that consumes piped stdin
+// (`cmd | tail`, `cmd | grep x`) is skipped: it views/filters command output,
+// which the MCP file/grep tools cannot serve. Direct file reads (`cat foo.go`)
+// are still classified, and `edit` (sed/awk) is never exempt.
+func commandKeys(command string, exemptPiped bool) []string {
 	if strings.TrimSpace(command) == "" {
 		return nil
 	}
 	var keys []string
 	seen := make(map[string]bool)
 	for _, seg := range splitCommandSegments(command) {
-		word := commandWord(seg)
+		word := commandWord(seg.text)
 		if word == "" {
 			continue
 		}
-		if key, ok := toolspec.ShellCommandKey(word); ok && !seen[key] {
+		key, ok := toolspec.ShellCommandKey(word)
+		if !ok {
+			continue
+		}
+		if exemptPiped && seg.pipedInto && (key == "read" || key == "grep") {
+			continue
+		}
+		if !seen[key] {
 			seen[key] = true
 			keys = append(keys, key)
 		}
@@ -157,19 +172,33 @@ func commandKeys(command string) []string {
 	return keys
 }
 
+// commandSegment is one simple-command candidate from a shell string, with
+// whether it consumes piped stdin (its preceding unquoted separator was a
+// single `|`).
+type commandSegment struct {
+	text      string
+	pipedInto bool
+}
+
 // splitCommandSegments splits a shell command into simple-command candidates on
 // unquoted separators (pipes, list operators, subshell/group delimiters,
 // backticks, newlines). Quote characters are dropped; their inner text is kept
-// so a quoted pipe never causes a split.
-func splitCommandSegments(command string) []string {
-	var segs []string
+// so a quoted pipe never causes a split. Each segment records whether it is the
+// consumer side of a single `|` pipe; `||` (logical OR) and `&&`/`&` are list
+// separators, not pipes.
+func splitCommandSegments(command string) []commandSegment {
+	runes := []rune(command)
+	var segs []commandSegment
 	var cur strings.Builder
 	var quote rune
-	flush := func() {
-		segs = append(segs, cur.String())
+	curPiped := false // is the segment currently accumulating downstream of a `|`?
+	flush := func(nextPiped bool) {
+		segs = append(segs, commandSegment{text: cur.String(), pipedInto: curPiped})
 		cur.Reset()
+		curPiped = nextPiped
 	}
-	for _, r := range command {
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
 		if quote != 0 {
 			if r == quote {
 				quote = 0
@@ -181,13 +210,20 @@ func splitCommandSegments(command string) []string {
 		switch r {
 		case '\'', '"':
 			quote = r
-		case '|', ';', '&', '\n', '(', ')', '`', '{', '}':
-			flush()
+		case '|':
+			if i+1 < len(runes) && runes[i+1] == '|' {
+				i++ // `||` is logical OR, not a pipe
+				flush(false)
+			} else {
+				flush(true)
+			}
+		case ';', '&', '\n', '(', ')', '`', '{', '}':
+			flush(false)
 		default:
 			cur.WriteRune(r)
 		}
 	}
-	flush()
+	flush(false)
 	return segs
 }
 

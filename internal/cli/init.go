@@ -82,7 +82,7 @@ func initOpenCode(global bool, cfg *helper.Config, autoYes bool) {
 	blocked := toolNameSet(mainEff.BlockedTools)
 	permissionMap["read"] = nativePermission(!blocked["read"])
 	permissionMap["edit"] = nativePermission(!blocked["edit"] && !blocked["write"])
-	permissionMap["bash"] = nativePermission(!blocked["bash"])
+	permissionMap["bash"] = openCodeBashPermission(blocked)
 	delete(permissionMap, "write")
 	permissionMap["aracne_*"] = "deny"
 	for _, toolName := range mainEff.MCPTools {
@@ -101,7 +101,7 @@ func initOpenCode(global bool, cfg *helper.Config, autoYes bool) {
 	writeOpenCodePrimaryCommand(commandsDir, "descriptions-generate", "Generate descriptions for undocumented resources in the topology", "build", prompts.DescriptionsGenerateCommand("descriptions-generation-executor", batchSize), autoYes)
 	writeOpenCodeCommand(commandsDir, "descriptions-apply", "Write topology descriptions back into source files as doc comments", "build", prompts.DescriptionsApplyCommand(), autoYes)
 	writeOpenCodeCommand(commandsDir, "descriptions_clear", "Clear stored topology descriptions", "build", prompts.DescriptionsClearCommand(), autoYes)
-	writeOpenCodeCommand(commandsDir, "bug-hunter", "Launch a Bug Hunter sub-agent to scan the entire topology for bugs", "bug-hunter", bugHunterCommandForAgent("bug-hunter"), autoYes)
+	writeOpenCodeCommand(commandsDir, "bug-hunter", "Scan the whole codebase for bugs", "bug-hunter", bugHunterOpenCodeCommand(), autoYes)
 	writeOpenCodeCommand(commandsDir, "bug-judge", "Triage every pending bug by fanning out Bug Judge sub-agents in parallel", "bug-judge", bugJudgeCommandForAgent("bug-judge"), autoYes)
 	writeOpenCodeCommand(commandsDir, "bug-solver", "Fix acknowledged bugs by launching Bug Solver sub-agents", "bug-solver", bugSolverCommandForAgent("bug-solver"), autoYes)
 
@@ -142,7 +142,7 @@ func initClaudeCode(global bool, cfg *helper.Config, autoYes bool) {
 	writeCommand(commandsDir, "descriptions-generate", "Generate descriptions for undocumented resources in the topology", prompts.DescriptionsGenerateCommand("descriptions-generation-executor", batchSize), autoYes)
 	writeCommand(commandsDir, "descriptions-apply", "Write topology descriptions back into source files as doc comments", prompts.DescriptionsApplyCommand(), autoYes)
 	writeCommand(commandsDir, "descriptions_clear", "Clear stored topology descriptions", prompts.DescriptionsClearCommand(), autoYes)
-	writeCommand(commandsDir, "bug-hunter", "Launch a Bug Hunter sub-agent to scan the entire topology for bugs", bugHunterCommandForAgent(".claude/agents/bug-hunter.md"), autoYes)
+	writeCommand(commandsDir, "bug-hunter", "Fan out Bug Hunter sub-agents to scan the codebase in parallel", bugHunterCommandForAgent(".claude/agents/bug-hunter.md"), autoYes)
 	writeCommand(commandsDir, "bug-judge", "Triage every pending bug by fanning out Bug Judge sub-agents in parallel", bugJudgeCommandForAgent(".claude/agents/bug-judge.md"), autoYes)
 	writeCommand(commandsDir, "bug-solver", "Fix acknowledged bugs by launching Bug Solver sub-agents", bugSolverCommandForAgent(".claude/agents/bug-solver.md"), autoYes)
 
@@ -243,8 +243,31 @@ func writeJSONConfig(path string, config map[string]interface{}) {
 	}
 }
 
+// bugHunterOpenCodeCommand is the OpenCode variant: the command runs as the
+// single bug-hunter sub-agent (it cannot spawn parallel sub-agents and has no
+// bug_list), so it scans the whole codebase itself rather than orchestrating a
+// fan-out.
+func bugHunterOpenCodeCommand() string {
+	return strings.Join([]string{
+		"Scan the whole codebase for confirmed correctness, reliability, and security bugs — you are the only hunter this run, so cover every package, not just one slice.",
+		"",
+		"1. Work through the source package by package, inspecting functions, methods, types, and interfaces with the read tools.",
+		"2. Report every confirmed bug with bug_report (precise node_id + concrete scenario; no style issues or speculation).",
+		"3. After a full pass, make another focused pass over anything you were unsure about; stop when a pass finds nothing new.",
+		"4. Report how many bugs you reported.",
+	}, "\n")
+}
+
 func bugHunterCommandForAgent(agentRef string) string {
-	return "Use the " + agentRef + " agent to scan the project topology for confirmed correctness, reliability, and security bugs. Report each confirmed bug with bug_report and summarize the count found."
+	return strings.Join([]string{
+		"Hunt the whole codebase for bugs by fanning out the " + agentRef + " agent in parallel, then repeat until a round finds nothing new.",
+		"",
+		"1. Partition the source tree into areas (top-level packages or directories; use ls/grep to enumerate them).",
+		"2. Launch the " + agentRef + " agent once per area, running as many concurrently as the platform allows. Each run reports every confirmed bug with bug_report (precise node_id + concrete scenario; no style issues or speculation).",
+		"3. Call bug_list to see what has already been reported, then run another parallel round telling each hunter not to re-report existing bugs — only new, distinct ones.",
+		"4. Repeat step 3 until a round adds no new bugs, or after a small number of rounds.",
+		"5. Report how many distinct bugs were reported in total.",
+	}, "\n")
 }
 
 func bugJudgeCommandForAgent(agentRef string) string {
@@ -315,18 +338,79 @@ func claudeToolsForAgent(eff helper.AgentConfig) []string {
 
 // openCodePermissionsForAgent builds the OpenCode permission block: native
 // tools allowed unless blocked, all aracne tools denied except the agent's
-// MCP tools.
+// MCP tools. When read/grep are blocked, bash gets glob deny-patterns for the
+// direct read/grep shell forms (see writeOpenCodeBashPermission).
 func openCodePermissionsForAgent(eff helper.AgentConfig) string {
 	blocked := toolNameSet(eff.BlockedTools)
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("  read: %s\n", nativePermission(!blocked["read"])))
 	b.WriteString(fmt.Sprintf("  edit: %s\n", nativePermission(!blocked["edit"] && !blocked["write"])))
-	b.WriteString(fmt.Sprintf("  bash: %s\n", nativePermission(!blocked["bash"])))
+	writeOpenCodeBashPermission(&b, blocked)
 	b.WriteString("  \"aracne_*\": deny\n")
 	for _, toolName := range eff.MCPTools {
 		b.WriteString(fmt.Sprintf("  \"aracne_%s\": allow\n", toolName))
 	}
 	return b.String()
+}
+
+// openCodeReadDenyPatterns / openCodeGrepDenyPatterns are the direct (un-piped)
+// shell forms denied when read/grep are blocked. OpenCode matches a bash
+// permission pattern against the full command line, so an anchored `head *`
+// denies `head foo.go` but not `cmd | head` — piped output viewing stays
+// allowed, mirroring the Claude Code guard's pipe exemption.
+var (
+	openCodeReadDenyPatterns = []string{"cat *", "head *", "tail *", "less *"}
+	openCodeGrepDenyPatterns = []string{"grep *", "rg *"}
+)
+
+// openCodeBashPermission builds the OpenCode `bash` permission value for the
+// global JSON config: "deny" when the whole Bash tool is blocked, "allow" when
+// neither read nor grep is blocked, otherwise a glob-pattern map allowing
+// everything except the direct read/grep shell forms.
+func openCodeBashPermission(blocked map[string]bool) interface{} {
+	if blocked["bash"] {
+		return "deny"
+	}
+	if !blocked["read"] && !blocked["grep"] {
+		return "allow"
+	}
+	rules := map[string]interface{}{"*": "allow"}
+	if blocked["read"] {
+		for _, p := range openCodeReadDenyPatterns {
+			rules[p] = "deny"
+		}
+	}
+	if blocked["grep"] {
+		for _, p := range openCodeGrepDenyPatterns {
+			rules[p] = "deny"
+		}
+	}
+	return rules
+}
+
+// writeOpenCodeBashPermission renders the same policy as openCodeBashPermission
+// into an agent YAML permission block, in a deterministic order.
+func writeOpenCodeBashPermission(b *strings.Builder, blocked map[string]bool) {
+	if blocked["bash"] {
+		b.WriteString("  bash: deny\n")
+		return
+	}
+	if !blocked["read"] && !blocked["grep"] {
+		b.WriteString("  bash: allow\n")
+		return
+	}
+	b.WriteString("  bash:\n")
+	b.WriteString("    \"*\": allow\n")
+	if blocked["read"] {
+		for _, p := range openCodeReadDenyPatterns {
+			b.WriteString(fmt.Sprintf("    %q: deny\n", p))
+		}
+	}
+	if blocked["grep"] {
+		for _, p := range openCodeGrepDenyPatterns {
+			b.WriteString(fmt.Sprintf("    %q: deny\n", p))
+		}
+	}
 }
 
 // nativeToolNames maps the aracne-relevant native tool keys to their Claude

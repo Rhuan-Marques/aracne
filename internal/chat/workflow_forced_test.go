@@ -22,8 +22,18 @@ func TestChatAgentProviderOverride_BugJudgeThinking(t *testing.T) {
 	if judge.ThinkingBudget != helper.DefaultBugJudgeThinkingBudget {
 		t.Fatalf("bug-judge thinking budget = %d, want %d", judge.ThinkingBudget, helper.DefaultBugJudgeThinkingBudget)
 	}
-	if hunter := manager.chatAgentProviderOverride("bug-hunter", base); hunter.ThinkingBudget != 0 {
-		t.Fatalf("bug-hunter thinking budget = %d, want 0", hunter.ThinkingBudget)
+	if explorer := manager.chatAgentProviderOverride("explorer", base); explorer.ThinkingBudget != 0 {
+		t.Fatalf("explorer thinking budget = %d, want 0", explorer.ThinkingBudget)
+	}
+}
+
+func TestChatAgentProviderOverride_BugHunterThinking(t *testing.T) {
+	manager := setupWorkflowManager(t, "", false)
+	base := ProviderSettings{Provider: ProviderAnthropic, Model: "claude-sonnet-4"}
+
+	hunter := manager.chatAgentProviderOverride("bug-hunter", base)
+	if hunter.ThinkingBudget != helper.DefaultBugHunterThinkingBudget {
+		t.Fatalf("bug-hunter thinking budget = %d, want %d", hunter.ThinkingBudget, helper.DefaultBugHunterThinkingBudget)
 	}
 }
 
@@ -216,11 +226,11 @@ func TestBuildWorkflowTaskSpecs_DescriptionPrompts(t *testing.T) {
 	if len(single) != 3 {
 		t.Fatalf("single task count = %d, want 3", len(single))
 	}
-	if !strings.Contains(single[0].Prompt, "The main resource has already been read for you") {
+	if !strings.Contains(single[0].Prompt, "Source (already read for you)") {
 		t.Fatalf("single-resource prompt should include pre-read content:\n%s", single[0].Prompt)
 	}
-	if strings.Contains(single[0].Prompt, "## Guidelines") {
-		t.Fatalf("single-resource prompt should not use numbered guidelines:\n%s", single[0].Prompt)
+	if strings.Contains(single[0].Prompt, "## Per-kind limits") {
+		t.Fatalf("single-resource prompt should not use the multi per-kind list:\n%s", single[0].Prompt)
 	}
 
 	multi, err := manager.buildWorkflowTaskSpecs(WorkflowRequest{Type: "descriptions", BatchSize: 2})
@@ -230,11 +240,11 @@ func TestBuildWorkflowTaskSpecs_DescriptionPrompts(t *testing.T) {
 	if len(multi) != 2 {
 		t.Fatalf("multi task count = %d, want 2", len(multi))
 	}
-	if strings.Contains(multi[0].Prompt, "The main resource has already been read for you") {
-		t.Fatalf("multi-resource prompt should let executor call read:\n%s", multi[0].Prompt)
+	if !strings.Contains(multi[0].Prompt, "Assigned resources") || !strings.Contains(multi[0].Prompt, "## Per-kind limits") {
+		t.Fatalf("multi-resource prompt missing assigned list or per-kind limits:\n%s", multi[0].Prompt)
 	}
-	if !strings.Contains(multi[0].Prompt, "Assigned resources") || !strings.Contains(multi[0].Prompt, "## Guidelines") {
-		t.Fatalf("multi-resource prompt missing assigned list or guidelines:\n%s", multi[0].Prompt)
+	if !strings.Contains(multi[0].Prompt, "Source (already read)") {
+		t.Fatalf("multi-resource prompt should pre-read assigned resources:\n%s", multi[0].Prompt)
 	}
 }
 
@@ -264,8 +274,23 @@ func TestBuildWorkflowTaskSpecs_BugWorkflows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build hunter: %v", err)
 	}
-	if len(hunter) != 1 || hunter[0].AgentKind != "bug-hunter" {
-		t.Fatalf("hunter tasks = %+v, want one bug-hunter", hunter)
+	if len(hunter) != 4 {
+		t.Fatalf("hunter task count = %d, want 4 (one per inspectable resource)", len(hunter))
+	}
+	var fooHunter string
+	for _, task := range hunter {
+		if task.AgentKind != "bug-hunter" {
+			t.Fatalf("hunter task kind = %q, want bug-hunter", task.AgentKind)
+		}
+		if strings.Contains(task.Prompt, "func_foo") {
+			fooHunter = task.Prompt
+		}
+	}
+	if fooHunter == "" {
+		t.Fatal("missing hunter task for func_foo")
+	}
+	if !strings.Contains(fooHunter, "first pending bug") {
+		t.Fatalf("func_foo hunter prompt should list already-reported bugs:\n%s", fooHunter)
 	}
 
 	judge, err := manager.buildWorkflowTaskSpecs(WorkflowRequest{Type: "bug_judge", BatchSize: 1})

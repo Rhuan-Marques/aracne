@@ -27,3 +27,22 @@ func TestBugSolverToolsIncludeWarningsList(t *testing.T) {
 		}
 	}
 }
+
+// TestMainAgentMCPToolsIncludeBugList guards that the main (orchestrator) agent
+// can enumerate bugs, which the bug-hunter/judge/solver slash-command recipes
+// rely on to fan out and to drive the hunter dedup loop.
+func TestMainAgentMCPToolsIncludeBugList(t *testing.T) {
+	has := func(xs []string, want string) bool {
+		for _, x := range xs {
+			if x == want {
+				return true
+			}
+		}
+		return false
+	}
+	for _, name := range []string{"", "main", "default"} {
+		if !has(DefaultAgentMCPTools(name), "bug_list") {
+			t.Errorf("DefaultAgentMCPTools(%q) missing bug_list — orchestrator cannot enumerate bugs", name)
+		}
+	}
+}

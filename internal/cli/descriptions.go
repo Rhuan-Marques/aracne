@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -100,14 +101,14 @@ func RunGenerateDescriptions(args []string) {
 	toolReg := BuildToolRegistry(manager, reg, cfg, "claude_code", "descriptions-generation-executor")
 	toolMap := registryToolMap(toolReg)
 
-	if err := runDescriptionGeneration(manager, provider, toolMap, lang, cfg.Descriptions.Kinds, *batchSize, *parallel, *maxRetries); err != nil {
+	if err := runDescriptionGeneration(manager, provider, toolMap, lang, cfg.Descriptions.Kinds, *batchSize, *parallel, *maxRetries, cfg.Descriptions.StyleExemplars); err != nil {
 		fmt.Fprintf(os.Stderr, "\nError: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Println("done")
 }
 
-func runDescriptionGeneration(manager *topology.TopologyManager, provider llm.Provider, toolMap map[string]tools.Tool, lang string, targets []domain.ResourceKind, batchSize, parallel, maxRetries int) error {
+func runDescriptionGeneration(manager *topology.TopologyManager, provider llm.Provider, toolMap map[string]tools.Tool, lang string, targets []domain.ResourceKind, batchSize, parallel, maxRetries, exemplarLimit int) error {
 	attempts := make(map[string]int)
 	failed := make(map[string]string)
 
@@ -140,7 +141,11 @@ func runDescriptionGeneration(manager *topology.TopologyManager, provider llm.Pr
 		}
 
 		fmt.Printf("Starting %d executor batch(es) for %d remaining resource(s)...\n", len(batches), len(retryable))
-		results := runDescriptionBatchWave(provider, toolMap, lang, batches, parallel)
+		var topo *domain.Topology
+		if exemplarLimit > 0 {
+			topo, _ = manager.ReadAll()
+		}
+		results := runDescriptionBatchWave(provider, toolMap, lang, batches, parallel, topo, exemplarLimit)
 		for _, result := range results {
 			if result.Err != nil {
 				fmt.Fprintf(os.Stderr, "Executor batch failed (%d resources): %v\n", len(result.Batch), result.Err)
@@ -153,7 +158,7 @@ func runDescriptionGeneration(manager *topology.TopologyManager, provider llm.Pr
 	}
 }
 
-func runDescriptionBatchWave(provider llm.Provider, toolMap map[string]tools.Tool, lang string, batches [][]descriptionResource, parallel int) []descriptionBatchResult {
+func runDescriptionBatchWave(provider llm.Provider, toolMap map[string]tools.Tool, lang string, batches [][]descriptionResource, parallel int, topo *domain.Topology, exemplarLimit int) []descriptionBatchResult {
 	if parallel > len(batches) {
 		parallel = len(batches)
 	}
@@ -166,7 +171,7 @@ func runDescriptionBatchWave(provider llm.Provider, toolMap map[string]tools.Too
 		go func() {
 			defer wg.Done()
 			for batch := range jobs {
-				text, err := runDescriptionExecutorBatch(provider, toolMap, lang, batch)
+				text, err := runDescriptionExecutorBatch(provider, toolMap, lang, batch, topo, exemplarLimit)
 				results <- descriptionBatchResult{Batch: batch, Text: text, Err: err}
 			}
 		}()
@@ -186,10 +191,19 @@ func runDescriptionBatchWave(provider llm.Provider, toolMap map[string]tools.Too
 	return collected
 }
 
-func runDescriptionExecutorBatch(provider llm.Provider, toolMap map[string]tools.Tool, lang string, batch []descriptionResource) (string, error) {
+func runDescriptionExecutorBatch(provider llm.Provider, toolMap map[string]tools.Tool, lang string, batch []descriptionResource, topo *domain.Topology, exemplarLimit int) (string, error) {
 	a := agent.New(provider, tools.NewRegistry(), lang)
 	a.SetMaxIterations(len(batch)*4 + 10)
-	return a.RunSubAgent(prompts.DescriptionsGenerationExecutorPrompt(), descriptionExecutorInput(batch), toolMap)
+	var exemplars []prompts.DescriptionExemplar
+	if topo != nil && exemplarLimit > 0 {
+		ids := make([]string, 0, len(batch))
+		for _, res := range batch {
+			ids = append(ids, res.ID)
+		}
+		exemplars = prompts.BuildDescriptionExemplars(topo, ids, exemplarLimit)
+	}
+	input := descriptionExecutorInput(batch, makeResourceReader(toolMap), exemplars)
+	return a.RunSubAgent(prompts.DescriptionsGenerationExecutorPrompt(), input, toolMap)
 }
 
 func undocumentedDescriptionResources(manager *topology.TopologyManager, targets []domain.ResourceKind) ([]descriptionResource, error) {
@@ -237,12 +251,37 @@ func chunkDescriptionResources(resources []descriptionResource, batchSize int) [
 	return batches
 }
 
-func descriptionExecutorInput(batch []descriptionResource) string {
+func descriptionExecutorInput(batch []descriptionResource, readResource func(string) string, exemplars []prompts.DescriptionExemplar) string {
 	resources := make([]prompts.DescriptionResource, 0, len(batch))
 	for _, res := range batch {
-		resources = append(resources, prompts.DescriptionResource{ID: res.ID, Name: res.Name, Kind: res.Kind})
+		dr := prompts.DescriptionResource{ID: res.ID, Name: res.Name, Kind: res.Kind}
+		if readResource != nil {
+			dr.ReadOutput = readResource(res.ID)
+		}
+		resources = append(resources, dr)
 	}
-	return prompts.DescriptionsGenerationExecutorInput(resources)
+	return prompts.DescriptionsGenerationExecutorInput(resources, exemplars)
+}
+
+// makeResourceReader returns a closure that pre-reads a resource's source via
+// the read tool, so executors don't have to read each one themselves. Returns
+// nil when the read tool is unavailable.
+func makeResourceReader(toolMap map[string]tools.Tool) func(string) string {
+	readTool, ok := toolMap["read"]
+	if !ok {
+		return nil
+	}
+	return func(id string) string {
+		payload, err := json.Marshal(map[string]string{"resource_id": id})
+		if err != nil {
+			return ""
+		}
+		text, err := readTool.Run(payload)
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(text)
+	}
 }
 
 func registryToolMap(registry *tools.Registry) map[string]tools.Tool {

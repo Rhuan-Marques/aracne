@@ -33,17 +33,16 @@ func (m *Manager) StartForcedWorkflow(req WorkflowRequest) (string, error) {
 	if len(tasks) == 0 {
 		return "", fmt.Errorf("workflow %q has no tasks to run", req.Type)
 	}
-	args, err := json.Marshal(createTasksRequest{WorkerCount: req.Parallel, Tasks: tasks})
-	if err != nil {
-		return "", err
+	hunterPrevPending := 0
+	if isHunterWorkflow(req.Type) {
+		hunterPrevPending = m.pendingBugCount()
 	}
-	tc := llm.ToolCall{ID: newID("call"), Type: "function", Function: llm.ToolCallFunction{Name: "CreateTasks", Arguments: string(args)}}
-	if err := m.addForcedCreateTasksCall(req.SessionID, req.Type, tc); err != nil {
-		return "", err
+	descPrevRemaining := 0
+	if isDescriptionsWorkflow(req.Type) {
+		descPrevRemaining = m.undocumentedCount()
 	}
-	groupID, err := m.createWorkflowTaskGroupFromToolCall(req.SessionID, tc)
+	tc, groupID, err := m.startForcedRound(req, tasks)
 	if err != nil {
-		m.appendToolResult(req.SessionID, tc, "Error: "+err.Error(), "error")
 		return "", err
 	}
 	m.recordEvent(req.SessionID, "workflow_started", map[string]any{"job_id": groupID, "type": req.Type})
@@ -53,9 +52,124 @@ func (m *Manager) StartForcedWorkflow(req WorkflowRequest) (string, error) {
 			return
 		}
 		m.appendToolResult(req.SessionID, tc, result, status)
+		if isHunterWorkflow(req.Type) {
+			m.runHunterFollowupRounds(req, hunterPrevPending)
+		}
+		if isDescriptionsWorkflow(req.Type) {
+			m.runDescriptionsFollowupRounds(req, descPrevRemaining)
+		}
 		m.startRun(req.SessionID)
 	}()
 	return groupID, nil
+}
+
+// startForcedRound builds one CreateTasks tool call + task group for the given
+// specs and returns them ready to run. Shared by the initial workflow launch
+// and the bug-hunter follow-up rounds.
+func (m *Manager) startForcedRound(req WorkflowRequest, tasks []createTaskSpec) (llm.ToolCall, string, error) {
+	args, err := json.Marshal(createTasksRequest{WorkerCount: req.Parallel, Tasks: tasks})
+	if err != nil {
+		return llm.ToolCall{}, "", err
+	}
+	tc := llm.ToolCall{ID: newID("call"), Type: "function", Function: llm.ToolCallFunction{Name: "CreateTasks", Arguments: string(args)}}
+	if err := m.addForcedCreateTasksCall(req.SessionID, req.Type, tc); err != nil {
+		return llm.ToolCall{}, "", err
+	}
+	groupID, err := m.createWorkflowTaskGroupFromToolCall(req.SessionID, tc)
+	if err != nil {
+		m.appendToolResult(req.SessionID, tc, "Error: "+err.Error(), "error")
+		return llm.ToolCall{}, "", err
+	}
+	return tc, groupID, nil
+}
+
+// maxHunterRounds caps how many full bug-hunter fan-out passes a single workflow
+// runs before stopping, regardless of whether bugs are still being found.
+const maxHunterRounds = 3
+
+func isHunterWorkflow(typ string) bool {
+	return typ == "bug_hunter" || typ == "bug-hunter"
+}
+
+func (m *Manager) pendingBugCount() int {
+	bugs, err := m.manager.ListBugs("", domain.BugPending)
+	if err != nil {
+		return 0
+	}
+	return len(bugs)
+}
+
+// runHunterFollowupRounds re-runs the hunter fan-out (loop-until-dry) until a
+// round adds no new pending bugs, capped at maxHunterRounds total rounds. Round
+// 1 has already run; prevPending is the pending-bug count taken before it. Each
+// round re-reads the current pending bugs, so its hunters skip what earlier
+// rounds already reported.
+func (m *Manager) runHunterFollowupRounds(req WorkflowRequest, prevPending int) {
+	for round := 2; round <= maxHunterRounds; round++ {
+		cur := m.pendingBugCount()
+		if cur <= prevPending {
+			return // the previous round found nothing new
+		}
+		prevPending = cur
+		tasks, err := m.buildWorkflowTaskSpecs(req)
+		if err != nil || len(tasks) == 0 {
+			return
+		}
+		tc, groupID, err := m.startForcedRound(req, tasks)
+		if err != nil {
+			return
+		}
+		result, status := m.runTaskGroup(req.SessionID, groupID)
+		if status == "interrupted" {
+			return
+		}
+		m.appendToolResult(req.SessionID, tc, result, status)
+	}
+}
+
+// maxDescriptionRounds caps how many full description fan-out passes a single
+// workflow runs before stopping.
+const maxDescriptionRounds = 3
+
+func isDescriptionsWorkflow(typ string) bool {
+	return typ == "descriptions"
+}
+
+func (m *Manager) undocumentedCount() int {
+	res, err := m.undocumentedResources()
+	if err != nil {
+		return 0
+	}
+	return len(res)
+}
+
+// runDescriptionsFollowupRounds re-runs the executor fan-out (loop-until-dry)
+// for any still-undocumented resources, capped at maxDescriptionRounds total
+// rounds and stopping as soon as a round makes no progress (some resources may
+// be undescribable). Round 1 has already run; prevRemaining is the undocumented
+// count taken before it. Each round re-reads the current undocumented set, so
+// its executors only cover what is still missing.
+func (m *Manager) runDescriptionsFollowupRounds(req WorkflowRequest, prevRemaining int) {
+	for round := 2; round <= maxDescriptionRounds; round++ {
+		cur := m.undocumentedCount()
+		if cur == 0 || cur >= prevRemaining {
+			return // nothing left, or the previous round made no progress
+		}
+		prevRemaining = cur
+		tasks, err := m.buildWorkflowTaskSpecs(req)
+		if err != nil || len(tasks) == 0 {
+			return
+		}
+		tc, groupID, err := m.startForcedRound(req, tasks)
+		if err != nil {
+			return
+		}
+		result, status := m.runTaskGroup(req.SessionID, groupID)
+		if status == "interrupted" {
+			return
+		}
+		m.appendToolResult(req.SessionID, tc, result, status)
+	}
 }
 
 func (m *Manager) addForcedCreateTasksCall(sessionID, workflowType string, tc llm.ToolCall) error {
@@ -89,15 +203,32 @@ func (m *Manager) buildWorkflowTaskSpecs(req WorkflowRequest) ([]createTaskSpec,
 		if err != nil {
 			return nil, err
 		}
+		topo, _ := m.manager.ReadAll()
 		batches := chunkResources(resources, req.BatchSize)
 		result := make([]createTaskSpec, 0, len(batches))
 		for _, batch := range batches {
-			result = append(result, createTaskSpec{AgentKind: "descriptions-generation-executor", Prompt: m.descriptionWorkflowPrompt(batch), NeedResult: false})
+			result = append(result, createTaskSpec{AgentKind: "descriptions-generation-executor", Prompt: m.descriptionWorkflowPrompt(batch, topo), NeedResult: false})
 		}
 		return result, nil
 	case "bug_hunter", "bug-hunter":
-		prompt := "Explore the project topology for confirmed correctness, reliability, and security bugs. Read relevant resources, follow context as needed, and report each confirmed bug with bug_report. Do not report speculation or style issues. Return a concise summary of bugs reported."
-		return []createTaskSpec{{AgentKind: "bug-hunter", Prompt: prompt, NeedResult: false}}, nil
+		resources, err := m.inspectableResources()
+		if err != nil {
+			return nil, err
+		}
+		pending, err := m.manager.ListBugs("", domain.BugPending)
+		if err != nil {
+			return nil, err
+		}
+		reportedByNode := make(map[string][]domain.KnownBug)
+		for _, bug := range pending {
+			reportedByNode[bug.NodeID] = append(reportedByNode[bug.NodeID], bug)
+		}
+		batches := chunkResources(resources, req.BatchSize)
+		result := make([]createTaskSpec, 0, len(batches))
+		for _, batch := range batches {
+			result = append(result, createTaskSpec{AgentKind: "bug-hunter", Prompt: m.bugHunterWorkflowPrompt(batch, reportedByNode), NeedResult: false})
+		}
+		return result, nil
 	case "bug_judge", "bug-judge":
 		pending, err := m.manager.ListBugs("", domain.BugPending)
 		if err != nil {
@@ -139,16 +270,45 @@ func (m *Manager) buildWorkflowTaskSpecs(req WorkflowRequest) ([]createTaskSpec,
 	}
 }
 
-func (m *Manager) descriptionWorkflowPrompt(batch []workflowResource) string {
+func (m *Manager) descriptionWorkflowPrompt(batch []workflowResource, topo *domain.Topology) string {
 	resources := make([]prompts.DescriptionResource, 0, len(batch))
+	ids := make([]string, 0, len(batch))
 	for _, res := range batch {
-		desc := prompts.DescriptionResource{ID: res.ID, Name: res.Name, Kind: res.Kind}
-		if len(batch) == 1 {
-			desc.ReadOutput = m.readResourceForPrompt(res.ID)
-		}
-		resources = append(resources, desc)
+		resources = append(resources, prompts.DescriptionResource{
+			ID:         res.ID,
+			Name:       res.Name,
+			Kind:       res.Kind,
+			ReadOutput: m.readResourceForPrompt(res.ID),
+		})
+		ids = append(ids, res.ID)
 	}
-	return prompts.DescriptionsGenerationExecutorInput(resources)
+	var exemplars []prompts.DescriptionExemplar
+	if m.config != nil && m.config.Descriptions.StyleExemplars > 0 {
+		exemplars = prompts.BuildDescriptionExemplars(topo, ids, m.config.Descriptions.StyleExemplars)
+	}
+	return prompts.DescriptionsGenerationExecutorInput(resources, exemplars)
+}
+
+func (m *Manager) bugHunterWorkflowPrompt(batch []workflowResource, reportedByNode map[string][]domain.KnownBug) string {
+	var b strings.Builder
+	b.WriteString("Inspect only these assigned resources for confirmed correctness, reliability, and security bugs. Read each one and the context it touches, and report every confirmed bug with bug_report (precise node_id + concrete scenario). Do not report style issues or speculation.\n\n")
+	b.WriteString("Assigned resources:\n")
+	for _, res := range batch {
+		b.WriteString(fmt.Sprintf("- ID: %s\n  Name: %s\n  Kind: %s\n", res.ID, res.Name, res.Kind))
+	}
+	var already []string
+	for _, res := range batch {
+		for _, bug := range reportedByNode[res.ID] {
+			already = append(already, fmt.Sprintf("- [%s] %s", bug.NodeID, bug.Description))
+		}
+	}
+	if len(already) > 0 {
+		b.WriteString("\nAlready reported on these resources — do NOT report these again, only new distinct bugs:\n")
+		b.WriteString(strings.Join(already, "\n"))
+		b.WriteString("\n")
+	}
+	b.WriteString("\nMake more than one pass; stop when a pass finds nothing new. Return a concise summary of the bugs you reported.\n")
+	return b.String()
 }
 
 func (m *Manager) bugJudgeWorkflowPrompt(assigned domain.KnownBug, nodeBugs []domain.KnownBug, crossNodeDismissed []domain.KnownBug) string {

@@ -15,69 +15,63 @@ type DescriptionResource struct {
 	ReadOutput string
 }
 
+// DescriptionExemplar is an already-written description fed to the executor as a
+// house-style anchor so generated descriptions match the codebase's voice.
+type DescriptionExemplar struct {
+	Name        string
+	Kind        domain.ResourceKind
+	Description string
+}
+
 func DescriptionsGenerationExecutorPrompt() string {
-	return `You are a description generation executor for the project topology database.
+	return `You write snappy, accurate descriptions for the resources in your assigned batch — nothing else.
 
-Your goal is to generate careful, concise descriptions for one assigned batch of undocumented resources.
+## Loop (per assigned resource)
+1. Use the source if it is already provided; otherwise call **read** with its ` + "`resource_id`" + `.
+2. Glance at neighbors only when the resource alone is unclear.
+3. Write the shortest description that is still accurate — one line is ideal, never exceed the per-kind limit in your task prompt.
+4. Call **update_description** immediately.
 
-You are not the orchestrator. Do not call node_list_no_description. Process only the resources explicitly assigned in your task prompt.
-
-You may and should look around neighboring resources when the assigned resource's source and immediate context are not enough to understand what it does. Use that context to improve accuracy, but never update resources outside your assigned batch.
-
-## Workflow
-
-1. Read the assigned resource list from the task prompt
-2. For each assigned resource, one at a time:
-   a. Use the provided resource read, if one is included
-   b. Otherwise call **read** with its ` + "`resource_id`" + `
-   c. Study the returned source code and nearby topology context when needed
-   d. Manually write a description based on what the resource actually does
-   e. Immediately call **update_description** with ` + "`id`" + `, ` + "`resource_name`" + `, and your generated description
-3. Continue until every assigned resource has either been updated or has a clear failure reason
-4. Return a concise completion report listing completed IDs and failed IDs
-
-## General Rules
-
-- Be concise and accurate
-- Do not automate description generation by writing scripts or bulk transformation code
-- Do not update resources outside your assigned batch
-- Do not skip any assigned resource unless a tool error prevents completion
-
-## Final Report Format
-
-completed:
-- <id>
-
-failed:
-- <id>: <reason>
+## Rules
+- Touch only assigned resources. Never write scripts to bulk-generate.
+- When house-style examples are given, match their voice and brevity.
+- The topology database is the source of truth. End with a one-line report: completed ids, then any failed ids with a brief reason.
 `
 }
 
-func DescriptionsGenerationExecutorInput(resources []DescriptionResource) string {
+func DescriptionsGenerationExecutorInput(resources []DescriptionResource, exemplars []DescriptionExemplar) string {
 	var b strings.Builder
 	if len(resources) == 1 {
 		res := resources[0]
-		b.WriteString("Process only the assigned main resource. You may inspect neighboring resources if needed, but update only this main resource.\n\n")
-		b.WriteString(fmt.Sprintf("Main resource ID: %s\nName: %s\nKind: %s\n\n", res.ID, res.Name, res.Kind))
+		b.WriteString("Describe only the assigned resource below. You may glance at neighbors, but update only this resource.\n\n")
+		b.WriteString(fmt.Sprintf("Resource ID: %s\nName: %s\nKind: %s\n\n", res.ID, res.Name, res.Kind))
 		if strings.TrimSpace(res.ReadOutput) != "" {
-			b.WriteString("The main resource has already been read for you:\n\n```text\n")
+			b.WriteString("Source (already read for you):\n\n```text\n")
 			b.WriteString(strings.TrimSpace(res.ReadOutput))
 			b.WriteString("\n```\n\n")
 		} else {
-			b.WriteString("Call read with the main resource ID before writing its description.\n\n")
+			b.WriteString("Call read with the resource ID before writing its description.\n\n")
 		}
+		writeExemplars(&b, exemplars)
 		b.WriteString(singleDescriptionInstruction(res.Kind))
-		b.WriteString(" Call update_description immediately after writing the description.\n")
+		b.WriteString(" Then call update_description immediately.\n")
 		return b.String()
 	}
 
-	b.WriteString("Process only the assigned resources below. You may inspect neighboring resources if needed, but update only assigned resources.\n\n")
-	b.WriteString("For each assigned resource, call read with the resource_id, manually write a concise description, then call update_description immediately.\n\n")
+	b.WriteString("Describe only the assigned resources below. You may glance at neighbors, but update only assigned resources.\n\n")
 	b.WriteString("Assigned resources:\n\n")
 	for _, res := range resources {
-		b.WriteString(fmt.Sprintf("- ID: %s\n  Name: %s\n  Kind: %s\n\n", res.ID, res.Name, res.Kind))
+		b.WriteString(fmt.Sprintf("- ID: %s\n  Name: %s\n  Kind: %s\n", res.ID, res.Name, res.Kind))
+		if strings.TrimSpace(res.ReadOutput) != "" {
+			b.WriteString("  Source (already read):\n\n```text\n")
+			b.WriteString(strings.TrimSpace(res.ReadOutput))
+			b.WriteString("\n```\n")
+		}
+		b.WriteByte('\n')
 	}
-	b.WriteString("## Guidelines\n\n")
+	b.WriteString("For any resource without source above, call read with its id first. Call update_description immediately after each description.\n\n")
+	writeExemplars(&b, exemplars)
+	b.WriteString("## Per-kind limits\n\n")
 	for _, line := range descriptionGuidelinesForKinds(resources) {
 		b.WriteString("- ")
 		b.WriteString(line)
@@ -86,24 +80,84 @@ func DescriptionsGenerationExecutorInput(resources []DescriptionResource) string
 	return b.String()
 }
 
+// writeExemplars renders a compact house-style block; no-op when empty.
+func writeExemplars(b *strings.Builder, exemplars []DescriptionExemplar) {
+	if len(exemplars) == 0 {
+		return
+	}
+	b.WriteString("House style examples (match this voice and brevity):\n")
+	for _, ex := range exemplars {
+		b.WriteString(fmt.Sprintf("- %s: %s\n", ex.Name, oneLine(ex.Description)))
+	}
+	b.WriteByte('\n')
+}
+
+func oneLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = strings.TrimSpace(s[:i])
+	}
+	return s
+}
+
+// BuildDescriptionExemplars returns up to limit already-described resources that
+// share a source file with the assigned batch, to anchor house style. Returns
+// nil when limit <= 0 or nothing qualifies.
+func BuildDescriptionExemplars(topo *domain.Topology, batchIDs []string, limit int) []DescriptionExemplar {
+	if topo == nil || limit <= 0 || len(batchIDs) == 0 {
+		return nil
+	}
+	batch := make(map[string]bool, len(batchIDs))
+	paths := make(map[string]bool)
+	for _, id := range batchIDs {
+		batch[id] = true
+		if res, ok := topo.Resources[id]; ok && res.Location.Path != "" {
+			paths[res.Location.Path] = true
+		}
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(topo.Resources))
+	for id := range topo.Resources {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	var out []DescriptionExemplar
+	for _, id := range ids {
+		if batch[id] {
+			continue
+		}
+		res := topo.Resources[id]
+		if strings.TrimSpace(res.Description) == "" || !paths[res.Location.Path] {
+			continue
+		}
+		out = append(out, DescriptionExemplar{Name: res.Name, Kind: res.Kind, Description: res.Description})
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
 func singleDescriptionInstruction(kind domain.ResourceKind) string {
 	switch kind {
 	case domain.ResourceFunction, domain.ResourceMethod:
-		return "Write 1-3 lines covering purpose, parameters, return values, and side effects."
+		return "1 line: what it does, plus any notable params, returns, or side effects."
 	case domain.ResourceType, domain.ResourceNamedType:
-		return "Write 1-3 lines covering what it represents, key fields or methods, and usage."
+		return "1 line: what it represents and its key fields or methods."
 	case domain.ResourceInterface:
-		return "Write 1-3 lines covering the contract and key methods."
+		return "1 line: the contract and key methods."
 	case domain.ResourceVariable:
-		return "Write 1 line covering what it stores and why it exists."
+		return "≤1 line: what it stores and why."
 	case domain.ResourceFile:
-		return "Write 1 line covering the file's role in its package."
+		return "≤1 line: the file's role in its package."
 	case domain.ResourcePackage:
-		return "Write 1-2 lines covering the package's overall purpose."
+		return "1 line: the package's purpose."
 	case domain.ResourceDependency:
-		return "Write 1 line covering what external dependency is referenced and why."
+		return "≤1 line: what external dependency and why."
 	default:
-		return "Write a concise, accurate description of what this resource does."
+		return "1 short line on what this resource does."
 	}
 }
 
@@ -121,7 +175,7 @@ func descriptionGuidelinesForKinds(resources []DescriptionResource) []string {
 	var lines []string
 	functionLike := seen[domain.ResourceFunction] || seen[domain.ResourceMethod]
 	if functionLike {
-		lines = append(lines, "Functions/methods: 1-3 lines covering purpose, parameters, return values, and side effects")
+		lines = append(lines, "Functions/methods: 1 line each — what it does + any notable params/returns/side effects")
 		delete(seen, domain.ResourceFunction)
 		delete(seen, domain.ResourceMethod)
 	}
@@ -131,25 +185,25 @@ func descriptionGuidelinesForKinds(resources []DescriptionResource) []string {
 		}
 		lines = append(lines, pluralDescriptionInstruction(kind))
 	}
-	lines = append(lines, "Be concise and accurate")
+	lines = append(lines, "Keep every description to one line where possible")
 	return lines
 }
 
 func pluralDescriptionInstruction(kind domain.ResourceKind) string {
 	switch kind {
 	case domain.ResourceType, domain.ResourceNamedType:
-		return "Structs/classes/types: 1-3 lines covering what they represent, key fields or methods, and usage"
+		return "Types: 1 line each — what they represent and key fields/methods"
 	case domain.ResourceInterface:
-		return "Interfaces/ABCs/protocols: 1-3 lines covering the contract and key methods"
+		return "Interfaces: 1 line each — contract and key methods"
 	case domain.ResourceVariable:
-		return "Variables: 1 line covering what they store and their purpose"
+		return "Variables: ≤1 line each — what they store and why"
 	case domain.ResourceFile:
-		return "Files: 1 line covering each file's role in its package"
+		return "Files: ≤1 line each — role in the package"
 	case domain.ResourcePackage:
-		return "Packages: 1-2 lines covering overall purpose"
+		return "Packages: 1 line each — overall purpose"
 	case domain.ResourceDependency:
-		return "Dependencies: 1 line covering what external dependency is referenced and why"
+		return "Dependencies: ≤1 line each — what and why"
 	default:
-		return fmt.Sprintf("%s resources: write concise, accurate descriptions", kind)
+		return fmt.Sprintf("%s: 1 short line each", kind)
 	}
 }

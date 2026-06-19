@@ -78,6 +78,8 @@ func agentInstructionsContent(eff helper.AgentConfig, mcpToolPrefix string) stri
 	// OpenCode enforces the same intent through its permission block instead.
 	if mcpToolPrefix == "mcp__aracne__" {
 		b.WriteString(guardNoteSection())
+	} else if blocksShellReadOrGrep(eff) {
+		b.WriteString(openCodeGuardNoteSection())
 	}
 	b.WriteString(howToNavigateSection())
 	b.WriteString(behavioralRulesSection())
@@ -225,8 +227,31 @@ func guardNoteSection() string {
 		"or PowerShell `Get-Content`/`Select-String`), you are reminded to use the matching aracne MCP tool instead.\n\n" +
 		"Any tool listed in `blocked_tools` for the `claude_code` harness is blocked outright. Blocking `grep` also " +
 		"blocks `grep`/`rg`/`Select-String` run through the Bash tool; blocking `bash` blocks the Bash tool entirely. " +
+		"A read/grep command that consumes piped output (e.g. `git log | tail`, `cmd | grep x`) is exempt — only " +
+		"direct file reads like `cat foo.go` are gated; set `read.pipe_passthrough` to `false` to gate piped reads too. " +
 		"The guard uses the main agent's `blocked_tools`; per-sub-agent blocking is enforced by each sub-agent's tool " +
 		"allow-list, not by this hook.\n\n"
+}
+
+// openCodeGuardNoteSection is the OpenCode counterpart to guardNoteSection:
+// OpenCode has no PreToolUse hook, so the same intent is enforced by the
+// permission block, which denies the direct read/grep shell forms.
+func openCodeGuardNoteSection() string {
+	return "## Tool Guard\n\n" +
+		"This project's OpenCode permissions deny the read/grep shell commands " +
+		"(`cat`/`head`/`tail`/`less`/`grep`/`rg`) when run directly on a file — use the matching aracne MCP " +
+		"tool instead. Reading piped command output (`cmd | head`, `cmd | grep x`) is still allowed.\n\n"
+}
+
+// blocksShellReadOrGrep reports whether the agent blocks the read or grep tool,
+// which is what makes the OpenCode permission block deny those shell commands.
+func blocksShellReadOrGrep(eff helper.AgentConfig) bool {
+	for _, t := range eff.BlockedTools {
+		if t == "read" || t == "grep" {
+			return true
+		}
+	}
+	return false
 }
 
 func howToNavigateSection() string {

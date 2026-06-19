@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"sort"
 	"strings"
 
 	"aracne/internal/helper"
@@ -33,6 +34,25 @@ func (m *Manager) undocumentedResources() ([]workflowResource, error) {
 		}
 		result = append(result, workflowResource{ID: res.ID, Name: res.Name, Kind: res.Kind})
 	}
+	return result, nil
+}
+
+// inspectableResources returns the functions, methods, types, and interfaces
+// the bug-hunter fan-out partitions across hunter tasks, sorted by ID so the
+// partition is deterministic across runs.
+func (m *Manager) inspectableResources() ([]workflowResource, error) {
+	topo, err := m.manager.ReadAll()
+	if err != nil {
+		return nil, err
+	}
+	var result []workflowResource
+	for _, res := range topo.Resources {
+		switch res.Kind {
+		case domain.ResourceFunction, domain.ResourceMethod, domain.ResourceType, domain.ResourceInterface:
+			result = append(result, workflowResource{ID: res.ID, Name: res.Name, Kind: res.Kind})
+		}
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
 	return result, nil
 }
 

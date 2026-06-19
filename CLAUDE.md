@@ -61,7 +61,7 @@ After editing or writing, the context for the topology will be automatically upd
 
 An `arac guard` hook watches your tool calls. Whenever you use a native tool (`Read`/`Grep`/`Edit`/`Write`) or a shell equivalent (`cat`/`head`/`tail`/`less`/`grep`/`rg`/`sed`/`awk`, or PowerShell `Get-Content`/`Select-String`), you are reminded to use the matching aracne MCP tool instead.
 
-Any tool listed in `blocked_tools` for the `claude_code` harness is blocked outright. Blocking `grep` also blocks `grep`/`rg`/`Select-String` run through the Bash tool; blocking `bash` blocks the Bash tool entirely. The guard uses the main agent's `blocked_tools`; per-sub-agent blocking is enforced by each sub-agent's tool allow-list, not by this hook.
+Any tool listed in `blocked_tools` for the `claude_code` harness is blocked outright. Blocking `grep` also blocks `grep`/`rg`/`Select-String` run through the Bash tool; blocking `bash` blocks the Bash tool entirely. A read/grep command that consumes piped output (e.g. `git log | tail`, `cmd | grep x`) is exempt — only direct file reads like `cat foo.go` are gated; set `read.pipe_passthrough` to `false` to gate piped reads too. The guard uses the main agent's `blocked_tools`; per-sub-agent blocking is enforced by each sub-agent's tool allow-list, not by this hook.
 
 ## How to Navigate:
 

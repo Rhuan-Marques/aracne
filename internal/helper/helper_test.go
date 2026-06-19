@@ -798,6 +798,24 @@ func TestEffectiveReadScan(t *testing.T) {
 	}
 }
 
+func TestEffectivePipePassthrough(t *testing.T) {
+	if !DefaultConfig().EffectivePipePassthrough() {
+		t.Fatal("default EffectivePipePassthrough should be true")
+	}
+	var c Config // zero value: PipePassthrough nil
+	if !c.EffectivePipePassthrough() {
+		t.Fatal("nil pipe_passthrough should default to true")
+	}
+	c.Read.PipePassthrough = boolPtr(false)
+	if c.EffectivePipePassthrough() {
+		t.Fatal("explicit pipe_passthrough=false should be false")
+	}
+	c.Read.PipePassthrough = boolPtr(true)
+	if !c.EffectivePipePassthrough() {
+		t.Fatal("explicit pipe_passthrough=true should be true")
+	}
+}
+
 func TestLoadConfigReadScan(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 

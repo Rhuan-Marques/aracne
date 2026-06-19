@@ -8,48 +8,58 @@ The topology is a directed graph can enhance your information about the reposito
 
 **Navigation Flow:**
 1. Use `ls` to understand the project file layout
-2. Use Use lookup MCP tools to get a resource's full context with interconnected relationships
+2. Use lookup MCP tools to get a resource's full context with interconnected relationships
 
 **Note: Never try to use `read` native tool, use MCP lookups instead**
 
 ## MCP Lookup tools:
-- `aracne_read`: This command will give you the code and full context for any resource you want. These include: Files, Functions, Structs, etc. The tool receives a Resource ID, which can be the file's path or the ID of any resource.
+- `aracne_read_function`: Reads the function and context for resources it uses, receives a function ID.
+- `aracne_read_struct`: Reads the struct and context for resources it uses, receives a struct ID.
+- `aracne_read_interface`: Reads the interface and context for which resources it is implemented by, receives an interface ID.
+- `aracne_read_file`: Reads the content of a file, receives the file path.
 
 Note: Do *not* use "cat", "Get-Content" or any other OS command to read files## Grep/Search
 
-Use your native `grep`/`Grep` search tool for content search. When you need topology metadata in results, use `arac grep <pattern> [path]`; it returns `path:line:match` plus `ResourceID` and `Description` when a match maps to a topology resource.
+Use the MCP tool `aracne_grep` for content search. It returns `path:line:match` plus `ResourceID` and `Description` when a match maps to a topology resource.
 
-## Resource Context
+Do *not* use your native `grep` tool.
+Do not use `grep`, `Select-String` or `rg` in the terminal## Resource Context
 
 When you call a MCP Lookup Tool, the output has two sections:
 
 **Code Block:** The resource's full source code, plus relevant imports and enclosing type (for methods).
 
-**`# CONTEXT:` Section:** A structured hierarchical listing of everything the resource touches:
+**`# CONTEXT:` Section:** A structured hierarchical listing of everything the resource touches. Each entry is keyed by the resource's full ID, which you can pass directly to a lookup tool to drill deeper:
 
 ```
 # CONTEXT:
-## InterfaceName: Description
-    ImplStruct: Description
-        ImplStruct.Method: Description
-## OtherStruct: Description
-    OtherStruct.Method: Description
-## CalledFunction: Description
-## ExtVarName = value
+## pkg.InterfaceName: Description
+    pkg.ImplStruct: Description
+        pkg.(ImplStruct).Method: Description
+## pkg.OtherStruct: Description
+    pkg.(OtherStruct).Method: Description
+## pkg.CalledFunction: Description
+## pkg.ExtVarName = value
 ```
 
 Use the CONTEXT section to understand relationships **without making additional tool calls**.
 
 ## Edit and Write:
 
-You can edit files using your native `edit` tool.
-You can write files using your native `write` tool.
+You can edit files using the MCP tool `aracne_edit`.
+You can write files using the MCP tool `aracne_write`.
 After editing or writing, the context for the topology will be automatically updated to reflect your actions.
+
+**Note: NEVER try to edit or write using your native tools**
 
 ## Other:
 
 - If you find a bug that is not relevant to your task, *do not fix it*. Instead, report it using `aracne_bug_report`
 - If you want to check for any topology warnings, you can do it using `aracne_warnings_list`
+
+## Tool Guard
+
+This project's OpenCode permissions deny the read/grep shell commands (`cat`/`head`/`tail`/`less`/`grep`/`rg`) when run directly on a file — use the matching aracne MCP tool instead. Reading piped command output (`cmd | head`, `cmd | grep x`) is still allowed.
 
 ## How to Navigate:
 

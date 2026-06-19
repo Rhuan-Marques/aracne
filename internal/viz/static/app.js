@@ -8,6 +8,7 @@
     pos: new Map(),
     vel: new Map(),
     selected: null,
+    followId: null,
     hoveredID: null,
     neighborhoodDepth: 1,
     relationshipClickTimer: null,
@@ -281,6 +282,32 @@
       'x': '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>'
     };
     return '<svg class="icon icon-' + esc(name) + '" viewBox="0 0 24 24" aria-hidden="true">' + (paths[name] || '') + '</svg>';
+  }
+  // Cached raster of a filled map-pin, drawn on the canvas over the followed node.
+  var mapPinImg = null, mapPinReady = false;
+  function getMapPin() {
+    if (mapPinImg) return mapPinImg;
+    var svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#0b1220" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">' +
+      '<path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0" fill="#ffffff"/>' +
+      '<circle cx="12" cy="10" r="3" fill="#0b1220"/></svg>';
+    var img = new Image();
+    img.onload = function () { mapPinReady = true; draw(); };
+    img.src = 'data:image/svg+xml,' + encodeURIComponent(svg);
+    mapPinImg = img;
+    return img;
+  }
+  // Centre a map-pin on the node at p (screen size grows with the node, with a floor so tiny nodes still get a clear marker).
+  function drawFollowPin(p, r, s) {
+    var img = getMapPin();
+    if (!mapPinReady) return;
+    var screenPx = Math.max(22, Math.min(64, r * s * 2.2));
+    var w = screenPx / s;
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.55)';
+    ctx.shadowBlur = 6 / s;
+    ctx.shadowOffsetY = 2 / s;
+    ctx.drawImage(img, p.x - w / 2, p.y - w / 2, w, w);
+    ctx.restore();
   }
   function params(obj) {
     var p = new URLSearchParams();
@@ -694,6 +721,7 @@
   }
 
   function loadGraph() {
+    state.followId = null;
     var q = params(currentFilter());
     el('status').textContent = 'Loading graph view...';
     api('/api/graph?' + q).then(setGraph).catch(showError);
@@ -702,6 +730,7 @@
   function loadNeighborhood(id, depth) {
     var targetDepth = depth || state.neighborhoodDepth;
     state.neighborhoodDepth = targetDepth;
+    state.followId = id;
     updateDepthControls();
     el('status').textContent = 'Loading neighborhood...';
     var mode = el('mode').value;
@@ -1234,6 +1263,15 @@
       ctx.fillStyle = '#ffffff';
       ctx.fillText(l.label, l.x, l.y);
     });
+
+    // --- follow marker: a map pin centred on the node currently being followed ---
+    if (state.followId) {
+      var fp = state.pos.get(state.followId);
+      if (fp) {
+        var fn = state.nodeMap.get(state.followId);
+        drawFollowPin(fp, fn ? radius(fn) : 6, s);
+      }
+    }
 
     ctx.restore();
   }

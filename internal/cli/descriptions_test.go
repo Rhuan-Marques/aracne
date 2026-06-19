@@ -58,8 +58,8 @@ func TestChunkDescriptionResourcesUsesBatchesOfRequestedSize(t *testing.T) {
 }
 
 func TestDescriptionExecutorInputConstrainsAssignedResources(t *testing.T) {
-	input := descriptionExecutorInput([]descriptionResource{{ID: "fn:one", Name: "One", Kind: domain.ResourceFunction}})
-	for _, want := range []string{"Process only the assigned main resource", "read", "update_description", "fn:one", "Kind: function"} {
+	input := descriptionExecutorInput([]descriptionResource{{ID: "fn:one", Name: "One", Kind: domain.ResourceFunction}}, nil, nil)
+	for _, want := range []string{"Describe only the assigned resource", "read", "update_description", "fn:one", "Kind: function"} {
 		if !strings.Contains(input, want) {
 			t.Fatalf("executor input missing %q:\n%s", want, input)
 		}

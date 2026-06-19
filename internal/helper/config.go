@@ -53,6 +53,11 @@ type ReadSection struct {
 	MaxFileSize   int64                `json:"max_file_size"`
 	Scan          ReadScanMode         `json:"scan"`
 	ContextFilter ContextFilterSection `json:"context_filter"`
+	// PipePassthrough exempts read/grep shell commands that consume piped
+	// stdin (e.g. `cmd | tail`) from the tool guard: such commands operate on
+	// command output, which the aracne MCP tools cannot serve. Direct file
+	// reads (`cat foo.go`) are still gated. Absent means the default (true).
+	PipePassthrough *bool `json:"pipe_passthrough"`
 }
 
 // ContextFilterSection tunes the "# CONTEXT:" block emitted by the read tools:
@@ -75,6 +80,9 @@ type ScannerSection struct {
 
 type DescriptionsSection struct {
 	Kinds []domain.ResourceKind `json:"kinds"`
+	// StyleExemplars is how many already-written neighbor descriptions to feed
+	// the executor as house-style anchors. 0 disables (saves tokens).
+	StyleExemplars int `json:"style_exemplars,omitempty"`
 }
 
 // AgentConfig is a main_agent or sub-agent entry under llm.<harness>. Absent
@@ -208,6 +216,18 @@ func (c *Config) EffectiveReadScan() ReadScanMode {
 	return normalizeReadScan(string(c.Read.Scan))
 }
 
+// EffectivePipePassthrough reports whether the tool guard should treat a
+// read/grep shell command that consumes piped stdin (e.g. `cmd | tail`) as
+// operating on command output and leave it ungated. Defaults to true; only an
+// explicit `read.pipe_passthrough: false` restores the strict behavior of
+// gating piped reads alongside direct file reads.
+func (c *Config) EffectivePipePassthrough() bool {
+	if c.Read.PipePassthrough == nil {
+		return true
+	}
+	return *c.Read.PipePassthrough
+}
+
 // normalizeVisibility coerces a raw visibility string to one of
 // "hidden" | "normal" | "full", defaulting to "normal".
 func normalizeVisibility(s string) string {
@@ -337,7 +357,10 @@ func DefaultAgentMCPTools(agentName string) []string {
 	case "bug-solver":
 		return []string{"read_file", "read_function", "read_struct", "read_interface", "grep", "edit", "write", "warnings_list", "bug_delete"}
 	default:
-		return []string{"read_file", "read_function", "read_struct", "read_interface", "grep", "edit", "write", "warnings_list", "bug_report"}
+		// The main agent orchestrates the bug workflows, so it needs read-only
+		// bug_list to enumerate pending/acknowledged/dismissed bugs and drive the
+		// per-bug fan-out and the hunter dedup loop.
+		return []string{"read_file", "read_function", "read_struct", "read_interface", "grep", "edit", "write", "warnings_list", "bug_report", "bug_list"}
 	}
 }
 
@@ -346,7 +369,7 @@ func defaultBlockedTools() []string {
 }
 
 func defaultChatMainAgentTools() []string {
-	return []string{"ls", "bash", "glob", "ask_user_question", "CreateTasks", "grep", "read", "edit", "write", "warnings_list", "bug_report", "bug_list", "bug_acknowledge", "bug_dismiss", "bug_delete", "update_description", "node_list_no_description"}
+	return []string{"ls", "bash", "glob", "ask_user_question", "CreateTasks", "grep", "read_file", "read_function", "read_struct", "read_interface", "edit", "write", "warnings_list", "bug_report", "bug_list", "bug_acknowledge", "bug_dismiss", "bug_delete", "update_description", "node_list_no_description"}
 }
 
 // DefaultChatAgentTools returns the default tool list for a proprietary-chat
@@ -374,11 +397,25 @@ func DefaultChatAgentTools(agentName string) []string {
 // do not support reasoning (see chat newProvider).
 const DefaultBugJudgeThinkingBudget = 4096
 
+// DefaultDescriptionStyleExemplars is how many neighbor descriptions are fed to
+// the description executor as house-style anchors by default. Set to 0 to
+// disable and save tokens.
+const DefaultDescriptionStyleExemplars = 3
+
 // DefaultBugSolverThinkingBudget is the default extended-reasoning token budget
 // for the proprietary-chat bug-solver sub-agent. Producing a minimal correct
 // fix is reasoning-heavy, so it reasons harder than the default. It is a no-op
 // for providers/models that do not support reasoning (see chat newProvider).
 const DefaultBugSolverThinkingBudget = 4096
+
+// DefaultBugHunterThinkingBudget is the default extended-reasoning token budget
+// for the proprietary-chat bug-hunter sub-agent. Spotting real defects across a
+// slice of resources is reasoning-heavy, so it reasons harder than the default.
+// It is a no-op for providers/models that do not support reasoning (see chat
+// newProvider).
+const DefaultBugHunterThinkingBudget = 4096
+
+func boolPtr(b bool) *bool { return &b }
 
 func DefaultConfig() *Config {
 	subAgent := func(name string) AgentConfig {
@@ -395,8 +432,9 @@ func DefaultConfig() *Config {
 	return &Config{
 		Scan: ScanSection{Mode: ScanModeDefault},
 		Read: ReadSection{
-			MaxFileSize: 512 * 1024,
-			Scan:        ReadScanNone,
+			MaxFileSize:     512 * 1024,
+			Scan:            ReadScanNone,
+			PipePassthrough: boolPtr(true),
 			ContextFilter: ContextFilterSection{
 				ExternalVarsVisibility:   "normal",
 				SmallFunctionsVisibility: "normal",
@@ -404,7 +442,7 @@ func DefaultConfig() *Config {
 			},
 		},
 		Scanner:      ScannerSection{Mode: ScanModeDefault, UpdateFrequency: 200},
-		Descriptions: DescriptionsSection{Kinds: DefaultNeedDescription()},
+		Descriptions: DescriptionsSection{Kinds: DefaultNeedDescription(), StyleExemplars: DefaultDescriptionStyleExemplars},
 		LLM: LLMSection{
 			Any: LLMHarness{
 				// main_agent uses MCP edit/write (which sync the topology DB
@@ -420,8 +458,14 @@ func DefaultConfig() *Config {
 					"bug-solver":                       subAgent("bug-solver"),
 				},
 			},
-			OpenCode:   LLMHarness{Agents: map[string]AgentConfig{}},
-			ClaudeCode: LLMHarness{Agents: map[string]AgentConfig{}},
+			OpenCode: LLMHarness{Agents: map[string]AgentConfig{}},
+			// Description generation is high-volume and low-difficulty: run the
+			// Claude Code executor on the fast/cheap tier by default. Safe to
+			// pin here because Claude Code runs Claude models; other harnesses
+			// inherit and stay configurable.
+			ClaudeCode: LLMHarness{Agents: map[string]AgentConfig{
+				"descriptions-generation-executor": {Model: "haiku"},
+			}},
 		},
 		Viz: VizSection{
 			Graph: VizGraph{OptimizationRules: ".aracne/optimization_rules.json"},
@@ -433,7 +477,7 @@ func DefaultConfig() *Config {
 				Agents: VizChatAgents{
 					Agents: map[string]ChatAgentConfig{
 						"explorer":   {Tools: DefaultChatAgentTools("explorer")},
-						"bug-hunter": {Tools: DefaultChatAgentTools("bug-hunter")},
+						"bug-hunter": {Tools: DefaultChatAgentTools("bug-hunter"), Params: map[string]int{"thinking": DefaultBugHunterThinkingBudget}},
 						"bug-judge":  {Tools: DefaultChatAgentTools("bug-judge"), Params: map[string]int{"thinking": DefaultBugJudgeThinkingBudget}},
 						"bug-solver": {Tools: DefaultChatAgentTools("bug-solver"), Params: map[string]int{"thinking": DefaultBugSolverThinkingBudget}},
 						"descriptions-generation-executor": {

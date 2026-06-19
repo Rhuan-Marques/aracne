@@ -225,14 +225,59 @@ func TestOpenCodePermissionsForAgent_DefaultMainAgent(t *testing.T) {
 	if !strings.Contains(perms, "edit: deny") {
 		t.Fatalf("expected edit: deny (blocked by default):\n%s", perms)
 	}
-	if !strings.Contains(perms, "bash: allow") {
-		t.Fatalf("expected bash: allow (not blocked):\n%s", perms)
+	// read/grep are blocked by default, so bash becomes a glob-pattern map that
+	// denies the direct read/grep shell forms while leaving everything else
+	// (including piped uses) allowed.
+	if !strings.Contains(perms, `"*": allow`) {
+		t.Fatalf("expected bash default allow:\n%s", perms)
+	}
+	if !strings.Contains(perms, `"head *": deny`) || !strings.Contains(perms, `"grep *": deny`) {
+		t.Fatalf("expected read/grep deny patterns:\n%s", perms)
+	}
+	if strings.Contains(perms, "bash: allow") {
+		t.Fatalf("bash should be a pattern map, not a scalar allow:\n%s", perms)
 	}
 	if !strings.Contains(perms, `"aracne_*": deny`) {
 		t.Fatalf("missing deny all:\n%s", perms)
 	}
 	if !strings.Contains(perms, `"aracne_read_file": allow`) {
 		t.Fatalf("expected aracne_read_file: allow:\n%s", perms)
+	}
+}
+
+func TestOpenCodeBashPermission(t *testing.T) {
+	set := func(keys ...string) map[string]bool {
+		m := map[string]bool{}
+		for _, k := range keys {
+			m[k] = true
+		}
+		return m
+	}
+	if got := openCodeBashPermission(set("bash")); got != "deny" {
+		t.Fatalf("whole bash blocked => deny, got %v", got)
+	}
+	if got := openCodeBashPermission(set()); got != "allow" {
+		t.Fatalf("nothing blocked => allow, got %v", got)
+	}
+	if got := openCodeBashPermission(set("edit", "write")); got != "allow" {
+		t.Fatalf("edit/write only => allow (no shell read/grep gating), got %v", got)
+	}
+	readRules, ok := openCodeBashPermission(set("read")).(map[string]interface{})
+	if !ok {
+		t.Fatalf("read blocked => pattern map, got %T", openCodeBashPermission(set("read")))
+	}
+	if readRules["*"] != "allow" || readRules["head *"] != "deny" {
+		t.Fatalf("unexpected read rules: %v", readRules)
+	}
+	if _, present := readRules["grep *"]; present {
+		t.Fatalf("grep pattern should be absent when only read blocked: %v", readRules)
+	}
+	grepRules := openCodeBashPermission(set("grep")).(map[string]interface{})
+	if grepRules["grep *"] != "deny" || grepRules["rg *"] != "deny" {
+		t.Fatalf("unexpected grep rules: %v", grepRules)
+	}
+	if _, present := grepRules["head *"]; present {
+		t.Fatalf("read pattern should be absent when only grep blocked: %v", grepRules)
 	}
 }
 
