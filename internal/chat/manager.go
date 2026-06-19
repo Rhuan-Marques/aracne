@@ -18,6 +18,7 @@ import (
 	"aracne/internal/llm/providers"
 	"aracne/internal/llm/tools"
 	"aracne/internal/topology"
+	"aracne/internal/topology/domain"
 	"aracne/internal/topology/scanner"
 )
 
@@ -175,6 +176,20 @@ func (m *Manager) GetSession(id string) (*Session, error) {
 		return nil, err
 	}
 	return m.sessionForResponseLocked(session), nil
+}
+
+// ContextFilter returns the resolved read context-filter from the active
+// config. It is used by the viz layer to decide, per neighbor resource,
+// whether a chat read surfaced its code (green) or only its description
+// (yellow), so the context graph honors the same read configuration the
+// chat's own read tools use.
+func (m *Manager) ContextFilter() domain.ContextFilter {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.config == nil {
+		return domain.DefaultContextFilter()
+	}
+	return m.config.EffectiveContextFilter()
 }
 
 func (m *Manager) DeleteSession(id string) error {
