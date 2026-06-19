@@ -25,8 +25,7 @@ func newTestRegistry() *scanner.Registry {
 }
 
 func TestCut(t *testing.T) {
-	dbPath := "../test_cut.db"
-	defer os.Remove(dbPath)
+	dbPath := filepath.Join(t.TempDir(), "test_cut.db")
 
 	reg := newTestRegistry()
 	mgr := topology.New()
@@ -57,8 +56,7 @@ func TestCut(t *testing.T) {
 }
 
 func TestCreateAndListBugs(t *testing.T) {
-	dbPath := "../test_bugs.db"
-	defer os.Remove(dbPath)
+	dbPath := filepath.Join(t.TempDir(), "test_bugs.db")
 
 	mgr := topology.New()
 	mgr.Load(dbPath)
@@ -110,8 +108,7 @@ func TestCreateAndListBugs(t *testing.T) {
 }
 
 func TestBugStateTransitions(t *testing.T) {
-	dbPath := "../test_bug_states.db"
-	defer os.Remove(dbPath)
+	dbPath := filepath.Join(t.TempDir(), "test_bug_states.db")
 
 	mgr := topology.New()
 	mgr.Load(dbPath)
@@ -147,8 +144,7 @@ func TestBugStateTransitions(t *testing.T) {
 }
 
 func TestDeleteBug(t *testing.T) {
-	dbPath := "../test_bug_delete.db"
-	defer os.Remove(dbPath)
+	dbPath := filepath.Join(t.TempDir(), "test_bug_delete.db")
 
 	mgr := topology.New()
 	mgr.Load(dbPath)
@@ -172,8 +168,7 @@ func TestDeleteBug(t *testing.T) {
 }
 
 func TestDeleteAllBugs(t *testing.T) {
-	dbPath := "../test_bug_deleteall.db"
-	defer os.Remove(dbPath)
+	dbPath := filepath.Join(t.TempDir(), "test_bug_deleteall.db")
 
 	mgr := topology.New()
 	mgr.Load(dbPath)
@@ -198,8 +193,7 @@ func TestDeleteAllBugs(t *testing.T) {
 }
 
 func TestBugSurvivesScan(t *testing.T) {
-	dbPath := "../test_bug_scan_survival.db"
-	defer os.Remove(dbPath)
+	dbPath := filepath.Join(t.TempDir(), "test_bug_scan_survival.db")
 
 	reg := newTestRegistry()
 	mgr := topology.New()
@@ -295,8 +289,7 @@ func TestPyUpdateFileAddsNewModule(t *testing.T) {
 }
 
 func TestPyCut(t *testing.T) {
-	dbPath := "../test_py_cut.db"
-	defer os.Remove(dbPath)
+	dbPath := filepath.Join(t.TempDir(), "test_py_cut.db")
 
 	reg := newPythonTestRegistry()
 	mgr := topology.New()
@@ -327,8 +320,7 @@ func TestPyCut(t *testing.T) {
 }
 
 func TestPyReadFunction(t *testing.T) {
-	dbPath := "../test_py_readfn.db"
-	defer os.Remove(dbPath)
+	dbPath := filepath.Join(t.TempDir(), "test_py_readfn.db")
 
 	reg := newPythonTestRegistry()
 	mgr := topology.New()
@@ -377,8 +369,7 @@ func TestPyReadFunction(t *testing.T) {
 }
 
 func TestPyReadClass(t *testing.T) {
-	dbPath := "../test_py_readclass.db"
-	defer os.Remove(dbPath)
+	dbPath := filepath.Join(t.TempDir(), "test_py_readclass.db")
 
 	reg := newPythonTestRegistry()
 	mgr := topology.New()
@@ -440,8 +431,7 @@ func TestPyReadClass(t *testing.T) {
 }
 
 func TestReadFunction(t *testing.T) {
-	dbPath := "../test_readfn.db"
-	defer os.Remove(dbPath)
+	dbPath := filepath.Join(t.TempDir(), "test_readfn.db")
 
 	reg := newTestRegistry()
 	mgr := topology.New()
@@ -493,8 +483,7 @@ func TestReadFunction(t *testing.T) {
 }
 
 func TestReadFunctionCalledFuncs(t *testing.T) {
-	dbPath := "../test_readfn2.db"
-	defer os.Remove(dbPath)
+	dbPath := filepath.Join(t.TempDir(), "test_readfn2.db")
 
 	reg := newTestRegistry()
 	mgr := topology.New()
@@ -541,8 +530,7 @@ func TestReadFunctionCalledFuncs(t *testing.T) {
 }
 
 func TestReadStruct(t *testing.T) {
-	dbPath := "../test_readstruct.db"
-	defer os.Remove(dbPath)
+	dbPath := filepath.Join(t.TempDir(), "test_readstruct.db")
 
 	reg := newTestRegistry()
 	mgr := topology.New()

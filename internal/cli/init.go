@@ -260,7 +260,15 @@ func bugJudgeCommandForAgent(agentRef string) string {
 }
 
 func bugSolverCommandForAgent(agentRef string) string {
-	return "Use the " + agentRef + " agent to fix acknowledged bugs. It must inspect each acknowledged bug, apply the minimal fix, and delete the bug report after the fix is complete."
+	return strings.Join([]string{
+		"Fix every acknowledged bug by fanning out the " + agentRef + " agent — one run per acknowledged bug, run in parallel.",
+		"",
+		"1. Call bug_list with state=acknowledged to get the bugs to fix.",
+		"2. Launch the " + agentRef + " agent once per acknowledged bug, running as many concurrently as the platform allows. Give each run only its assigned bug.",
+		"3. Each run finds the root cause and makes the minimal correct change, then verifies: build and/or test the affected scope with Bash and clear any new topology warnings. If an edit fails because another agent changed the file, re-read the resource and retry.",
+		"4. Each run deletes its bug report with bug_delete once the fix is verified; if a bug cannot be fixed, it leaves the report in place and explains why.",
+		"5. After all runs finish, report how many bugs were fixed, deferred (unfixable), and failed.",
+	}, "\n")
 }
 
 func claudeAgentContent(name, description string, eff helper.AgentConfig, prompt string) string {

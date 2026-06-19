@@ -1204,6 +1204,7 @@
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
     ctx.lineJoin = 'round';
+    var hiLabels = []; // deferred: highlighted names paint in a 2nd pass, above every plain name
     state.nodes.forEach(function (n) {
       var p = state.pos.get(n.id);
       if (!p) return;
@@ -1215,18 +1216,23 @@
       if (!(hi || isSel || s > 0.78 || r > 7)) return;
       var label = n.name || n.id;
       var y = p.y + r + 4 / s;
-      if (hi) { // bigger + black outline so highlighted names pop over anything
-        ctx.font = (14 / s) + 'px sans-serif';
-        ctx.lineWidth = 3.5 / s;
-        ctx.strokeStyle = '#000000';
-        ctx.strokeText(label, p.x, y);
-        ctx.fillStyle = '#ffffff';
-        ctx.fillText(label, p.x, y);
-      } else {
-        ctx.font = (12 / s) + 'px sans-serif';
-        ctx.fillStyle = '#e8edf6';
-        ctx.fillText(label, p.x, y);
+      if (hi) { // defer so highlighted names never get covered by a later plain name
+        hiLabels.push({ label: label, x: p.x, y: y, isHover: isHover });
+        return;
       }
+      ctx.font = (12 / s) + 'px sans-serif';
+      ctx.fillStyle = '#e8edf6';
+      ctx.fillText(label, p.x, y);
+    });
+    // highlighted names: even larger + thicker black outline, always on top
+    hiLabels.forEach(function (l) {
+      var size = l.isHover ? 20 : 17; // hovered node biggest, its neighbors slightly smaller
+      ctx.font = (size / s) + 'px sans-serif';
+      ctx.lineWidth = (l.isHover ? 6 : 5) / s;
+      ctx.strokeStyle = '#000000';
+      ctx.strokeText(l.label, l.x, l.y);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(l.label, l.x, l.y);
     });
 
     ctx.restore();
@@ -1249,7 +1255,26 @@
     return 'hsl(' + h + ', 70%, 62%)';
   }
 
+  function hideInspectorPanel() {
+    state.selected = null;
+    state.hoveredID = null;
+    updateDepthControls();
+    if (!document.body.classList.contains('graph-inspector-hidden')) {
+      document.body.classList.add('graph-inspector-hidden');
+      resize(); // canvas widened -> recompute buffer + redraw
+    } else {
+      draw(); // already hidden: just refresh highlight removal
+    }
+  }
+
+  function showInspectorPanel() {
+    if (!document.body.classList.contains('graph-inspector-hidden')) return;
+    document.body.classList.remove('graph-inspector-hidden');
+    resize(); // canvas narrowed back -> recompute buffer + redraw
+  }
+
   function selectNode(id) {
+    showInspectorPanel();
     var n = state.nodeMap.get(id) || {id: id};
     state.selected = n;
     updateDepthControls();
@@ -2757,11 +2782,12 @@
     if (state.dragMoved) return;
     var n = nearest(e.clientX, e.clientY);
     if (n) selectNode(n.id);
-    else loadGraph();
+    else hideInspectorPanel();
   });
   canvas.addEventListener('dblclick', function (e) {
     var n = nearest(e.clientX, e.clientY);
     if (n) loadNeighborhood(n.id);
+    else { hideInspectorPanel(); loadGraph(); }
   });
   canvas.addEventListener('wheel', function (e) {
     e.preventDefault();

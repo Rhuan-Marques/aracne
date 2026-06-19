@@ -335,7 +335,7 @@ func DefaultAgentMCPTools(agentName string) []string {
 	case "bug-judge":
 		return []string{"read_file", "read_function", "read_struct", "read_interface", "grep", "bug_list", "bug_acknowledge", "bug_dismiss", "bug_delete"}
 	case "bug-solver":
-		return []string{"read_file", "read_function", "read_struct", "read_interface", "grep", "edit", "write", "bug_delete"}
+		return []string{"read_file", "read_function", "read_struct", "read_interface", "grep", "edit", "write", "warnings_list", "bug_delete"}
 	default:
 		return []string{"read_file", "read_function", "read_struct", "read_interface", "grep", "edit", "write", "warnings_list", "bug_report"}
 	}
@@ -362,7 +362,7 @@ func DefaultChatAgentTools(agentName string) []string {
 	case "bug-judge":
 		return []string{"read", "read_function", "read_struct", "read_interface", "read_file", "grep", "bug_list", "bug_acknowledge", "bug_dismiss", "bug_delete"}
 	case "bug-solver":
-		return []string{"read", "edit", "write", "read_function", "read_struct", "read_interface", "read_file", "grep", "bug_delete"}
+		return []string{"read", "edit", "write", "read_function", "read_struct", "read_interface", "read_file", "grep", "warnings_list", "bug_delete"}
 	default:
 		return nil
 	}
@@ -373,6 +373,12 @@ func DefaultChatAgentTools(agentName string) []string {
 // it reasons harder than the default. It is a no-op for providers/models that
 // do not support reasoning (see chat newProvider).
 const DefaultBugJudgeThinkingBudget = 4096
+
+// DefaultBugSolverThinkingBudget is the default extended-reasoning token budget
+// for the proprietary-chat bug-solver sub-agent. Producing a minimal correct
+// fix is reasoning-heavy, so it reasons harder than the default. It is a no-op
+// for providers/models that do not support reasoning (see chat newProvider).
+const DefaultBugSolverThinkingBudget = 4096
 
 func DefaultConfig() *Config {
 	subAgent := func(name string) AgentConfig {
@@ -429,7 +435,7 @@ func DefaultConfig() *Config {
 						"explorer":   {Tools: DefaultChatAgentTools("explorer")},
 						"bug-hunter": {Tools: DefaultChatAgentTools("bug-hunter")},
 						"bug-judge":  {Tools: DefaultChatAgentTools("bug-judge"), Params: map[string]int{"thinking": DefaultBugJudgeThinkingBudget}},
-						"bug-solver": {Tools: DefaultChatAgentTools("bug-solver")},
+						"bug-solver": {Tools: DefaultChatAgentTools("bug-solver"), Params: map[string]int{"thinking": DefaultBugSolverThinkingBudget}},
 						"descriptions-generation-executor": {
 							Tools:  DefaultChatAgentTools("descriptions-generation-executor"),
 							Params: map[string]int{"max-batch-size": DefaultDescriptionBatchSize},

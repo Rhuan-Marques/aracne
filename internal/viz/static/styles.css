@@ -806,6 +806,14 @@ body.chat-active .toolbar {
   display: none;
 }
 
+body.graph-inspector-hidden .shell {
+  grid-template-columns: 320px minmax(0, 1fr);
+}
+
+body.graph-inspector-hidden .right {
+  display: none;
+}
+
 .chatScreen {
   position: absolute;
   inset: 0;

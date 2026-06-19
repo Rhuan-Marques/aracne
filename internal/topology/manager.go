@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -440,6 +441,32 @@ func (m *TopologyManager) Cut(loc domain.Location) (*domain.CodeEntry, error) {
 	}
 	cut := strings.Join(lines[loc.StartsAt-1:loc.EndsAt], "\n")
 	return &domain.CodeEntry{Location: loc, Cut: cut}, nil
+}
+
+// fileEditLocks serializes concurrent edit/write operations (and their topology
+// updates) on the same absolute file path within a process, so parallel
+// sub-agents editing the same file cannot lose each other's changes. Different
+// files proceed concurrently. Keyed by absolute path so it is shared across all
+// managers in the process.
+var fileEditLocks sync.Map // map[string]*sync.Mutex
+
+// WithFileLock runs fn while holding the per-file lock for path's absolute form,
+// serializing edit/write of the same file. waited is true when another holder
+// forced this call to block — a signal that the file may have changed since the
+// caller last read it (used to give a clearer stale-edit error).
+func (m *TopologyManager) WithFileLock(path string, fn func(waited bool) (string, error)) (string, error) {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	muAny, _ := fileEditLocks.LoadOrStore(absPath, &sync.Mutex{})
+	mu := muAny.(*sync.Mutex)
+	waited := !mu.TryLock()
+	if waited {
+		mu.Lock()
+	}
+	defer mu.Unlock()
+	return fn(waited)
 }
 
 func (m *TopologyManager) UpdateFile(path string, reg *scanner.Registry) ([]domain.TopologyWarning, error) {

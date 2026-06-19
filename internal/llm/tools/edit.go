@@ -55,29 +55,48 @@ func (e *Edit) Run(args json.RawMessage) (string, error) {
 		return "", fmt.Errorf("missing required arguments: file_path, old_string")
 	}
 
-	data, err := os.ReadFile(params.FilePath)
+	// Serialize edits to the same file so parallel agents cannot lose each
+	// other's changes. When mgr is nil (no topology) there is nothing to lock
+	// or update, so apply directly.
+	if e.mgr == nil {
+		return e.apply(params.FilePath, params.OldString, params.NewString, false)
+	}
+	return e.mgr.WithFileLock(params.FilePath, func(waited bool) (string, error) {
+		return e.apply(params.FilePath, params.OldString, params.NewString, waited)
+	})
+}
+
+// apply performs the read-modify-write and topology update. waited reports
+// whether this edit had to queue behind another agent's edit of the same file;
+// if so and the old_string no longer matches, that other agent almost certainly
+// changed the file, so the error tells this agent to re-read and retry.
+func (e *Edit) apply(filePath, oldString, newString string, waited bool) (string, error) {
+	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return "", fmt.Errorf("read file: %w", err)
 	}
 
 	content := string(data)
-	if !strings.Contains(content, params.OldString) {
+	if !strings.Contains(content, oldString) {
 		normalizedContent := strings.ReplaceAll(content, "\r\n", "\n")
-		normalizedOld := strings.ReplaceAll(params.OldString, "\r\n", "\n")
+		normalizedOld := strings.ReplaceAll(oldString, "\r\n", "\n")
 		if !strings.Contains(normalizedContent, normalizedOld) {
-			return "", fmt.Errorf("old_string not found in %s", params.FilePath)
+			if waited {
+				return "", fmt.Errorf("old_string not found in %s — another agent changed this file while your edit was queued; re-read the resource and retry with the current text", filePath)
+			}
+			return "", fmt.Errorf("old_string not found in %s", filePath)
 		}
-		params.OldString = normalizedOld
+		oldString = normalizedOld
 		content = normalizedContent
 	}
 
-	newContent := strings.Replace(content, params.OldString, params.NewString, 1)
-	if err := os.WriteFile(params.FilePath, []byte(newContent), 0644); err != nil {
+	newContent := strings.Replace(content, oldString, newString, 1)
+	if err := os.WriteFile(filePath, []byte(newContent), 0644); err != nil {
 		return "", fmt.Errorf("write file: %w", err)
 	}
 
 	if e.mgr != nil {
-		warnings, err := e.mgr.UpdateFile(params.FilePath, e.reg)
+		warnings, err := e.mgr.UpdateFile(filePath, e.reg)
 		if err != nil {
 			return "", fmt.Errorf("update topology: %w", err)
 		}

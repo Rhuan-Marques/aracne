@@ -48,17 +48,28 @@ func (w *Write) Run(args json.RawMessage) (string, error) {
 		return "", fmt.Errorf("missing required argument: file_path")
 	}
 
-	dir := filepath.Dir(params.FilePath)
+	// Serialize with concurrent edits/writes of the same file (see Edit). When
+	// mgr is nil there is nothing to lock or update, so apply directly.
+	if w.mgr == nil {
+		return w.apply(params.FilePath, params.Content)
+	}
+	return w.mgr.WithFileLock(params.FilePath, func(_ bool) (string, error) {
+		return w.apply(params.FilePath, params.Content)
+	})
+}
+
+func (w *Write) apply(filePath, contentStr string) (string, error) {
+	dir := filepath.Dir(filePath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", fmt.Errorf("create directories: %w", err)
 	}
 
-	if err := os.WriteFile(params.FilePath, []byte(params.Content), 0644); err != nil {
+	if err := os.WriteFile(filePath, []byte(contentStr), 0644); err != nil {
 		return "", fmt.Errorf("write file: %w", err)
 	}
 
 	if w.mgr != nil {
-		warnings, err := w.mgr.UpdateFile(params.FilePath, w.reg)
+		warnings, err := w.mgr.UpdateFile(filePath, w.reg)
 		if err != nil {
 			return "", fmt.Errorf("update topology: %w", err)
 		}

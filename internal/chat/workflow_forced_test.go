@@ -27,6 +27,16 @@ func TestChatAgentProviderOverride_BugJudgeThinking(t *testing.T) {
 	}
 }
 
+func TestChatAgentProviderOverride_BugSolverThinking(t *testing.T) {
+	manager := setupWorkflowManager(t, "", false)
+	base := ProviderSettings{Provider: ProviderAnthropic, Model: "claude-sonnet-4"}
+
+	solver := manager.chatAgentProviderOverride("bug-solver", base)
+	if solver.ThinkingBudget != helper.DefaultBugSolverThinkingBudget {
+		t.Fatalf("bug-solver thinking budget = %d, want %d", solver.ThinkingBudget, helper.DefaultBugSolverThinkingBudget)
+	}
+}
+
 func TestOpenAIReasoningHelpers(t *testing.T) {
 	if isOpenAIReasoningModel("gpt-4.1") {
 		t.Fatal("gpt-4.1 is not a reasoning model")

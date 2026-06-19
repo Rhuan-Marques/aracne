@@ -228,12 +228,18 @@ func dismissedPatternDigest(allBugs []domain.KnownBug, excludeNode string, limit
 
 func (m *Manager) bugSolverWorkflowPrompt(bug domain.KnownBug) string {
 	var b strings.Builder
-	b.WriteString("Fix exactly this acknowledged bug and nothing else. Explore enough surrounding context to understand the full scope of the fix, then make the minimal correct change. Delete the bug report only after the fix is complete.\n\n")
+	b.WriteString("Fix exactly this acknowledged bug and nothing else: find the root cause, make the minimal correct change, verify it, then delete the bug report.\n\n")
 	b.WriteString("Assigned bug:\n")
 	b.WriteString(fmt.Sprintf("- ID: %s\n  Node: %s\n  State: %s\n  Description: %s\n\n", bug.ID, bug.NodeID, bug.State, bug.Description))
 	b.WriteString("Assigned resource read:\n\n```text\n")
 	b.WriteString(m.readResourceForPrompt(bug.NodeID))
-	b.WriteString("\n```\n")
+	b.WriteString("\n```\n\n")
+	b.WriteString("Orders, in order:\n")
+	b.WriteString("\n1. Investigate: explore enough surrounding context (callers, implementations, related types) to understand the full scope of the fix.")
+	b.WriteString("\n2. Fix: apply the minimal correct change at every site it is needed; preserve the existing style.")
+	b.WriteString("\n3. Verify: re-read what you changed and heed the topology warnings that edit/write return — a new use_missing_node means you broke a reference; you may also call warnings_list.")
+	b.WriteString("\n4. If an edit fails because another agent changed the file while your edit was queued, re-read the resource and retry against the current text.")
+	b.WriteString("\n5. Delete the bug report with bug_delete once the fix is complete. If it cannot be fixed, leave it in place and explain why.\n")
 	return b.String()
 }
 
