@@ -135,6 +135,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	mux.HandleFunc("/api/search", s.handleSearch)
 	mux.HandleFunc("/api/node/", s.handleNode)
 	mux.HandleFunc("/api/optimization-rules", s.handleOptimizationRules)
+	mux.HandleFunc("/api/context-graph", s.handleContextGraph)
 	mux.HandleFunc("/api/config", s.handleConfig)
 	mux.HandleFunc("/api/chat", s.handleChat)
 	mux.HandleFunc("/api/chat/", s.handleChat)

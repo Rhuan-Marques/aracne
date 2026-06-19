@@ -1495,6 +1495,7 @@
     el('navSettings').classList.toggle('active', route === 'settings');
 
     if (route === 'graph') resize();
+    if (route === 'chat') { var mg = ensureContextGraph(); if (mg) mg.resize(); }
     if (route === 'settings') {
       loadChatProvider();
       loadAppConfig();
@@ -2070,6 +2071,7 @@
   function renderChat() {
     var box = el('chatMessages');
     if (!box) return;
+    syncContextGraphScope();
     var stick = atBottom(box);
     var focusSnap = captureFocus(box);
     var openKeys = {};
@@ -2520,6 +2522,7 @@
       state.chatStreaming = null;
       renderChatThinking();
       loadChatSession(state.chatSession.id).then(processNextQueuedMessage);
+      scheduleContextGraphRefresh();
       return;
     }
     if (event.type === 'delta' && mine) {
@@ -2567,7 +2570,7 @@
       state.chatThinking = false;
       renderChatThinking();
     }
-    if (mine) scheduleSessionRefresh();
+    if (mine) { scheduleSessionRefresh(); scheduleContextGraphRefresh(); }
     else loadChatSessions();
   }
 
@@ -3150,6 +3153,333 @@
     if (card) Array.prototype.forEach.call(card.querySelectorAll('button, input'), function (n) { n.disabled = true; });
     answerQuestion(form.dataset.question, value);
   });
+  // --- Live context graph (miniature Data Flow view of what the LLM has seen) ---
+  // Self-contained renderer bound to its own canvas; reuses edgeColor/hashAngle
+  // from the closure but keeps its own state, layout, and hover. Green = code
+  // seen, yellow = name/description only. Hover-only: no click/drag/zoom.
+  function MiniContextGraph(canvasEl) {
+    var c = canvasEl;
+    var cx = c.getContext('2d');
+    var g = {
+      nodes: [], edges: [], byId: new Map(),
+      pos: new Map(), vel: new Map(), neighbors: new Map(),
+      scale: 1, ox: 0, oy: 0, hoveredID: null, raf: null, alpha: 0
+    };
+
+    function miniRadius(n) {
+      return Math.max(3, Math.min(11, 3 + Math.sqrt((n.in_degree || 0) + (n.out_degree || 0))));
+    }
+    function nodeFill(n) { return n.context_state === 'green' ? '#34d399' : '#facc15'; }
+
+    function resize() {
+      var rect = c.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return false;
+      var dpr = window.devicePixelRatio || 1;
+      c.width = Math.max(1, Math.floor(rect.width * dpr));
+      c.height = Math.max(1, Math.floor(rect.height * dpr));
+      cx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      computeFit();
+      draw();
+      return true;
+    }
+
+    function seedPos(node) {
+      var anchor = null;
+      for (var i = 0; i < g.edges.length; i++) {
+        var e = g.edges[i];
+        var other = e.source === node.id ? e.target : (e.target === node.id ? e.source : null);
+        if (other && g.pos.has(other)) { anchor = g.pos.get(other); break; }
+      }
+      var ang = hashAngle(node.id);
+      var base = anchor || {x: 0, y: 0};
+      var dist = anchor ? 42 : 12;
+      g.pos.set(node.id, {x: base.x + Math.cos(ang) * dist, y: base.y + Math.sin(ang) * dist});
+      g.vel.set(node.id, {x: 0, y: 0});
+    }
+
+    function rebuildNeighbors() {
+      var m = new Map();
+      g.nodes.forEach(function (n) { m.set(n.id, new Set()); });
+      g.edges.forEach(function (e) {
+        if (e.source === e.target) return;
+        var s = m.get(e.source), t = m.get(e.target);
+        if (s) s.add(e.target);
+        if (t) t.add(e.source);
+      });
+      g.neighbors = m;
+    }
+
+    function update(resp) {
+      var nodes = (resp && resp.nodes) || [];
+      var allEdges = (resp && resp.edges) || [];
+      var nextIds = new Set();
+      var greenSet = new Set();
+      nodes.forEach(function (n) { nextIds.add(n.id); if (n.context_state === 'green') greenSet.add(n.id); });
+      // Only show an edge once at least one endpoint is green; yellow<->yellow
+      // links stay hidden until the model reads one of them.
+      g.edges = allEdges.filter(function (e) {
+        return nextIds.has(e.source) && nextIds.has(e.target) && (greenSet.has(e.source) || greenSet.has(e.target));
+      });
+      // Drop layout state for nodes that left the graph.
+      g.pos.forEach(function (_, id) { if (!nextIds.has(id)) { g.pos.delete(id); g.vel.delete(id); } });
+      var prev = g.byId;
+      var fresh = [];
+      g.nodes = nodes.map(function (n) {
+        var old = prev.get(n.id);
+        if (old) { n._appear = old._appear; } else { n._appear = 0; fresh.push(n); }
+        return n;
+      });
+      g.byId = new Map();
+      g.nodes.forEach(function (n) { g.byId.set(n.id, n); });
+      fresh.forEach(seedPos);
+      g.nodes.forEach(function (n) { if (!g.pos.has(n.id)) seedPos(n); });
+      rebuildNeighbors();
+      updateChrome();
+      if (g.nodes.length) kick();
+      else { stop(); computeFit(); draw(); }
+    }
+
+    function updateChrome() {
+      var empty = el('contextGraphEmpty');
+      var count = el('contextGraphCount');
+      if (empty) empty.classList.toggle('hidden', g.nodes.length > 0);
+      if (count) count.textContent = g.nodes.length ? (g.nodes.length + (g.nodes.length === 1 ? ' node' : ' nodes')) : '';
+    }
+
+    function step() {
+      var ns = g.nodes, n = ns.length;
+      for (var k = 0; k < n; k++) { if (ns[k]._appear < 1) ns[k]._appear = Math.min(1, ns[k]._appear + 0.08); }
+      if (n > 1) {
+        for (var i = 0; i < n; i++) {
+          var pi = g.pos.get(ns[i].id), vi = g.vel.get(ns[i].id);
+          for (var j = i + 1; j < n; j++) {
+            var pj = g.pos.get(ns[j].id), vj = g.vel.get(ns[j].id);
+            var dx = pi.x - pj.x, dy = pi.y - pj.y;
+            var d2 = dx * dx + dy * dy || 0.01;
+            var d = Math.sqrt(d2);
+            var f = 650 / d2;
+            var ux = dx / d, uy = dy / d;
+            vi.x += ux * f; vi.y += uy * f;
+            vj.x -= ux * f; vj.y -= uy * f;
+          }
+        }
+        g.edges.forEach(function (e) {
+          var a = g.pos.get(e.source), b = g.pos.get(e.target);
+          if (!a || !b) return;
+          var dx = b.x - a.x, dy = b.y - a.y;
+          var d = Math.sqrt(dx * dx + dy * dy) || 0.01;
+          var f = (d - 46) * 0.02;
+          var ux = dx / d, uy = dy / d;
+          var va = g.vel.get(e.source), vb = g.vel.get(e.target);
+          va.x += ux * f; va.y += uy * f;
+          vb.x -= ux * f; vb.y -= uy * f;
+        });
+      }
+      for (var m = 0; m < n; m++) {
+        var p = g.pos.get(ns[m].id), v = g.vel.get(ns[m].id);
+        v.x = (v.x - p.x * 0.002) * 0.86;
+        v.y = (v.y - p.y * 0.002) * 0.86;
+        var sp = Math.sqrt(v.x * v.x + v.y * v.y);
+        if (sp > 12) { v.x = v.x / sp * 12; v.y = v.y / sp * 12; }
+        p.x += v.x; p.y += v.y;
+      }
+    }
+
+    function frame() {
+      step();
+      g.alpha *= 0.96;
+      computeFit();
+      draw();
+      var animating = g.nodes.some(function (n) { return n._appear < 1; });
+      if (g.alpha > 0.05 || animating) { g.raf = requestAnimationFrame(frame); }
+      else { g.raf = null; computeFit(); draw(); }
+    }
+    function kick() { g.alpha = 1; if (!g.raf) g.raf = requestAnimationFrame(frame); }
+    function stop() { if (g.raf) { cancelAnimationFrame(g.raf); g.raf = null; } }
+
+    function computeFit() {
+      var rect = c.getBoundingClientRect();
+      if (!g.nodes.length || rect.width <= 0) { g.scale = 1; g.ox = 0; g.oy = 0; return; }
+      var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      g.nodes.forEach(function (n) {
+        var p = g.pos.get(n.id); if (!p) return;
+        var r = miniRadius(n);
+        if (p.x - r < minX) minX = p.x - r;
+        if (p.x + r > maxX) maxX = p.x + r;
+        if (p.y - r < minY) minY = p.y - r;
+        if (p.y + r > maxY) maxY = p.y + r;
+      });
+      if (!isFinite(minX)) { g.scale = 1; g.ox = 0; g.oy = 0; return; }
+      var pad = 24;
+      var bw = Math.max(1, maxX - minX), bh = Math.max(1, maxY - minY);
+      var sx = (rect.width - 2 * pad) / bw, sy = (rect.height - 2 * pad) / bh;
+      g.scale = Math.max(0.2, Math.min(2.4, Math.min(sx, sy)));
+      g.ox = -((minX + maxX) / 2) * g.scale;
+      g.oy = -((minY + maxY) / 2) * g.scale;
+    }
+
+    function draw() {
+      var rect = c.getBoundingClientRect();
+      cx.clearRect(0, 0, rect.width, rect.height);
+      if (!g.nodes.length) return;
+      cx.save();
+      cx.translate(rect.width / 2 + g.ox, rect.height / 2 + g.oy);
+      cx.scale(g.scale, g.scale);
+      var s = g.scale;
+      var hoverId = g.hoveredID;
+      var nbrs = hoverId ? g.neighbors.get(hoverId) : null;
+      g.edges.forEach(function (e) {
+        var a = g.pos.get(e.source), b = g.pos.get(e.target);
+        if (!a || !b) return;
+        var hot = hoverId && (e.source === hoverId || e.target === hoverId);
+        cx.strokeStyle = hot ? '#74d4ff' : edgeColor(e.type);
+        cx.globalAlpha = hot ? 0.95 : 0.5;
+        cx.lineWidth = (hot ? 2 : 1) / s;
+        cx.beginPath(); cx.moveTo(a.x, a.y); cx.lineTo(b.x, b.y); cx.stroke();
+      });
+      cx.globalAlpha = 1;
+      g.nodes.forEach(function (n) {
+        var p = g.pos.get(n.id); if (!p) return;
+        var grow = n._appear == null ? 1 : n._appear;
+        var r = miniRadius(n) * grow;
+        if (r <= 0.2) return;
+        var isHover = n.id === hoverId;
+        var isNbr = !!(nbrs && nbrs.has(n.id));
+        if (isHover || isNbr) {
+          cx.strokeStyle = isHover ? 'rgba(116,212,255,0.45)' : 'rgba(116,212,255,0.26)';
+          cx.lineWidth = (isHover ? 10 : 7) / s;
+          cx.beginPath(); cx.arc(p.x, p.y, r, 0, Math.PI * 2); cx.stroke();
+        }
+        cx.fillStyle = nodeFill(n);
+        cx.beginPath(); cx.arc(p.x, p.y, r, 0, Math.PI * 2); cx.fill();
+        if (isHover || isNbr) {
+          cx.strokeStyle = '#74d4ff';
+          cx.lineWidth = (isHover ? 2.5 : 1.5) / s;
+          cx.stroke();
+        }
+      });
+      if (hoverId) {
+        var hn = g.byId.get(hoverId), hp = g.pos.get(hoverId);
+        if (hn && hp) {
+          cx.textAlign = 'center'; cx.textBaseline = 'top'; cx.lineJoin = 'round';
+          cx.font = (12 / s) + 'px sans-serif';
+          var y = hp.y + miniRadius(hn) + 4 / s;
+          cx.lineWidth = 4 / s; cx.strokeStyle = '#000';
+          cx.strokeText(hn.name || hn.id, hp.x, y);
+          cx.fillStyle = '#fff';
+          cx.fillText(hn.name || hn.id, hp.x, y);
+        }
+      }
+      cx.restore();
+    }
+
+    function screenToWorld(x, y) {
+      var rect = c.getBoundingClientRect();
+      return {
+        x: (x - rect.left - rect.width / 2 - g.ox) / g.scale,
+        y: (y - rect.top - rect.height / 2 - g.oy) / g.scale
+      };
+    }
+    function nearest(x, y) {
+      var w = screenToWorld(x, y), tol = 4 / g.scale, best = null;
+      for (var i = 0; i < g.nodes.length; i++) {
+        var n = g.nodes[i], p = g.pos.get(n.id); if (!p) continue;
+        var r = miniRadius(n) + tol;
+        var dx = p.x - w.x, dy = p.y - w.y;
+        if (dx * dx + dy * dy <= r * r) best = n;
+      }
+      return best;
+    }
+    c.addEventListener('mousemove', function (e) {
+      var n = nearest(e.clientX, e.clientY);
+      var id = n ? n.id : null;
+      if (id !== g.hoveredID) {
+        g.hoveredID = id;
+        c.style.cursor = id ? 'pointer' : 'default';
+        if (!g.raf) draw();
+      }
+    });
+    c.addEventListener('mouseleave', function () {
+      if (g.hoveredID) { g.hoveredID = null; c.style.cursor = 'default'; if (!g.raf) draw(); }
+    });
+
+    return { update: update, resize: resize, redraw: draw, stop: stop };
+  }
+
+  var contextGraph = null;
+  var contextGraphTimer = null;
+  var contextGraphSeq = 0;
+  var contextGraphScopeKey = '';
+
+  function ensureContextGraph() {
+    if (!contextGraph) {
+      var cv = el('contextGraphCanvas');
+      if (!cv) return null;
+      contextGraph = MiniContextGraph(cv);
+    }
+    return contextGraph;
+  }
+  function contextScope() {
+    if (!state.chatSession) return null;
+    var scope = {session_id: state.chatSession.id};
+    if (state.selectedTaskGroupID && state.selectedTaskID) {
+      scope.group_id = state.selectedTaskGroupID;
+      scope.task_id = state.selectedTaskID;
+    }
+    return scope;
+  }
+  function scopeKey(scope) {
+    if (!scope) return '';
+    return scope.session_id + '|' + (scope.group_id || '') + '|' + (scope.task_id || '');
+  }
+  function refreshContextGraph() {
+    if (document.body.dataset.route !== 'chat') return;
+    var mg = ensureContextGraph();
+    if (!mg) return;
+    var scope = contextScope();
+    if (!scope) { mg.update({nodes: [], edges: []}); return; }
+    mg.resize();
+    var seq = ++contextGraphSeq;
+    var key = scopeKey(scope);
+    api('/api/context-graph?' + params(scope)).then(function (resp) {
+      if (seq !== contextGraphSeq || scopeKey(contextScope()) !== key) return;
+      mg.update(resp || {nodes: [], edges: []});
+    }).catch(function () {});
+  }
+  function scheduleContextGraphRefresh() {
+    if (document.body.dataset.route !== 'chat') return;
+    if (contextGraphTimer) clearTimeout(contextGraphTimer);
+    contextGraphTimer = setTimeout(function () { contextGraphTimer = null; refreshContextGraph(); }, 250);
+  }
+  function syncContextGraphScope() {
+    if (document.body.dataset.route !== 'chat') return;
+    var key = scopeKey(contextScope());
+    if (key === contextGraphScopeKey) return;
+    contextGraphScopeKey = key;
+    var mg = ensureContextGraph();
+    if (mg) mg.update({nodes: [], edges: []});
+    refreshContextGraph();
+  }
+
+  (function initContextPanel() {
+    var ws = el('chatWorkspace');
+    var toggle = el('chatSideToggle');
+    if (ws && localStorage.getItem('aracneChatSideCollapsed') === '1') ws.classList.add('sideCollapsed');
+    if (ws && toggle) {
+      toggle.addEventListener('click', function () {
+        ws.classList.toggle('sideCollapsed');
+        try { localStorage.setItem('aracneChatSideCollapsed', ws.classList.contains('sideCollapsed') ? '1' : '0'); } catch (e) {}
+        if (!ws.classList.contains('sideCollapsed')) {
+          var mg = ensureContextGraph();
+          if (mg) mg.resize();
+        }
+      });
+    }
+    window.addEventListener('resize', function () {
+      if (contextGraph && document.body.dataset.route === 'chat') contextGraph.resize();
+    });
+  })();
+
   loadChatProvider();
   loadAgents().then(loadChatSessions).then(renderRoute);
   resize();
