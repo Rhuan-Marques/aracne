@@ -3201,7 +3201,8 @@
     var g = {
       nodes: [], edges: [], byId: new Map(),
       pos: new Map(), vel: new Map(), neighbors: new Map(),
-      scale: 1, ox: 0, oy: 0, hoveredID: null, raf: null, alpha: 0
+      scale: 1, ox: 0, oy: 0, hoveredID: null, raf: null, alpha: 0,
+      userMoved: false, dragging: false, dragStart: null
     };
 
     function miniRadius(n) {
@@ -3216,7 +3217,7 @@
       c.width = Math.max(1, Math.floor(rect.width * dpr));
       c.height = Math.max(1, Math.floor(rect.height * dpr));
       cx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      computeFit();
+      if (!g.userMoved) computeFit();
       draw();
       return true;
     }
@@ -3326,11 +3327,16 @@
     function frame() {
       step();
       g.alpha *= 0.96;
-      computeFit();
+      if (!g.userMoved) computeFit();
       draw();
       var animating = g.nodes.some(function (n) { return n._appear < 1; });
       if (g.alpha > 0.05 || animating) { g.raf = requestAnimationFrame(frame); }
-      else { g.raf = null; computeFit(); draw(); }
+      else { g.raf = null; if (!g.userMoved) computeFit(); draw(); }
+    }
+    function fit() {
+      g.userMoved = false;
+      computeFit();
+      draw();
     }
     function kick() { g.alpha = 1; if (!g.raf) g.raf = requestAnimationFrame(frame); }
     function stop() { if (g.raf) { cancelAnimationFrame(g.raf); g.raf = null; } }
@@ -3428,20 +3434,48 @@
       }
       return best;
     }
+    // Drag to pan. Dragging suspends auto-fit until the user hits "Fit".
+    c.addEventListener('mousedown', function (e) {
+      g.dragging = true;
+      g.dragStart = {x: e.clientX, y: e.clientY, ox: g.ox, oy: g.oy};
+      c.style.cursor = 'grabbing';
+      e.preventDefault();
+    });
+    window.addEventListener('mousemove', function (e) {
+      if (!g.dragging) return;
+      g.userMoved = true;
+      g.ox = g.dragStart.ox + (e.clientX - g.dragStart.x);
+      g.oy = g.dragStart.oy + (e.clientY - g.dragStart.y);
+      if (!g.raf) draw();
+    });
+    window.addEventListener('mouseup', function () {
+      if (!g.dragging) return;
+      g.dragging = false;
+      c.style.cursor = g.hoveredID ? 'pointer' : 'grab';
+    });
+    // Wheel to zoom (also a manual move -> suspends auto-fit).
+    c.addEventListener('wheel', function (e) {
+      e.preventDefault();
+      g.userMoved = true;
+      g.scale = Math.max(0.1, Math.min(4, g.scale * (e.deltaY > 0 ? 0.9 : 1.1)));
+      if (!g.raf) draw();
+    }, {passive: false});
+    // Hover highlight.
     c.addEventListener('mousemove', function (e) {
+      if (g.dragging) return;
       var n = nearest(e.clientX, e.clientY);
       var id = n ? n.id : null;
       if (id !== g.hoveredID) {
         g.hoveredID = id;
-        c.style.cursor = id ? 'pointer' : 'default';
         if (!g.raf) draw();
       }
+      c.style.cursor = id ? 'pointer' : 'grab';
     });
     c.addEventListener('mouseleave', function () {
-      if (g.hoveredID) { g.hoveredID = null; c.style.cursor = 'default'; if (!g.raf) draw(); }
+      if (g.hoveredID) { g.hoveredID = null; if (!g.raf) draw(); }
     });
 
-    return { update: update, resize: resize, redraw: draw, stop: stop };
+    return { update: update, resize: resize, redraw: draw, stop: stop, fit: fit };
   }
 
   var contextGraph = null;
@@ -3502,17 +3536,24 @@
   (function initContextPanel() {
     var ws = el('chatWorkspace');
     var toggle = el('chatSideToggle');
+    function syncToggle() {
+      if (toggle) toggle.textContent = ws && ws.classList.contains('sideCollapsed') ? '‹' : '›';
+    }
     if (ws && localStorage.getItem('aracneChatSideCollapsed') === '1') ws.classList.add('sideCollapsed');
+    syncToggle();
     if (ws && toggle) {
       toggle.addEventListener('click', function () {
-        ws.classList.toggle('sideCollapsed');
-        try { localStorage.setItem('aracneChatSideCollapsed', ws.classList.contains('sideCollapsed') ? '1' : '0'); } catch (e) {}
-        if (!ws.classList.contains('sideCollapsed')) {
-          var mg = ensureContextGraph();
-          if (mg) mg.resize();
-        }
+        var collapsed = ws.classList.toggle('sideCollapsed');
+        try { localStorage.setItem('aracneChatSideCollapsed', collapsed ? '1' : '0'); } catch (e) {}
+        syncToggle();
+        if (!collapsed && contextGraph) contextGraph.resize();
       });
     }
+    var fitBtn = el('contextGraphFit');
+    if (fitBtn) fitBtn.addEventListener('click', function () {
+      var mg = ensureContextGraph();
+      if (mg) mg.fit();
+    });
     window.addEventListener('resize', function () {
       if (contextGraph && document.body.dataset.route === 'chat') contextGraph.resize();
     });
