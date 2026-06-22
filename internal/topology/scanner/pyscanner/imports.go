@@ -87,6 +87,7 @@ func findModuleFile(stem string, gt *python.PythonTopology) (python.ModuleID, bo
 	return "", false
 }
 
+// Checks whether a module exists in the Python topology.
 func moduleExists(id python.ModuleID, gt *python.PythonTopology) bool {
 	_, ok := gt.Modules[id]
 	return ok

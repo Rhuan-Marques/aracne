@@ -6,6 +6,7 @@ import (
 	"aracne/internal/llm"
 )
 
+// Resumes processing a paused task group by running it asynchronously and appending results to the session message thread.
 func (m *Manager) ResumeTaskGroup(sessionID, groupID string) (*Session, error) {
 	m.mu.Lock()
 	session, err := m.getSessionLocked(sessionID)
@@ -55,6 +56,7 @@ func (m *Manager) ResumeTaskGroup(sessionID, groupID string) (*Session, error) {
 	return m.GetSession(sessionID)
 }
 
+// Checks if a tool call has a completed result in the session messages.
 func taskGroupToolResultPresent(session *Session, toolCallID string) bool {
 	for _, msg := range session.Messages {
 		if msg.ToolCallID == toolCallID && msg.Status != "" && msg.Status != taskStatusPending && msg.ToolOutput != "" {

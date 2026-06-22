@@ -1,5 +1,6 @@
 package prompts
 
+// Command string to launch Bug Judge sub-agents for triaging pending bugs.
 func BugJudgeCommand() string {
 	return `Launch Bug Judge sub-agents to triage all pending bugs.
 

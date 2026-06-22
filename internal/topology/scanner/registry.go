@@ -31,6 +31,7 @@ func (r *Registry) Detect(root string) LanguageScanner {
 	return nil
 }
 
+// Returns all language scanners that can detect or find files in the given root directory.
 func (r *Registry) DetectAll(root string) []LanguageScanner {
 	var detected []LanguageScanner
 	for _, s := range r.scanners {
@@ -41,6 +42,7 @@ func (r *Registry) DetectAll(root string) []LanguageScanner {
 	return detected
 }
 
+// Returns the appropriate LanguageScanner for a file path by matching its extension against registered scanners.
 func (r *Registry) DetectFile(path string) LanguageScanner {
 	ext := strings.ToLower(filepath.Ext(path))
 	for _, s := range r.scanners {
@@ -53,6 +55,7 @@ func (r *Registry) DetectFile(path string) LanguageScanner {
 	return nil
 }
 
+// Checks whether a directory tree contains any files matching a scanner's supported extensions, skipping standard exclusion directories.
 func scannerHasFiles(root string, s LanguageScanner) bool {
 	absRoot, err := filepath.Abs(root)
 	if err != nil {

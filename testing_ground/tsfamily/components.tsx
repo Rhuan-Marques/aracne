@@ -6,21 +6,22 @@ import React from "react";
 import { Circle } from "./shapes";
 import { Color } from "./models";
 
-// Interface used as a component's props, including a FUNCTION-TYPED prop.
+// Props interface for badge component with shape, color, and selection callback.
 interface BadgeProps {
   shape: Circle;
   color: Color;
   onSelect: (shape: Circle) => void;
 }
 
-// Function component with typed props.
+// React component that renders a button displaying a shape's area and handles shape selection.
 export function ShapeBadge(props: BadgeProps) {
   const handle = () => props.onSelect(props.shape);
   return <button onClick={handle}>{props.shape.area()}</button>;
 }
 
-// Class component extending a generic member-expression base.
+// React component that renders a circle shape with color styling and area display.
 export class CircleView extends React.Component<BadgeProps> {
+// Renders the circle with computed area and color style from props.
   render() {
     const c: Circle = this.props.shape; // local annotation -> `c.area()` resolves
     return <div style={{ color: Color[this.props.color] }}>{c.area()}</div>;

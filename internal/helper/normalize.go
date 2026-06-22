@@ -8,6 +8,7 @@ import (
 	"strings"
 )
 
+// Normalizes resource IDs by expanding file URIs and tilde paths.
 func NormalizeResourceID(id string) string {
 	if id == "" {
 		return id
@@ -24,6 +25,7 @@ func NormalizeResourceID(id string) string {
 	return id
 }
 
+// Converts a file:// URI to a platform-appropriate filesystem path, handling Windows drive letter prefixes.
 func normalizeFileURI(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "file" {
@@ -39,6 +41,7 @@ func normalizeFileURI(raw string) string {
 	return path
 }
 
+// Expands ~ to the user's home directory in a file path.
 func expandTilde(path string) string {
 	home, err := os.UserHomeDir()
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 	"strings"
 )
 
+// Updates the description of a topology resource by ID and kind.
 func RunUpdateDescription(args []string) {
 	if len(args) < 3 {
 		fmt.Fprintln(os.Stderr, "Usage: arac update-description <id> <kind> <description>")

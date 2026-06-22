@@ -11,6 +11,7 @@ type PackagePath = string
 type DependancyPath = string
 type NamedTypeID = string
 
+// Represents a variable with its name, type, and resolved canonical type ID for cross-package type resolution.
 type VariableDefinition struct {
 	Name   string
 	Typing string
@@ -23,16 +24,19 @@ type VariableDefinition struct {
 	TypingID string
 }
 
+// Defines a function signature with its name, input parameters, and output return types.
 type FunctionDefinition struct {
 	Name   string
 	Input  []VariableDefinition
 	Output []VariableDefinition
 }
 
+// Wraps a package path dependency for tracking external package imports.
 type Dependancy struct {
 	PackagePath DependancyPath
 }
 
+// Complete Go codebase topology containing functions, structs, interfaces, types, variables, files, packages, dependencies, and analysis warnings/errors.
 type GolangTopology struct {
 	Root         string
 	Functions    map[FunctionID]GolangFunction
@@ -47,6 +51,7 @@ type GolangTopology struct {
 	Errors       map[string]string
 }
 
+// Represents a Go function with signature, inputs, outputs, and optionally a receiver struct.
 type GolangFunction struct {
 	ID          FunctionID
 	Name        string
@@ -58,6 +63,7 @@ type GolangFunction struct {
 	MethodFrom  *StructID
 }
 
+// Represents a Go struct type with its fields, location, connections, and optional constructor function.
 type GolangStruct struct {
 	ID          StructID
 	Name        string
@@ -68,6 +74,7 @@ type GolangStruct struct {
 	Constructor *FunctionID
 }
 
+// Represents a Go interface with its methods and implementation relationships.
 type GolangInterface struct {
 	ID          InterfaceID
 	Name        string
@@ -77,6 +84,7 @@ type GolangInterface struct {
 	Connections map[ConnectionKind][]string
 }
 
+// Represents a Go named type with its underlying type and location in source.
 type GolangNamedType struct {
 	ID          NamedTypeID
 	Name        string
@@ -86,6 +94,7 @@ type GolangNamedType struct {
 	Connections map[ConnectionKind][]string
 }
 
+// Represents an external variable with its type, value, and location in Go source code.
 type GolangExternalVar struct {
 	ID          ExternalVarID
 	Name        string
@@ -95,6 +104,7 @@ type GolangExternalVar struct {
 	Location    domain.Location
 }
 
+// Represents a Go source file with its package, connections to other resources.
 type GolangFile struct {
 	ID          FileID
 	Name        string
@@ -103,6 +113,7 @@ type GolangFile struct {
 	Connections map[ConnectionKind][]string
 }
 
+// Represents a Go package with its path, description, and connections to other resources.
 type GolangPackage struct {
 	Path        PackagePath
 	Description string

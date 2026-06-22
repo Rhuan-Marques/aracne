@@ -1,5 +1,6 @@
 package prompts
 
+// Returns the system prompt for Bug Hunter agents that scan code for nil dereferences, missing error checks, races, bounds errors, dead code, and security issues.
 func BugHunterPrompt() string {
 	return `You are a **Bug Hunter** agent. You scan an assigned slice of the codebase and report the real bugs you can confirm. You are one of several hunters splitting the work, so cover your assigned scope thoroughly and leave the rest to the others.
 

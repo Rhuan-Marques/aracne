@@ -10,6 +10,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// Writes topology data (resources, connections, warnings, metadata) to SQLite database.
 func WriteDb(topo *domain.Topology, path string) error {
 	return withSQLiteWrite(path, func(db *sql.DB) error {
 		if err := createSchema(db); err != nil {
@@ -105,6 +106,7 @@ func WriteDb(topo *domain.Topology, path string) error {
 	})
 }
 
+// Initializes the topology database schema with tables for resources, connections, warnings, and bugs.
 func createSchema(db *sql.DB) error {
 	ddl := `
 	CREATE TABLE IF NOT EXISTS info (key TEXT PRIMARY KEY, value TEXT);
@@ -160,6 +162,7 @@ func createSchema(db *sql.DB) error {
 	return nil
 }
 
+// Adds a language column to the resources table if it doesn't exist.
 func ensureResourceLanguageColumn(db *sql.DB) error {
 	hasColumn, err := resourceLanguageColumnExists(db)
 	if err != nil {
@@ -172,6 +175,7 @@ func ensureResourceLanguageColumn(db *sql.DB) error {
 	return err
 }
 
+// Checks if the language column exists in the resources database table.
 func resourceLanguageColumnExists(db *sql.DB) (bool, error) {
 	rows, err := db.Query("PRAGMA table_info(resources)")
 	if err != nil {
@@ -195,6 +199,7 @@ func resourceLanguageColumnExists(db *sql.DB) (bool, error) {
 	return false, rows.Err()
 }
 
+// Loads the complete topology from a SQLite database, including resources, connections, and warnings.
 func ReadDb(path string) (*domain.Topology, error) {
 	var topo *domain.Topology
 	err := withSQLiteRead(path, func(db *sql.DB) error {
@@ -346,6 +351,7 @@ func ReadDb(path string) (*domain.Topology, error) {
 	return topo, err
 }
 
+// Updates a resource's description in the database.
 func UpdateDescription(dbPath string, kind domain.ResourceKind, id string, description string) error {
 	return withSQLiteWrite(dbPath, func(db *sql.DB) error {
 		_, err := db.Exec("UPDATE resources SET description = ? WHERE id = ?", description, id)
@@ -353,6 +359,7 @@ func UpdateDescription(dbPath string, kind domain.ResourceKind, id string, descr
 	})
 }
 
+// Clears descriptions from resources in the database, optionally filtered by resource kind.
 func ClearDescriptions(dbPath string, targets []domain.ResourceKind) (int64, error) {
 	var count int64
 	err := withSQLiteWrite(dbPath, func(db *sql.DB) error {
@@ -377,6 +384,7 @@ func ClearDescriptions(dbPath string, targets []domain.ResourceKind) (int64, err
 	return count, err
 }
 
+// Queries the database for all source IDs that call a target resource via a specified connection type.
 func GetCallers(dbPath string, targetID string, connType string) ([]string, error) {
 	db, err := sql.Open("sqlite", dbPath+"?cache=shared&_journal_mode=WAL")
 	if err != nil {
@@ -401,6 +409,7 @@ func GetCallers(dbPath string, targetID string, connType string) ([]string, erro
 	return results, nil
 }
 
+// Inserts a KnownBug record into the SQLite database.
 func CreateBug(dbPath string, bug domain.KnownBug) error {
 	return withSQLiteWrite(dbPath, func(db *sql.DB) error {
 		if err := createSchema(db); err != nil {
@@ -413,6 +422,7 @@ func CreateBug(dbPath string, bug domain.KnownBug) error {
 	})
 }
 
+// Queries the SQLite database for known bugs, optionally filtered by node ID or bug state.
 func ReadBugs(dbPath string, nodeID string, state domain.BugState) ([]domain.KnownBug, error) {
 	db, err := sql.Open("sqlite", dbPath+"?cache=shared&_journal_mode=WAL")
 	if err != nil {
@@ -451,6 +461,7 @@ func ReadBugs(dbPath string, nodeID string, state domain.BugState) ([]domain.Kno
 	return bugs, nil
 }
 
+// Updates a bug's state in the SQLite database by ID.
 func UpdateBugState(dbPath string, bugID string, state domain.BugState) error {
 	db, err := sql.Open("sqlite", dbPath+"?cache=shared&_journal_mode=WAL")
 	if err != nil {
@@ -469,6 +480,7 @@ func UpdateBugState(dbPath string, bugID string, state domain.BugState) error {
 	return nil
 }
 
+// Deletes a single bug record from the SQLite database by ID.
 func DeleteBug(dbPath string, bugID string) error {
 	return withSQLiteWrite(dbPath, func(db *sql.DB) error {
 		_, err := db.Exec("DELETE FROM bugs WHERE id = ?", bugID)
@@ -476,6 +488,7 @@ func DeleteBug(dbPath string, bugID string) error {
 	})
 }
 
+// Deletes all bug records from the SQLite database.
 func DeleteAllBugs(dbPath string) error {
 	return withSQLiteWrite(dbPath, func(db *sql.DB) error {
 		_, err := db.Exec("DELETE FROM bugs")
@@ -483,6 +496,7 @@ func DeleteAllBugs(dbPath string) error {
 	})
 }
 
+// Marshals a value to JSON string, returning empty object on nil or marshal error.
 func toJSON(v interface{}) string {
 	if v == nil {
 		return "{}"
@@ -494,6 +508,7 @@ func toJSON(v interface{}) string {
 	return string(b)
 }
 
+// Unmarshals a JSON string into a map, returning an empty map on parse error.
 func fromJSONMap(s string) map[string]any {
 	var v map[string]any
 	if s != "" {
@@ -507,6 +522,7 @@ func fromJSONMap(s string) map[string]any {
 	return v
 }
 
+// Deletes bug records whose associated resources no longer exist in the topology.
 func CleanupOrphanedBugs(dbPath string, topo *domain.Topology) error {
 	bugs, err := ReadBugs(dbPath, "", "")
 	if err != nil {

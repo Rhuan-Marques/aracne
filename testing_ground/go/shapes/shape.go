@@ -66,8 +66,11 @@ func NewCircle(r float64) *Circle {
 	return &Circle{Radius: r, Kind: KindCircle}
 }
 
+// Computes the circle's area using π × radius².
 func (c Circle) Area() float64      { return Pi * c.Radius * c.Radius }
+// Returns the circumference of a circle using 2πr formula
 func (c Circle) Perimeter() float64 { return 2 * Pi * c.Radius }
+// Returns a formatted string describing the circle's radius.
 func (c Circle) Describe() string   { return fmt.Sprintf("circle r=%.2f", c.Radius) }
 
 // Rectangle implements Shape with POINTER receivers.
@@ -81,8 +84,11 @@ func NewRectangle(w, h float64) Rectangle {
 	return Rectangle{Width: w, Height: h}
 }
 
+// Returns the area of a rectangle as width times height
 func (r *Rectangle) Area() float64      { return r.Width * r.Height }
+// Returns the perimeter of a rectangle as 2(width + height)
 func (r *Rectangle) Perimeter() float64 { return 2 * (r.Width + r.Height) }
+// Returns a formatted string description of a rectangle's dimensions
 func (r *Rectangle) Describe() string   { return fmt.Sprintf("rect %gx%g", r.Width, r.Height) }
 
 // Square EMBEDS Rectangle (embedded struct) and reuses its promoted methods.
@@ -107,13 +113,16 @@ func NewTriangle(base, height float64) (Triangle, error) {
 	return Triangle{Base: base, Height: height}, nil
 }
 
+// Returns the area of a triangle using 0.5 * base * height formula
 func (t Triangle) Area() float64 { return 0.5 * t.Base * t.Height }
 
+// Calculates triangle perimeter by summing Base, SideA, and SideB
 func (t Triangle) Perimeter() (total float64) { // named return value
 	total = t.Base + t.SideA + t.SideB
 	return
 }
 
+// Returns the string "triangle"
 func (t Triangle) Describe() string { return "triangle" }
 
 // Canvas is the SINGLE implementation of Drawable.
@@ -121,4 +130,5 @@ type Canvas struct {
 	Shapes []Shape
 }
 
+// Returns a string representation of the canvas and its shape count.
 func (cv *Canvas) Draw() string { return fmt.Sprintf("canvas with %d shapes", len(cv.Shapes)) }

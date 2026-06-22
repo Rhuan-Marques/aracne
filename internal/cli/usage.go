@@ -2,6 +2,7 @@ package cli
 
 import "fmt"
 
+// Prints the full CLI usage documentation for all aracne commands and flags.
 func PrintUsage() {
 	fmt.Println(`arac - Go/Python/JavaScript/TypeScript project topology analyzer
 

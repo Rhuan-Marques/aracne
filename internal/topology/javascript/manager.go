@@ -10,18 +10,22 @@ import (
 	"aracne/internal/topology/domain"
 )
 
+// Manager wrapping a generic topology engine to handle JavaScript/TypeScript analysis and resource queries.
 type JavaScriptManager struct {
 	generic *topology.TopologyManager
 }
 
+// Creates a new JavaScriptManager wrapping a generic topology manager.
 func NewJavaScriptManager(mgr *topology.TopologyManager) *JavaScriptManager {
 	return &JavaScriptManager{generic: mgr}
 }
 
+// Returns the underlying generic topology manager for the JavaScript domain.
 func (m *JavaScriptManager) Generic() *topology.TopologyManager {
 	return m.generic
 }
 
+// Retrieves a JavaScript function and its context including parent class, called functions, used classes, interfaces, and dependencies.
 func (m *JavaScriptManager) ReadFunction(id string, opts ...topology.TopologyOption) (*JavaScriptFunctionContext, error) {
 	opt := &topology.TopologyOptions{}
 	for _, o := range opts {
@@ -205,6 +209,7 @@ func (m *JavaScriptManager) ReadFunction(id string, opts ...topology.TopologyOpt
 	return ctx, nil
 }
 
+// Retrieves a JavaScript class and its full context including constructor, methods, base classes, and dependencies.
 func (m *JavaScriptManager) ReadClass(id string, opts ...topology.TopologyOption) (*JavaScriptClassContext, error) {
 	opt := &topology.TopologyOptions{}
 	for _, o := range opts {
@@ -402,6 +407,7 @@ func (m *JavaScriptManager) ReadClass(id string, opts ...topology.TopologyOption
 	return ctx, nil
 }
 
+// Retrieves a JavaScript module and its contents including functions, classes, variables, and imports.
 func (m *JavaScriptManager) ReadModule(id string, opts ...topology.TopologyOption) (*JavaScriptModuleContext, error) {
 	opt := &topology.TopologyOptions{}
 	for _, o := range opts {
@@ -492,6 +498,7 @@ func (m *JavaScriptManager) ReadModule(id string, opts ...topology.TopologyOptio
 	return ctx, nil
 }
 
+// Retrieves a dependency and lists which functions and classes use it.
 func (m *JavaScriptManager) ReadDependency(id string, opts ...topology.TopologyOption) (*JavaScriptDependencyContext, error) {
 	topo, err := m.generic.ReadAll()
 	if err != nil {
@@ -562,6 +569,7 @@ func (m *JavaScriptManager) ReadDependency(id string, opts ...topology.TopologyO
 	return ctx, nil
 }
 
+// Retrieves a JavaScript interface and its context including base interfaces and implementing classes.
 func (m *JavaScriptManager) ReadInterface(id string, opts ...topology.TopologyOption) (*JavaScriptInterfaceContext, error) {
 	opt := &topology.TopologyOptions{}
 	for _, o := range opts {
@@ -624,6 +632,7 @@ func (m *JavaScriptManager) ReadInterface(id string, opts ...topology.TopologyOp
 	return ctx, nil
 }
 
+// Retrieves a named type (type or enum) and all functions/classes that use it, organized as context blocks.
 func (m *JavaScriptManager) ReadNamedType(id string, opts ...topology.TopologyOption) (*JavaScriptNamedTypeContext, error) {
 	topo, err := m.generic.ReadAll()
 	if err != nil {
@@ -685,6 +694,7 @@ func (m *JavaScriptManager) ReadNamedType(id string, opts ...topology.TopologyOp
 	return ctx, nil
 }
 
+// Searches for all functions with a matching name in the JavaScript topology.
 func (m *JavaScriptManager) FindFunctionsByName(name string) ([]FunctionID, error) {
 	topo, err := m.generic.ReadAll()
 	if err != nil {
@@ -700,6 +710,7 @@ func (m *JavaScriptManager) FindFunctionsByName(name string) ([]FunctionID, erro
 	return results, nil
 }
 
+// Searches for all classes with a matching name in the JavaScript topology.
 func (m *JavaScriptManager) FindClassesByName(name string) ([]ClassID, error) {
 	topo, err := m.generic.ReadAll()
 	if err != nil {
@@ -715,10 +726,12 @@ func (m *JavaScriptManager) FindClassesByName(name string) ([]ClassID, error) {
 	return results, nil
 }
 
+// Updates a resource's description in the topology database.
 func (m *JavaScriptManager) UpdateDescription(id string, kind domain.ResourceKind, description string) error {
 	return helper.UpdateDescription(m.generic.DbPath(), kind, id, description)
 }
 
+// Returns the code cut for a resource (function, method, class, variable, file, or dependency) by kind and ID.
 func (m *JavaScriptManager) ReadResourceAndCut(id string, kind domain.ResourceKind) (*domain.CodeEntry, error) {
 	topo, err := m.generic.ReadAll()
 	if err != nil {
@@ -772,6 +785,7 @@ func (m *JavaScriptManager) ReadResourceAndCut(id string, kind domain.ResourceKi
 	return m.generic.Cut(loc)
 }
 
+// Converts JavaScriptFunction to SimplifiedFunction for API output.
 func simplifyFunction(fn JavaScriptFunction) SimplifiedFunction {
 	return SimplifiedFunction{
 		ID:          fn.ID,
@@ -783,6 +797,7 @@ func simplifyFunction(fn JavaScriptFunction) SimplifiedFunction {
 	}
 }
 
+// Converts JavaScriptExternalVar to SimplifiedExtVar, truncating values over 500 characters.
 func simplifyExtVar(v JavaScriptExternalVar) SimplifiedExtVar {
 	const maxValueLen = 500
 	sv := SimplifiedExtVar{
@@ -802,6 +817,7 @@ func simplifyExtVar(v JavaScriptExternalVar) SimplifiedExtVar {
 	return sv
 }
 
+// Builds a ClassUsage from a JavaScriptClass, including its name, location, and simplified method signatures.
 func classUsageWithMethods(gt *JavaScriptTopology, c JavaScriptClass) ClassUsage {
 	usage := ClassUsage{
 		ID:          c.ID,
@@ -817,6 +833,7 @@ func classUsageWithMethods(gt *JavaScriptTopology, c JavaScriptClass) ClassUsage
 	return usage
 }
 
+// Sorts context blocks by file ID, then line number.
 func sortBlocks(blocks []ContextBlock) []ContextBlock {
 	sort.SliceStable(blocks, func(i, j int) bool {
 		if blocks[i].FileID != blocks[j].FileID {
@@ -827,6 +844,7 @@ func sortBlocks(blocks []ContextBlock) []ContextBlock {
 	return blocks
 }
 
+// Collects all method IDs belonging to a class, sorted alphabetically
 func collectMethodIDs(gt *JavaScriptTopology, classID ClassID) []FunctionID {
 	var ids []FunctionID
 	for id, f := range gt.Functions {

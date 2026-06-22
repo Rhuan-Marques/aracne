@@ -165,6 +165,7 @@ func ShellCommandKey(cmd string) (string, bool) {
 // when the key has no MCP equivalent (e.g. "bash") or is unknown.
 func WarningFor(key string) string { return nativeWarnings[key] }
 
+// Validates a list of tool names against an allowed set, returning an error for any unknown tools.
 func validate(names []string, ok func(string) bool, kind string) error {
 	var unknown []string
 	for _, n := range names {

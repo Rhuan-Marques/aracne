@@ -2,6 +2,7 @@ package chat
 
 import "aracne/internal/prompts"
 
+// Profile metadata for an agent: ID, name, description, and icon.
 type AgentProfile struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
@@ -9,10 +10,12 @@ type AgentProfile struct {
 	Icon        string `json:"icon"`
 }
 
+// Returns default agent profiles available for chat
 func (m *Manager) AgentProfiles() ([]AgentProfile, error) {
 	return DefaultAgentProfiles(), nil
 }
 
+// Returns built-in agent profiles for descriptions, bug hunting, bug judging, and bug solving.
 func DefaultAgentProfiles() []AgentProfile {
 	return []AgentProfile{
 		{ID: "descriptions", Name: "Descriptions", Description: "Generate concise topology descriptions", Icon: "file-text"},
@@ -22,6 +25,7 @@ func DefaultAgentProfiles() []AgentProfile {
 	}
 }
 
+// Maps agent names to valid options or returns "default" for unknown agents.
 func normalizeAgent(agent string) string {
 	switch agent {
 	case "descriptions", "bug_hunter", "bug_judge", "bug_solver":
@@ -31,6 +35,7 @@ func normalizeAgent(agent string) string {
 	}
 }
 
+// Returns the system prompt for a given agent type (descriptions, bug_hunter, bug_judge, bug_solver).
 func agentPrompt(agent string) string {
 	switch normalizeAgent(agent) {
 	case "descriptions":

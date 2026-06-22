@@ -2,18 +2,18 @@
 // implementers, interface-extends-interface, type aliases (union, object,
 // intersection, generic function type), and enums (bare + assigned members).
 
-// Shape has MULTIPLE implementers (Base/Circle and Rectangle in shapes.ts).
+// Interface defining methods for geometric shapes: area() and describe().
 export interface Shape {
   area(): number;
   describe(): string;
 }
 
-// Drawable has a SINGLE implementer (Canvas in shapes.ts).
+// Interface defining a draw method that returns a string representation.
 export interface Drawable {
   draw(): string;
 }
 
-// Solid EXTENDS the Shape interface (interface-extends-interface).
+// Interface extending Shape to add volume() method for 3D solids.
 export interface Solid extends Shape {
   volume(): number;
 }

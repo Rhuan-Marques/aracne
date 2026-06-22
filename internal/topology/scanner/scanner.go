@@ -25,14 +25,12 @@ type LanguageScanner interface {
 // file WITHOUT loading the whole topology graph. Instead of mutating an
 // in-memory full topology, the scanner loads only the working set it needs from
 // the DB (via the helper partial readers) and returns a scoped delta:
-//
-//   - upserts: the changed file's new resources plus any neighbor resources
-//     whose connections were mutated (callers, the owning package, matched
-//     structs/interfaces, structs whose method set changed).
-//   - deletes: old resource IDs of the changed file that no longer exist.
-//   - warnings: the COMPLETE updated warnings map (the small warnings table is
-//     rewritten wholesale from it), so existing add/clear logic is preserved.
-//
+// - upserts: the changed file's new resources plus any neighbor resources
+// whose connections were mutated (callers, the owning package, matched
+// structs/interfaces, structs whose method set changed).
+// - deletes: old resource IDs of the changed file that no longer exist.
+// - warnings: the COMPLETE updated warnings map (the small warnings table is
+// rewritten wholesale from it), so existing add/clear logic is preserved.
 // Manager only routes to this path when it is safe (no deleted files, and every
 // changed file's scanner implements PartialUpdater); otherwise it falls back to
 // the existing full UpdateFile path. Correctness over coverage.

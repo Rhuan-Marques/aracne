@@ -20,21 +20,25 @@ const (
 	taskStatusFailed    = "failed"
 )
 
+// Specifies a task to be created with agent kind, prompt, and result requirement.
 type createTaskSpec struct {
 	AgentKind  string `json:"agent_kind"`
 	Prompt     string `json:"prompt"`
 	NeedResult bool   `json:"need_result"`
 }
 
+// Request payload specifying worker count and list of tasks to execute in parallel.
 type createTasksRequest struct {
 	WorkerCount int              `json:"worker_count"`
 	Tasks       []createTaskSpec `json:"tasks"`
 }
 
+// Returns the set of agent kinds allowed for task creation via LLM tool calls.
 func createTasksAgentKindSet() map[string]bool {
 	return map[string]bool{"explorer": true}
 }
 
+// Returns the set of workflow agent kinds supported: descriptions-generation-executor, bug-hunter, bug-judge, and bug-solver.
 func workflowAgentKindSet() map[string]bool {
 	return map[string]bool{
 		"descriptions-generation-executor": true,
@@ -44,6 +48,7 @@ func workflowAgentKindSet() map[string]bool {
 	}
 }
 
+// Executes a CreateTasks tool call by creating and running the task group, then appending the result.
 func (m *Manager) executeCreateTasksTool(sessionID string, tc llm.ToolCall) error {
 	groupID, err := m.createTaskGroupFromToolCall(sessionID, tc)
 	if err != nil {
@@ -57,14 +62,17 @@ func (m *Manager) executeCreateTasksTool(sessionID string, tc llm.ToolCall) erro
 	return nil
 }
 
+// Creates a task group from an LLM tool call using the default set of allowed agent kinds.
 func (m *Manager) createTaskGroupFromToolCall(sessionID string, tc llm.ToolCall) (string, error) {
 	return m.createTaskGroupFromToolCallWithAllowed(sessionID, tc, createTasksAgentKindSet())
 }
 
+// Creates a task group from a tool call restricted to workflow-compatible agent kinds.
 func (m *Manager) createWorkflowTaskGroupFromToolCall(sessionID string, tc llm.ToolCall) (string, error) {
 	return m.createTaskGroupFromToolCallWithAllowed(sessionID, tc, workflowAgentKindSet())
 }
 
+// Parses a CreateTasks tool call and creates a task group with validated agent kinds against allowed set.
 func (m *Manager) createTaskGroupFromToolCallWithAllowed(sessionID string, tc llm.ToolCall, allowedKinds map[string]bool) (string, error) {
 	var req createTasksRequest
 	if err := json.Unmarshal([]byte(tc.Function.Arguments), &req); err != nil {
@@ -134,6 +142,7 @@ func (m *Manager) createTaskGroupFromToolCallWithAllowed(sessionID string, tc ll
 	return group.ID, nil
 }
 
+// Executes all pending tasks in a group using a worker pool, returning status and result message on completion.
 func (m *Manager) runTaskGroup(sessionID, groupID string) (string, string) {
 	key := taskGroupRunKey(sessionID, groupID)
 	m.mu.Lock()
@@ -216,6 +225,7 @@ func (m *Manager) runTaskGroup(sessionID, groupID string) (string, string) {
 	return result, status
 }
 
+// Executes a sub-agent task, handling LLM calls, tool invocations, and result collection with a max iteration limit.
 func (m *Manager) runAgentTask(ctx context.Context, sessionID, groupID, taskID string) {
 	if ctx.Err() != nil {
 		return
@@ -339,6 +349,7 @@ func (m *Manager) runAgentTask(ctx context.Context, sessionID, groupID, taskID s
 	m.recordTaskFailure(sessionID, groupID, taskID, fmt.Errorf("sub-agent exceeded max iterations"))
 }
 
+// Executes a tool from an allowed tool map and returns its result or error status.
 func runAllowedTaskTool(toolMap map[string]tools.Tool, tc llm.ToolCall) (string, string) {
 	tool, ok := toolMap[tc.Function.Name]
 	if !ok {
@@ -387,6 +398,7 @@ func chatAgentModelID(model string) string {
 	return model
 }
 
+// Resolves the set of available tools for an agent kind from config or agent markdown, with validation.
 func (m *Manager) toolsForAgentKind(kind AgentKind) (map[string]tools.Tool, error) {
 	// The config's viz.chat.agents.<name>.tools is authoritative; the agent
 	// markdown's tools: frontmatter is the fallback. viz.chat never inherits
@@ -413,6 +425,7 @@ func (m *Manager) toolsForAgentKind(kind AgentKind) (map[string]tools.Tool, erro
 	return toolMap, nil
 }
 
+// Returns tools from a map as a sorted slice by name.
 func sortedTools(toolMap map[string]tools.Tool) []tools.Tool {
 	names := make([]string, 0, len(toolMap))
 	for name := range toolMap {
@@ -426,6 +439,7 @@ func sortedTools(toolMap map[string]tools.Tool) []tools.Tool {
 	return result
 }
 
+// Sets LLM messages on a task and updates the task group's timestamp.
 func (m *Manager) setTaskLLMMessages(sessionID, groupID, taskID string, messages []llm.Message) {
 	_, _ = m.updateTaskLocked(sessionID, groupID, taskID, func(group *TaskGroup, task *AgentTask) {
 		task.LLMMessages = append([]llm.Message(nil), messages...)
@@ -433,6 +447,7 @@ func (m *Manager) setTaskLLMMessages(sessionID, groupID, taskID string, messages
 	})
 }
 
+// Adds an assistant message with content and reasoning to a task's message history and LLM context.
 func (m *Manager) appendTaskAssistantMessage(sessionID, groupID, taskID, content, reasoning string, messages []llm.Message) {
 	if strings.TrimSpace(content) == "" && strings.TrimSpace(reasoning) == "" {
 		m.setTaskLLMMessages(sessionID, groupID, taskID, messages)
@@ -449,6 +464,7 @@ func (m *Manager) appendTaskAssistantMessage(sessionID, groupID, taskID, content
 	}
 }
 
+// Appends a tool call message to a task's message history with pending status.
 func (m *Manager) appendTaskToolCall(sessionID, groupID, taskID string, tc llm.ToolCall) {
 	input := jsonRaw{}
 	_ = json.Unmarshal([]byte(tc.Function.Arguments), &input)
@@ -462,6 +478,7 @@ func (m *Manager) appendTaskToolCall(sessionID, groupID, taskID string, tc llm.T
 	}
 }
 
+// Records a tool execution result in a task's message history and updates the corresponding tool call status.
 func (m *Manager) appendTaskToolResult(sessionID, groupID, taskID, toolCallID, result, status string, messages []llm.Message) {
 	task, err := m.updateTaskLocked(sessionID, groupID, taskID, func(group *TaskGroup, task *AgentTask) {
 		task.LLMMessages = append([]llm.Message(nil), messages...)
@@ -479,6 +496,7 @@ func (m *Manager) appendTaskToolResult(sessionID, groupID, taskID, toolCallID, r
 	}
 }
 
+// Marks a task as failed with an error message and records its final status.
 func (m *Manager) recordTaskFailure(sessionID, groupID, taskID string, taskErr error) {
 	completedAt := time.Now().UTC()
 	task, err := m.updateTaskLocked(sessionID, groupID, taskID, func(group *TaskGroup, task *AgentTask) {
@@ -492,6 +510,7 @@ func (m *Manager) recordTaskFailure(sessionID, groupID, taskID string, taskErr e
 	}
 }
 
+// Applies an update function to a task within a task group and persists changes, updating timestamps.
 func (m *Manager) updateTaskLocked(sessionID, groupID, taskID string, update func(*TaskGroup, *AgentTask)) (AgentTask, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -517,6 +536,7 @@ func (m *Manager) updateTaskLocked(sessionID, groupID, taskID string, update fun
 	return AgentTask{}, fmt.Errorf("task not found: %s", taskID)
 }
 
+// Updates a task group within a session via a callback function and persists the change.
 func (m *Manager) updateTaskGroupLocked(sessionID, groupID string, update func(*TaskGroup)) (TaskGroup, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -536,6 +556,7 @@ func (m *Manager) updateTaskGroupLocked(sessionID, groupID string, update func(*
 	return *group, nil
 }
 
+// Locates a task group by ID in a session and returns the group, its index, or an error if not found.
 func findTaskGroup(session *Session, groupID string) (*TaskGroup, int, error) {
 	for i := range session.TaskGroups {
 		if session.TaskGroups[i].ID == groupID {
@@ -545,6 +566,7 @@ func findTaskGroup(session *Session, groupID string) (*TaskGroup, int, error) {
 	return nil, -1, fmt.Errorf("task group not found: %s", groupID)
 }
 
+// Extracts IDs of pending or running tasks from a task group.
 func pendingTaskIDs(group TaskGroup) []string {
 	ids := make([]string, 0, len(group.Tasks))
 	for _, task := range group.Tasks {
@@ -555,6 +577,7 @@ func pendingTaskIDs(group TaskGroup) []string {
 	return ids
 }
 
+// Removes task group tracking data from running, cancels, and stopped maps.
 func (m *Manager) finishTaskGroupRun(key string) {
 	m.mu.Lock()
 	delete(m.runningTaskGroups, key)
@@ -563,16 +586,19 @@ func (m *Manager) finishTaskGroupRun(key string) {
 	m.mu.Unlock()
 }
 
+// Checks whether a task group has been marked as stopped.
 func (m *Manager) isTaskGroupStopped(key string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.stoppedTaskGroups[key]
 }
 
+// Generates a unique key combining session and group IDs.
 func taskGroupRunKey(sessionID, groupID string) string {
 	return sessionID + ":" + groupID
 }
 
+// Constrains worker count to valid range [2, 8], defaulting to 2 if invalid.
 func clampWorkerCount(workerCount int) int {
 	if workerCount <= 0 {
 		return 2
@@ -583,11 +609,13 @@ func clampWorkerCount(workerCount int) int {
 	return workerCount
 }
 
+// Records a task status event and updates task group progress tracking.
 func (m *Manager) recordTaskStatus(sessionID, groupID string, task AgentTask) {
 	m.recordEvent(sessionID, "task_status", map[string]any{"group_id": groupID, "task_id": task.ID, "task": task})
 	m.recordTaskGroupProgress(sessionID, groupID)
 }
 
+// Records a task group's status event with completion and failure counts.
 func (m *Manager) recordTaskGroupStatus(sessionID string, group TaskGroup) {
 	completed, failed := taskGroupCounts(group)
 	m.recordEvent(sessionID, "task_group_status", map[string]any{
@@ -601,6 +629,7 @@ func (m *Manager) recordTaskGroupStatus(sessionID string, group TaskGroup) {
 	})
 }
 
+// Fetches the latest task group state and records its status update.
 func (m *Manager) recordTaskGroupProgress(sessionID, groupID string) {
 	m.mu.Lock()
 	session, err := m.getSessionLocked(sessionID)
@@ -618,6 +647,7 @@ func (m *Manager) recordTaskGroupProgress(sessionID, groupID string) {
 	}
 }
 
+// Counts completed and failed tasks within a task group.
 func taskGroupCounts(group TaskGroup) (completed, failed int) {
 	for _, task := range group.Tasks {
 		switch task.Status {
@@ -630,6 +660,7 @@ func taskGroupCounts(group TaskGroup) (completed, failed int) {
 	return completed, failed
 }
 
+// Formats a task group's results into a structured text report with status, successful/failed counts, task results, and failures.
 func formatTaskGroupResult(group TaskGroup) (string, string) {
 	completed, failed := taskGroupCounts(group)
 	status := taskStatusCompleted

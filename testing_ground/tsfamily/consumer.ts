@@ -9,13 +9,14 @@ export const DEFAULT_AREA = areaOf(1);
 
 // A namespace block with a nested exported function and const.
 export namespace Geometry {
+// Creates a circle with radius 1.
   export function unit(): Circle {
     return makeCircle(1);
   }
   export const NAME = "geometry";
 }
 
-// Annotation-driven resolution again (param typed as the Shape interface).
+// Returns a shape's description string.
 function summarize(shape: Shape): string {
   return shape.describe();
 }
@@ -23,7 +24,7 @@ function summarize(shape: Shape): string {
 // Aliased re-export of a local function.
 export { summarize as describeShape };
 
-// Default export: a function declaration.
+// Computes the sum of a unit circle's area and a default area constant.
 export default function main(): number {
   const u = Geometry.unit();
   return u.area() + DEFAULT_AREA;

@@ -15,6 +15,7 @@ import (
 	"aracne/internal/topology/python"
 )
 
+// Records a Python import statement with the name, optional alias, module path, and relative import level.
 type pyImport struct {
 	Name   string `json:"name"`
 	Alias  string `json:"alias"`
@@ -22,6 +23,7 @@ type pyImport struct {
 	Level  int    `json:"level,omitempty"`
 }
 
+// Captures Python class metadata including name, docstring, base classes, decorators, methods, class variables, and abstractness/protocol flags.
 type pyClass struct {
 	Name               string   `json:"name"`
 	Docstring          string   `json:"docstring"`
@@ -36,6 +38,7 @@ type pyClass struct {
 	EndLineno          int      `json:"end_lineno"`
 }
 
+// Represents a function or method call within a Python function body with the called function name, object/method context, and line number.
 type pyBodyCall struct {
 	Func       string `json:"func"`
 	ObjectName string `json:"object_name"`
@@ -43,12 +46,14 @@ type pyBodyCall struct {
 	LineNo     int    `json:"lineno"`
 }
 
+// Struct capturing an assignment statement in Python source: variable name, inferred value type, and line number.
 type pyBodyAssign struct {
 	Name      string `json:"name"`
 	ValueType string `json:"value_type"`
 	LineNo    int    `json:"lineno"`
 }
 
+// Represents a Python function or method with signature, docstring, decorators, async/property/abstract flags, parameters, return values, and body calls/assignments.
 type pyFunc struct {
 	Name       string         `json:"name"`
 	Docstring  string         `json:"docstring"`
@@ -65,11 +70,13 @@ type pyFunc struct {
 	BodyAssign []pyBodyAssign `json:"body_assignments"`
 }
 
+// Represents a Python variable definition with its name and type annotation.
 type pyVarDef struct {
 	Name   string `json:"name"`
 	Typing string `json:"typing"`
 }
 
+// Represents a Python variable with its name, type annotation, value, and source location.
 type pyVar struct {
 	Name      string `json:"name"`
 	Typing    string `json:"typing"`
@@ -78,6 +85,7 @@ type pyVar struct {
 	EndLineno int    `json:"end_lineno"`
 }
 
+// Aggregates all top-level Python file contents: docstring, imports, import map, functions, classes, and module-level variables.
 type pyFileResult struct {
 	Docstring string            `json:"docstring"`
 	Imports   []pyImport        `json:"imports"`
@@ -87,6 +95,7 @@ type pyFileResult struct {
 	Variables []pyVar           `json:"variables"`
 }
 
+// Parses a Python file by executing a script via python3/python interpreter and deserializes the resulting JSON AST.
 func parsePythonFile(filePath string) (*pyFileResult, error) {
 	absPath, err := filepath.Abs(filePath)
 	if err != nil {
@@ -124,6 +133,7 @@ func parsePythonFile(filePath string) (*pyFileResult, error) {
 	return nil, cmdErr
 }
 
+// Holds parsed Python file contents: module path, imports, classes, functions, and variables with cross-file symbol resolution maps.
 type ParseResult struct {
 	FileID          string
 	FileDescription string
@@ -148,6 +158,7 @@ type ParseResult struct {
 	ClassVarRefs  []ClassVarRef
 }
 
+// Holds parsed function metadata including signature, AST body, and call/assignment analyses
 type FunctionParse struct {
 	Function    python.PythonFunction
 	Body        *pyFunc
@@ -155,11 +166,13 @@ type FunctionParse struct {
 	BodyAssigns []pyBodyAssign
 }
 
+// Represents a reference to a value in a class variable for later resolution
 type ClassVarRef struct {
 	ClassID  python.ClassID
 	RefValue string
 }
 
+// Parses a Python file and extracts classes, functions, variables, and imports into a ParseResult
 func ParseFile(filePath string, pkgPath python.PackagePath, moduleRoot string) (*ParseResult, error) {
 	raw, err := parsePythonFile(filePath)
 	if err != nil {
@@ -246,6 +259,7 @@ func ParseFile(filePath string, pkgPath python.PackagePath, moduleRoot string) (
 	return pr, nil
 }
 
+// Converts a parsed Python class into a PythonClass topology resource with metadata.
 func convertClass(cls pyClass, filePath string, modulePath string) python.PythonClass {
 	id := python.ClassID(modulePath + "." + cls.Name)
 	return python.PythonClass{
@@ -262,6 +276,7 @@ func convertClass(cls pyClass, filePath string, modulePath string) python.Python
 	}
 }
 
+// Converts a parsed Python function into a PythonFunction topology resource, resolving type hints and handling methods.
 func convertFunction(fn pyFunc, filePath string, modulePath string, classID *python.ClassID, importMap map[string]string, importTargets map[string]pyImportTarget) python.PythonFunction {
 	var input []python.VariableDefinition
 	for _, p := range fn.Params {
@@ -298,6 +313,7 @@ func convertFunction(fn pyFunc, filePath string, modulePath string, classID *pyt
 	}
 }
 
+// Checks whether an import path is internal to the module by comparing its first component to the module root name.
 func isInternal(importPath, moduleRoot string) bool {
 	parts := strings.Split(importPath, ".")
 	if len(parts) == 0 {

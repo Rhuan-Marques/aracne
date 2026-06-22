@@ -8,18 +8,22 @@ import (
 	"sort"
 )
 
+// Manages file storage directory for chat data.
 type Store struct {
 	dir string
 }
 
+// Creates a chat session store backed by a directory.
 func NewStore(dir string) *Store {
 	return &Store{dir: dir}
 }
 
+// Creates the session store directory if it doesn't exist
 func (s *Store) Ensure() error {
 	return os.MkdirAll(s.dir, 0755)
 }
 
+// Persists a chat session to disk as JSON.
 func (s *Store) Save(session *Session) error {
 	if err := s.Ensure(); err != nil {
 		return err
@@ -31,6 +35,7 @@ func (s *Store) Save(session *Session) error {
 	return os.WriteFile(s.sessionPath(session.ID), data, 0644)
 }
 
+// Loads and unmarshals a session from a JSON file by ID
 func (s *Store) Load(id string) (*Session, error) {
 	data, err := os.ReadFile(s.sessionPath(id))
 	if err != nil {
@@ -43,6 +48,7 @@ func (s *Store) Load(id string) (*Session, error) {
 	return &session, nil
 }
 
+// Loads all chat sessions from disk, sorted by most recent update time.
 func (s *Store) LoadAll() ([]*Session, error) {
 	if err := s.Ensure(); err != nil {
 		return nil, err
@@ -72,6 +78,7 @@ func (s *Store) LoadAll() ([]*Session, error) {
 	return sessions, nil
 }
 
+// Removes a session file by ID, ignoring not-found errors
 func (s *Store) Delete(id string) error {
 	err := os.Remove(s.sessionPath(id))
 	if os.IsNotExist(err) {
@@ -80,6 +87,7 @@ func (s *Store) Delete(id string) error {
 	return err
 }
 
+// Constructs the file path for a session JSON file.
 func (s *Store) sessionPath(id string) string {
 	return filepath.Join(s.dir, id+".json")
 }

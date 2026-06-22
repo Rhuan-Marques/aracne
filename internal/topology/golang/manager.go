@@ -1440,6 +1440,7 @@ func collectMethodIDs(gt *GolangTopology, structID StructID) []FunctionID {
 	return ids
 }
 
+// Checks if a function's name and parameter/return types match a given function definition.
 func functionSignatureMatchesDefinition(fn GolangFunction, def FunctionDefinition) bool {
 	if fn.Name != def.Name {
 		return false
@@ -1460,6 +1461,7 @@ func functionSignatureMatchesDefinition(fn GolangFunction, def FunctionDefinitio
 	return true
 }
 
+// Checks if a NamedTypeID target exists in a slice of NamedTypeIDs.
 func usesNamedType(ids []NamedTypeID, target NamedTypeID) bool {
 	for _, id := range ids {
 		if id == target {
@@ -1469,6 +1471,7 @@ func usesNamedType(ids []NamedTypeID, target NamedTypeID) bool {
 	return false
 }
 
+// Sorts context blocks by file ID and line number in stable order.
 func sortContextBlocks(blocks []ContextBlock) {
 	sort.SliceStable(blocks, func(i, j int) bool {
 		if blocks[i].FileID != blocks[j].FileID {

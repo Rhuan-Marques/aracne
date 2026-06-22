@@ -42,6 +42,7 @@ func chatAgentMarkdown(name, description string, tools []string, prompt string) 
 	return "---\nname: " + name + "\ndescription: " + description + "\ntools: " + strings.Join(tools, ", ") + "\n---\n\n" + body
 }
 
+// Creates default agent definition markdown files in a directory if they don't already exist.
 func ensureDefaultAgentFiles(cfg *helper.Config, dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -61,6 +62,7 @@ func ensureDefaultAgentFiles(cfg *helper.Config, dir string) error {
 	return nil
 }
 
+// Loads and parses agent kind definitions from markdown files in a directory.
 func loadAgentKinds(dir string) ([]AgentKind, error) {
 	if err := ensureDefaultAgentFiles(nil, dir); err != nil {
 		return nil, err
@@ -94,6 +96,7 @@ func loadAgentKinds(dir string) ([]AgentKind, error) {
 	return kinds, nil
 }
 
+// Parses frontmatter and body from a markdown agent definition file into an AgentKind struct.
 func parseAgentKindMarkdown(content, path string) (AgentKind, error) {
 	content = strings.TrimPrefix(strings.ReplaceAll(content, "\r\n", "\n"), "\ufeff")
 	if !strings.HasPrefix(content, "---\n") {
@@ -143,6 +146,7 @@ func parseAgentKindMarkdown(content, path string) (AgentKind, error) {
 	return kind, nil
 }
 
+// Normalizes agent kind names by trimming whitespace, quotes, and replacing underscores with hyphens.
 func normalizeAgentKindName(name string) string {
 	name = strings.TrimSpace(name)
 	name = strings.Trim(name, "\"'")
@@ -150,6 +154,7 @@ func normalizeAgentKindName(name string) string {
 	return name
 }
 
+// Looks up an agent kind by name from the loaded agent registry.
 func resolveAgentKind(dir, name string) (AgentKind, error) {
 	name = normalizeAgentKindName(name)
 	kinds, err := loadAgentKinds(dir)
@@ -164,6 +169,7 @@ func resolveAgentKind(dir, name string) (AgentKind, error) {
 	return AgentKind{}, fmt.Errorf("unknown agent kind %q", name)
 }
 
+// Builds a prompt listing available CreateTasks agent kinds with their descriptions.
 func agentKindPrompt(dir string) string {
 	kinds, err := loadAgentKinds(dir)
 	if err != nil || len(kinds) == 0 {
@@ -191,6 +197,7 @@ func agentKindPrompt(dir string) string {
 	return b.String()
 }
 
+// Converts AgentKind list to AgentProfile list for display with names, descriptions, and icons.
 func agentProfilesFromKinds(kinds []AgentKind) []AgentProfile {
 	profiles := make([]AgentProfile, 0, len(kinds))
 	for _, kind := range kinds {
@@ -204,6 +211,7 @@ func agentProfilesFromKinds(kinds []AgentKind) []AgentProfile {
 	return profiles
 }
 
+// Converts kebab/snake_case agent name to title-case display format.
 func displayAgentKindName(name string) string {
 	parts := strings.FieldsFunc(name, func(r rune) bool { return r == '-' || r == '_' })
 	for i, part := range parts {
@@ -215,6 +223,7 @@ func displayAgentKindName(name string) string {
 	return strings.Join(parts, " ")
 }
 
+// Maps agent kinds to UI icon names.
 func agentKindIcon(name string) string {
 	switch normalizeAgentKindName(name) {
 	case "explorer":

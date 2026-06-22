@@ -12,6 +12,7 @@ import (
 	"aracne/internal/topology/golang"
 )
 
+// Dispatcher for analysis subcommands; routes "dead-code" to RunAnalyzeDeadCode.
 func RunAnalyze(args []string) {
 	if len(args) < 1 {
 		fmt.Fprintln(os.Stderr, "Usage: arac analyze <dead-code> [flags]")
@@ -27,6 +28,7 @@ func RunAnalyze(args []string) {
 	}
 }
 
+// Analyzes Go project topology to find and report unused functions, types, interfaces, and variables with confidence levels.
 func RunAnalyzeDeadCode(args []string) {
 	fs := flag.NewFlagSet("analyze dead-code", flag.ExitOnError)
 	kindFilter := fs.String("kind", "", "Resource kind to filter (function, type, interface, named_type, variable)")
@@ -136,6 +138,7 @@ func RunAnalyzeDeadCode(args []string) {
 	}
 }
 
+// Parses a resource kind string and returns the corresponding domain.ResourceKind enum value.
 func parseDeadCodeKind(value string) (domain.ResourceKind, error) {
 	s := strings.ToLower(strings.TrimSpace(value))
 	s = strings.TrimSuffix(s, "s")
@@ -155,6 +158,7 @@ func parseDeadCodeKind(value string) (domain.ResourceKind, error) {
 	}
 }
 
+// Converts an absolute path to a relative path from the working directory, or returns the original if conversion fails or goes outside.
 func shortenPath(path string) string {
 	wd, err := os.Getwd()
 	if err != nil {

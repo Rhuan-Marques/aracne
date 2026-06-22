@@ -9,6 +9,7 @@ import (
 	"aracne/internal/helper"
 )
 
+// Detects added, modified, and deleted files by comparing current source against the manifest.
 func RunCheckUpdates(args []string) {
 	dbPath := ".aracne/topology.db"
 	root := ""

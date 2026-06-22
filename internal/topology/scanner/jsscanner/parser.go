@@ -105,6 +105,7 @@ type importInfo struct {
 	Namespace    bool
 }
 
+// Represents a parsed JavaScript function with parameters, return type, async/generator flags, and captured calls and assignments
 type jsFunc struct {
 	Name        string
 	Params      []js.VariableDefinition
@@ -115,6 +116,7 @@ type jsFunc struct {
 	BodyAssigns []jsBodyAssign
 }
 
+// Represents a function or method call in a function body with object, method, or function name and line number
 type jsBodyCall struct {
 	ObjectName string
 	MethodName string
@@ -123,6 +125,7 @@ type jsBodyCall struct {
 	LineNo     int
 }
 
+// Represents a variable assignment in a function body with optional constructor call, method call, alias, or TypeScript type annotation
 type jsBodyAssign struct {
 	Name         string
 	NewClass     string // value is `new X(...)`
@@ -131,11 +134,13 @@ type jsBodyAssign struct {
 	DeclaredType string // TypeScript `const x: Foo = ...` annotation
 }
 
+// Holds a parsed JavaScript/TypeScript function and its associated AST body node.
 type FunctionParse struct {
 	Function js.JavaScriptFunction
 	Body     *jsFunc
 }
 
+// Contains the parsed structure of a JavaScript/TypeScript file including functions, classes, imports, exports, and type definitions.
 type ParseResult struct {
 	FileID          string
 	FileDescription string
@@ -153,6 +158,7 @@ type ParseResult struct {
 	NamedTypes      []js.JavaScriptNamedType
 }
 
+// Extracts the text content of a tree-sitter node from source bytes.
 func nodeText(n *sitter.Node, src []byte) string {
 	if n == nil {
 		return ""
@@ -160,9 +166,12 @@ func nodeText(n *sitter.Node, src []byte) string {
 	return n.Content(src)
 }
 
+// Returns the 1-indexed starting line number of a tree-sitter node.
 func startLine(n *sitter.Node) int { return int(n.StartPoint().Row) + 1 }
+// Returns the 1-indexed ending line number of an AST node.
 func endLine(n *sitter.Node) int   { return int(n.EndPoint().Row) + 1 }
 
+// Finds the first named child node matching a given type.
 func childByType(n *sitter.Node, typ string) *sitter.Node {
 	if n == nil {
 		return nil
@@ -176,6 +185,7 @@ func childByType(n *sitter.Node, typ string) *sitter.Node {
 	return nil
 }
 
+// Checks whether a tree-sitter node has a child with a given token type.
 func hasChildToken(n *sitter.Node, token string) bool {
 	for i := 0; i < int(n.ChildCount()); i++ {
 		if n.Child(i).Type() == token {
@@ -185,8 +195,10 @@ func hasChildToken(n *sitter.Node, token string) bool {
 	return false
 }
 
+// Removes surrounding quotes (", ', or `) from a string specifier.
 func trimSpecifier(s string) string { return strings.Trim(s, "\"'`") }
 
+// Checks whether a specifier string is a relative import path (starts with ./, ../, or is . or ..).
 func isRelativeSpecifier(s string) bool {
 	return strings.HasPrefix(s, "./") || strings.HasPrefix(s, "../") || s == "." || s == ".."
 }
@@ -222,6 +234,7 @@ func ParseFile(filePath string, pkgPath js.PackagePath, moduleRoot string) (*Par
 	return pr, nil
 }
 
+// Dispatches top-level JavaScript/TypeScript declarations (imports, exports, functions, classes, interfaces, enums, etc.) to their respective parsers.
 func parseTopLevel(node *sitter.Node, exported bool, src []byte, pr *ParseResult) {
 	switch node.Type() {
 	case ntImportStatement:
@@ -253,6 +266,7 @@ func parseTopLevel(node *sitter.Node, exported bool, src []byte, pr *ParseResult
 	}
 }
 
+// Extracts import source and bindings from an ES6 import statement, tracking internal vs external imports and mapping local names to their sources.
 func parseImport(node *sitter.Node, src []byte, pr *ParseResult) {
 	srcNode := node.ChildByFieldName("source")
 	if srcNode == nil {
@@ -301,6 +315,7 @@ func parseImport(node *sitter.Node, src []byte, pr *ParseResult) {
 	}
 }
 
+// Processes ES6 export statements, handling declarations, defaults, and named export specifiers.
 func parseExport(node *sitter.Node, src []byte, pr *ParseResult) {
 	if decl := node.ChildByFieldName("declaration"); decl != nil {
 		parseTopLevel(decl, true, src, pr)
@@ -331,6 +346,7 @@ func parseExport(node *sitter.Node, src []byte, pr *ParseResult) {
 	}
 }
 
+// Records exported declarations (functions, classes, variables, types) and maps default exports to their target.
 func recordDeclExports(decl *sitter.Node, src []byte, pr *ParseResult, isDefault bool) {
 	switch decl.Type() {
 	case ntFunctionDeclaration, ntGeneratorFuncDecl, ntFunctionSignature,
@@ -357,6 +373,7 @@ func recordDeclExports(decl *sitter.Node, src []byte, pr *ParseResult, isDefault
 	}
 }
 
+// Extracts CommonJS exports from module.exports and exports.* assignments.
 func parseCommonJSExport(assign *sitter.Node, src []byte, pr *ParseResult) {
 	left := assign.ChildByFieldName("left")
 	right := assign.ChildByFieldName("right")
@@ -394,6 +411,7 @@ func parseCommonJSExport(assign *sitter.Node, src []byte, pr *ParseResult) {
 	}
 }
 
+// Extracts export name from a tree-sitter node, returning node text if it's an identifier, otherwise the fallback string.
 func localExportName(value *sitter.Node, src []byte, fallback string) string {
 	if value != nil && value.Type() == ntIdentifier {
 		return nodeText(value, src)
@@ -401,6 +419,7 @@ func localExportName(value *sitter.Node, src []byte, fallback string) string {
 	return fallback
 }
 
+// Parses function declarations and extracts metadata including parameters, return types, async/generator flags, and body calls.
 func parseFunctionDecl(node *sitter.Node, src []byte, pr *ParseResult, exported bool) FunctionParse {
 	name := nodeText(node.ChildByFieldName("name"), src)
 	isGen := node.Type() == ntGeneratorFuncDecl || hasChildToken(node, "*")
@@ -431,6 +450,7 @@ func parseFunctionDecl(node *sitter.Node, src []byte, pr *ParseResult, exported 
 	return FunctionParse{Function: fn, Body: raw}
 }
 
+// Parses a class declaration node, extracting class metadata, methods, and base classes, then appends to ParseResult.
 func parseClass(node *sitter.Node, src []byte, pr *ParseResult, exported bool) {
 	name := nodeText(node.ChildByFieldName("name"), src)
 	if name == "" {
@@ -467,6 +487,7 @@ func parseClass(node *sitter.Node, src []byte, pr *ParseResult, exported bool) {
 	}
 }
 
+// Parses a class method definition, extracting name, parameters, return type, modifiers (async, static, getter/setter), and body calls/assignments.
 func parseMethod(node *sitter.Node, src []byte, pr *ParseResult, classID string, abstract bool) FunctionParse {
 	name := nodeText(node.ChildByFieldName("name"), src)
 	isAsync := hasChildToken(node, "async")
@@ -513,6 +534,7 @@ func parseMethod(node *sitter.Node, src []byte, pr *ParseResult, classID string,
 	return FunctionParse{Function: fn, Body: raw}
 }
 
+// Parses a TypeScript interface declaration into a JavaScriptInterface, extracting name, base types, methods, and properties.
 func parseInterface(node *sitter.Node, src []byte, pr *ParseResult) {
 	name := nodeText(node.ChildByFieldName("name"), src)
 	if name == "" {
@@ -567,6 +589,7 @@ func parseInterface(node *sitter.Node, src []byte, pr *ParseResult) {
 	pr.Interfaces = append(pr.Interfaces, iface)
 }
 
+// Extracts TypeScript type alias declarations and records them as named types in the parse result.
 func parseTypeAlias(node *sitter.Node, src []byte, pr *ParseResult) {
 	name := nodeText(node.ChildByFieldName("name"), src)
 	if name == "" {
@@ -586,6 +609,7 @@ func parseTypeAlias(node *sitter.Node, src []byte, pr *ParseResult) {
 	})
 }
 
+// Parses TypeScript enum declarations and records their members as named types.
 func parseEnum(node *sitter.Node, src []byte, pr *ParseResult) {
 	name := nodeText(node.ChildByFieldName("name"), src)
 	if name == "" {
@@ -632,6 +656,7 @@ func parseNamespace(node *sitter.Node, src []byte, pr *ParseResult) {
 	pr.ModulePath = saved
 }
 
+// Processes variable declarations, handling function expressions, require bindings, and external variables with type annotations.
 func parseVarDeclaration(node *sitter.Node, src []byte, pr *ParseResult, exported bool) {
 	for i := 0; i < int(node.NamedChildCount()); i++ {
 		d := node.NamedChild(i)
@@ -675,6 +700,7 @@ func parseVarDeclaration(node *sitter.Node, src []byte, pr *ParseResult, exporte
 	}
 }
 
+// Processes CommonJS require binding patterns, mapping imported names (including destructured properties) to their source module.
 func parseRequireBinding(nameNode *sitter.Node, source string, src []byte, pr *ParseResult) {
 	internal := isRelativeSpecifier(source)
 	if internal {
@@ -709,6 +735,7 @@ func parseRequireBinding(nameNode *sitter.Node, source string, src []byte, pr *P
 	}
 }
 
+// Parses function expressions and arrow functions, extracting metadata and distinguishing between function and arrow kinds.
 func parseFunctionValue(name string, value *sitter.Node, src []byte, pr *ParseResult, exported bool) FunctionParse {
 	isAsync := hasChildToken(value, "async")
 	isGen := value.Type() == ntGeneratorFunction || hasChildToken(value, "*")
@@ -742,6 +769,7 @@ func parseFunctionValue(name string, value *sitter.Node, src []byte, pr *ParseRe
 	return FunctionParse{Function: fn, Body: raw}
 }
 
+// Extracts function parameters from a function node, handling both single and multi-parameter declarations.
 func extractParams(fnNode *sitter.Node, src []byte) []js.VariableDefinition {
 	var params []js.VariableDefinition
 	p := fnNode.ChildByFieldName("parameters")
@@ -757,6 +785,7 @@ func extractParams(fnNode *sitter.Node, src []byte) []js.VariableDefinition {
 	return params
 }
 
+// Parses a parameter node into a VariableDefinition, extracting name and optional type annotation.
 func paramDef(c *sitter.Node, src []byte) js.VariableDefinition {
 	switch c.Type() {
 	case ntIdentifier:
@@ -802,6 +831,7 @@ func typeAnnotationName(ta *sitter.Node, src []byte) string {
 	return ""
 }
 
+// Extracts the name from a TypeScript/JavaScript type reference node, handling identifiers, generics, arrays, and member expressions.
 func typeRefName(n *sitter.Node, src []byte) string {
 	switch n.Type() {
 	case ntTypeIdentifier, ntIdentifier:
@@ -822,6 +852,7 @@ func typeRefName(n *sitter.Node, src []byte) string {
 	return ""
 }
 
+// Extracts base classes and implemented interfaces from a class node's extends and implements clauses.
 func extractHeritage(classNode *sitter.Node, src []byte) (bases, impls []string) {
 	h := childByType(classNode, ntClassHeritage)
 	if h == nil {
@@ -855,6 +886,7 @@ func extractHeritage(classNode *sitter.Node, src []byte) (bases, impls []string)
 	return
 }
 
+// Recursively extracts the base identifier name from an expression node, unwrapping generics and member access.
 func baseNameFromExpr(n *sitter.Node, src []byte) string {
 	if n == nil {
 		return ""
@@ -878,6 +910,7 @@ func baseNameFromExpr(n *sitter.Node, src []byte) string {
 	return ""
 }
 
+// Extracts decorator names from a class or function node, parsing decorator syntax and removing parentheses if present.
 func extractDecorators(node *sitter.Node, src []byte) []string {
 	var decs []string
 	for i := 0; i < int(node.ChildCount()); i++ {
@@ -896,6 +929,7 @@ func extractDecorators(node *sitter.Node, src []byte) []string {
 	return decs
 }
 
+// Recursively extracts function calls and variable assignments from a function body AST node.
 func collectBody(bodyNode *sitter.Node, src []byte) ([]jsBodyCall, []jsBodyAssign) {
 	var calls []jsBodyCall
 	var assigns []jsBodyAssign
@@ -952,6 +986,7 @@ func collectBody(bodyNode *sitter.Node, src []byte) ([]jsBodyCall, []jsBodyAssig
 	return calls, assigns
 }
 
+// Parses an assignment value node to extract new class instantiations, function calls, or variable aliases.
 func assignFrom(name string, val *sitter.Node, src []byte) jsBodyAssign {
 	a := jsBodyAssign{Name: name}
 	if val == nil {
@@ -972,11 +1007,13 @@ func assignFrom(name string, val *sitter.Node, src []byte) jsBodyAssign {
 	return a
 }
 
+// Checks if a call node represents a require() function invocation
 func isRequireCall(call *sitter.Node, src []byte) bool {
 	f := call.ChildByFieldName("function")
 	return f != nil && f.Type() == ntIdentifier && nodeText(f, src) == "require"
 }
 
+// Extracts the string argument from a require() call node.
 func requireSource(call *sitter.Node, src []byte) string {
 	args := call.ChildByFieldName("arguments")
 	if args == nil {
@@ -988,6 +1025,7 @@ func requireSource(call *sitter.Node, src []byte) string {
 	return ""
 }
 
+// Returns a pointer to a string value, truncated to 500 chars; returns nil for empty strings.
 func valuePtr(s string) *any {
 	if s == "" {
 		return nil

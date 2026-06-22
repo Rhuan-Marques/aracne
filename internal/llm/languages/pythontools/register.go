@@ -7,6 +7,7 @@ import (
 
 type Parameter = tools.Parameter
 
+// Registers Python LLM tools (update_description, node_list) to the provided tool registry for topology interactions.
 func RegisterPythonTools(registry *tools.Registry, mgr *python.PythonManager) {
 	registry.Register(NewUpdateDescriptionTool(mgr))
 	registry.Register(NewNodeListNoDescription(mgr))

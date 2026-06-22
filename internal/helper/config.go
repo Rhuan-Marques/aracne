@@ -23,9 +23,9 @@ const (
 // ReadScanMode controls whether a topology scan runs before read/grep
 // operations (CLI commands, MCP tools, and viz chat tools). "none" keeps the
 // current behavior (no scan); any other value triggers a scan first:
-//   - "default" = incremental scan (only changed files)
-//   - "full"    = re-scan all files (preserves descriptions)
-//   - "hard"    = rebuild from scratch (clears descriptions and bugs)
+// - "default" = incremental scan (only changed files)
+// - "full"    = re-scan all files (preserves descriptions)
+// - "hard"    = rebuild from scratch (clears descriptions and bugs)
 type ReadScanMode string
 
 const (
@@ -40,15 +40,14 @@ const DefaultDescriptionBatchSize = 5
 // InheritsModel is the sentinel a sub-agent uses to copy the main agent's model.
 const InheritsModel = "<inherits>"
 
-// ---------------------------------------------------------------------------
-// Config tree
-// ---------------------------------------------------------------------------
+// Configuration for the one-shot `arac scan` command, specifying the default scan mode.
 
 type ScanSection struct {
 	// Mode is the default mode for the one-shot `arac scan` command.
 	Mode ScanMode `json:"mode"`
 }
 
+// Configuration for file read operations, including max file size, scan mode, context filtering, and shell command passthrough behavior.
 type ReadSection struct {
 	MaxFileSize   int64                `json:"max_file_size"`
 	Scan          ReadScanMode         `json:"scan"`
@@ -72,12 +71,14 @@ type ContextFilterSection struct {
 	HideNoDescription        bool   `json:"hide_no_description"`
 }
 
+// Configuration for the live/incremental scanner, including default scan mode and update frequency.
 type ScannerSection struct {
 	// Mode is the default mode for the live/incremental scanner.
 	Mode            ScanMode `json:"mode"`
 	UpdateFrequency int      `json:"update_frequency"`
 }
 
+// Configuration for description generation specifying which resource kinds to describe and how many style exemplars to use as house-style anchors.
 type DescriptionsSection struct {
 	Kinds []domain.ResourceKind `json:"kinds"`
 	// StyleExemplars is how many already-written neighbor descriptions to feed
@@ -95,11 +96,13 @@ type AgentConfig struct {
 	Params       map[string]int `json:"params,omitempty"`
 }
 
+// Configuration struct containing main and subordinate LLM agent configs.
 type LLMHarness struct {
 	MainAgent AgentConfig            `json:"main_agent"`
 	Agents    map[string]AgentConfig `json:"agents,omitempty"`
 }
 
+// Struct holding LLM harness configs with per-harness overrides for OpenCode and ClaudeCode.
 type LLMSection struct {
 	// Any applies to both harnesses; the per-harness blocks take priority.
 	Any        LLMHarness `json:"<any>"`
@@ -107,6 +110,7 @@ type LLMSection struct {
 	ClaudeCode LLMHarness `json:"claude_code"`
 }
 
+// Config struct for graph visualization settings, containing optimization rules.
 type VizGraph struct {
 	OptimizationRules string `json:"optimization_rules"`
 }
@@ -126,6 +130,7 @@ type VizChatAgents struct {
 	Agents map[string]ChatAgentConfig
 }
 
+// Encodes VizChatAgents to JSON with optional model field and named agent configs.
 func (v VizChatAgents) MarshalJSON() ([]byte, error) {
 	out := make(map[string]json.RawMessage, len(v.Agents)+1)
 	if v.Model != "" {
@@ -145,6 +150,7 @@ func (v VizChatAgents) MarshalJSON() ([]byte, error) {
 	return json.Marshal(out)
 }
 
+// Decodes JSON into VizChatAgents, routing "model" key separately from named agent configs.
 func (v *VizChatAgents) UnmarshalJSON(data []byte) error {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -169,16 +175,19 @@ func (v *VizChatAgents) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// Configuration for visualization chat with main agent and agent pool settings.
 type VizChat struct {
 	MainAgent ChatAgentConfig `json:"main_agent"`
 	Agents    VizChatAgents   `json:"agents"`
 }
 
+// Config struct grouping graph and chat visualization settings.
 type VizSection struct {
 	Graph VizGraph `json:"graph"`
 	Chat  VizChat  `json:"chat"`
 }
 
+// Root configuration struct holding scan, read, scanner, descriptions, LLM, and viz settings.
 type Config struct {
 	Scan         ScanSection         `json:"scan"`
 	Read         ReadSection         `json:"read"`
@@ -188,6 +197,7 @@ type Config struct {
 	Viz          VizSection          `json:"viz"`
 }
 
+// Returns the maximum file size for scanning, defaulting to 512KB if not set.
 func (c *Config) EffectiveMaxFileSize() int64 {
 	if c.Read.MaxFileSize <= 0 {
 		return 512 * 1024
@@ -241,18 +251,22 @@ func normalizeVisibility(s string) string {
 	}
 }
 
+// Returns whether to include incoming resource references in context output.
 func (c *Config) EffectiveIncludeIncoming() bool {
 	return c.Read.ContextFilter.IncludeIncoming
 }
 
+// Returns the normalized visibility level for external variables from context filter configuration.
 func (c *Config) EffectiveExternalVarsVisibility() string {
 	return normalizeVisibility(c.Read.ContextFilter.ExternalVarsVisibility)
 }
 
+// Returns the normalized visibility level for small functions in context output.
 func (c *Config) EffectiveSmallFunctionsVisibility() string {
 	return normalizeVisibility(c.Read.ContextFilter.SmallFunctionsVisibility)
 }
 
+// Returns the line-count threshold for identifying small functions, defaulting to 5 if not set.
 func (c *Config) EffectiveSmallFunctionThreshold() int {
 	if c.Read.ContextFilter.SmallFunctionThreshold <= 0 {
 		return 5
@@ -260,6 +274,7 @@ func (c *Config) EffectiveSmallFunctionThreshold() int {
 	return c.Read.ContextFilter.SmallFunctionThreshold
 }
 
+// Returns whether to hide resources without descriptions in context output.
 func (c *Config) EffectiveHideNoDescription() bool {
 	return c.Read.ContextFilter.HideNoDescription
 }
@@ -276,6 +291,7 @@ func (c *Config) EffectiveContextFilter() domain.ContextFilter {
 	}
 }
 
+// Returns the config.json path derived from the database directory.
 func ConfigPath(dbPath string) string {
 	return filepath.Join(filepath.Dir(dbPath), "config.json")
 }
@@ -321,9 +337,7 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// ---------------------------------------------------------------------------
-// Defaults
-// ---------------------------------------------------------------------------
+// Returns the default set of resource kinds that require descriptions: Functions, Methods, Types, and Interfaces.
 
 func DefaultNeedDescription() []domain.ResourceKind {
 	return []domain.ResourceKind{
@@ -331,11 +345,11 @@ func DefaultNeedDescription() []domain.ResourceKind {
 		domain.ResourceMethod,
 		domain.ResourceType,
 		domain.ResourceInterface,
-		domain.ResourceFile,
 	}
 }
 
 func DefaultDescribeTargets() []domain.ResourceKind {
+// Returns the default description resource kinds to generate descriptions for.
 	return DefaultNeedDescription()
 }
 
@@ -347,6 +361,12 @@ func DefaultDescribeTargets() []domain.ResourceKind {
 // replace "read" with the per-kind tools (read_function, read_struct,
 // read_interface, read_named_type, read_file, read_package, read_dependency).
 func DefaultAgentMCPTools(agentName string) []string {
+// DefaultAgentMCPTools returns the canonical MCP tool list for a known agent.
+// agentName "" / "main" / "default" returns the main-agent set. This is the
+// single source of truth for both DefaultConfig and the MCP registry.
+// The default uses the generic "read" tool. To split reads by resource kind,
+// replace "read" with the per-kind tools (read_function, read_struct,
+// read_interface, read_named_type, read_file, read_package, read_dependency).
 	switch agentName {
 	case "descriptions-generation-executor", "descriptions-executor":
 		return []string{"read", "grep", "update_description"}
@@ -365,16 +385,20 @@ func DefaultAgentMCPTools(agentName string) []string {
 }
 
 func defaultBlockedTools() []string {
+// Returns the default set of blocked tools: read, grep, edit, and write.
 	return []string{"read", "grep", "edit", "write"}
 }
 
 func defaultChatMainAgentTools() []string {
+// Returns the default tool set for the chat main agent including bash, MCP lookups, file operations, and topology utilities.
 	return []string{"ls", "bash", "glob", "ask_user_question", "CreateTasks", "grep", "read_file", "read_function", "read_struct", "read_interface", "edit", "write", "warnings_list", "bug_report", "bug_list", "bug_acknowledge", "bug_dismiss", "bug_delete", "update_description", "node_list_no_description"}
 }
 
 // DefaultChatAgentTools returns the default tool list for a proprietary-chat
 // sub-agent (used by CreateTasks). These are independent from the llm section.
 func DefaultChatAgentTools(agentName string) []string {
+// DefaultChatAgentTools returns the default tool list for a proprietary-chat
+// sub-agent (used by CreateTasks). These are independent from the llm section.
 	switch agentName {
 	case "explorer":
 		return []string{"read", "read_function", "read_struct", "read_interface", "read_named_type", "read_file", "read_package", "read_dependency", "grep"}
@@ -396,17 +420,28 @@ func DefaultChatAgentTools(agentName string) []string {
 // it reasons harder than the default. It is a no-op for providers/models that
 // do not support reasoning (see chat newProvider).
 const DefaultBugJudgeThinkingBudget = 4096
+// DefaultBugJudgeThinkingBudget is the default extended-reasoning token budget
+// for the proprietary-chat bug-judge sub-agent. Triage is a judgment task, so
+// it reasons harder than the default. It is a no-op for providers/models that
+// do not support reasoning (see chat newProvider).
 
 // DefaultDescriptionStyleExemplars is how many neighbor descriptions are fed to
 // the description executor as house-style anchors by default. Set to 0 to
 // disable and save tokens.
 const DefaultDescriptionStyleExemplars = 3
+// DefaultDescriptionStyleExemplars is how many neighbor descriptions are fed to
+// the description executor as house-style anchors by default. Set to 0 to
+// disable and save tokens.
 
 // DefaultBugSolverThinkingBudget is the default extended-reasoning token budget
 // for the proprietary-chat bug-solver sub-agent. Producing a minimal correct
 // fix is reasoning-heavy, so it reasons harder than the default. It is a no-op
 // for providers/models that do not support reasoning (see chat newProvider).
 const DefaultBugSolverThinkingBudget = 4096
+// DefaultBugSolverThinkingBudget is the default extended-reasoning token budget
+// for the proprietary-chat bug-solver sub-agent. Producing a minimal correct
+// fix is reasoning-heavy, so it reasons harder than the default. It is a no-op
+// for providers/models that do not support reasoning (see chat newProvider).
 
 // DefaultBugHunterThinkingBudget is the default extended-reasoning token budget
 // for the proprietary-chat bug-hunter sub-agent. Spotting real defects across a
@@ -414,10 +449,17 @@ const DefaultBugSolverThinkingBudget = 4096
 // It is a no-op for providers/models that do not support reasoning (see chat
 // newProvider).
 const DefaultBugHunterThinkingBudget = 4096
+// DefaultBugHunterThinkingBudget is the default extended-reasoning token budget
+// for the proprietary-chat bug-hunter sub-agent. Spotting real defects across a
+// slice of resources is reasoning-heavy, so it reasons harder than the default.
+// It is a no-op for providers/models that do not support reasoning (see chat
+// newProvider).
 
 func boolPtr(b bool) *bool { return &b }
+// Helper function that converts a boolean value to a pointer to bool.
 
 func DefaultConfig() *Config {
+// Returns default Config with scan/read/scanner/LLM/viz defaults and agent configurations.
 	subAgent := func(name string) AgentConfig {
 		ac := AgentConfig{
 			Model:        InheritsModel,
@@ -496,6 +538,7 @@ func DefaultConfig() *Config {
 // ---------------------------------------------------------------------------
 
 func harnessBlock(c *Config, harness string) LLMHarness {
+// Returns the LLM harness configuration block for the specified harness name.
 	switch harness {
 	case "opencode":
 		return c.LLM.OpenCode
@@ -511,6 +554,10 @@ func harnessBlock(c *Config, harness string) LLMHarness {
 // main agent. The per-harness block wins over <any>, and "<inherits>"/absent
 // fields fall back to the main agent.
 func (c *Config) EffectiveAgent(harness, agentName string) AgentConfig {
+// EffectiveAgent resolves the config for (harness, agentName). harness is
+// "opencode" or "claude_code"; agentName "" / "main" / "default" resolves the
+// main agent. The per-harness block wins over <any>, and "<inherits>"/absent
+// fields fall back to the main agent.
 	hb := harnessBlock(c, harness)
 	main := mergeAgent(c.LLM.Any.MainAgent, hb.MainAgent)
 	if agentName == "" || agentName == "main" || agentName == "default" {
@@ -528,6 +575,7 @@ func (c *Config) EffectiveAgent(harness, agentName string) AgentConfig {
 }
 
 func mergeAgent(base, over AgentConfig) AgentConfig {
+// Merges an override agent config into a base config, combining model, tools, plugins, and parameters.
 	result := base
 	if over.Model != "" {
 		result.Model = over.Model
@@ -555,6 +603,7 @@ func mergeAgent(base, over AgentConfig) AgentConfig {
 }
 
 func resolveInherits(ag, main AgentConfig) AgentConfig {
+// Resolves agent configuration by inheriting unset fields (Model, MCPTools, BlockedTools) from a main agent.
 	if ag.Model == "" || ag.Model == InheritsModel {
 		ag.Model = main.Model
 	}
@@ -570,6 +619,8 @@ func resolveInherits(ag, main AgentConfig) AgentConfig {
 // AgentParam returns the integer param for (harness, agentName, key), or
 // fallback when unset or non-positive.
 func (c *Config) AgentParam(harness, agentName, key string, fallback int) int {
+// AgentParam returns the integer param for (harness, agentName, key), or
+// fallback when unset or non-positive.
 	eff := c.EffectiveAgent(harness, agentName)
 	if eff.Params != nil {
 		if v, ok := eff.Params[key]; ok && v > 0 {
@@ -587,6 +638,9 @@ func (c *Config) AgentParam(harness, agentName, key string, fallback int) int {
 // old-format file decodes to all-zero new-schema fields and is rejected so
 // EnsureConfig can clean-break migrate it.
 func validConfig(c *Config) bool {
+// validConfig reports whether a decoded config looks like the new schema. An
+// old-format file decodes to all-zero new-schema fields and is rejected so
+// EnsureConfig can clean-break migrate it.
 	return c.LLM.Any.MainAgent.MCPTools != nil ||
 		len(c.LLM.Any.Agents) > 0 ||
 		c.Scan.Mode != "" ||
@@ -597,6 +651,7 @@ func validConfig(c *Config) bool {
 }
 
 func normalizeConfig(c *Config) {
+// Applies defaults to config fields for scan modes, file limits, visibility filters, descriptions, optimization rules, and LLM agents.
 	switch c.Scan.Mode {
 	case ScanModeDefault, ScanModeHard, ScanModeAll:
 	default:
@@ -645,6 +700,9 @@ func normalizeConfig(c *Config) {
 // the new schema. A missing file, a JSON error, or an old-format file all
 // return (DefaultConfig(), false).
 func LoadConfigStrict(path string) (*Config, bool) {
+// LoadConfigStrict loads the config and reports whether it parsed cleanly as
+// the new schema. A missing file, a JSON error, or an old-format file all
+// return (DefaultConfig(), false).
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return DefaultConfig(), false
@@ -661,11 +719,13 @@ func LoadConfigStrict(path string) (*Config, bool) {
 }
 
 func LoadConfig(path string) *Config {
+// Loads config from a path, returning the config without error handling.
 	cfg, _ := LoadConfigStrict(path)
 	return cfg
 }
 
 func SaveConfig(cfg *Config, path string) error {
+// Writes a Config struct to a JSON file with pretty-printing, preserving special tokens like "<any>" and "<inherits>" as readable literals.
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
@@ -685,6 +745,9 @@ func SaveConfig(cfg *Config, path string) error {
 // missing. If an existing file does not parse as the new schema (e.g. an
 // old-format config), it is overwritten with fresh defaults (clean break).
 func EnsureConfig(path string) *Config {
+// EnsureConfig returns the config at path, creating it with defaults when
+// missing. If an existing file does not parse as the new schema (e.g. an
+// old-format config), it is overwritten with fresh defaults (clean break).
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		cfg := DefaultConfig()
 		if saveErr := SaveConfig(cfg, path); saveErr != nil {
@@ -704,6 +767,7 @@ func EnsureConfig(path string) *Config {
 // ---------------------------------------------------------------------------
 
 func ParseDescribeTargets(value string) ([]domain.ResourceKind, error) {
+// Parses comma-separated describe targets into a deduplicated slice of ResourceKinds.
 	if strings.TrimSpace(value) == "" {
 		return nil, fmt.Errorf("describe targets cannot be empty")
 	}
@@ -720,6 +784,7 @@ func ParseDescribeTargets(value string) ([]domain.ResourceKind, error) {
 }
 
 func NormalizeDescribeTargets(targets []domain.ResourceKind) ([]domain.ResourceKind, error) {
+// Parses and dedupes describe targets into a normalized ResourceKind slice.
 	normalized := make([]domain.ResourceKind, 0, len(targets))
 	for _, target := range targets {
 		kind, err := ParseDescribeTarget(string(target))
@@ -732,6 +797,7 @@ func NormalizeDescribeTargets(targets []domain.ResourceKind) ([]domain.ResourceK
 }
 
 func ParseDescribeTarget(value string) (domain.ResourceKind, error) {
+// Parses a single describe target string into a ResourceKind, normalizing whitespace and hyphens.
 	s := strings.ToLower(strings.TrimSpace(value))
 	s = strings.ReplaceAll(s, "-", "_")
 	s = strings.ReplaceAll(s, " ", "_")
@@ -762,6 +828,7 @@ func ParseDescribeTarget(value string) (domain.ResourceKind, error) {
 }
 
 func DescribeTargetSet(targets []domain.ResourceKind) map[domain.ResourceKind]bool {
+// Converts a list of target resource kinds into a lookup map, defaulting to DefaultDescribeTargets if nil.
 	if targets == nil {
 		targets = DefaultDescribeTargets()
 	}
@@ -773,6 +840,7 @@ func DescribeTargetSet(targets []domain.ResourceKind) map[domain.ResourceKind]bo
 }
 
 func ShouldDescribeKind(kind domain.ResourceKind, targets []domain.ResourceKind) bool {
+// Checks if a resource kind should be described based on configured describe targets.
 	if targets == nil {
 		targets = DefaultDescribeTargets()
 	}
@@ -780,6 +848,7 @@ func ShouldDescribeKind(kind domain.ResourceKind, targets []domain.ResourceKind)
 }
 
 func FormatDescribeTargets(targets []domain.ResourceKind) string {
+// Formats a slice of describe targets into a comma-separated string.
 	if targets == nil {
 		targets = DefaultDescribeTargets()
 	}
@@ -791,6 +860,7 @@ func FormatDescribeTargets(targets []domain.ResourceKind) string {
 }
 
 func dedupeDescribeTargets(targets []domain.ResourceKind) []domain.ResourceKind {
+// Removes duplicate ResourceKind targets, returning only the first occurrence of each unique kind.
 	seen := make(map[domain.ResourceKind]bool, len(targets))
 	result := make([]domain.ResourceKind, 0, len(targets))
 	for _, target := range targets {

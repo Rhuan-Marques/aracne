@@ -14,15 +14,18 @@ const (
 	permissionDeny  permissionAction = "deny"
 )
 
+// Represents a permission decision with an action and reason.
 type permissionDecision struct {
 	Action permissionAction
 	Reason string
 }
 
+// Enforces workspace-scoped permission policies for chat operations.
 type PermissionPolicy struct {
 	workspace string
 }
 
+// Creates a permission policy enforcer scoped to an absolute workspace path.
 func NewPermissionPolicy(workspace string) PermissionPolicy {
 	abs, err := filepath.Abs(workspace)
 	if err == nil {
@@ -31,6 +34,7 @@ func NewPermissionPolicy(workspace string) PermissionPolicy {
 	return PermissionPolicy{workspace: filepath.Clean(workspace)}
 }
 
+// Determines whether to allow, deny, or ask approval for a tool call based on workspace scope and mode.
 func (p PermissionPolicy) Decide(toolName string, args string, mode Mode, approvalMode ApprovalMode) permissionDecision {
 	if toolName == "ask_user_question" {
 		return permissionDecision{Action: permissionAllow, Reason: "user question"}
@@ -53,6 +57,7 @@ func (p PermissionPolicy) Decide(toolName string, args string, mode Mode, approv
 	return permissionDecision{Action: permissionAsk, Reason: "tool requires approval"}
 }
 
+// Inspects tool arguments for file paths that reference outside the workspace scope.
 func (p PermissionPolicy) referencesOutsideWorkspace(args string) (bool, string) {
 	if strings.TrimSpace(args) == "" {
 		return false, ""
@@ -73,6 +78,7 @@ func (p PermissionPolicy) referencesOutsideWorkspace(args string) (bool, string)
 	return false, ""
 }
 
+// Checks whether a file path is contained within the configured workspace directory.
 func (p PermissionPolicy) insideWorkspace(path string) bool {
 	if path == "." {
 		return true
@@ -92,6 +98,7 @@ func (p PermissionPolicy) insideWorkspace(path string) bool {
 	return rel == "." || (!strings.HasPrefix(rel, "..") && !filepath.IsAbs(rel))
 }
 
+// Checks if a tool name is read-only (safe for unprivileged access).
 func isReadOnlyTool(name string) bool {
 	switch name {
 	case "read", "read_function", "read_struct", "read_interface", "read_named_type", "read_file", "read_package", "read_dependency", "grep", "glob", "ls", "warnings_list", "bug_list", "node_list_no_description":
@@ -101,6 +108,7 @@ func isReadOnlyTool(name string) bool {
 	}
 }
 
+// Returns true if the tool name is a mutation operation (edit, write, update_description, bug_report, etc.).
 func isMutatingTool(name string) bool {
 	switch name {
 	case "edit", "write", "update_description", "bug_report", "bug_acknowledge", "bug_dismiss", "bug_delete", "CreateTasks":

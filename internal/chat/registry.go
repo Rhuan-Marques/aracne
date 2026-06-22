@@ -18,6 +18,7 @@ import (
 	"aracne/internal/topology/scanner/pyscanner"
 )
 
+// Registers scanners for Go, Python, JavaScript, and TypeScript into a scanner registry.
 func NewScannerRegistry() *scanner.Registry {
 	reg := scanner.NewRegistry()
 	reg.Register(goscanner.NewGoScanner())
@@ -27,6 +28,7 @@ func NewScannerRegistry() *scanner.Registry {
 	return reg
 }
 
+// Constructs a filtered tool registry for the main chat agent with config-based tool access control.
 func BuildToolRegistry(manager *topology.TopologyManager, scannerReg *scanner.Registry, cfg *helper.Config, workspace string) *tools.Registry {
 	registry := tools.NewRegistry()
 	allowed := chatMainAgentToolSet(cfg)
@@ -81,6 +83,7 @@ func chatMainAgentToolSet(cfg *helper.Config) map[string]bool {
 	return set
 }
 
+// Returns the list of resource kinds that should have descriptions generated from config.
 func configDescribeTargets(cfg *helper.Config) []domain.ResourceKind {
 	if cfg == nil {
 		return nil
@@ -88,6 +91,7 @@ func configDescribeTargets(cfg *helper.Config) []domain.ResourceKind {
 	return cfg.Descriptions.Kinds
 }
 
+// Constructs a full tool registry for agent threads with topology, scanning, and language-specific tools.
 func BuildAgentToolRegistry(manager *topology.TopologyManager, scannerReg *scanner.Registry, cfg *helper.Config, workspace string) *tools.Registry {
 	registry := tools.NewRegistry()
 	readScan := helper.ReadScanNone
@@ -122,6 +126,7 @@ func BuildAgentToolRegistry(manager *topology.TopologyManager, scannerReg *scann
 	return registry
 }
 
+// Registers language-specific maintenance tools (description updates and node listing) in the tool registry.
 func registerLanguageMaintenanceTools(registry *tools.Registry, allowed map[string]bool, manager *topology.TopologyManager, lang string, targets []domain.ResourceKind, descriptionBatchSize int) {
 	add := func(t tools.Tool) {
 		if allowed == nil || allowed[t.Name()] {
@@ -158,6 +163,7 @@ func configDescriptionBatchSize(cfg *helper.Config) int {
 	return helper.DefaultDescriptionBatchSize
 }
 
+// Filters registry tools by allowlist and returns them as a map keyed by tool name.
 func toolMap(registry *tools.Registry, allowed map[string]bool) map[string]tools.Tool {
 	result := make(map[string]tools.Tool)
 	for _, tool := range registry.List() {
@@ -168,6 +174,7 @@ func toolMap(registry *tools.Registry, allowed map[string]bool) map[string]tools
 	return result
 }
 
+// Returns the language from topology metadata, defaulting to "go" if not available.
 func getLanguage(manager *topology.TopologyManager) string {
 	topo, err := manager.ReadAll()
 	if err == nil && topo != nil && topo.Language != "" {

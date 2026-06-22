@@ -7,6 +7,7 @@ import (
 	"aracne/internal/topology/javascript"
 )
 
+// Returns "no description" for empty strings, otherwise returns the input string unchanged.
 func desc(s string) string {
 	if s == "" {
 		return "no description"
@@ -14,6 +15,7 @@ func desc(s string) string {
 	return s
 }
 
+// Formats a JavaScript module with its functions, classes, and external variables as a hierarchical context block for LLM consumption.
 func FormatJavaScriptModuleContext(ctx *javascript.JavaScriptModuleContext) string {
 	var b strings.Builder
 
@@ -47,6 +49,7 @@ func FormatJavaScriptModuleContext(ctx *javascript.JavaScriptModuleContext) stri
 	return b.String()
 }
 
+// Formats a JavaScript dependency as markdown showing which resources use it.
 func FormatJavaScriptDependencyContext(ctx *javascript.JavaScriptDependencyContext) string {
 	var b strings.Builder
 
@@ -66,6 +69,7 @@ func FormatJavaScriptDependencyContext(ctx *javascript.JavaScriptDependencyConte
 	return b.String()
 }
 
+// Formats a JavaScript function context as markdown with imports, function definition, parent class, and CONTEXT section listing called functions and dependencies.
 func FormatJavaScriptFunctionContext(ctx *javascript.JavaScriptFunctionContext) string {
 	var b strings.Builder
 
@@ -125,6 +129,7 @@ func FormatJavaScriptFunctionContext(ctx *javascript.JavaScriptFunctionContext) 
 	return b.String()
 }
 
+// Formats a TypeScript interface with its base interfaces and implementations as a context block for LLM consumption.
 func FormatJavaScriptInterfaceContext(ctx *javascript.JavaScriptInterfaceContext) string {
 	var b strings.Builder
 
@@ -153,6 +158,7 @@ func FormatJavaScriptInterfaceContext(ctx *javascript.JavaScriptInterfaceContext
 	return b.String()
 }
 
+// Formats a TypeScript named type with its usage locations as a context block for LLM consumption.
 func FormatJavaScriptNamedTypeContext(ctx *javascript.JavaScriptNamedTypeContext) string {
 	var b strings.Builder
 
@@ -176,6 +182,7 @@ func FormatJavaScriptNamedTypeContext(ctx *javascript.JavaScriptNamedTypeContext
 	return b.String()
 }
 
+// Formats a JavaScript class context as markdown with imports, class definition, and CONTEXT section listing base classes, methods, and dependencies.
 func FormatJavaScriptClassContext(ctx *javascript.JavaScriptClassContext) string {
 	var b strings.Builder
 

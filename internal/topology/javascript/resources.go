@@ -11,6 +11,7 @@ type ModuleID = string
 type PackagePath = string
 type DependancyPath = string
 
+// Represents a variable with its name, type annotation, and resolved topology resource ID (for classes, interfaces, or named types).
 type VariableDefinition struct {
 	Name   string
 	Typing string
@@ -21,12 +22,14 @@ type VariableDefinition struct {
 	TypingID string
 }
 
+// Represents a function signature with its name, input, and output variable definitions.
 type FunctionDefinition struct {
 	Name   string
 	Input  []VariableDefinition
 	Output []VariableDefinition
 }
 
+// Holds the complete JavaScript/TypeScript topology graph: functions, classes, interfaces, named types, modules, external vars, and their dependencies.
 type JavaScriptTopology struct {
 	Root         string
 	Functions    map[FunctionID]JavaScriptFunction
@@ -39,6 +42,7 @@ type JavaScriptTopology struct {
 	Errors       map[string]string
 }
 
+// Represents a JavaScript/TypeScript function with signature, location, decorators, accessibility, and async/generator/method flags.
 type JavaScriptFunction struct {
 	ID          FunctionID
 	Name        string
@@ -62,6 +66,7 @@ type JavaScriptFunction struct {
 	Exported      bool
 }
 
+// Represents a JavaScript/TypeScript class with its metadata including inheritance, interfaces, constructor, and decorators.
 type JavaScriptClass struct {
 	ID          ClassID
 	Name        string
@@ -107,6 +112,7 @@ type JavaScriptNamedType struct {
 	Connections map[ConnectionKind][]string
 }
 
+// Represents a JavaScript/TypeScript module with identity, name, default export binding, and connection metadata.
 type JavaScriptModule struct {
 	ID          ModuleID
 	Name        string
@@ -118,6 +124,7 @@ type JavaScriptModule struct {
 	Connections   map[ConnectionKind][]string
 }
 
+// Represents an external variable with ID, name, type, value, and export/location metadata.
 type JavaScriptExternalVar struct {
 	ID          ExternalVarID
 	Name        string
@@ -128,6 +135,7 @@ type JavaScriptExternalVar struct {
 	Location    domain.Location
 }
 
+// Represents a module dependency with its package path.
 type JavaScriptDependancy struct {
 	PackagePath DependancyPath
 }

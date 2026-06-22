@@ -8,6 +8,7 @@ import (
 	"aracne/internal/topology/golang"
 )
 
+// Returns the input string or "no description" if empty
 func desc(s string) string {
 	if s == "" {
 		return "no description"
@@ -190,6 +191,7 @@ func FormatGoNamedTypeContext(ctx *golang.GoNamedTypeContext) string {
 	return b.String()
 }
 
+// Writes a formatted Go import block containing packages and dependencies to a strings.Builder.
 func writeImports(b *strings.Builder, packages []golang.PackagePath, dependencies []golang.DependancyPath) {
 	if len(packages) == 0 && len(dependencies) == 0 {
 		return
@@ -308,6 +310,7 @@ func FormatGoDependencyContext(ctx *golang.GoDependencyContext) string {
 	return b.String()
 }
 
+// Maps a ResourceKind enum to its string label (function, method, type, interface, etc.).
 func resourceKindLabel(kind domain.ResourceKind) string {
 	switch kind {
 	case domain.ResourceFunction:

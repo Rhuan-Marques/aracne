@@ -8,6 +8,7 @@ import (
 	"aracne/internal/topology/domain"
 )
 
+// Lists topology warnings filtered by source, target, or kind with sorted output and summary counts.
 func RunWarningsList(args []string) {
 	dbPath := ".aracne/topology.db"
 	sourceID := ""

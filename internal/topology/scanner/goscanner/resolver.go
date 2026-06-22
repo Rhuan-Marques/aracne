@@ -10,6 +10,7 @@ import (
 	"aracne/internal/topology/golang"
 )
 
+// Analyzes function bodies to extract variable types, interface types, and connection metadata during Go code parsing.
 type bodyAnalyzer struct {
 	pr          *ParseResult
 	gt          *golang.GolangTopology
@@ -21,6 +22,7 @@ type bodyAnalyzer struct {
 	knownNames  map[string]bool
 }
 
+// Creates a bodyAnalyzer instance initialized with function parameters, receiver, and known names for code body traversal.
 func newBodyAnalyzer(pr *ParseResult, gt *golang.GolangTopology, funcInput []golang.VariableDefinition, receiverName string, receiverStruct *golang.StructID, callerID golang.FunctionID, extraKnownNames []string) *bodyAnalyzer {
 	ba := &bodyAnalyzer{
 		pr:          pr,
@@ -62,6 +64,7 @@ func newBodyAnalyzer(pr *ParseResult, gt *golang.GolangTopology, funcInput []gol
 	return ba
 }
 
+// Resolves a type string to an interface ID using the package path and import map, returning nil if not found.
 func paramTypeNameToInterface(typing string, pkgPath golang.PackagePath, importMap map[string]string, modulePath string, gt *golang.GolangTopology) *golang.InterfaceID {
 	t := strings.TrimPrefix(typing, "*")
 
@@ -84,6 +87,7 @@ func paramTypeNameToInterface(typing string, pkgPath golang.PackagePath, importM
 	return nil
 }
 
+// Resolves a type string to a struct ID using the package path and import map, without topology lookup.
 func paramTypeNameToStruct(typing string, pkgPath golang.PackagePath, importMap map[string]string, modulePath string) *golang.StructID {
 	t := strings.TrimPrefix(typing, "*")
 
@@ -159,6 +163,7 @@ func (ba *bodyAnalyzer) resolveVarType(name string, vd golang.VariableDefinition
 	}
 }
 
+// Adds a unique connection ID to the body analyzer's connection map if not already present.
 func (ba *bodyAnalyzer) add(kind golang.ConnectionKind, id string) {
 	ids := ba.conn[kind]
 	if !containsString(ids, id) {
@@ -166,6 +171,7 @@ func (ba *bodyAnalyzer) add(kind golang.ConnectionKind, id string) {
 	}
 }
 
+// Registers a deduped topology warning with its kind, target ID, and message.
 func (ba *bodyAnalyzer) addWarning(kind domain.WarningKind, targetID string, message string) {
 	id := fmt.Sprintf("%s@%s@%s", ba.callerID, kind, targetID)
 	if ba.warnings == nil {
@@ -183,6 +189,7 @@ func (ba *bodyAnalyzer) addWarning(kind domain.WarningKind, targetID string, mes
 	}
 }
 
+// Analyzes function body AST to resolve calls, type references, and variable usage into topology connections.
 func analyzeFunctionBody(body *ast.BlockStmt, pr *ParseResult, gt *golang.GolangTopology, funcInput []golang.VariableDefinition, receiverName string, receiverStruct *golang.StructID, callerID golang.FunctionID, typeParamNames []string) map[golang.ConnectionKind][]string {
 	localTypeNames := collectLocalTypeNames(body)
 	localVarNames := collectLocalVarNames(body)
@@ -226,6 +233,7 @@ var goBuiltins = map[string]bool{
 	"uintptr": true, "nil": true, "true": true, "false": true, "iota": true,
 }
 
+// Extracts the names of locally defined types from an AST block statement.
 func collectLocalTypeNames(body *ast.BlockStmt) []string {
 	var names []string
 	ast.Inspect(body, func(n ast.Node) bool {
@@ -238,6 +246,7 @@ func collectLocalTypeNames(body *ast.BlockStmt) []string {
 	return names
 }
 
+// Collects locally-defined variable names from a function body via assignment and range statements.
 func collectLocalVarNames(body *ast.BlockStmt) []string {
 	var names []string
 	if body == nil {
@@ -268,6 +277,7 @@ func collectLocalVarNames(body *ast.BlockStmt) []string {
 	return names
 }
 
+// Resolves function and type calls, creating connections to called functions, structs, and named types with qualified names.
 func (ba *bodyAnalyzer) resolveCallExpr(call *ast.CallExpr) {
 	fun := call.Fun
 	if ile, ok := fun.(*ast.IndexListExpr); ok {
@@ -325,6 +335,7 @@ func (ba *bodyAnalyzer) resolveCallExpr(call *ast.CallExpr) {
 	}
 }
 
+// Resolves qualified calls (X.sel) to functions, methods, or interfaces based on import map, variable type map, and struct/interface definitions.
 func (ba *bodyAnalyzer) resolveQualifiedCall(xName, selName string) {
 	if impPath, ok := ba.pr.ImportMap[xName]; ok {
 		internalPkg := golang.PackagePath(impPath)
@@ -402,6 +413,7 @@ func (ba *bodyAnalyzer) resolveQualifiedCall(xName, selName string) {
 	}
 }
 
+// Resolves composite literal types, creating connections to referenced structs and named types.
 func (ba *bodyAnalyzer) resolveCompositeLit(lit *ast.CompositeLit) {
 	typ := lit.Type
 	if ile, ok := typ.(*ast.IndexListExpr); ok {
@@ -453,6 +465,7 @@ func (ba *bodyAnalyzer) resolveCompositeLit(lit *ast.CompositeLit) {
 	}
 }
 
+// Records usage edges for identifiers that reference external variables, structs, or named types in the current package scope.
 func (ba *bodyAnalyzer) resolveIdentRef(ident *ast.Ident) {
 	if ident.Name == "_" || ba.knownNames[ident.Name] {
 		return
@@ -473,6 +486,7 @@ func (ba *bodyAnalyzer) resolveIdentRef(ident *ast.Ident) {
 	}
 }
 
+// Processes assignment statements, tracking variable names and resolving types from call expressions and composite literals.
 func (ba *bodyAnalyzer) resolveAssignStmt(stmt *ast.AssignStmt) {
 	if stmt.Tok != token.DEFINE {
 		return
@@ -511,6 +525,7 @@ func (ba *bodyAnalyzer) resolveAssignStmt(stmt *ast.AssignStmt) {
 	}
 }
 
+// Records the type of a variable assigned from a composite literal, mapping it to its struct or interface type.
 func (ba *bodyAnalyzer) resolveCompositeLitAssign(name string, lit *ast.CompositeLit) {
 	typ := lit.Type
 	if ile, ok := typ.(*ast.IndexListExpr); ok {
@@ -548,6 +563,7 @@ func (ba *bodyAnalyzer) resolveCompositeLitAssign(name string, lit *ast.Composit
 	}
 }
 
+// Infers the type of a variable assigned from a function call by looking up the function's return type.
 func (ba *bodyAnalyzer) resolveCallExprAssign(name string, call *ast.CallExpr) {
 	fun := call.Fun
 	if ile, ok := fun.(*ast.IndexListExpr); ok {
@@ -634,6 +650,7 @@ func (ba *bodyAnalyzer) resolveMultiValueCallAssign(lhs []ast.Expr, call *ast.Ca
 	}
 }
 
+// Extracts variable declarations and maps their types to known structs or interfaces for later use during call resolution.
 func (ba *bodyAnalyzer) resolveDeclStmt(decl *ast.DeclStmt) {
 	genDecl, ok := decl.Decl.(*ast.GenDecl)
 	if !ok || genDecl.Tok != token.VAR {
@@ -667,6 +684,7 @@ func (ba *bodyAnalyzer) resolveDeclStmt(decl *ast.DeclStmt) {
 	}
 }
 
+// Checks whether a string exists in a slice.
 func containsString(slice []string, item string) bool {
 	for _, s := range slice {
 		if s == item {

@@ -8,6 +8,7 @@ import (
 	"aracne/internal/llm/tools"
 )
 
+// Writes a file to disk from JSON input on stdin using the topology-aware write tool.
 func RunWrite() {
 	data, err := io.ReadAll(os.Stdin)
 	if err != nil {

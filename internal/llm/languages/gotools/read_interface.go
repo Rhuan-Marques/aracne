@@ -9,28 +9,34 @@ import (
 	"aracne/internal/topology/golang"
 )
 
+// Reads interface type information from Go code via a GoManager instance
 type ReadInterface struct {
 	mgr *golang.GoManager
 }
 
+// Creates a new ReadInterface instance for reading Go interface definitions and their implementations.
 func NewReadInterface(mgr *golang.GoManager) *ReadInterface {
 	return &ReadInterface{mgr: mgr}
 }
 
+// Returns the tool name 'read_interface'.
 func (r *ReadInterface) Name() string {
 	return "read_interface"
 }
 
+// Returns the tool description: reads a Go interface's source and interconnected context from topology.
 func (r *ReadInterface) Description() string {
 	return "Read a Go interface's full source code and its interconnected context (implementing structs, methods, dependencies) from the project topology."
 }
 
+// Returns the required parameters for ReadInterface: an interface name string.
 func (r *ReadInterface) Parameters() []Parameter {
 	return []Parameter{
 		{Name: "name", Type: "string", Description: "The interface name (e.g. 'Reader', 'Writer')", Required: true},
 	}
 }
 
+// Retrieves a Go interface's full source and context from topology by name, handling ambiguous results by listing all matches.
 func (r *ReadInterface) Run(args json.RawMessage) (string, error) {
 	var params struct {
 		Name string `json:"name"`

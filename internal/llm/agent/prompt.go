@@ -6,6 +6,7 @@ import (
 	"aracne/internal/llm/languages/pythontools"
 )
 
+// Constructs language-specific system prompts for Go, Python, JavaScript, TypeScript, or multi-language.
 func BuildPrompt(language string) string {
 	switch language {
 	case "go":

@@ -10,18 +10,22 @@ import (
 	"aracne/internal/topology/domain"
 )
 
+// Manages Python topology analysis by wrapping a generic topology manager.
 type PythonManager struct {
 	generic *topology.TopologyManager
 }
 
+// Creates and returns a new PythonManager wrapping a TopologyManager.
 func NewPythonManager(mgr *topology.TopologyManager) *PythonManager {
 	return &PythonManager{generic: mgr}
 }
 
+// Get the underlying generic TopologyManager instance.
 func (m *PythonManager) Generic() *topology.TopologyManager {
 	return m.generic
 }
 
+// Retrieves a Python function with its context including parent class, called functions, used classes, external variables, dependencies, and modules, organized into context blocks.
 func (m *PythonManager) ReadFunction(id string, opts ...topology.TopologyOption) (*PythonFunctionContext, error) {
 	opt := &topology.TopologyOptions{}
 	for _, o := range opts {
@@ -223,6 +227,7 @@ func (m *PythonManager) ReadFunction(id string, opts ...topology.TopologyOption)
 	return ctx, nil
 }
 
+// Read a Python class with its context including methods, base classes, dependencies, and constructor details.
 func (m *PythonManager) ReadClass(id string, opts ...topology.TopologyOption) (*PythonClassContext, error) {
 	opt := &topology.TopologyOptions{}
 	for _, o := range opts {
@@ -517,6 +522,7 @@ func (m *PythonManager) ReadClass(id string, opts ...topology.TopologyOption) (*
 	return ctx, nil
 }
 
+// Find all functions in the topology by name.
 func (m *PythonManager) FindFunctionsByName(name string) ([]FunctionID, error) {
 	topo, err := m.generic.ReadAll()
 	if err != nil {
@@ -532,6 +538,7 @@ func (m *PythonManager) FindFunctionsByName(name string) ([]FunctionID, error) {
 	return results, nil
 }
 
+// Find all classes in the topology by name.
 func (m *PythonManager) FindClassesByName(name string) ([]ClassID, error) {
 	topo, err := m.generic.ReadAll()
 	if err != nil {
@@ -547,10 +554,12 @@ func (m *PythonManager) FindClassesByName(name string) ([]ClassID, error) {
 	return results, nil
 }
 
+// Updates the description of a Python resource in the topology database by kind and ID.
 func (m *PythonManager) UpdateDescription(id string, kind domain.ResourceKind, description string) error {
 	return helper.UpdateDescription(m.generic.DbPath(), kind, id, description)
 }
 
+// Retrieves a Python module with its functions, classes, external variables, and imports, organized into context blocks sorted by file and line number.
 func (m *PythonManager) ReadModule(id string, opts ...topology.TopologyOption) (*PythonModuleContext, error) {
 	opt := &topology.TopologyOptions{}
 	for _, o := range opts {
@@ -683,6 +692,7 @@ func (m *PythonManager) ReadModule(id string, opts ...topology.TopologyOption) (
 	return ctx, nil
 }
 
+// Read a dependency with its usage locations across functions and classes.
 func (m *PythonManager) ReadDependency(id string, opts ...topology.TopologyOption) (*PythonDependencyContext, error) {
 	topo, err := m.generic.ReadAll()
 	if err != nil {
@@ -759,6 +769,7 @@ func (m *PythonManager) ReadDependency(id string, opts ...topology.TopologyOptio
 	return ctx, nil
 }
 
+// Retrieves a code entry by resource ID and kind, returning the source code cut for functions, types, variables, files, or a placeholder for dependencies.
 func (m *PythonManager) ReadResourceAndCut(id string, kind domain.ResourceKind) (*domain.CodeEntry, error) {
 	topo, err := m.generic.ReadAll()
 	if err != nil {
@@ -823,6 +834,7 @@ func (m *PythonManager) ReadResourceAndCut(id string, kind domain.ResourceKind) 
 	return m.generic.Cut(loc)
 }
 
+// Collects all function IDs that are methods belonging to a given Python class.
 func collectMethodIDs(gt *PythonTopology, classID ClassID) []FunctionID {
 	var ids []FunctionID
 	for id, f := range gt.Functions {

@@ -12,10 +12,12 @@ import (
 
 type kindFilters []string
 
+// Returns a comma-separated string representation of resource kind filters.
 func (k *kindFilters) String() string {
 	return strings.Join(*k, ",")
 }
 
+// Parses a comma-separated string into kindFilters, trimming spaces and converting to lowercase.
 func (k *kindFilters) Set(value string) error {
 	for _, part := range strings.Split(value, ",") {
 		part = strings.TrimSpace(strings.ToLower(part))
@@ -26,6 +28,7 @@ func (k *kindFilters) Set(value string) error {
 	return nil
 }
 
+// Parses command-line arguments for the resource list command, extracting search query, kind filters, and description visibility flag.
 func parseResourceListArgs(args []string) (string, kindFilters, bool) {
 	var query string
 	var kinds kindFilters
@@ -64,6 +67,7 @@ func parseResourceListArgs(args []string) (string, kindFilters, bool) {
 	return query, kinds, noDesc
 }
 
+// Lists topology resources filtered by kind, query string, and description status.
 func RunResourceList(args []string) {
 	query, kinds, noDesc := parseResourceListArgs(args)
 
@@ -112,12 +116,14 @@ func RunResourceList(args []string) {
 	}
 }
 
+// Checks if a resource matches a query by case-insensitive substring search on key, ID, or name.
 func resourceMatchesQuery(key, id, name, query string) bool {
 	return strings.Contains(strings.ToLower(key), query) ||
 		strings.Contains(strings.ToLower(id), query) ||
 		strings.Contains(strings.ToLower(name), query)
 }
 
+// Reads the topology database and prints the total count of resources.
 func RunNodeCount() {
 	manager, _ := InitRegistry(".aracne/topology.db")
 
@@ -130,6 +136,7 @@ func RunNodeCount() {
 	fmt.Println(len(topo.Resources))
 }
 
+// Counts resources without descriptions in the topology database matching configured target kinds.
 func RunNodeCountNoDescription() {
 	manager, _ := InitRegistry(".aracne/topology.db")
 	cfg := helper.EnsureConfig(helper.ConfigPath(".aracne/topology.db"))

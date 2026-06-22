@@ -25,6 +25,7 @@ const (
 	ProviderDeepSeek  ProviderName = "deepseek"
 )
 
+// LLM provider configuration including model, base URL, API key, and thinking budget settings.
 type ProviderSettings struct {
 	Provider ProviderName `json:"provider"`
 	Model    string       `json:"model,omitempty"`
@@ -39,6 +40,7 @@ type ProviderSettings struct {
 	ThinkingBudget int `json:"thinking_budget,omitempty"`
 }
 
+// Complete chat session with metadata, messages, events, task groups, and pending approvals/questions.
 type Session struct {
 	ID               string            `json:"id"`
 	Title            string            `json:"title"`
@@ -59,6 +61,7 @@ type Session struct {
 	PendingQuestions []PendingQuestion `json:"pending_questions,omitempty"`
 }
 
+// Lightweight session summary with metadata, message count, and pending approval/question counts.
 type SessionSummary struct {
 	ID               string       `json:"id"`
 	Title            string       `json:"title"`
@@ -75,6 +78,7 @@ type SessionSummary struct {
 	PendingQuestions int          `json:"pending_questions"`
 }
 
+// Single chat message with role, content, tool execution details, reasoning, and creation timestamp.
 type SessionMessage struct {
 	ID         string    `json:"id"`
 	Role       string    `json:"role"`
@@ -88,6 +92,7 @@ type SessionMessage struct {
 	Reasoning  string    `json:"reasoning,omitempty"`
 }
 
+// Chat event with ID, session, type, timestamp, and arbitrary payload data.
 type Event struct {
 	ID        string         `json:"id"`
 	SessionID string         `json:"session_id"`
@@ -96,6 +101,7 @@ type Event struct {
 	Payload   map[string]any `json:"payload,omitempty"`
 }
 
+// Pending LLM tool call awaiting user approval with reason and timestamp.
 type PendingApproval struct {
 	ID        string       `json:"id"`
 	CreatedAt time.Time    `json:"created_at"`
@@ -103,6 +109,7 @@ type PendingApproval struct {
 	ToolCall  llm.ToolCall `json:"tool_call"`
 }
 
+// Pending user question or prompt from an LLM tool call with optional multiple-choice options.
 type PendingQuestion struct {
 	ID        string       `json:"id"`
 	CreatedAt time.Time    `json:"created_at"`
@@ -112,6 +119,7 @@ type PendingQuestion struct {
 	ToolCall  llm.ToolCall `json:"tool_call"`
 }
 
+// Represents a batch of agent tasks with shared metadata and processing state.
 type TaskGroup struct {
 	ID          string      `json:"id"`
 	ToolCallID  string      `json:"tool_call_id"`
@@ -123,6 +131,7 @@ type TaskGroup struct {
 	Processing  bool        `json:"processing,omitempty"`
 }
 
+// Tracks execution state of an agent task: prompt, status, result, messages, and timestamps.
 type AgentTask struct {
 	ID          string           `json:"id"`
 	AgentKind   string           `json:"agent_kind"`
@@ -137,6 +146,7 @@ type AgentTask struct {
 	CompletedAt *time.Time       `json:"completed_at,omitempty"`
 }
 
+// Defines an agent type with name, description, tools list, and optional system prompt.
 type AgentKind struct {
 	Name         string   `json:"name"`
 	Description  string   `json:"description"`
@@ -144,6 +154,7 @@ type AgentKind struct {
 	SystemPrompt string   `json:"system_prompt,omitempty"`
 }
 
+// HTTP request payload for initiating a new chat session with agent, mode, and provider settings.
 type CreateSessionRequest struct {
 	Agent        string           `json:"agent,omitempty"`
 	Title        string           `json:"title,omitempty"`
@@ -153,6 +164,7 @@ type CreateSessionRequest struct {
 	Provider     ProviderSettings `json:"provider,omitempty"`
 }
 
+// Request payload for sending a message in chat mode with content, execution mode, approval settings, and provider configuration.
 type SendRequest struct {
 	Content      string           `json:"content"`
 	Mode         Mode             `json:"mode"`
@@ -160,6 +172,7 @@ type SendRequest struct {
 	Provider     ProviderSettings `json:"provider"`
 }
 
+// Specifies execution parameters for a task workflow: session, type, batch size, and parallelism.
 type WorkflowRequest struct {
 	SessionID string `json:"session_id"`
 	Type      string `json:"type"`
@@ -169,6 +182,7 @@ type WorkflowRequest struct {
 
 type jsonRaw map[string]any
 
+// Converts a Session to a SessionSummary with metadata and message/approval counts.
 func summarizeSession(s *Session) SessionSummary {
 	return SessionSummary{
 		ID:               s.ID,

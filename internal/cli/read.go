@@ -20,6 +20,7 @@ import (
 	"aracne/internal/topology/python"
 )
 
+// Reads and displays a topology resource (function, type, interface, file, etc.) with its context and relationships.
 func RunRead() {
 	args := os.Args[2:]
 	id, forcedKind, startLine, endLine, parseErr := parseReadArgs(args)
@@ -88,6 +89,7 @@ func RunRead() {
 	}
 }
 
+// Parses command-line arguments for the read command, extracting resource ID, optional kind filter, and line range bounds.
 func parseReadArgs(args []string) (string, domain.ResourceKind, int, int, error) {
 	if len(args) < 1 {
 		return "", "", 0, 0, fmt.Errorf("missing resource ID")
@@ -191,6 +193,7 @@ func parseLineRange(value string) (int, int, error) {
 	return n, n, nil
 }
 
+// Prints usage information and examples for the read command to stderr.
 func printReadUsage() {
 	fmt.Fprintln(os.Stderr, "Usage: arac read [--kind <kind>] [--lines <start>:<end>] <resource-id>")
 	fmt.Fprintln(os.Stderr, "Kinds: function, method, type, named_type, interface, variable, file, package, dependency")
@@ -201,6 +204,7 @@ func printReadUsage() {
 	fmt.Fprintln(os.Stderr, "  arac read aracne/internal/topology/golang.GoManager --kind type")
 }
 
+// Looks up a resource by ID or absolute file path in the topology.
 func findReadResource(topo *domain.Topology, id string) (domain.Resource, string, bool) {
 	res, ok := topo.Resources[id]
 	if ok {
@@ -239,6 +243,7 @@ func readFileRange(mgr *topology.TopologyManager, id string, start, end int) {
 	fmt.Printf("%s (lines %d-%d)\n%s\n", filepath.Base(path), first, last, content)
 }
 
+// Reads and prints raw file content with size/binary checks, used when file path isn't a topology resource.
 func readRawFile(mgr *topology.TopologyManager, path string) {
 	cfg := helper.EnsureConfig(helper.ConfigPath(mgr.DbPath()))
 	maxSize := cfg.EffectiveMaxFileSize()
@@ -268,6 +273,7 @@ func readRawFile(mgr *topology.TopologyManager, path string) {
 	fmt.Printf("%s\n%s", name, string(data))
 }
 
+// Displays a file's content (with size checks) and language-specific context about functions, classes, and variables defined in it.
 func readFileWithContext(mgr *topology.TopologyManager, topo *domain.Topology, fileRes *domain.Resource, fileID string) {
 	cfg := helper.EnsureConfig(helper.ConfigPath(mgr.DbPath()))
 	maxSize := cfg.EffectiveMaxFileSize()
@@ -308,6 +314,7 @@ func readFileWithContext(mgr *topology.TopologyManager, topo *domain.Topology, f
 	}
 }
 
+// Prints a formatted summary of JavaScript/TypeScript module contents (functions, classes, methods, variables) with line numbers and descriptions.
 func formatJSFileContext(jt *javascript.JavaScriptTopology, fileID string) {
 	mod, ok := jt.Modules[javascript.ModuleID(fileID)]
 	if !ok {
@@ -418,6 +425,7 @@ func formatJSFileContext(jt *javascript.JavaScriptTopology, fileID string) {
 	}
 }
 
+// Prints a formatted summary of all Go resources (functions, types, interfaces, variables) defined in a file.
 func formatGoFileContext(gt *golang.GolangTopology, fileID string) {
 	gf, ok := gt.Files[golang.FileID(fileID)]
 	if !ok {
@@ -566,6 +574,7 @@ func formatGoFileContext(gt *golang.GolangTopology, fileID string) {
 	}
 }
 
+// Prints a formatted summary of Python module contents (functions, classes, methods, variables) with line numbers and descriptions.
 func formatPythonFileContext(pt *python.PythonTopology, fileID string) {
 	mod, ok := pt.Modules[python.ModuleID(fileID)]
 	if !ok {
@@ -683,6 +692,7 @@ func cliContextFilter(mgr *topology.TopologyManager) topology.TopologyOption {
 	return topology.WithContextFilter(cfg.EffectiveContextFilter())
 }
 
+// Reads and displays a function's full context with dependencies for Python, Go, or JavaScript.
 func readAsFunction(mgr *topology.TopologyManager, lang string, id string) {
 	filter := cliContextFilter(mgr)
 	if lang == "python" {
@@ -714,6 +724,7 @@ func readAsFunction(mgr *topology.TopologyManager, lang string, id string) {
 	fmt.Print(gotools.FormatGoFunctionContext(ctx))
 }
 
+// Displays a struct/class definition and context with configurable filtering, delegating to language-specific managers.
 func readAsStruct(mgr *topology.TopologyManager, lang string, id string) {
 	filter := cliContextFilter(mgr)
 	if lang == "python" {
@@ -745,6 +756,7 @@ func readAsStruct(mgr *topology.TopologyManager, lang string, id string) {
 	fmt.Print(gotools.FormatGoStructContext(ctx))
 }
 
+// Reads and displays an interface's context for Go/JavaScript, or source for Python.
 func readAsInterface(mgr *topology.TopologyManager, lang string, id string) {
 	if lang == "python" {
 		readAsCut(mgr, lang, id, domain.ResourceInterface)
@@ -768,6 +780,7 @@ func readAsInterface(mgr *topology.TopologyManager, lang string, id string) {
 	fmt.Print(gotools.FormatGoInterfaceContext(ctx))
 }
 
+// Displays a named type's definition and context, delegating to language-specific managers (Python, JS/TS, or Go).
 func readAsNamedType(mgr *topology.TopologyManager, lang string, id string) {
 	if lang == "python" {
 		readAsCut(mgr, lang, id, domain.ResourceNamedType)
@@ -791,6 +804,7 @@ func readAsNamedType(mgr *topology.TopologyManager, lang string, id string) {
 	fmt.Print(gotools.FormatGoNamedTypeContext(ctx))
 }
 
+// Displays an external variable's definition and lists all functions and classes that use it across all languages.
 func readAsVariable(mgr *topology.TopologyManager, topo *domain.Topology, lang string, id string) {
 	var loc domain.Location
 
@@ -926,6 +940,7 @@ func readAsVariable(mgr *topology.TopologyManager, topo *domain.Topology, lang s
 	}
 }
 
+// Displays a dependency and lists functions/classes that use it, organized by language.
 func readAsDependency(mgr *topology.TopologyManager, topo *domain.Topology, lang string, id string) {
 	fmt.Printf("Dependency: %s\n", id)
 
@@ -1020,6 +1035,7 @@ func readAsDependency(mgr *topology.TopologyManager, topo *domain.Topology, lang
 	}
 }
 
+// Reads and displays a resource as a cut (source code excerpt) for Python, Go, or JavaScript.
 func readAsCut(mgr *topology.TopologyManager, lang string, id string, kind domain.ResourceKind) {
 	if lang == "python" {
 		pythonManager := python.NewPythonManager(mgr)
@@ -1040,6 +1056,7 @@ func readAsCut(mgr *topology.TopologyManager, lang string, id string, kind domai
 	fmt.Print(entry.Cut)
 }
 
+// Checks if data is binary by scanning up to 512 bytes for a null byte.
 func isBinary(data []byte) bool {
 	n := len(data)
 	if n > 512 {
@@ -1048,6 +1065,7 @@ func isBinary(data []byte) bool {
 	return bytes.IndexByte(data[:n], 0) >= 0
 }
 
+// Displays package context for Go packages; no-op for Python/JS/TS which center on files instead.
 func readPackageContext(mgr *topology.TopologyManager, topo *domain.Topology, lang string, pkgID string) {
 	fmt.Printf("Package: %s\n", pkgID)
 
@@ -1057,6 +1075,7 @@ func readPackageContext(mgr *topology.TopologyManager, topo *domain.Topology, la
 	formatGoPackageContext(gt, pkgID)
 }
 
+// Prints a formatted summary of all Go resources (functions, types, interfaces, variables) in a package.
 func formatGoPackageContext(gt *golang.GolangTopology, pkgID string) {
 	pkg, ok := gt.Packages[golang.PackagePath(pkgID)]
 	if !ok {

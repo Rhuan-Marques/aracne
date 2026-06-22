@@ -8,16 +8,19 @@ import (
 	"aracne/internal/topology/domain"
 )
 
+// Represents a resource within a workflow with its ID, name, and resource kind.
 type workflowResource struct {
 	ID   string
 	Name string
 	Kind domain.ResourceKind
 }
 
+// Delegates to StartForcedWorkflow to launch a workflow.
 func (m *Manager) StartWorkflow(req WorkflowRequest) (string, error) {
 	return m.StartForcedWorkflow(req)
 }
 
+// Returns the list of resources without descriptions matching the configured target kinds.
 func (m *Manager) undocumentedResources() ([]workflowResource, error) {
 	topo, err := m.manager.ReadAll()
 	if err != nil {
@@ -56,6 +59,7 @@ func (m *Manager) inspectableResources() ([]workflowResource, error) {
 	return result, nil
 }
 
+// Splits resources into batches of specified size (defaults to 5 if size is invalid).
 func chunkResources(resources []workflowResource, size int) [][]workflowResource {
 	if size <= 0 {
 		size = 5

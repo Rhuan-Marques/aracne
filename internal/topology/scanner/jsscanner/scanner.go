@@ -21,6 +21,7 @@ type JavaScriptScanner struct {
 	detectFiles []string
 }
 
+// Creates a new JavaScriptScanner configured for .js, .mjs, .cjs, .jsx files.
 func NewJavaScriptScanner() *JavaScriptScanner {
 	return &JavaScriptScanner{
 		name:        "javascript",
@@ -29,6 +30,7 @@ func NewJavaScriptScanner() *JavaScriptScanner {
 	}
 }
 
+// Creates a new TypeScript scanner configured for .ts, .tsx, .mts, .cts files.
 func NewTypeScriptScanner() *JavaScriptScanner {
 	return &JavaScriptScanner{
 		name:        "typescript",
@@ -37,10 +39,13 @@ func NewTypeScriptScanner() *JavaScriptScanner {
 	}
 }
 
+// Returns the scanner's name identifier.
 func (s *JavaScriptScanner) Name() string { return s.name }
 
+// Returns the list of file extensions this scanner handles.
 func (s *JavaScriptScanner) Extensions() []string { return s.extensions }
 
+// Checks if JavaScript/TypeScript code exists in a directory by looking for signature files or glob patterns.
 func (s *JavaScriptScanner) Detect(root string) bool {
 	for _, name := range s.detectFiles {
 		if _, err := os.Stat(filepath.Join(root, name)); err == nil {
@@ -55,6 +60,7 @@ func (s *JavaScriptScanner) Detect(root string) bool {
 	return false
 }
 
+// Scans a directory tree for JavaScript/TypeScript files, parses them, and builds a complete topology with resolved references.
 func (s *JavaScriptScanner) Scan(root string) (*domain.Topology, error) {
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
@@ -92,6 +98,7 @@ func (s *JavaScriptScanner) Scan(root string) (*domain.Topology, error) {
 	return js.ToGeneric(gt, s.Name()), nil
 }
 
+// Scans a JavaScript/TypeScript file and updates the topology, preserving descriptions and generating warnings for function changes.
 func (s *JavaScriptScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.TopologyWarning, error) {
 	gt := js.FromGeneric(topo)
 	if gt == nil {
@@ -142,6 +149,7 @@ func (s *JavaScriptScanner) UpdateFile(topo *domain.Topology, path string) ([]do
 	return warnings, nil
 }
 
+// Initializes an empty JavaScriptTopology with empty maps for functions, classes, interfaces, types, variables, modules, and errors.
 func newTopology(absRoot string) *js.JavaScriptTopology {
 	return &js.JavaScriptTopology{
 		Root:         absRoot,
@@ -240,6 +248,7 @@ func resolveTopology(gt *js.JavaScriptTopology, results []*ParseResult) {
 	collectDependencies(gt)
 }
 
+// Extracts all functions, classes, variables, interfaces, and named types from a module into separate maps.
 func snapshotModule(gt *js.JavaScriptTopology, mod js.JavaScriptModule) (
 	map[js.FunctionID]js.JavaScriptFunction,
 	map[js.ClassID]js.JavaScriptClass,
@@ -280,6 +289,7 @@ func snapshotModule(gt *js.JavaScriptTopology, mod js.JavaScriptModule) (
 	return funcs, classes, vars, ifaces, namedTypes
 }
 
+// Removes a module and all its functions, classes, variables, interfaces, and named types from the topology.
 func removeModule(gt *js.JavaScriptTopology, mod js.JavaScriptModule) {
 	funcIDs := mod.Functions()
 	classIDs := mod.Classes()
@@ -306,6 +316,7 @@ func removeModule(gt *js.JavaScriptTopology, mod js.JavaScriptModule) {
 	delete(gt.Modules, mod.ID)
 }
 
+// Carries forward user-provided descriptions from prior parse results when rescanning a file.
 func preserveDescriptions(pr *ParseResult, oldFuncs map[js.FunctionID]js.JavaScriptFunction, oldClasses map[js.ClassID]js.JavaScriptClass, oldVars map[js.ExternalVarID]js.JavaScriptExternalVar, oldIfaces map[js.InterfaceID]js.JavaScriptInterface, oldNamedTypes map[js.NamedTypeID]js.JavaScriptNamedType, oldMod js.JavaScriptModule) {
 	for i, fp := range pr.Functions {
 		if old, ok := oldFuncs[fp.Function.ID]; ok && fp.Function.Description == "" && old.Description != "" {
@@ -337,6 +348,7 @@ func preserveDescriptions(pr *ParseResult, oldFuncs map[js.FunctionID]js.JavaScr
 	}
 }
 
+// Compares old and new function signatures to detect removals and signature changes, returning topology warnings.
 func diffFuncWarnings(oldFuncs map[js.FunctionID]js.JavaScriptFunction, pr *ParseResult) []domain.TopologyWarning {
 	newFuncs := make(map[js.FunctionID]js.JavaScriptFunction, len(pr.Functions))
 	for _, fp := range pr.Functions {
@@ -367,6 +379,7 @@ func diffFuncWarnings(oldFuncs map[js.FunctionID]js.JavaScriptFunction, pr *Pars
 	return warnings
 }
 
+// Compares two JavaScript function signatures for equality based on parameter names and async/generator flags.
 func signaturesEqualJS(a, b js.JavaScriptFunction) bool {
 	if len(a.Input) != len(b.Input) {
 		return false
@@ -379,6 +392,7 @@ func signaturesEqualJS(a, b js.JavaScriptFunction) bool {
 	return a.IsAsync == b.IsAsync && a.IsGenerator == b.IsGenerator
 }
 
+// Derives a dot-separated package path from a directory relative to the project root.
 func getJSPackagePath(root, dir string) js.PackagePath {
 	if dir == root {
 		return js.PackagePath(filepath.Base(root))
@@ -392,6 +406,7 @@ func getJSPackagePath(root, dir string) js.PackagePath {
 	return js.PackagePath(filepath.Base(root) + "." + rel)
 }
 
+// Generic helper that converts a slice of string-like types to a string slice.
 func toStrings[T ~string](ids []T) []string {
 	out := make([]string, 0, len(ids))
 	for _, id := range ids {
@@ -400,6 +415,7 @@ func toStrings[T ~string](ids []T) []string {
 	return out
 }
 
+// Filters a string slice by removing specified items, returning a new slice without matches.
 func removeStrings(slice []string, items ...string) []string {
 	if len(items) == 0 {
 		return slice

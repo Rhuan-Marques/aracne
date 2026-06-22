@@ -115,16 +115,15 @@ func (s *GoScanner) UpdateFilePartial(dbPath, root, absPath string) (upserts []d
 // loadWorkingSet assembles the partial GolangTopology the incremental update
 // needs, reading only the resources required for correct resolution and
 // incremental matching:
-//   - the changed file's OLD member resources (by loc_path) + the file node +
-//     the owning package node (both by ID),
-//   - the changed file's package members + each internally-imported package's
-//     members (forward-resolution targets),
-//   - ALL interfaces (struct<->interface matching is structural/cross-package),
-//   - the reverse callers/users of the file's old funcs/structs/named-types
-//     (so signature-change / node-removed warnings + caller edge cleanup work),
-//   - ALL warnings (the table is small; the existing add/clear logic runs on it
-//     and the complete map is returned for a wholesale warnings rewrite).
-//
+// - the changed file's OLD member resources (by loc_path) + the file node +
+// the owning package node (both by ID),
+// - the changed file's package members + each internally-imported package's
+// members (forward-resolution targets),
+// - ALL interfaces (struct<->interface matching is structural/cross-package),
+// - the reverse callers/users of the file's old funcs/structs/named-types
+// (so signature-change / node-removed warnings + caller edge cleanup work),
+// - ALL warnings (the table is small; the existing add/clear logic runs on it
+// and the complete map is returned for a wholesale warnings rewrite).
 // A point-lookup MISS in the resulting gt is the correct "missing node" signal;
 // nothing is fabricated.
 func (s *GoScanner) loadWorkingSet(dbPath, rootPath, absPath string, pkgPath golang.PackagePath, pr *ParseResult) (*golang.GolangTopology, error) {
@@ -317,6 +316,7 @@ func typingPackagesOf(resources map[string]domain.Resource, pr *ParseResult) []s
 	return out
 }
 
+// Decodes a JSON-serialized variable definition into a VariableDefinition slice.
 func decodeVarDefs(raw any) []golang.VariableDefinition {
 	if raw == nil {
 		return nil
@@ -326,6 +326,7 @@ func decodeVarDefs(raw any) []golang.VariableDefinition {
 	return out
 }
 
+// Decodes raw data into a slice of FunctionDefinition via JSON round-trip.
 func decodeMethodDefs(raw any) []golang.FunctionDefinition {
 	if raw == nil {
 		return nil
@@ -572,6 +573,7 @@ func structPkg(sid golang.StructID, _ golang.GolangStruct) golang.PackagePath {
 	return golang.PackagePath(trimLastDotSegment(string(sid)))
 }
 
+// Extracts the package path from a function or method ID.
 func funcPkg(fid golang.FunctionID, f golang.GolangFunction) golang.PackagePath {
 	id := string(fid)
 	// Methods have IDs like pkg.(Recv).Method — strip the receiver+method.

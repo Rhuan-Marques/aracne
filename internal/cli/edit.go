@@ -8,6 +8,7 @@ import (
 	"strings"
 )
 
+// Reads JSON from stdin containing file path and old/new strings, replaces the old string in the file once, and updates the topology database.
 func RunEdit() {
 	var input struct {
 		FilePath  string `json:"file_path"`

@@ -15,16 +15,19 @@ import (
 
 const websocketGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
+// WebSocket message envelope with a type identifier and optional JSON payload.
 type WebSocketEvent struct {
 	Type    string `json:"type"`
 	Payload any    `json:"payload,omitempty"`
 }
 
+// Manages WebSocket client connections for real-time graph visualization updates.
 type WebSocketManager struct {
 	mu      sync.Mutex
 	clients map[*webSocketClient]bool
 }
 
+// WebSocket client connection with a network socket, send channel, and once-only close mechanism.
 type webSocketClient struct {
 	conn net.Conn
 	send chan []byte
@@ -32,10 +35,12 @@ type webSocketClient struct {
 	once sync.Once
 }
 
+// Initializes a WebSocket manager for handling connected visualization clients.
 func NewWebSocketManager() *WebSocketManager {
 	return &WebSocketManager{clients: make(map[*webSocketClient]bool)}
 }
 
+// Handles WebSocket upgrade requests by validating headers, hijacking the connection, and initiating read/write loops for the client.
 func (m *WebSocketManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") || !strings.Contains(strings.ToLower(r.Header.Get("Connection")), "upgrade") {
 		http.Error(w, "websocket upgrade required", http.StatusBadRequest)
@@ -71,6 +76,7 @@ func (m *WebSocketManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	m.Send(client, WebSocketEvent{Type: "connected"})
 }
 
+// Sends a WebSocket event to all connected clients; removes non-responsive clients.
 func (m *WebSocketManager) Broadcast(event WebSocketEvent) {
 	data, err := json.Marshal(event)
 	if err != nil {
@@ -91,6 +97,7 @@ func (m *WebSocketManager) Broadcast(event WebSocketEvent) {
 	}
 }
 
+// Sends a WebSocket event to a specific client; removes the client if the send fails.
 func (m *WebSocketManager) Send(client *webSocketClient, event WebSocketEvent) {
 	data, err := json.Marshal(event)
 	if err != nil {
@@ -103,18 +110,21 @@ func (m *WebSocketManager) Send(client *webSocketClient, event WebSocketEvent) {
 	}
 }
 
+// Returns the number of currently connected WebSocket clients.
 func (m *WebSocketManager) Count() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return len(m.clients)
 }
 
+// Registers a WebSocket client with the manager under a mutex lock.
 func (m *WebSocketManager) add(client *webSocketClient) {
 	m.mu.Lock()
 	m.clients[client] = true
 	m.mu.Unlock()
 }
 
+// Unregisters a WebSocket client and closes its connection, executing once via sync.Once.
 func (m *WebSocketManager) remove(client *webSocketClient) {
 	client.once.Do(func() {
 		m.mu.Lock()
@@ -125,6 +135,7 @@ func (m *WebSocketManager) remove(client *webSocketClient) {
 	})
 }
 
+// Sends queued messages to WebSocket client with 30-second heartbeat pings, removing client on write errors or shutdown signal.
 func (c *webSocketClient) writeLoop(manager *WebSocketManager) {
 	heartbeat := time.NewTicker(30 * time.Second)
 	defer heartbeat.Stop()
@@ -149,16 +160,19 @@ func (c *webSocketClient) writeLoop(manager *WebSocketManager) {
 	}
 }
 
+// Drains incoming WebSocket connection data and removes the client from the manager on disconnect.
 func (c *webSocketClient) readLoop(manager *WebSocketManager) {
 	_, _ = io.Copy(io.Discard, c.conn)
 	manager.remove(c)
 }
 
+// Computes the WebSocket accept response key by hashing the client key with the RFC 6455 GUID.
 func websocketAccept(key string) string {
 	sum := sha1.Sum([]byte(key + websocketGUID))
 	return base64.StdEncoding.EncodeToString(sum[:])
 }
 
+// Writes a WebSocket text frame with RFC 6455 compliant header encoding length-prefixed payload.
 func writeWebSocketTextFrame(conn net.Conn, data []byte) error {
 	header := []byte{0x81}
 	length := len(data)

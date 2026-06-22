@@ -4,8 +4,7 @@ import makeSquare, { Circle as Disc, Rectangle } from "./shapes.js";
 import * as factory from "./factory.js";
 import "./shapes.js"; // side-effect import (no bindings)
 
-// `new Disc(...)` resolves through the import alias back to Circle, so the
-// method call resolves to Circle.area.
+// Computes the sum of areas from a Disc, Rectangle, and optionally created Circle and Square objects
 export function report() {
   const c = new Disc(2);
   const a = c.area();

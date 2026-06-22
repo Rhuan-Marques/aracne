@@ -8,28 +8,34 @@ import (
 	"aracne/internal/topology/python"
 )
 
+// LLM tool handler that reads Python class interface definitions from topology, including type (ABC/Protocol) and base classes.
 type ReadInterface struct {
 	mgr *python.PythonManager
 }
 
+// Creates a ReadInterface handler for reading Python interface definitions.
 func NewReadInterface(mgr *python.PythonManager) *ReadInterface {
 	return &ReadInterface{mgr: mgr}
 }
 
+// Returns the tool name "read_interface".
 func (r *ReadInterface) Name() string {
 	return "read_interface"
 }
 
+// Returns a description of the read_interface tool for accessing Python class interface information.
 func (r *ReadInterface) Description() string {
 	return "Read a Python class's interface information (ABCs, Protocols, base classes, and methods that need implementing) from the project topology."
 }
 
+// Returns parameter schema with required class name argument for ReadInterface tool.
 func (r *ReadInterface) Parameters() []Parameter {
 	return []Parameter{
 		{Name: "name", Type: "string", Description: "The class name (e.g. 'MyAbstractClass')", Required: true},
 	}
 }
 
+// Looks up a Python class by name in topology and returns its definition, type (ABC/Protocol), location, and base classes.
 func (r *ReadInterface) Run(args json.RawMessage) (string, error) {
 	var params struct {
 		Name string `json:"name"`

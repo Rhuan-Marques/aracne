@@ -13,6 +13,7 @@ type pluginWriter struct {
 	openCode func(openCodeConfigDir string, autoYes bool)
 }
 
+// Returns a map of available plugins that sync the topology database after native edits, with handlers for Claude and Open Code environments.
 func pluginWriters() map[string]pluginWriter {
 	return map[string]pluginWriter{
 		// Syncs the topology DB after native (non-MCP) edits. Only needed when
@@ -28,6 +29,7 @@ func pluginWriters() map[string]pluginWriter {
 	}
 }
 
+// Writes Claude plugin files for each requested plugin name using registered plugin writers.
 func writeClaudePlugins(plugins []string, claudeBaseDir string, autoYes bool) {
 	writers := pluginWriters()
 	for _, name := range plugins {
@@ -39,6 +41,7 @@ func writeClaudePlugins(plugins []string, claudeBaseDir string, autoYes bool) {
 	}
 }
 
+// Writes OpenCode configuration files for specified plugins, invoking each plugin's openCode writer if available.
 func writeOpenCodePlugins(plugins []string, openCodeConfigDir string, autoYes bool) {
 	writers := pluginWriters()
 	for _, name := range plugins {

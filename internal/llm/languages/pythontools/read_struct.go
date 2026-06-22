@@ -9,28 +9,34 @@ import (
 	"aracne/internal/topology/python"
 )
 
+// LLM tool handler that reads Python classes from topology by name with source code and connected context, supporting exact and fuzzy lookup.
 type ReadStruct struct {
 	mgr *python.PythonManager
 }
 
+// Creates a ReadStruct handler for reading Python classes from the topology.
 func NewReadStruct(mgr *python.PythonManager) *ReadStruct {
 	return &ReadStruct{mgr: mgr}
 }
 
+// Returns the tool name "read_struct" for Python class inspection.
 func (r *ReadStruct) Name() string {
 	return "read_struct"
 }
 
+// Returns the tool description explaining read_struct reads Python classes with their source code and connected context.
 func (r *ReadStruct) Description() string {
 	return "Read a Python class's full source code and its interconnected context (base classes, methods, constructor, used types) from the project topology. Prefer this over 'read' when investigating a specific class."
 }
 
+// Returns parameter schema with required class name argument for ReadStruct tool.
 func (r *ReadStruct) Parameters() []Parameter {
 	return []Parameter{
 		{Name: "name", Type: "string", Description: "The class name (e.g. 'PythonManager', 'TopologyManager', 'MyClass')", Required: true},
 	}
 }
 
+// Retrieves and formats a Python class from the topology by name, supporting exact lookup or fuzzy search when needed
 func (r *ReadStruct) Run(args json.RawMessage) (string, error) {
 	var params struct {
 		Name string `json:"name"`

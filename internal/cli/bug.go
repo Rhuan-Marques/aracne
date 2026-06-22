@@ -7,6 +7,7 @@ import (
 	"aracne/internal/topology/domain"
 )
 
+// Dispatcher for bug management subcommands (report, list, acknowledge, dismiss, delete).
 func RunBug(args []string) {
 	if len(args) < 1 {
 		fmt.Fprintln(os.Stderr, "Usage: arac bug <report|list|acknowledge|dismiss|delete> [args...]")
@@ -30,6 +31,7 @@ func RunBug(args []string) {
 	}
 }
 
+// Creates a bug report for a topology resource with a given node ID and description.
 func RunBugReport(args []string) {
 	dbPath := ".aracne/topology.db"
 	nodeID := ""
@@ -68,6 +70,7 @@ func RunBugReport(args []string) {
 	fmt.Printf("Bug reported: %s (state: %s)\n", bug.ID, bug.State)
 }
 
+// Lists topology bugs filtered by node ID and/or state.
 func RunBugList(args []string) {
 	dbPath := ".aracne/topology.db"
 	nodeID := ""
@@ -112,6 +115,7 @@ func RunBugList(args []string) {
 	}
 }
 
+// Marks a bug as acknowledged in the topology database.
 func RunBugAcknowledge(args []string) {
 	dbPath := ".aracne/topology.db"
 	bugID := ""
@@ -142,6 +146,7 @@ func RunBugAcknowledge(args []string) {
 	fmt.Printf("Bug %s acknowledged.\n", bugID)
 }
 
+// Marks a bug as dismissed in the topology database.
 func RunBugDismiss(args []string) {
 	dbPath := ".aracne/topology.db"
 	bugID := ""
@@ -172,6 +177,7 @@ func RunBugDismiss(args []string) {
 	fmt.Printf("Bug %s dismissed.\n", bugID)
 }
 
+// Removes a bug from the topology database.
 func RunBugDelete(args []string) {
 	dbPath := ".aracne/topology.db"
 	bugID := ""

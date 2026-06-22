@@ -218,7 +218,6 @@ func ReadResourcesByKind(dbPath string, kind domain.ResourceKind) (map[string]do
 
 // ReadResourcesByFile loads every resource whose loc_path equals locPath (via
 // idx_resources_loc_path) with outgoing connections hydrated.
-//
 // NOTE: the file-node resource itself is stored with loc_path == "" (only its
 // members carry a loc_path), so the owning file node is NOT returned by this
 // helper. Callers needing the file node must fetch it by ID separately.

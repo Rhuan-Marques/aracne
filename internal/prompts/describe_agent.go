@@ -8,6 +8,7 @@ import (
 	"aracne/internal/topology/domain"
 )
 
+// Holds a resource's ID, name, kind, and pre-read source output for description generation.
 type DescriptionResource struct {
 	ID         string
 	Name       string
@@ -23,6 +24,7 @@ type DescriptionExemplar struct {
 	Description string
 }
 
+// Returns prompt instructions for the descriptions-generation executor sub-agent, directing it to write concise resource descriptions and update them via the topology database.
 func DescriptionsGenerationExecutorPrompt() string {
 	return `You write snappy, accurate descriptions for the resources in your assigned batch — nothing else.
 
@@ -39,6 +41,7 @@ func DescriptionsGenerationExecutorPrompt() string {
 `
 }
 
+// Formats executor subagent instructions for describing assigned resources, with per-kind limits and exemplars.
 func DescriptionsGenerationExecutorInput(resources []DescriptionResource, exemplars []DescriptionExemplar) string {
 	var b strings.Builder
 	if len(resources) == 1 {
@@ -92,6 +95,7 @@ func writeExemplars(b *strings.Builder, exemplars []DescriptionExemplar) {
 	b.WriteByte('\n')
 }
 
+// Extracts the first line of a string, trimming whitespace.
 func oneLine(s string) string {
 	s = strings.TrimSpace(s)
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
@@ -140,6 +144,7 @@ func BuildDescriptionExemplars(topo *domain.Topology, batchIDs []string, limit i
 	return out
 }
 
+// Returns the per-resource-kind guideline for writing one-line descriptions in the topology database.
 func singleDescriptionInstruction(kind domain.ResourceKind) string {
 	switch kind {
 	case domain.ResourceFunction, domain.ResourceMethod:
@@ -161,6 +166,7 @@ func singleDescriptionInstruction(kind domain.ResourceKind) string {
 	}
 }
 
+// Generates per-resource-kind description guidelines for description generator, formatted as instruction lines
 func descriptionGuidelinesForKinds(resources []DescriptionResource) []string {
 	seen := make(map[domain.ResourceKind]bool)
 	for _, res := range resources {
@@ -189,6 +195,7 @@ func descriptionGuidelinesForKinds(resources []DescriptionResource) []string {
 	return lines
 }
 
+// Returns description guidelines for a resource kind, specifying line limits and key details to include per type.
 func pluralDescriptionInstruction(kind domain.ResourceKind) string {
 	switch kind {
 	case domain.ResourceType, domain.ResourceNamedType:

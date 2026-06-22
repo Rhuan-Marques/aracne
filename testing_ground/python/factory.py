@@ -11,21 +11,25 @@ Edge cases exercised here:
 from .shapes import Circle, Rectangle, Shape, Point
 
 
+// Return a Circle (cross-module type return).
 def make_circle(radius: float) -> Circle:
     """Return a Circle (cross-module type return)."""
     return Circle(radius)
 
 
+// Return a Rectangle (cross-module type return).
 def make_rectangle(width: float, height: float) -> Rectangle:
     """Return a Rectangle (cross-module type return)."""
     return Rectangle(width, height)
 
 
+// ``*args`` of Shape; sums area() over each element.
 def total_area(*shapes: Shape) -> float:
     """``*args`` of Shape; sums area() over each element."""
     return sum(shape.area() for shape in shapes)
 
 
+// Mix of positional-only (shapes_list, sep), keyword-only (upper), and **kwargs.
 def describe_all(shapes_list, sep: str = ", ", /, *, upper: bool = False, **opts) -> str:
     """Mix of positional-only (shapes_list, sep), keyword-only (upper), and **kwargs."""
     parts = [shape.describe() for shape in shapes_list]
@@ -35,11 +39,13 @@ def describe_all(shapes_list, sep: str = ", ", /, *, upper: bool = False, **opts
     return text.upper() if upper else text
 
 
+// An async factory returning a Circle (cross-module type return).
 async def fetch_circle(radius: float) -> Circle:
     """An async factory returning a Circle (cross-module type return)."""
     return Circle(radius)
 
 
+// Return a Point dataclass instance.
 def origin() -> Point:
     """Return a Point dataclass instance."""
     return Point(0.0, 0.0)

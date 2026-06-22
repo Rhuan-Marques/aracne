@@ -8,6 +8,7 @@ import (
 	"strings"
 )
 
+// Disables Claude Code and/or OpenCode integrations either globally or per-project.
 func RunDisable(args []string) {
 	fs := flag.NewFlagSet("disable", flag.ExitOnError)
 	claude := fs.Bool("claude", false, "Disable Claude Code integration")
@@ -34,6 +35,7 @@ func RunDisable(args []string) {
 	}
 }
 
+// Removes aracne MCP server and integration from OpenCode configuration, resets permissions, and deletes related files.
 func disableOpenCode(global bool, autoYes bool) {
 	configPath, configDir, agentsMdPath := opencodePaths(global)
 
@@ -98,6 +100,7 @@ func disableOpenCode(global bool, autoYes bool) {
 	fmt.Println("[OpenCode] Aracne integration disabled. Restart OpenCode to apply changes.")
 }
 
+// Removes aracne MCP server and integration from Claude Code configuration and deletes related command/agent files.
 func disableClaudeCode(global bool, autoYes bool) {
 	mcpConfigPath, commandsDir, agentsDir, claudeMdPath := claudePaths(global)
 
@@ -160,12 +163,14 @@ func disableClaudeCode(global bool, autoYes bool) {
 	fmt.Println("[Claude Code] Aracne integration disabled. Restart Claude Code to apply changes.")
 }
 
+// Removes multiple files by name from a directory.
 func removeFiles(dir string, names []string) {
 	for _, name := range names {
 		removeFile(filepath.Join(dir, name), name)
 	}
 }
 
+// Removes a file if it exists, logging success or errors to stderr.
 func removeFile(path, label string) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return
@@ -177,6 +182,7 @@ func removeFile(path, label string) {
 	fmt.Printf("Removed %s\n", path)
 }
 
+// Removes aracne hook entries from PreToolUse/PostToolUse events in settings JSON.
 func removeAracneHookFromSettings(settingsPath string) {
 	config := readJSONConfig(settingsPath)
 	if len(config) == 0 {
@@ -255,6 +261,7 @@ func isAracneHookEntry(entry interface{}) bool {
 	return false
 }
 
+// Strips aracne integration segment from a file and rewrites it if changed.
 func removeAracneIntegrationSection(path, label string) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -279,6 +286,7 @@ func removeAracneIntegrationSection(path, label string) {
 	fmt.Printf("%s updated at %s\n", label, path)
 }
 
+// Removes the aracne integration markdown section from content, preserving line endings and spacing.
 func stripAracneIntegrationSegment(content string) string {
 	lineEnding := markdownLineEnding(content)
 

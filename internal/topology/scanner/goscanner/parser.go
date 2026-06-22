@@ -11,6 +11,7 @@ import (
 	"aracne/internal/topology/golang"
 )
 
+// Holds parsed Go file metadata including imports, structs, interfaces, functions, and type definitions.
 type ParseResult struct {
 	FileID          string
 	FileDescription string
@@ -27,6 +28,7 @@ type ParseResult struct {
 	ImportMap       map[string]string
 }
 
+// Holds a parsed function's metadata, AST body, receiver name, and type parameter names for body analysis.
 type FunctionParse struct {
 	Function       golang.GolangFunction
 	Body           *ast.BlockStmt
@@ -34,6 +36,7 @@ type FunctionParse struct {
 	TypeParamNames []string
 }
 
+// Parses a Go source file and extracts imports, declarations, types, functions, and metadata into a ParseResult.
 func ParseFile(filePath string, pkgPath golang.PackagePath, modulePath, rootPath string) (*ParseResult, error) {
 	fset := token.NewFileSet()
 	astFile, err := parser.ParseFile(fset, filePath, nil, parser.ParseComments)
@@ -84,6 +87,7 @@ func ParseFile(filePath string, pkgPath golang.PackagePath, modulePath, rootPath
 	return pr, nil
 }
 
+// Processes generic declarations (variables, constants, and type definitions) from an AST node.
 func (pr *ParseResult) processGenDecl(genDecl *ast.GenDecl, fset *token.FileSet) error {
 	for _, spec := range genDecl.Specs {
 		switch s := spec.(type) {
@@ -119,6 +123,7 @@ func (pr *ParseResult) processGenDecl(genDecl *ast.GenDecl, fset *token.FileSet)
 	return nil
 }
 
+// Routes a type specification to the appropriate handler based on whether it's a struct, interface, or named type.
 func (pr *ParseResult) processTypeSpec(typeSpec *ast.TypeSpec, fset *token.FileSet, genDecl *ast.GenDecl) error {
 	switch t := typeSpec.Type.(type) {
 	case *ast.StructType:
@@ -130,6 +135,7 @@ func (pr *ParseResult) processTypeSpec(typeSpec *ast.TypeSpec, fset *token.FileS
 	}
 }
 
+// Extracts and registers a struct definition with its fields and their package/dependency references.
 func (pr *ParseResult) processStruct(typeSpec *ast.TypeSpec, st *ast.StructType, fset *token.FileSet, genDecl *ast.GenDecl) error {
 	id := golang.StructID(string(pr.PkgPath) + "." + typeSpec.Name.Name)
 	loc := locationFromNode(fset, typeSpec, pr.FileID)
@@ -176,6 +182,7 @@ func (pr *ParseResult) processStruct(typeSpec *ast.TypeSpec, st *ast.StructType,
 	return nil
 }
 
+// Extracts an interface type definition from an AST with method signatures and resolved type dependencies.
 func (pr *ParseResult) processInterface(typeSpec *ast.TypeSpec, it *ast.InterfaceType, fset *token.FileSet, genDecl *ast.GenDecl) error {
 	id := golang.InterfaceID(string(pr.PkgPath) + "." + typeSpec.Name.Name)
 	loc := locationFromNode(fset, typeSpec, pr.FileID)
@@ -228,6 +235,7 @@ func (pr *ParseResult) processInterface(typeSpec *ast.TypeSpec, it *ast.Interfac
 	return nil
 }
 
+// Extracts and registers a named type definition with its underlying type and package/dependency references.
 func (pr *ParseResult) processNamedType(typeSpec *ast.TypeSpec, underlying ast.Expr, fset *token.FileSet, genDecl *ast.GenDecl) error {
 	id := golang.NamedTypeID(string(pr.PkgPath) + "." + typeSpec.Name.Name)
 	loc := locationFromNode(fset, typeSpec, pr.FileID)
@@ -258,6 +266,7 @@ func (pr *ParseResult) processNamedType(typeSpec *ast.TypeSpec, underlying ast.E
 	return nil
 }
 
+// Parses a function declaration into a GolangFunction record, including parameters, results, and type constraints.
 func (pr *ParseResult) processFuncDecl(funcDecl *ast.FuncDecl, fset *token.FileSet) {
 	loc := locationFromNode(fset, funcDecl, pr.FileID)
 	params := pr.parseFieldList(funcDecl.Type.Params)
@@ -314,6 +323,7 @@ func (pr *ParseResult) processFuncDecl(funcDecl *ast.FuncDecl, fset *token.FileS
 	pr.Functions = append(pr.Functions, fi)
 }
 
+// Converts an AST expression to its string representation, handling pointers, arrays, maps, and complex types.
 func exprToString(expr ast.Expr) string {
 	switch e := expr.(type) {
 	case *ast.Ident:
@@ -356,6 +366,7 @@ func exprToString(expr ast.Expr) string {
 	}
 }
 
+// Converts an AST field list into variable definitions with resolved type information.
 func (pr *ParseResult) parseFieldList(fl *ast.FieldList) []golang.VariableDefinition {
 	if fl == nil {
 		return nil
@@ -379,6 +390,7 @@ func (pr *ParseResult) parseFieldList(fl *ast.FieldList) []golang.VariableDefini
 	return result
 }
 
+// Extracts and normalizes text content from a comment group, removing comment markers.
 func commentText(group *ast.CommentGroup) string {
 	if group == nil {
 		return ""
@@ -395,6 +407,7 @@ func commentText(group *ast.CommentGroup) string {
 	return strings.Join(comments, "\n")
 }
 
+// Returns the text from the preferred comment group, or falls back to the fallback comment group.
 func pickComment(preferred, fallback *ast.CommentGroup) string {
 	desc := commentText(preferred)
 	if desc != "" {
@@ -403,10 +416,12 @@ func pickComment(preferred, fallback *ast.CommentGroup) string {
 	return commentText(fallback)
 }
 
+// Extracts package and dependency type references from an AST expression.
 func extractTypeRefs(expr ast.Expr, importMap map[string]string, modulePath string, seen map[string]bool, packages *[]golang.PackagePath, deps *[]golang.DependancyPath) {
 	extractTypeRefsRec(expr, importMap, modulePath, seen, packages, deps)
 }
 
+// Recursively extracts package and dependency references from AST type expressions, separating internal and external imports.
 func extractTypeRefsRec(expr ast.Expr, importMap map[string]string, modulePath string, seen map[string]bool, packages *[]golang.PackagePath, deps *[]golang.DependancyPath) {
 	switch e := expr.(type) {
 	case *ast.SelectorExpr:
@@ -441,6 +456,7 @@ func extractTypeRefsRec(expr ast.Expr, importMap map[string]string, modulePath s
 	}
 }
 
+// Extracts package and dependency type references from function parameter fields.
 func extractParamsTypeRefs(fl *ast.FieldList, importMap map[string]string, modulePath string, seen map[string]bool, packages *[]golang.PackagePath, deps *[]golang.DependancyPath) {
 	if fl == nil {
 		return
@@ -450,6 +466,7 @@ func extractParamsTypeRefs(fl *ast.FieldList, importMap map[string]string, modul
 	}
 }
 
+// Extracts the root identifier from an AST expression, recursing through selectors.
 func rootIdent(expr ast.Expr) string {
 	switch e := expr.(type) {
 	case *ast.Ident:
@@ -472,6 +489,7 @@ func isInternalImport(impPath, modulePath string) bool {
 	return impPath == modulePath || strings.HasPrefix(impPath, modulePath+"/")
 }
 
+// Converts an AST node to a Location with file path and line range.
 func locationFromNode(fset *token.FileSet, node ast.Node, filePath string) domain.Location {
 	if node == nil {
 		return domain.Location{Path: filePath}
@@ -485,6 +503,7 @@ func locationFromNode(fset *token.FileSet, node ast.Node, filePath string) domai
 	}
 }
 
+// Converts a slice of string-like types to []string by casting each element.
 func castStrings[T ~string](ids []T) []string {
 	result := make([]string, len(ids))
 	for i, id := range ids {

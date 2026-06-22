@@ -33,11 +33,13 @@ type contextGraphNode struct {
 	ContextState string `json:"context_state"`
 }
 
+// Response payload containing graph nodes and edges for context visualization.
 type contextGraphResponse struct {
 	Nodes []contextGraphNode `json:"nodes"`
 	Edges []GraphEdge        `json:"edges"`
 }
 
+// HTTP handler that returns a filtered context graph for a chat session, showing resources seen by the model with optimization rules applied.
 func (s *Server) handleContextGraph(w http.ResponseWriter, r *http.Request) {
 	idx, err := s.loadIndex()
 	if err != nil {
@@ -296,6 +298,7 @@ func parseGrepResourceIDs(output string) []string {
 	return ids
 }
 
+// Filters optimization rules to return only those marked as favorites.
 func favoriteRules(rules []OptimizationRule) []OptimizationRule {
 	out := make([]OptimizationRule, 0, len(rules))
 	for _, rule := range rules {

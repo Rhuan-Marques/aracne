@@ -25,18 +25,21 @@ const (
 	defaultDescriptionMaxRetries = 3
 )
 
+// Represents a topology resource with its ID, name, and kind for description operations.
 type descriptionResource struct {
 	ID   string
 	Name string
 	Kind domain.ResourceKind
 }
 
+// Holds a batch of resources with their generated descriptions text and any error from the LLM
 type descriptionBatchResult struct {
 	Batch []descriptionResource
 	Text  string
 	Err   error
 }
 
+// Generates descriptions for undocumented topology resources using an LLM provider, with configurable batch size, parallelism, and retry limits.
 func RunGenerateDescriptions(args []string) {
 	fs := flag.NewFlagSet("generate-descriptions", flag.ExitOnError)
 	targetsFlag := fs.String("targets", "", "Comma-separated resource kinds to describe (overrides config need_description)")
@@ -108,6 +111,7 @@ func RunGenerateDescriptions(args []string) {
 	fmt.Println("done")
 }
 
+// Orchestrates batch-wise LLM description generation with retry logic, splitting undocumented resources into parallel executor waves.
 func runDescriptionGeneration(manager *topology.TopologyManager, provider llm.Provider, toolMap map[string]tools.Tool, lang string, targets []domain.ResourceKind, batchSize, parallel, maxRetries, exemplarLimit int) error {
 	attempts := make(map[string]int)
 	failed := make(map[string]string)
@@ -158,6 +162,7 @@ func runDescriptionGeneration(manager *topology.TopologyManager, provider llm.Pr
 	}
 }
 
+// Runs description generation for resource batches in parallel using an LLM provider and collects results.
 func runDescriptionBatchWave(provider llm.Provider, toolMap map[string]tools.Tool, lang string, batches [][]descriptionResource, parallel int, topo *domain.Topology, exemplarLimit int) []descriptionBatchResult {
 	if parallel > len(batches) {
 		parallel = len(batches)
@@ -191,6 +196,7 @@ func runDescriptionBatchWave(provider llm.Provider, toolMap map[string]tools.Too
 	return collected
 }
 
+// Executes an LLM agent to generate descriptions for a batch of resources using exemplars from the topology for consistency.
 func runDescriptionExecutorBatch(provider llm.Provider, toolMap map[string]tools.Tool, lang string, batch []descriptionResource, topo *domain.Topology, exemplarLimit int) (string, error) {
 	a := agent.New(provider, tools.NewRegistry(), lang)
 	a.SetMaxIterations(len(batch)*4 + 10)
@@ -206,6 +212,7 @@ func runDescriptionExecutorBatch(provider llm.Provider, toolMap map[string]tools
 	return a.RunSubAgent(prompts.DescriptionsGenerationExecutorPrompt(), input, toolMap)
 }
 
+// Returns all resources of specified kinds that lack descriptions, sorted by kind, name, and ID.
 func undocumentedDescriptionResources(manager *topology.TopologyManager, targets []domain.ResourceKind) ([]descriptionResource, error) {
 	topo, err := manager.ReadAll()
 	if err != nil {
@@ -223,6 +230,7 @@ func undocumentedDescriptionResources(manager *topology.TopologyManager, targets
 	return resources, nil
 }
 
+// Sorts description resources in-place by kind, name, then ID.
 func sortDescriptionResources(resources []descriptionResource) {
 	sort.Slice(resources, func(i, j int) bool {
 		if resources[i].Kind != resources[j].Kind {
@@ -235,6 +243,7 @@ func sortDescriptionResources(resources []descriptionResource) {
 	})
 }
 
+// Divides description resources into batches of specified size.
 func chunkDescriptionResources(resources []descriptionResource, batchSize int) [][]descriptionResource {
 	if batchSize <= 0 {
 		batchSize = defaultDescriptionBatchSize
@@ -251,6 +260,7 @@ func chunkDescriptionResources(resources []descriptionResource, batchSize int) [
 	return batches
 }
 
+// Formats a batch of resources for description generation by constructing prompt input with resource metadata and read outputs
 func descriptionExecutorInput(batch []descriptionResource, readResource func(string) string, exemplars []prompts.DescriptionExemplar) string {
 	resources := make([]prompts.DescriptionResource, 0, len(batch))
 	for _, res := range batch {
@@ -284,6 +294,7 @@ func makeResourceReader(toolMap map[string]tools.Tool) func(string) string {
 	}
 }
 
+// Converts tool registry list into a name-indexed map for lookup.
 func registryToolMap(registry *tools.Registry) map[string]tools.Tool {
 	result := make(map[string]tools.Tool)
 	for _, tool := range registry.List() {
@@ -292,6 +303,7 @@ func registryToolMap(registry *tools.Registry) map[string]tools.Tool {
 	return result
 }
 
+// Formats a map of failed resource IDs and their error reasons into a comma-separated string.
 func formatDescriptionFailures(failed map[string]string) string {
 	ids := make([]string, 0, len(failed))
 	for id := range failed {
@@ -305,6 +317,7 @@ func formatDescriptionFailures(failed map[string]string) string {
 	return strings.Join(parts, ", ")
 }
 
+// Writes topology descriptions back to source code files as inline documentation.
 func RunDescriptionApply(args []string) {
 	manager, _ := InitRegistry(".aracne/topology.db")
 
@@ -330,6 +343,7 @@ func RunDescriptionApply(args []string) {
 	fmt.Println("done")
 }
 
+// Clears descriptions for specified or all resource kinds from the topology database.
 func RunClearDescriptions(args []string) {
 	fs := flag.NewFlagSet("descriptions-clear", flag.ExitOnError)
 	targetFlag := fs.String("target", "", "Comma-separated resource kinds to clear; clears all kinds when omitted")
@@ -364,6 +378,7 @@ func RunClearDescriptions(args []string) {
 	fmt.Printf("Cleared %d description(s)\n", count)
 }
 
+// Parses a comma-separated list of resource kinds to clear descriptions for.
 func parseClearDescriptionTargets(value string) ([]domain.ResourceKind, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {

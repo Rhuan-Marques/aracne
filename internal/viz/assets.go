@@ -7,9 +7,10 @@ import (
 	"strings"
 )
 
-//go:embed static/*
+// go:embed static/*
 var embeddedStatic embed.FS
 
+// Returns an HTTP handler that serves embedded static files with app route fallback to index
 func staticFileServer() http.Handler {
 	files, err := fs.Sub(embeddedStatic, "static")
 	if err != nil {
@@ -36,6 +37,7 @@ func staticFileServer() http.Handler {
 	})
 }
 
+// Checks if a path is an application route (/graph, /settings, /chat, or /chat/*)
 func isAppRoute(path string) bool {
 	return path == "/graph" || path == "/settings" || path == "/chat" || strings.HasPrefix(path, "/chat/")
 }

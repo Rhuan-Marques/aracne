@@ -10,16 +10,21 @@ import (
 	"aracne/internal/topology/python"
 )
 
+// Empty scanner marker struct for Python topology scanning.
 type PythonScanner struct{}
 
+// Creates and returns a new PythonScanner instance
 func NewPythonScanner() *PythonScanner {
 	return &PythonScanner{}
 }
 
+// Returns the scanner identifier: "python".
 func (s *PythonScanner) Name() string { return "python" }
 
+// Returns the file extensions this scanner handles: [".py"].
 func (s *PythonScanner) Extensions() []string { return []string{".py"} }
 
+// Detects Python projects by checking for standard config files or .py files in the root directory.
 func (s *PythonScanner) Detect(root string) bool {
 	indicators := []string{
 		"setup.py", "pyproject.toml", "setup.cfg",
@@ -34,6 +39,7 @@ func (s *PythonScanner) Detect(root string) bool {
 	return len(pyFiles) > 0
 }
 
+// Parses all Python files in a directory tree and builds a topology of modules, classes, functions, and their dependencies through multi-pass resolution.
 func (s *PythonScanner) Scan(root string) (*domain.Topology, error) {
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
@@ -150,6 +156,7 @@ func (s *PythonScanner) Scan(root string) (*domain.Topology, error) {
 	return python.ToGeneric(gt), nil
 }
 
+// Parses a Python file and updates the topology, preserving descriptions and emitting warnings for signature changes and removed resources
 func (s *PythonScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.TopologyWarning, error) {
 	gt := python.FromGeneric(topo)
 	if gt == nil {
@@ -317,6 +324,7 @@ func (s *PythonScanner) UpdateFile(topo *domain.Topology, path string) ([]domain
 	return warnings, nil
 }
 
+// Converts a directory path to a dotted Python package path relative to the project root.
 func getPythonPackagePath(root, dir string) python.PackagePath {
 	if dir == root {
 		return python.PackagePath(filepath.Base(root))
@@ -330,6 +338,7 @@ func getPythonPackagePath(root, dir string) python.PackagePath {
 	return python.PackagePath(filepath.Base(root) + "." + rel)
 }
 
+// Recursively collects all .py files from a directory, excluding common cache and test directories.
 func collectPythonFiles(root string) []string {
 	var files []string
 	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
@@ -354,6 +363,7 @@ func collectPythonFiles(root string) []string {
 	return files
 }
 
+// Compares two Python function signatures for equality based on input and output type annotations.
 func signaturesEqualPy(a, b python.PythonFunction) bool {
 	if len(a.Input) != len(b.Input) {
 		return false

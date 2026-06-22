@@ -15,6 +15,7 @@ func wantVis(v domain.Visibility, full bool) bool {
 	return (v == domain.VisibilityFull) == full
 }
 
+// Removes duplicate strings from a slice while preserving order
 func dedupStr(in []string) []string {
 	if len(in) == 0 {
 		return in
@@ -62,6 +63,7 @@ func renderFunc(b *strings.Builder, prefix string, fn golang.SimplifiedFunction)
 	b.WriteString(fmt.Sprintf("%s%s: %s\n", prefix, fn.ID, desc(fn.Description)))
 }
 
+// Formats a struct definition with its methods and optional full source block.
 func renderStructUsage(b *strings.Builder, su golang.StructUsage) {
 	b.WriteString(fmt.Sprintf("## %s: %s\n", su.ID, desc(su.Description)))
 	if su.Visibility == domain.VisibilityFull && su.Full != nil {
@@ -72,6 +74,7 @@ func renderStructUsage(b *strings.Builder, su golang.StructUsage) {
 	}
 }
 
+// Formats a struct's interface implementation with its methods and optional full source block.
 func renderImpl(b *strings.Builder, prefix string, impl golang.InterfaceImplementation) {
 	b.WriteString(fmt.Sprintf("%s%s: %s\n", prefix, impl.StructID, desc(impl.Description)))
 	if impl.Visibility == domain.VisibilityFull && impl.Full != nil {
@@ -82,6 +85,7 @@ func renderImpl(b *strings.Builder, prefix string, impl golang.InterfaceImplemen
 	}
 }
 
+// Formats an interface definition with all its implementations and their methods.
 func renderInterfaceUsage(b *strings.Builder, iu golang.InterfaceUsage) {
 	b.WriteString(fmt.Sprintf("## %s: %s\n", iu.ID, desc(iu.Description)))
 	if iu.Visibility == domain.VisibilityFull && iu.Full != nil {
@@ -92,6 +96,7 @@ func renderInterfaceUsage(b *strings.Builder, iu golang.InterfaceUsage) {
 	}
 }
 
+// Formats an external variable reference with optional full source block and value assignment.
 func renderExtVar(b *strings.Builder, ev golang.SimplifiedExtVar) {
 	if ev.Visibility == domain.VisibilityFull && ev.Full != nil {
 		b.WriteString(fmt.Sprintf("## %s: %s\n", ev.ID, desc(ev.Description)))

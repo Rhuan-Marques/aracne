@@ -2,6 +2,7 @@ package pyscanner
 
 import "aracne/internal/topology/python"
 
+// Matches and rebuilds inheritance relationships between Python classes by resolving base classes and creating bidirectional ConnInherits/ConnInheritedBy edges.
 func matchClassInheritance(gt *python.PythonTopology) {
 	// Clear existing inheritance edges first so re-running over the full
 	// topology during an incremental UpdateFile rebuilds them from scratch
@@ -39,6 +40,7 @@ func matchClassInheritance(gt *python.PythonTopology) {
 	}
 }
 
+// Resolves a base class name to its ClassID, checking same-package first, then deterministically matching a unique global class by name.
 func resolveBaseClassID(baseName string, cls python.PythonClass, gt *python.PythonTopology) *python.ClassID {
 	samePkgID := python.ClassID(extractPkgFromID(string(cls.ID)) + "." + baseName)
 	if _, exists := gt.Classes[samePkgID]; exists {
@@ -62,6 +64,7 @@ func resolveBaseClassID(baseName string, cls python.PythonClass, gt *python.Pyth
 	return nil
 }
 
+// Extracts the package part from a dotted Python identifier by returning everything before the last dot.
 func extractPkgFromID(id string) string {
 	for i := len(id) - 1; i >= 0; i-- {
 		if id[i] == '.' {
@@ -71,6 +74,7 @@ func extractPkgFromID(id string) string {
 	return id
 }
 
+// Extracts the class name from a dotted Python identifier by returning everything after the last dot.
 func extractClassName(id string) string {
 	for i := len(id) - 1; i >= 0; i-- {
 		if id[i] == '.' {

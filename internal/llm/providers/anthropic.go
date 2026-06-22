@@ -14,6 +14,7 @@ import (
 	"aracne/internal/llm"
 )
 
+// Anthropic LLM provider with API key, model, base URL, and thinking budget configuration.
 type Anthropic struct {
 	apiKey         string
 	model          string
@@ -21,6 +22,7 @@ type Anthropic struct {
 	thinkingBudget int
 }
 
+// Request payload for Anthropic API with model, messages, system prompt, tools, and thinking configuration.
 type anthropicRequest struct {
 	Model     string             `json:"model"`
 	MaxTokens int                `json:"max_tokens"`
@@ -31,6 +33,7 @@ type anthropicRequest struct {
 	Thinking  *anthropicThinking `json:"thinking,omitempty"`
 }
 
+// Configuration for extended thinking feature specifying budget tokens for model reasoning.
 type anthropicThinking struct {
 	Type         string `json:"type"`
 	BudgetTokens int    `json:"budget_tokens"`
@@ -42,11 +45,13 @@ func (a *Anthropic) SetThinkingBudget(budget int) {
 	a.thinkingBudget = budget
 }
 
+// Represents a single message in Anthropic API requests with role and content blocks.
 type anthropicMessage struct {
 	Role    string                  `json:"role"`
 	Content []anthropicContentBlock `json:"content"`
 }
 
+// JSON-serializable content block for Anthropic API responses, supporting text and tool use payloads.
 type anthropicContentBlock struct {
 	Type      string `json:"type"`
 	Text      string `json:"text,omitempty"`
@@ -57,12 +62,14 @@ type anthropicContentBlock struct {
 	Content   string `json:"content,omitempty"`
 }
 
+// Anthropic tool definition with name, description, and input schema.
 type anthropicTool struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
 	InputSchema llm.Parameters `json:"input_schema"`
 }
 
+// Response payload from Anthropic API containing content blocks with text, tool calls, and metadata.
 type anthropicResponse struct {
 	Content []struct {
 		Type  string          `json:"type"`
@@ -73,6 +80,7 @@ type anthropicResponse struct {
 	} `json:"content"`
 }
 
+// Initializes an Anthropic LLM provider with API key, model, and base URL, using default Claude Sonnet model and environment variables as fallback.
 func NewAnthropic(apiKey, model, baseURL string) *Anthropic {
 	if apiKey == "" {
 		apiKey = os.Getenv("ANTHROPIC_API_KEY")
@@ -86,14 +94,17 @@ func NewAnthropic(apiKey, model, baseURL string) *Anthropic {
 	return &Anthropic{apiKey: apiKey, model: model, baseURL: baseURL}
 }
 
+// Sends a chat request to Anthropic API without streaming and returns the response.
 func (a *Anthropic) Chat(messages []llm.Message, tools []llm.ToolDefinition) (*llm.ChatResponse, error) {
 	return a.StreamChatContext(context.Background(), messages, tools, nil)
 }
 
+// Sends a streaming chat request to Anthropic API with callback emission and returns the aggregated response.
 func (a *Anthropic) StreamChat(messages []llm.Message, tools []llm.ToolDefinition, emit llm.StreamCallback) (*llm.ChatResponse, error) {
 	return a.StreamChatContext(context.Background(), messages, tools, emit)
 }
 
+// Streams messages to Anthropic API with context, tool support, and optional extended thinking, emitting content and reasoning events.
 func (a *Anthropic) StreamChatContext(ctx context.Context, messages []llm.Message, tools []llm.ToolDefinition, emit llm.StreamCallback) (*llm.ChatResponse, error) {
 	if a.apiKey == "" {
 		return nil, fmt.Errorf("ANTHROPIC_API_KEY is not configured")
@@ -212,6 +223,7 @@ func (a *Anthropic) StreamChatContext(ctx context.Context, messages []llm.Messag
 	return result, nil
 }
 
+// Streaming event from Anthropic API with content blocks, deltas for text/thinking/tool input, and error info.
 type anthropicStreamEvent struct {
 	Type         string `json:"type"`
 	Index        int    `json:"index"`
@@ -233,6 +245,7 @@ type anthropicStreamEvent struct {
 	} `json:"error"`
 }
 
+// Converts generic LLM messages to Anthropic format, aggregating system prompts and transforming tool calls/results.
 func toAnthropicMessages(messages []llm.Message) (string, []anthropicMessage) {
 	var systemParts []string
 	out := make([]anthropicMessage, 0, len(messages))
@@ -272,6 +285,7 @@ func toAnthropicMessages(messages []llm.Message) (string, []anthropicMessage) {
 	return joinAnthropicSystem(systemParts), out
 }
 
+// Joins multiple system prompt parts with double newlines.
 func joinAnthropicSystem(parts []string) string {
 	if len(parts) == 0 {
 		return ""

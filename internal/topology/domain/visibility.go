@@ -7,6 +7,9 @@ import "strings"
 // resource is reachable at multiple visibilities (see ContextFilter docs).
 type Visibility int
 
+// VisibilityHidden omits the resource entirely.
+// VisibilityFull renders the resource as a fenced source-code cut.
+// VisibilityNormal renders the resource as "ID: description" (the default).
 const (
 	// VisibilityHidden omits the resource entirely.
 	VisibilityHidden Visibility = 1

@@ -6,6 +6,7 @@ import (
 	"aracne/internal/topology/domain"
 )
 
+// Converts a generic domain topology to a Python-specific topology with typed resources and connections.
 func FromGeneric(topo *domain.Topology) *PythonTopology {
 	if topo == nil {
 		return nil
@@ -118,6 +119,7 @@ func FromGeneric(topo *domain.Topology) *PythonTopology {
 	return gt
 }
 
+// Converts a PythonTopology to a generic domain.Topology with functions, classes, variables, modules, and dependencies normalized as domain resources.
 func ToGeneric(gt *PythonTopology) *domain.Topology {
 	if gt == nil {
 		return nil
@@ -228,6 +230,7 @@ func ToGeneric(gt *PythonTopology) *domain.Topology {
 	return topo
 }
 
+// Converts a string-keyed connection map to a ConnectionKind-keyed map.
 func mapKindConn(conns map[string][]string) map[ConnectionKind][]string {
 	if conns == nil {
 		return make(map[ConnectionKind][]string)
@@ -239,6 +242,7 @@ func mapKindConn(conns map[string][]string) map[ConnectionKind][]string {
 	return result
 }
 
+// Converts an object to another type by marshaling to JSON and unmarshaling to the target.
 func jsonConvert(from any, to any) {
 	b, err := json.Marshal(from)
 	if err != nil {
@@ -247,6 +251,7 @@ func jsonConvert(from any, to any) {
 	json.Unmarshal(b, to)
 }
 
+// Converts a ConnectionKind-keyed connection map to a string-keyed map.
 func stringMapConn(conns map[ConnectionKind][]string) map[string][]string {
 	if conns == nil {
 		return make(map[string][]string)

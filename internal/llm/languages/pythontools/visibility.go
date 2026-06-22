@@ -15,6 +15,7 @@ func wantVis(v domain.Visibility, full bool) bool {
 	return (v == domain.VisibilityFull) == full
 }
 
+// Removes duplicate strings from a slice while preserving order.
 func dedupStr(in []string) []string {
 	if len(in) == 0 {
 		return in
@@ -31,6 +32,7 @@ func dedupStr(in []string) []string {
 	return out
 }
 
+// Writes internal and external import statements to a string builder with source annotations.
 func writePyImports(b *strings.Builder, modules []python.PackagePath, deps []python.DependancyPath) {
 	if len(modules) == 0 && len(deps) == 0 {
 		return
@@ -63,6 +65,7 @@ func writeFullBlock(b *strings.Builder, full *python.FullBlock) {
 	b.WriteString("```\n")
 }
 
+// Formats a Python function into markdown with ID, description, and full source block if visibility is full.
 func renderFunc(b *strings.Builder, prefix string, fn python.SimplifiedFunction) {
 	if fn.Visibility == domain.VisibilityFull && fn.Full != nil {
 		b.WriteString(fmt.Sprintf("## %s: %s\n", fn.ID, desc(fn.Description)))
@@ -72,6 +75,7 @@ func renderFunc(b *strings.Builder, prefix string, fn python.SimplifiedFunction)
 	b.WriteString(fmt.Sprintf("%s%s: %s\n", prefix, fn.ID, desc(fn.Description)))
 }
 
+// Renders a Python class usage entry with description, full code block if visible, and methods.
 func renderClassUsage(b *strings.Builder, cu python.ClassUsage) {
 	b.WriteString(fmt.Sprintf("## %s: %s\n", cu.ID, desc(cu.Description)))
 	if cu.Visibility == domain.VisibilityFull && cu.Full != nil {
@@ -82,6 +86,7 @@ func renderClassUsage(b *strings.Builder, cu python.ClassUsage) {
 	}
 }
 
+// Renders an external variable entry with full code block if visible, or a compact format with optional value.
 func renderExtVar(b *strings.Builder, ev python.SimplifiedExtVar) {
 	if ev.Visibility == domain.VisibilityFull && ev.Full != nil {
 		b.WriteString(fmt.Sprintf("## %s: %s\n", ev.ID, desc(ev.Description)))
@@ -95,6 +100,7 @@ func renderExtVar(b *strings.Builder, ev python.SimplifiedExtVar) {
 	b.WriteString(fmt.Sprintf("## %s%s\n", ev.ID, valStr))
 }
 
+// Writes a markdown section listing resources that use the current dependency.
 func writeUsedBy(b *strings.Builder, incoming []domain.ResourceRef) {
 	if len(incoming) == 0 {
 		return

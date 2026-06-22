@@ -56,6 +56,7 @@ func NewDeepSeek() *DeepSeek {
 	return NewDeepSeekWithConfig(os.Getenv("DEEPSEEK_API_KEY"), "deepseek-chat", "https://api.deepseek.com")
 }
 
+// Initializes a DeepSeek LLM provider with API key, model, and base URL, using default deepseek-chat model.
 func NewDeepSeekWithConfig(apiKey, model, baseURL string) *DeepSeek {
 	if model == "" {
 		model = "deepseek-chat"
@@ -75,10 +76,12 @@ func (d *DeepSeek) Chat(messages []llm.Message, tools []llm.ToolDefinition) (*ll
 	return d.StreamChatContext(context.Background(), messages, tools, nil)
 }
 
+// Sends a streaming chat request to DeepSeek API with callback emission and returns the aggregated response.
 func (d *DeepSeek) StreamChat(messages []llm.Message, tools []llm.ToolDefinition, emit llm.StreamCallback) (*llm.ChatResponse, error) {
 	return d.StreamChatContext(context.Background(), messages, tools, emit)
 }
 
+// Streams chat completions from DeepSeek API with context, emitting content/reasoning tokens and tool calls as they arrive.
 func (d *DeepSeek) StreamChatContext(ctx context.Context, messages []llm.Message, tools []llm.ToolDefinition, emit llm.StreamCallback) (*llm.ChatResponse, error) {
 	reqBody := deepSeekRequest{
 		Model:    d.model,
@@ -182,6 +185,7 @@ func (d *DeepSeek) StreamChatContext(ctx context.Context, messages []llm.Message
 	return result, nil
 }
 
+// DeepSeek streaming response containing content, reasoning, and tool calls with indexed deltas.
 type deepSeekStreamResponse struct {
 	Choices []struct {
 		Delta struct {

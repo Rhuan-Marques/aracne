@@ -3,34 +3,33 @@
 // `new`-based method resolution (works) vs return-value chaining (not tracked).
 import makeSquare, { Circle, Rectangle } from "./shapes.js";
 
-// Function declaration that returns `new Circle(...)`.
+// Constructs and returns a Circle instance with the given radius
 export function makeCircle(radius) {
   return new Circle(radius);
 }
 
-// Arrow function bound to a const (parsed as a function with Kind "arrow").
+// Creates and returns a Rectangle instance with given width and height.
 export const makeRect = (w, h) => new Rectangle(w, h);
 
-// Async function.
+// Asynchronously creates and returns a Circle with the given radius
 export async function loadCircle(radius) {
   return new Circle(radius);
 }
 
-// Generator function that calls an internal function.
+// Generator that yields Circle instances sequentially, creating one for each iteration up to count.
 export function* shapeStream(count) {
   for (let i = 0; i < count; i++) {
     yield makeCircle(i);
   }
 }
 
-// `new X()` makes the local var's class known, so the method call RESOLVES.
+// Creates a Circle with the given radius and returns its area
 export function circleArea(radius) {
   const c = new Circle(radius);
   return c.area();
 }
 
-// makeSquare's return type is NOT tracked, so `sq.area()` does NOT resolve.
-// (Documented JS limitation: plain return values are not type-inferred.)
+// Creates a square with given side length and returns its area.
 export function squareArea(side) {
   const sq = makeSquare(side);
   return sq.area();

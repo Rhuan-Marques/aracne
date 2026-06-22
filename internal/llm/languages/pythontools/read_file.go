@@ -9,28 +9,34 @@ import (
 	"aracne/internal/topology/python"
 )
 
+// Handler for reading Python module contents and their topology context.
 type ReadFile struct {
 	mgr *python.PythonManager
 }
 
+// Creates a ReadFile handler for reading Python file contents.
 func NewReadFile(mgr *python.PythonManager) *ReadFile {
 	return &ReadFile{mgr: mgr}
 }
 
+// Returns the tool name "read_file" for the Python LLM tool.
 func (r *ReadFile) Name() string {
 	return "read_file"
 }
 
+// Returns the LLM tool description for read_file: reads a Python module's full source code and topology context.
 func (r *ReadFile) Description() string {
 	return "Read a Python module's full source code and its interconnected context (package, functions, classes, imports) from the project topology."
 }
 
+// Returns the parameter schema for read_file: a required module path string.
 func (r *ReadFile) Parameters() []Parameter {
 	return []Parameter{
 		{Name: "name", Type: "string", Description: "The module path (e.g. 'main.py', 'package/module.py')", Required: true},
 	}
 }
 
+// Executes read_file: resolves a module by name or ID and returns its formatted topology context.
 func (r *ReadFile) Run(args json.RawMessage) (string, error) {
 	var params struct {
 		Name string `json:"name"`

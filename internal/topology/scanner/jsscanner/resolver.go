@@ -13,14 +13,17 @@ type exportRef struct {
 	ID   string
 }
 
+// Checks whether an ID exists in the JavaScript topology's functions map.
 func isFunc(gt *js.JavaScriptTopology, id string) bool {
 	_, ok := gt.Functions[js.FunctionID(id)]
 	return ok
 }
+// Checks whether an ID exists in the JavaScript topology's classes map.
 func isClass(gt *js.JavaScriptTopology, id string) bool {
 	_, ok := gt.Classes[js.ClassID(id)]
 	return ok
 }
+// Checks if an identifier is registered as an external variable
 func isVar(gt *js.JavaScriptTopology, id string) bool {
 	_, ok := gt.ExternalVars[js.ExternalVarID(id)]
 	return ok
@@ -98,6 +101,7 @@ func resolveModuleImports(pr *ParseResult, gt *js.JavaScriptTopology) []js.Modul
 	return mods
 }
 
+// Extracts type annotations, instance creations, and method/function calls from a function body to build connection edges.
 func analyzeFunctionBody(body *jsFunc, pr *ParseResult, gt *js.JavaScriptTopology, receiverClass *js.ClassID) map[js.ConnectionKind][]string {
 	conn := make(map[js.ConnectionKind][]string)
 	if body == nil {
@@ -240,6 +244,7 @@ func typingID(typeName string, pr *ParseResult, gt *js.JavaScriptTopology) strin
 	return id
 }
 
+// Resolves a direct function call by name, checking local functions and imported bindings.
 func resolveDirectCall(name string, pr *ParseResult, gt *js.JavaScriptTopology, add func(js.ConnectionKind, string)) {
 	if name == "" {
 		return
@@ -302,6 +307,7 @@ func resolveFunctionID(name string, pr *ParseResult, gt *js.JavaScriptTopology) 
 	return "", false
 }
 
+// Resolves a method call on an object, handling namespace imports, this-references, and variable type tracking.
 func resolveMethodCall(call jsBodyCall, pr *ParseResult, gt *js.JavaScriptTopology, varTypeMap map[string]js.ClassID, receiverClass *js.ClassID, add func(js.ConnectionKind, string)) {
 	// namespace import: ns.member()
 	if info, ok := pr.ImportMap[call.ObjectName]; ok && info.Namespace {
@@ -330,6 +336,7 @@ func resolveMethodCall(call jsBodyCall, pr *ParseResult, gt *js.JavaScriptTopolo
 	}
 }
 
+// Finds and records a connection to a named method of a given class.
 func addMethodOf(cid js.ClassID, methodName string, gt *js.JavaScriptTopology, add func(js.ConnectionKind, string)) {
 	c, ok := gt.Classes[cid]
 	if !ok {
@@ -343,6 +350,7 @@ func addMethodOf(cid js.ClassID, methodName string, gt *js.JavaScriptTopology, a
 	}
 }
 
+// Resolves a class name to its ID, checking local scope and imported modules with full export resolution.
 func resolveClassName(name string, pr *ParseResult, gt *js.JavaScriptTopology) (js.ClassID, bool) {
 	localID := js.ClassID(pr.ModulePath + "." + name)
 	if _, ok := gt.Classes[localID]; ok {
@@ -417,6 +425,7 @@ func moduleKey(abs string, pr *ParseResult) string {
 	return jsModulePath(pr.ModuleRoot, abs)
 }
 
+// Links constructor methods to their parent classes in the JavaScript topology.
 func detectConstructors(gt *js.JavaScriptTopology) {
 	for _, fn := range gt.Functions {
 		if fn.MethodFrom == nil || fn.Name != "constructor" {
@@ -429,6 +438,7 @@ func detectConstructors(gt *js.JavaScriptTopology) {
 	}
 }
 
+// Rebuilds has_method edges from functions to their containing classes, clearing stale connections on incremental updates.
 func populateClassMethods(gt *js.JavaScriptTopology) {
 	// Clear has_method edges first so an incremental UpdateFile that re-runs over
 	// the whole topology rebuilds them instead of appending duplicates.
@@ -449,6 +459,7 @@ func populateClassMethods(gt *js.JavaScriptTopology) {
 	}
 }
 
+// Aggregates unique imported dependencies across all modules into the topology's dependency list.
 func collectDependencies(gt *js.JavaScriptTopology) {
 	seen := make(map[js.DependancyPath]bool)
 	gt.Dependencies = nil
@@ -462,6 +473,7 @@ func collectDependencies(gt *js.JavaScriptTopology) {
 	}
 }
 
+// Deduplicates connection IDs within each connection kind, removing empty categories.
 func uniqueConns(conns map[js.ConnectionKind][]string) map[js.ConnectionKind][]string {
 	result := make(map[js.ConnectionKind][]string, len(conns))
 	for k, v := range conns {

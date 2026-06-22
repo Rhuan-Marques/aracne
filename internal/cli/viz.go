@@ -8,6 +8,7 @@ import (
 	"aracne/internal/viz"
 )
 
+// Starts an HTTP server to visualize the topology graph.
 func RunViz(args []string) {
 	if len(args) == 0 {
 		args = []string{"serve"}

@@ -7,6 +7,7 @@ import (
 	"aracne/internal/topology/domain"
 )
 
+// Returns the number of lines spanned by a location, or 0 if the range is invalid.
 func lineSpan(loc domain.Location) int {
 	if loc.EndsAt < loc.StartsAt {
 		return 0
@@ -14,11 +15,10 @@ func lineSpan(loc domain.Location) int {
 	return loc.EndsAt - loc.StartsAt + 1
 }
 
+// Checks whether a string is a non-empty description after trimming whitespace.
 func visHasDesc(s string) bool { return strings.TrimSpace(s) != "" }
 
-// ---------------------------------------------------------------------------
-// Full-block builders
-// ---------------------------------------------------------------------------
+// Constructs a FullBlock for a function with source code, imports, dependencies, and parent class context if applicable.
 
 func (m *PythonManager) fnFullBlock(gt *PythonTopology, fn PythonFunction) *FullBlock {
 	cut, err := m.generic.Cut(fn.Loc)
@@ -43,6 +43,7 @@ func (m *PythonManager) fnFullBlock(gt *PythonTopology, fn PythonFunction) *Full
 	return fb
 }
 
+// Builds a FullBlock for a Python class with its source cut, imports, and dependencies.
 func (m *PythonManager) classFullBlock(c PythonClass) *FullBlock {
 	cut, err := m.generic.Cut(c.Loc)
 	if err != nil {
@@ -56,6 +57,7 @@ func (m *PythonManager) classFullBlock(c PythonClass) *FullBlock {
 	}
 }
 
+// Builds a FullBlock for an external variable with its source cut and location.
 func (m *PythonManager) extVarFullBlock(v PythonExternalVar) *FullBlock {
 	cut, err := m.generic.Cut(v.Location)
 	if err != nil {
@@ -64,9 +66,7 @@ func (m *PythonManager) extVarFullBlock(v PythonExternalVar) *FullBlock {
 	return &FullBlock{Path: v.Location.Path, Cut: cut.Cut}
 }
 
-// ---------------------------------------------------------------------------
-// Per-list visibility application
-// ---------------------------------------------------------------------------
+// Filters functions/methods by visibility level and populates full block for visible ones.
 
 func (m *PythonManager) applyFuncList(gt *PythonTopology, filter domain.ContextFilter, fns []SimplifiedFunction) []SimplifiedFunction {
 	var out []SimplifiedFunction
@@ -90,6 +90,7 @@ func (m *PythonManager) applyFuncList(gt *PythonTopology, filter domain.ContextF
 	return out
 }
 
+// Filters external variables by visibility level and populates full block for visible ones.
 func (m *PythonManager) applyExtVars(gt *PythonTopology, filter domain.ContextFilter, vars []SimplifiedExtVar) []SimplifiedExtVar {
 	var out []SimplifiedExtVar
 	for _, v := range vars {
@@ -108,6 +109,7 @@ func (m *PythonManager) applyExtVars(gt *PythonTopology, filter domain.ContextFi
 	return out
 }
 
+// Filters class usages by visibility, applying method filtering and populating full class blocks for visible classes.
 func (m *PythonManager) applyClassUsages(gt *PythonTopology, filter domain.ContextFilter, classes []ClassUsage) []ClassUsage {
 	var out []ClassUsage
 	for _, cu := range classes {
@@ -130,9 +132,7 @@ func (m *PythonManager) applyClassUsages(gt *PythonTopology, filter domain.Conte
 	return out
 }
 
-// ---------------------------------------------------------------------------
-// Incoming (reverse) edges
-// ---------------------------------------------------------------------------
+// Checks if a target ID exists in a slice of string IDs.
 
 func containsID(ids []string, target string) bool {
 	for _, id := range ids {
@@ -143,12 +143,14 @@ func containsID(ids []string, target string) bool {
 	return false
 }
 
+// Determines if a Python function uses a target resource via calls, class usage, or external variable references.
 func functionUses(fn PythonFunction, target string) bool {
 	return containsID(fn.Calls(), target) ||
 		containsID(fn.UsesClass(), target) ||
 		containsID(fn.UsesExtVar(), target)
 }
 
+// Collects and sorts all functions and classes that reference a target resource, differentiating between functions and methods.
 func (m *PythonManager) incomingRefs(gt *PythonTopology, targetID string) []domain.ResourceRef {
 	var refs []domain.ResourceRef
 	for fnID, fn := range gt.Functions {
@@ -180,9 +182,7 @@ func (m *PythonManager) incomingRefs(gt *PythonTopology, targetID string) []doma
 	return refs
 }
 
-// ---------------------------------------------------------------------------
-// Context entry points (no-op under the default all-Normal filter)
-// ---------------------------------------------------------------------------
+// Filters a function context's references (called functions, classes, external variables, and incoming references) based on visibility rules.
 
 func (m *PythonManager) filterFunctionContext(gt *PythonTopology, ctx *PythonFunctionContext, filter domain.ContextFilter, targetID string) {
 	ctx.CalledFunctions = m.applyFuncList(gt, filter, ctx.CalledFunctions)
@@ -193,6 +193,7 @@ func (m *PythonManager) filterFunctionContext(gt *PythonTopology, ctx *PythonFun
 	}
 }
 
+// Filters a class context's methods, usages, and external variables by visibility; optionally adds incoming references.
 func (m *PythonManager) filterClassContext(gt *PythonTopology, ctx *PythonClassContext, filter domain.ContextFilter, targetID string) {
 	ctx.Methods = m.applyFuncList(gt, filter, ctx.Methods)
 	ctx.ClassesUsed = m.applyClassUsages(gt, filter, ctx.ClassesUsed)

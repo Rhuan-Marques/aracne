@@ -18,6 +18,7 @@ func NewStack[T any]() *Stack[T] {
 	return &Stack[T]{}
 }
 
+// Appends a value to the top of the generic stack.
 func (s *Stack[T]) Push(v T) { s.items = append(s.items, v) }
 
 // Pop returns the top element and whether the stack was non-empty.

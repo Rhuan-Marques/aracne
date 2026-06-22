@@ -16,6 +16,7 @@ const (
 	DeadPossible DeadConfidence = "possible"
 )
 
+// Represents an unused code resource with its kind, location, confidence level, and reason for being marked as dead.
 type DeadResource struct {
 	ID         string
 	Kind       domain.ResourceKind
@@ -25,10 +26,12 @@ type DeadResource struct {
 	Reason     string
 }
 
+// Contains a list of dead code resources identified by analysis.
 type DeadCodeReport struct {
 	Resources []DeadResource
 }
 
+// Analyzes a Go topology to identify unused functions, structs, interfaces, named types, and variables, returning them sorted by confidence and kind.
 func FindDeadResources(gt *GolangTopology) *DeadCodeReport {
 	incoming := buildIncomingIndex(gt)
 	aliveIDs := markAlwaysAlive(gt)
@@ -54,6 +57,7 @@ func FindDeadResources(gt *GolangTopology) *DeadCodeReport {
 	return &DeadCodeReport{Resources: dead}
 }
 
+// Builds a map of resource IDs to their incoming reference counts from functions, structs, interfaces, named types, and file imports.
 func buildIncomingIndex(gt *GolangTopology) map[string]int {
 	index := make(map[string]int)
 
@@ -118,6 +122,7 @@ func buildIncomingIndex(gt *GolangTopology) map[string]int {
 	return index
 }
 
+// Checks if a Go identifier name is exported (public).
 func isExported(name string) bool {
 	if name == "" {
 		return false
@@ -125,6 +130,7 @@ func isExported(name string) bool {
 	return token.IsExported(name)
 }
 
+// Identifies entry points and interface implementations as always-alive code.
 func markAlwaysAlive(gt *GolangTopology) map[string]bool {
 	alive := make(map[string]bool)
 
@@ -163,6 +169,7 @@ func markAlwaysAlive(gt *GolangTopology) map[string]bool {
 	return alive
 }
 
+// Identifies uncalled functions and methods, marking them as dead with confidence levels based on export status.
 func findDeadFunctions(gt *GolangTopology, incoming map[string]int, alive map[string]bool) []DeadResource {
 	var dead []DeadResource
 	for id, fn := range gt.Functions {
@@ -201,6 +208,7 @@ func findDeadFunctions(gt *GolangTopology, incoming map[string]int, alive map[st
 	return dead
 }
 
+// Identifies unused structs by checking for zero incoming references and interface implementations, marking exported ones as possibly dead.
 func findDeadStructs(gt *GolangTopology, incoming map[string]int, alive map[string]bool) []DeadResource {
 	var dead []DeadResource
 	for id, s := range gt.Structs {
@@ -238,6 +246,7 @@ func findDeadStructs(gt *GolangTopology, incoming map[string]int, alive map[stri
 	return dead
 }
 
+// Identifies unused interfaces by checking for zero incoming references, marking exported ones as possibly dead.
 func findDeadInterfaces(gt *GolangTopology, incoming map[string]int, alive map[string]bool) []DeadResource {
 	var dead []DeadResource
 	for id, iface := range gt.Interfaces {
@@ -268,6 +277,7 @@ func findDeadInterfaces(gt *GolangTopology, incoming map[string]int, alive map[s
 	return dead
 }
 
+// Identifies unused named types by checking for zero incoming references, marking exported ones as possibly dead.
 func findDeadNamedTypes(gt *GolangTopology, incoming map[string]int, alive map[string]bool) []DeadResource {
 	var dead []DeadResource
 	for id, nt := range gt.NamedTypes {
@@ -302,6 +312,7 @@ func findDeadNamedTypes(gt *GolangTopology, incoming map[string]int, alive map[s
 	return dead
 }
 
+// Identifies unreferenced external variables, marking them as dead with confidence levels based on export status.
 func findDeadExtVars(gt *GolangTopology, incoming map[string]int, alive map[string]bool) []DeadResource {
 	var dead []DeadResource
 	for id, v := range gt.ExternalVars {
@@ -332,6 +343,7 @@ func findDeadExtVars(gt *GolangTopology, incoming map[string]int, alive map[stri
 	return dead
 }
 
+// Returns a filtered report containing only dead resources matching the given kinds.
 func (r *DeadCodeReport) FilterByKinds(kinds ...domain.ResourceKind) *DeadCodeReport {
 	if len(kinds) == 0 {
 		return r
@@ -349,6 +361,7 @@ func (r *DeadCodeReport) FilterByKinds(kinds ...domain.ResourceKind) *DeadCodeRe
 	return &DeadCodeReport{Resources: filtered}
 }
 
+// Returns a filtered report containing only dead resources from the given package path.
 func (r *DeadCodeReport) FilterByPackage(pkgPath string) *DeadCodeReport {
 	if pkgPath == "" {
 		return r
@@ -362,6 +375,7 @@ func (r *DeadCodeReport) FilterByPackage(pkgPath string) *DeadCodeReport {
 	return &DeadCodeReport{Resources: filtered}
 }
 
+// Returns a filtered report containing only resources marked as definitely dead.
 func (r *DeadCodeReport) FilterCertain() *DeadCodeReport {
 	var filtered []DeadResource
 	for _, res := range r.Resources {
@@ -372,6 +386,7 @@ func (r *DeadCodeReport) FilterCertain() *DeadCodeReport {
 	return &DeadCodeReport{Resources: filtered}
 }
 
+// Returns a filtered report containing only resources marked as possibly dead.
 func (r *DeadCodeReport) FilterPossible() *DeadCodeReport {
 	var filtered []DeadResource
 	for _, res := range r.Resources {
@@ -382,6 +397,7 @@ func (r *DeadCodeReport) FilterPossible() *DeadCodeReport {
 	return &DeadCodeReport{Resources: filtered}
 }
 
+// Returns counts of certain and possible dead resources in the report.
 func (r *DeadCodeReport) Count() (certain, possible int) {
 	for _, res := range r.Resources {
 		switch res.Confidence {

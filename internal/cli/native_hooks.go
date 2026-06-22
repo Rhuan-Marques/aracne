@@ -8,6 +8,7 @@ import (
 	"strings"
 )
 
+// Holds OS-specific hook script metadata: name, content, command, and shell type
 type claudeNativeEditHook struct {
 	scriptName string
 	content    string
@@ -15,6 +16,7 @@ type claudeNativeEditHook struct {
 	shell      string
 }
 
+// Installs a native edit hook script and registers it in Claude's settings configuration.
 func writeClaudeNativeEditHook(settingsPath, hooksDir string, autoYes bool) {
 	os.MkdirAll(hooksDir, 0755)
 	hook := claudeNativeEditHookForOS(runtime.GOOS)
@@ -170,6 +172,7 @@ func upsertAracneAllowRules(existing []interface{}, rules []string) []interface{
 	return result
 }
 
+// Returns the appropriate native hook script and configuration for the given OS.
 func claudeGuardHookForOS(goos string) claudeNativeEditHook {
 	if goos == "windows" {
 		return claudeNativeEditHook{
@@ -187,6 +190,7 @@ func claudeGuardHookForOS(goos string) claudeNativeEditHook {
 	}
 }
 
+// Returns a shell script that invokes the arac guard tool as a Claude hook
 func claudeGuardHookShellScript() string {
 	return strings.Join([]string{
 		"#!/bin/sh",
@@ -195,6 +199,7 @@ func claudeGuardHookShellScript() string {
 	}, "\n")
 }
 
+// Returns the PowerShell script for the native guard hook.
 func claudeGuardHookPowerShellScript() string {
 	return strings.Join([]string{
 		"$inputJson = [Console]::In.ReadToEnd()",
@@ -204,6 +209,7 @@ func claudeGuardHookPowerShellScript() string {
 	}, "\n")
 }
 
+// Returns OS-specific native edit hook configuration (PowerShell for Windows, shell script for others)
 func claudeNativeEditHookForOS(goos string) claudeNativeEditHook {
 	if goos == "windows" {
 		return claudeNativeEditHook{
@@ -221,6 +227,7 @@ func claudeNativeEditHookForOS(goos string) claudeNativeEditHook {
 	}
 }
 
+// Generates a PowerShell script that pipes stdin JSON to the arac update-file command with claude-hook flag
 func claudeUpdateFileHookPowerShellScript() string {
 	return strings.Join([]string{
 		"$inputJson = [Console]::In.ReadToEnd()",
@@ -230,6 +237,7 @@ func claudeUpdateFileHookPowerShellScript() string {
 	}, "\n")
 }
 
+// Generates a shell script that invokes arac update-file with the claude-hook flag
 func claudeUpdateFileHookShellScript() string {
 	return strings.Join([]string{
 		"#!/bin/sh",
@@ -238,11 +246,13 @@ func claudeUpdateFileHookShellScript() string {
 	}, "\n")
 }
 
+// Writes the OpenCode native edit sync plugin JavaScript file to the plugins directory.
 func writeOpenCodeNativeEditPlugin(pluginsDir string, autoYes bool) {
 	os.MkdirAll(pluginsDir, 0755)
 	writeMarkdownFile(filepath.Join(pluginsDir, "arac-native-edit-sync.js"), "OpenCode native edit sync plugin", openCodeNativeEditPlugin(), autoYes)
 }
 
+// Returns a Node.js plugin for syncing file edits with arac, intercepting file changes and tool execution.
 func openCodeNativeEditPlugin() string {
 	return strings.TrimPrefix(`
 import { execFileSync } from "node:child_process"

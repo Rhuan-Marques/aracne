@@ -13,6 +13,7 @@ const sqliteBusyTimeoutMillis = 10000
 
 var sqliteDBLocks sync.Map
 
+// Acquires a read lock and executes a read-only database operation with automatic retry.
 func withSQLiteRead(dbPath string, fn func(*sql.DB) error) error {
 	lock := sqliteLock(dbPath)
 	lock.RLock()
@@ -20,6 +21,7 @@ func withSQLiteRead(dbPath string, fn func(*sql.DB) error) error {
 	return withSQLiteRetry(dbPath, false, fn)
 }
 
+// Acquires a per-database mutex and executes a write operation with retry logic.
 func withSQLiteWrite(dbPath string, fn func(*sql.DB) error) error {
 	lock := sqliteLock(dbPath)
 	lock.Lock()
@@ -27,6 +29,7 @@ func withSQLiteWrite(dbPath string, fn func(*sql.DB) error) error {
 	return withSQLiteRetry(dbPath, true, fn)
 }
 
+// Executes a database operation with exponential backoff retry logic for SQLite lock contention.
 func withSQLiteRetry(dbPath string, write bool, fn func(*sql.DB) error) error {
 	var err error
 	backoff := 25 * time.Millisecond
@@ -43,6 +46,7 @@ func withSQLiteRetry(dbPath string, write bool, fn func(*sql.DB) error) error {
 	return err
 }
 
+// Opens a SQLite database and executes a callback function, ensuring the connection closes afterward.
 func withSQLiteDB(dbPath string, write bool, fn func(*sql.DB) error) error {
 	db, err := openSQLite(dbPath, write)
 	if err != nil {
@@ -52,6 +56,7 @@ func withSQLiteDB(dbPath string, write bool, fn func(*sql.DB) error) error {
 	return fn(db)
 }
 
+// Opens a SQLite database connection with shared cache, busy timeout, and WAL mode for write access.
 func openSQLite(dbPath string, write bool) (*sql.DB, error) {
 	db, err := sql.Open("sqlite", fmt.Sprintf("%s?cache=shared&_busy_timeout=%d", dbPath, sqliteBusyTimeoutMillis))
 	if err != nil {
@@ -76,12 +81,14 @@ func openSQLite(dbPath string, write bool) (*sql.DB, error) {
 	return db, nil
 }
 
+// Returns or creates a per-database sync.RWMutex for SQLite access coordination.
 func sqliteLock(dbPath string) *sync.RWMutex {
 	key := sqliteLockKey(dbPath)
 	lock, _ := sqliteDBLocks.LoadOrStore(key, &sync.RWMutex{})
 	return lock.(*sync.RWMutex)
 }
 
+// Returns a canonical lock key for a SQLite database path by normalizing to absolute path.
 func sqliteLockKey(dbPath string) string {
 	if abs, err := filepath.Abs(dbPath); err == nil {
 		return filepath.Clean(abs)
@@ -89,6 +96,7 @@ func sqliteLockKey(dbPath string) string {
 	return filepath.Clean(dbPath)
 }
 
+// Detects SQLite lock errors by checking error message for database locking patterns.
 func isSQLiteLocked(err error) bool {
 	if err == nil {
 		return false

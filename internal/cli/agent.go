@@ -11,6 +11,7 @@ import (
 	"aracne/internal/llm/providers"
 )
 
+// Runs the AI coding agent with DeepSeek provider, accepting input from CLI args or interactive stdin.
 func RunAgent(args []string) {
 	manager, reg := InitRegistry(".aracne/topology.db")
 

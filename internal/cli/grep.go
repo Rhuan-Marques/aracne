@@ -8,6 +8,7 @@ import (
 	"aracne/internal/topogrep"
 )
 
+// Searches file contents with a regex pattern against the topology database, returning path:line:match output with resource metadata when applicable.
 func RunGrep(args []string) {
 	fs := flag.NewFlagSet("grep", flag.ExitOnError)
 	dbPath := fs.String("db", ".aracne/topology.db", "Topology database path")

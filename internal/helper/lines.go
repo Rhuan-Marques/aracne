@@ -11,7 +11,6 @@ import (
 // ReadFileRange returns lines [start, end] (1-indexed, inclusive) of the file at
 // path. A start <= 0 defaults to the first line; an end <= 0 reads through EOF.
 // It returns the sliced content and the number of the last line emitted.
-//
 // It streams the file line by line, so it handles large files and one-sided
 // ranges without loading the whole file into memory, and is not bounded by the
 // configured read.max_file_size (the requested range itself bounds the output).

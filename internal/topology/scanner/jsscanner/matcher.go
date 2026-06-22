@@ -40,6 +40,7 @@ func matchClassInheritance(gt *js.JavaScriptTopology) {
 	}
 }
 
+// Resolves a base class ID by searching in the same module first, then across all classes in the topology.
 func resolveBaseClassID(baseName string, cls js.JavaScriptClass, gt *js.JavaScriptTopology) *js.ClassID {
 	sameModuleID := js.ClassID(extractModulePath(string(cls.ID)) + "." + baseName)
 	if _, exists := gt.Classes[sameModuleID]; exists {
@@ -113,6 +114,7 @@ func matchImplementsAndInterfaceExtends(gt *js.JavaScriptTopology) {
 	}
 }
 
+// Looks up an interface by name within the same module or by class name across all interfaces.
 func resolveInterfaceID(name, fromID string, gt *js.JavaScriptTopology) *js.InterfaceID {
 	sameModuleID := js.InterfaceID(extractModulePath(fromID) + "." + name)
 	if _, ok := gt.Interfaces[sameModuleID]; ok {
@@ -127,6 +129,7 @@ func resolveInterfaceID(name, fromID string, gt *js.JavaScriptTopology) *js.Inte
 	return nil
 }
 
+// Extracts the module path from a fully-qualified identifier by returning the text before the last dot.
 func extractModulePath(id string) string {
 	for i := len(id) - 1; i >= 0; i-- {
 		if id[i] == '.' {
@@ -136,6 +139,7 @@ func extractModulePath(id string) string {
 	return id
 }
 
+// Extracts the class name from a fully-qualified identifier by returning the text after the last dot.
 func extractClassName(id string) string {
 	for i := len(id) - 1; i >= 0; i-- {
 		if id[i] == '.' {

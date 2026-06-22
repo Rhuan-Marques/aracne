@@ -9,22 +9,27 @@ import (
 	"aracne/internal/topology/python"
 )
 
+// LLM tool handler that updates a resource's description in the topology database by id and resource kind.
 type UpdateDescriptionTool struct {
 	mgr *python.PythonManager
 }
 
+// Creates an UpdateDescriptionTool handler for modifying resource descriptions in the topology.
 func NewUpdateDescriptionTool(mgr *python.PythonManager) *UpdateDescriptionTool {
 	return &UpdateDescriptionTool{mgr: mgr}
 }
 
+// Returns the tool's name for the LLM: "update_description"
 func (u *UpdateDescriptionTool) Name() string {
 	return "update_description"
 }
 
+// Returns the tool's description for the LLM: "Update the description of a resource in the topology database"
 func (u *UpdateDescriptionTool) Description() string {
 	return "Update the description of a resource in the topology database"
 }
 
+// Returns the tool's parameters: id (resource ID), resource_name (kind), and description (new text), all required strings
 func (u *UpdateDescriptionTool) Parameters() []Parameter {
 	return []Parameter{
 		{Name: "id", Type: "string", Description: "Resource ID", Required: true},
@@ -33,6 +38,7 @@ func (u *UpdateDescriptionTool) Parameters() []Parameter {
 	}
 }
 
+// Parses arguments and updates a resource's description in the topology database with the given id, kind, and text
 func (u *UpdateDescriptionTool) Run(args json.RawMessage) (string, error) {
 	var params struct {
 		ID           string `json:"id"`

@@ -8,6 +8,7 @@ import (
 	"strings"
 )
 
+// Re-scans a file and updates the topology, optionally reporting warnings from structural changes.
 func RunUpdateFile(args []string) {
 	if len(args) == 1 && args[0] == "--claude-hook" {
 		runClaudeUpdateFileHook(os.Stdin, os.Stdout)
@@ -39,6 +40,7 @@ func RunUpdateFile(args []string) {
 	}
 }
 
+// Processes Claude file-edit hooks to update topology and report warnings for modified files.
 func runClaudeUpdateFileHook(input io.Reader, output io.Writer) {
 	inputJSON, err := io.ReadAll(input)
 	if err != nil || strings.TrimSpace(string(inputJSON)) == "" {
@@ -73,6 +75,7 @@ func runClaudeUpdateFileHook(input io.Reader, output io.Writer) {
 	}
 }
 
+// Extracts and deduplicates file paths from tool input, checking file_path/filePath/path fields and nested edits
 func claudeHookPaths(toolInput map[string]interface{}) []string {
 	seen := make(map[string]bool)
 	var paths []string

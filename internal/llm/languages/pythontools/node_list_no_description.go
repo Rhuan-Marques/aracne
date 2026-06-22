@@ -11,12 +11,14 @@ import (
 	"aracne/internal/topology/python"
 )
 
+// Scans topology for undocumented Python resources and returns them batched by kind.
 type NodeListNoDescription struct {
 	mgr       *python.PythonManager
 	targets   []domain.ResourceKind
 	batchSize int
 }
 
+// Creates a NodeListNoDescription handler with target resource kinds and description batch size.
 func NewNodeListNoDescription(mgr *python.PythonManager, targets ...[]domain.ResourceKind) *NodeListNoDescription {
 	describeTargets := helper.DefaultDescribeTargets()
 	if len(targets) > 0 {
@@ -25,6 +27,7 @@ func NewNodeListNoDescription(mgr *python.PythonManager, targets ...[]domain.Res
 	return &NodeListNoDescription{mgr: mgr, targets: describeTargets, batchSize: helper.DefaultDescriptionBatchSize}
 }
 
+// Sets the batch size for processing and returns the receiver for method chaining.
 func (l *NodeListNoDescription) SetBatchSize(batchSize int) *NodeListNoDescription {
 	if batchSize > 0 {
 		l.batchSize = batchSize
@@ -32,18 +35,22 @@ func (l *NodeListNoDescription) SetBatchSize(batchSize int) *NodeListNoDescripti
 	return l
 }
 
+// Returns the tool name "node_list_no_description".
 func (l *NodeListNoDescription) Name() string {
 	return "node_list_no_description"
 }
 
+// Returns a description explaining that this tool lists resources needing documentation.
 func (l *NodeListNoDescription) Description() string {
 	return "List targeted resources that still need descriptions. Returns each resource's ID, name, and kind for batching into description executor tasks."
 }
 
+// Returns an empty parameter list; the tool takes no configuration.
 func (l *NodeListNoDescription) Parameters() []Parameter {
 	return nil
 }
 
+// Scans topology for undocumented resources matching target kinds and returns them sorted by kind, name, and ID.
 func (l *NodeListNoDescription) Run(args json.RawMessage) (string, error) {
 	topo, err := l.mgr.Generic().ReadAll()
 	if err != nil {

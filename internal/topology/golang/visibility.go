@@ -15,11 +15,10 @@ func lineSpan(loc domain.Location) int {
 	return loc.EndsAt - loc.StartsAt + 1
 }
 
+// Returns true if a string contains non-whitespace content.
 func visHasDesc(s string) bool { return strings.TrimSpace(s) != "" }
 
-// ---------------------------------------------------------------------------
-// Full-block builders (imports + optional parent + own cut, no CONTEXT)
-// ---------------------------------------------------------------------------
+// Builds the full source block for a function, including its code, imports, dependencies, and parent struct info for methods.
 
 func (m *GoManager) fnFullBlock(gt *GolangTopology, fn GolangFunction) *FullBlock {
 	cut, err := m.generic.Cut(fn.Loc)
@@ -44,6 +43,7 @@ func (m *GoManager) fnFullBlock(gt *GolangTopology, fn GolangFunction) *FullBloc
 	return fb
 }
 
+// Extracts a FullBlock for a Go struct containing its source code cut, imports, and dependencies.
 func (m *GoManager) structFullBlock(s GolangStruct) *FullBlock {
 	cut, err := m.generic.Cut(s.Loc)
 	if err != nil {
@@ -57,6 +57,7 @@ func (m *GoManager) structFullBlock(s GolangStruct) *FullBlock {
 	}
 }
 
+// Extracts a FullBlock for a Go interface containing its source code cut, imports, and dependencies.
 func (m *GoManager) ifaceFullBlock(iface GolangInterface) *FullBlock {
 	cut, err := m.generic.Cut(iface.Loc)
 	if err != nil {
@@ -70,6 +71,7 @@ func (m *GoManager) ifaceFullBlock(iface GolangInterface) *FullBlock {
 	}
 }
 
+// Extracts the full source block for an external variable by cutting its location.
 func (m *GoManager) extVarFullBlock(v GolangExternalVar) *FullBlock {
 	cut, err := m.generic.Cut(v.Location)
 	if err != nil {
@@ -78,9 +80,7 @@ func (m *GoManager) extVarFullBlock(v GolangExternalVar) *FullBlock {
 	return &FullBlock{Path: v.Location.Path, Cut: cut.Cut}
 }
 
-// ---------------------------------------------------------------------------
-// Per-list visibility application
-// ---------------------------------------------------------------------------
+// Filters functions/methods by visibility level and populates full code blocks for full visibility.
 
 func (m *GoManager) applyFuncList(gt *GolangTopology, filter domain.ContextFilter, fns []SimplifiedFunction) []SimplifiedFunction {
 	var out []SimplifiedFunction
@@ -104,6 +104,7 @@ func (m *GoManager) applyFuncList(gt *GolangTopology, filter domain.ContextFilte
 	return out
 }
 
+// Filters external variables by visibility level and populates full blocks where applicable.
 func (m *GoManager) applyExtVars(gt *GolangTopology, filter domain.ContextFilter, vars []SimplifiedExtVar) []SimplifiedExtVar {
 	var out []SimplifiedExtVar
 	for _, v := range vars {
@@ -122,6 +123,7 @@ func (m *GoManager) applyExtVars(gt *GolangTopology, filter domain.ContextFilter
 	return out
 }
 
+// Filters struct usages by visibility level, recursively applying method visibility and populating struct full blocks.
 func (m *GoManager) applyStructUsages(gt *GolangTopology, filter domain.ContextFilter, structs []StructUsage) []StructUsage {
 	var out []StructUsage
 	for _, su := range structs {
@@ -144,6 +146,7 @@ func (m *GoManager) applyStructUsages(gt *GolangTopology, filter domain.ContextF
 	return out
 }
 
+// Filters interface implementations by visibility level, recursively applying function visibility and populating struct full blocks.
 func (m *GoManager) applyImplList(gt *GolangTopology, filter domain.ContextFilter, impls []InterfaceImplementation) []InterfaceImplementation {
 	var out []InterfaceImplementation
 	for _, impl := range impls {
@@ -166,6 +169,7 @@ func (m *GoManager) applyImplList(gt *GolangTopology, filter domain.ContextFilte
 	return out
 }
 
+// Filters interface usages by visibility level, recursively applying implementation visibility and populating interface full blocks.
 func (m *GoManager) applyInterfaceUsages(gt *GolangTopology, filter domain.ContextFilter, ifaces []InterfaceUsage) []InterfaceUsage {
 	var out []InterfaceUsage
 	for _, iu := range ifaces {
@@ -188,9 +192,7 @@ func (m *GoManager) applyInterfaceUsages(gt *GolangTopology, filter domain.Conte
 	return out
 }
 
-// ---------------------------------------------------------------------------
-// Incoming (reverse) edges
-// ---------------------------------------------------------------------------
+// Checks whether a target string ID exists in a slice of IDs.
 
 func containsID(ids []string, target string) bool {
 	for _, id := range ids {
@@ -201,6 +203,7 @@ func containsID(ids []string, target string) bool {
 	return false
 }
 
+// Determines whether a function uses a target resource via calls, struct/interface/variable/named-type usage.
 func functionUses(fn GolangFunction, target string) bool {
 	return containsID(fn.Calls(), target) ||
 		containsID(fn.UsesStruct(), target) ||
@@ -250,9 +253,7 @@ func (m *GoManager) incomingRefs(gt *GolangTopology, targetID string) []domain.R
 	return refs
 }
 
-// ---------------------------------------------------------------------------
-// Context entry points (no-op under the default all-Normal filter)
-// ---------------------------------------------------------------------------
+// Filters a function's context (called functions, structs, interfaces, variables, and incoming references) by visibility rules.
 
 func (m *GoManager) filterFunctionContext(gt *GolangTopology, ctx *GoFunctionContext, filter domain.ContextFilter, targetID string) {
 	ctx.CalledFunctions = m.applyFuncList(gt, filter, ctx.CalledFunctions)
@@ -264,6 +265,7 @@ func (m *GoManager) filterFunctionContext(gt *GolangTopology, ctx *GoFunctionCon
 	}
 }
 
+// Filters a struct's context (methods, structs used, interfaces used, variables, and incoming references) by visibility rules.
 func (m *GoManager) filterStructContext(gt *GolangTopology, ctx *GoStructContext, filter domain.ContextFilter, targetID string) {
 	ctx.Methods = m.applyFuncList(gt, filter, ctx.Methods)
 	ctx.StructsUsed = m.applyStructUsages(gt, filter, ctx.StructsUsed)
@@ -274,6 +276,7 @@ func (m *GoManager) filterStructContext(gt *GolangTopology, ctx *GoStructContext
 	}
 }
 
+// Filters an interface's context (implementations and incoming references) by visibility rules.
 func (m *GoManager) filterInterfaceContext(gt *GolangTopology, ctx *GoInterfaceContext, filter domain.ContextFilter, targetID string) {
 	ctx.Implementations = m.applyImplList(gt, filter, ctx.Implementations)
 	if filter.IncludeIncoming {

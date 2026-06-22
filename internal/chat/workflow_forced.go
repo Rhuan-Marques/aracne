@@ -13,6 +13,7 @@ import (
 	"aracne/internal/topology/domain"
 )
 
+// Launches a workflow (descriptions/bug_hunter/bug_judge/bug_solver) by building tasks, creating a tool call, and running task groups with optional follow-up rounds.
 func (m *Manager) StartForcedWorkflow(req WorkflowRequest) (string, error) {
 	if req.SessionID == "" {
 		return "", fmt.Errorf("session_id is required")
@@ -87,10 +88,12 @@ func (m *Manager) startForcedRound(req WorkflowRequest, tasks []createTaskSpec) 
 // runs before stopping, regardless of whether bugs are still being found.
 const maxHunterRounds = 3
 
+// Returns true if the workflow type is "bug_hunter" or "bug-hunter".
 func isHunterWorkflow(typ string) bool {
 	return typ == "bug_hunter" || typ == "bug-hunter"
 }
 
+// Returns the count of bugs currently in pending status.
 func (m *Manager) pendingBugCount() int {
 	bugs, err := m.manager.ListBugs("", domain.BugPending)
 	if err != nil {
@@ -131,10 +134,12 @@ func (m *Manager) runHunterFollowupRounds(req WorkflowRequest, prevPending int) 
 // workflow runs before stopping.
 const maxDescriptionRounds = 3
 
+// Returns true if the workflow type is "descriptions".
 func isDescriptionsWorkflow(typ string) bool {
 	return typ == "descriptions"
 }
 
+// Returns the count of resources lacking descriptions in the configured target kinds.
 func (m *Manager) undocumentedCount() int {
 	res, err := m.undocumentedResources()
 	if err != nil {
@@ -172,6 +177,7 @@ func (m *Manager) runDescriptionsFollowupRounds(req WorkflowRequest, prevRemaini
 	}
 }
 
+// Appends a synthetic user message and assistant tool call to a session's transcript for workflow task creation.
 func (m *Manager) addForcedCreateTasksCall(sessionID, workflowType string, tc llm.ToolCall) error {
 	now := time.Now().UTC()
 	label := strings.ReplaceAll(workflowType, "_", " ")
@@ -196,6 +202,7 @@ func (m *Manager) addForcedCreateTasksCall(sessionID, workflowType string, tc ll
 	return nil
 }
 
+// Builds task specs for workflow agents (descriptions, bug-hunter, bug-judge, or bug-solver) based on request type.
 func (m *Manager) buildWorkflowTaskSpecs(req WorkflowRequest) ([]createTaskSpec, error) {
 	switch req.Type {
 	case "descriptions":
@@ -270,6 +277,7 @@ func (m *Manager) buildWorkflowTaskSpecs(req WorkflowRequest) ([]createTaskSpec,
 	}
 }
 
+// Builds a prompt for the description generation executor with resources, style exemplars, and read output.
 func (m *Manager) descriptionWorkflowPrompt(batch []workflowResource, topo *domain.Topology) string {
 	resources := make([]prompts.DescriptionResource, 0, len(batch))
 	ids := make([]string, 0, len(batch))
@@ -289,6 +297,7 @@ func (m *Manager) descriptionWorkflowPrompt(batch []workflowResource, topo *doma
 	return prompts.DescriptionsGenerationExecutorInput(resources, exemplars)
 }
 
+// Generates prompt for bug-hunting workflow, assigning resources and tracking already-reported bugs.
 func (m *Manager) bugHunterWorkflowPrompt(batch []workflowResource, reportedByNode map[string][]domain.KnownBug) string {
 	var b strings.Builder
 	b.WriteString("Inspect only these assigned resources for confirmed correctness, reliability, and security bugs. Read each one and the context it touches, and report every confirmed bug with bug_report (precise node_id + concrete scenario). Do not report style issues or speculation.\n\n")
@@ -311,6 +320,7 @@ func (m *Manager) bugHunterWorkflowPrompt(batch []workflowResource, reportedByNo
 	return b.String()
 }
 
+// Generates prompt for bug validation workflow with rules for dismissing false positives, duplicates, and confirming genuine bugs.
 func (m *Manager) bugJudgeWorkflowPrompt(assigned domain.KnownBug, nodeBugs []domain.KnownBug, crossNodeDismissed []domain.KnownBug) string {
 	var dismissedSame, dupCandidates []domain.KnownBug
 	for _, bug := range nodeBugs {
@@ -386,6 +396,7 @@ func dismissedPatternDigest(allBugs []domain.KnownBug, excludeNode string, limit
 	return dismissed
 }
 
+// Generates a workflow prompt for the bug-solver agent to fix an acknowledged bug with minimal, correct changes.
 func (m *Manager) bugSolverWorkflowPrompt(bug domain.KnownBug) string {
 	var b strings.Builder
 	b.WriteString("Fix exactly this acknowledged bug and nothing else: find the root cause, make the minimal correct change, verify it, then delete the bug report.\n\n")
@@ -403,6 +414,7 @@ func (m *Manager) bugSolverWorkflowPrompt(bug domain.KnownBug) string {
 	return b.String()
 }
 
+// Fetches resource content via the Read tool and returns it as a string for LLM prompt injection.
 func (m *Manager) readResourceForPrompt(resourceID string) string {
 	payload, _ := json.Marshal(map[string]string{"resource_id": resourceID})
 	text, err := tools.NewRead(m.manager).Run(payload)
@@ -412,6 +424,7 @@ func (m *Manager) readResourceForPrompt(resourceID string) string {
 	return strings.TrimSpace(text)
 }
 
+// Sorts known bugs by NodeID then by ID.
 func sortKnownBugs(bugs []domain.KnownBug) {
 	sort.Slice(bugs, func(i, j int) bool {
 		if bugs[i].NodeID != bugs[j].NodeID {

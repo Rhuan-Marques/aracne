@@ -7,6 +7,7 @@ import (
 	"aracne/internal/topology/domain"
 )
 
+// Calculates the line span length of a location, returning 0 if end is before start
 func lineSpan(loc domain.Location) int {
 	if loc.EndsAt < loc.StartsAt {
 		return 0
@@ -14,11 +15,10 @@ func lineSpan(loc domain.Location) int {
 	return loc.EndsAt - loc.StartsAt + 1
 }
 
+// Checks whether a string contains non-whitespace characters.
 func visHasDesc(s string) bool { return strings.TrimSpace(s) != "" }
 
-// ---------------------------------------------------------------------------
-// Full-block builders
-// ---------------------------------------------------------------------------
+// Builds a full source block for a function including parent class info and all dependencies
 
 func (m *JavaScriptManager) fnFullBlock(gt *JavaScriptTopology, fn JavaScriptFunction) *FullBlock {
 	cut, err := m.generic.Cut(fn.Loc)
@@ -43,6 +43,7 @@ func (m *JavaScriptManager) fnFullBlock(gt *JavaScriptTopology, fn JavaScriptFun
 	return fb
 }
 
+// Extracts a class's source code block with its imports and dependency paths.
 func (m *JavaScriptManager) classFullBlock(c JavaScriptClass) *FullBlock {
 	cut, err := m.generic.Cut(c.Loc)
 	if err != nil {
@@ -56,6 +57,7 @@ func (m *JavaScriptManager) classFullBlock(c JavaScriptClass) *FullBlock {
 	}
 }
 
+// Extracts an external variable's source code block by location.
 func (m *JavaScriptManager) extVarFullBlock(v JavaScriptExternalVar) *FullBlock {
 	cut, err := m.generic.Cut(v.Location)
 	if err != nil {
@@ -64,9 +66,7 @@ func (m *JavaScriptManager) extVarFullBlock(v JavaScriptExternalVar) *FullBlock 
 	return &FullBlock{Path: v.Location.Path, Cut: cut.Cut}
 }
 
-// ---------------------------------------------------------------------------
-// Per-list visibility application
-// ---------------------------------------------------------------------------
+// Filters a list of simplified functions by visibility, resolves full blocks for visible-full items, and classifies each as function or method.
 
 func (m *JavaScriptManager) applyFuncList(gt *JavaScriptTopology, filter domain.ContextFilter, fns []SimplifiedFunction) []SimplifiedFunction {
 	var out []SimplifiedFunction
@@ -90,6 +90,7 @@ func (m *JavaScriptManager) applyFuncList(gt *JavaScriptTopology, filter domain.
 	return out
 }
 
+// Filters external variables by context visibility and populates full block details when visibility is full.
 func (m *JavaScriptManager) applyExtVars(gt *JavaScriptTopology, filter domain.ContextFilter, vars []SimplifiedExtVar) []SimplifiedExtVar {
 	var out []SimplifiedExtVar
 	for _, v := range vars {
@@ -108,6 +109,7 @@ func (m *JavaScriptManager) applyExtVars(gt *JavaScriptTopology, filter domain.C
 	return out
 }
 
+// Filters class usages by context visibility, applying method filters and computing aggregate visibility.
 func (m *JavaScriptManager) applyClassUsages(gt *JavaScriptTopology, filter domain.ContextFilter, classes []ClassUsage) []ClassUsage {
 	var out []ClassUsage
 	for _, cu := range classes {
@@ -130,9 +132,7 @@ func (m *JavaScriptManager) applyClassUsages(gt *JavaScriptTopology, filter doma
 	return out
 }
 
-// ---------------------------------------------------------------------------
-// Incoming (reverse) edges
-// ---------------------------------------------------------------------------
+// Checks if a target ID exists in a slice of string IDs
 
 func containsID(ids []string, target string) bool {
 	for _, id := range ids {
@@ -143,6 +143,7 @@ func containsID(ids []string, target string) bool {
 	return false
 }
 
+// Determines if a function uses a target by checking calls, classes, interfaces, variables, and types
 func functionUses(fn JavaScriptFunction, target string) bool {
 	return containsID(fn.Calls(), target) ||
 		containsID(fn.UsesClass(), target) ||
@@ -151,12 +152,14 @@ func functionUses(fn JavaScriptFunction, target string) bool {
 		containsID(fn.UsesNamedType(), target)
 }
 
+// Checks if a class uses a target class, interface, or named type in its dependencies.
 func classUses(c JavaScriptClass, target string) bool {
 	return containsID(c.UsesClass(), target) ||
 		containsID(c.UsesInterface(), target) ||
 		containsID(c.UsesNamedType(), target)
 }
 
+// Collects all functions and classes that reference a target, sorted by location
 func (m *JavaScriptManager) incomingRefs(gt *JavaScriptTopology, targetID string) []domain.ResourceRef {
 	var refs []domain.ResourceRef
 	for fnID, fn := range gt.Functions {
@@ -188,9 +191,7 @@ func (m *JavaScriptManager) incomingRefs(gt *JavaScriptTopology, targetID string
 	return refs
 }
 
-// ---------------------------------------------------------------------------
-// Context entry points (no-op under the default all-Normal filter)
-// ---------------------------------------------------------------------------
+// Filters a function's context by applying visibility rules to its called functions, used classes, and external variables, and optionally includes incoming references.
 
 func (m *JavaScriptManager) filterFunctionContext(gt *JavaScriptTopology, ctx *JavaScriptFunctionContext, filter domain.ContextFilter, targetID string) {
 	ctx.CalledFunctions = m.applyFuncList(gt, filter, ctx.CalledFunctions)
@@ -201,6 +202,7 @@ func (m *JavaScriptManager) filterFunctionContext(gt *JavaScriptTopology, ctx *J
 	}
 }
 
+// Filters a class's context by applying visibility rules to its methods, used classes, and external variables, and optionally includes incoming references.
 func (m *JavaScriptManager) filterClassContext(gt *JavaScriptTopology, ctx *JavaScriptClassContext, filter domain.ContextFilter, targetID string) {
 	ctx.Methods = m.applyFuncList(gt, filter, ctx.Methods)
 	ctx.ClassesUsed = m.applyClassUsages(gt, filter, ctx.ClassesUsed)
@@ -210,6 +212,7 @@ func (m *JavaScriptManager) filterClassContext(gt *JavaScriptTopology, ctx *Java
 	}
 }
 
+// Populates incoming references in a class context when the filter requests them
 func (m *JavaScriptManager) filterInterfaceContext(gt *JavaScriptTopology, ctx *JavaScriptInterfaceContext, filter domain.ContextFilter, targetID string) {
 	if filter.IncludeIncoming {
 		ctx.Incoming = m.incomingRefs(gt, targetID)

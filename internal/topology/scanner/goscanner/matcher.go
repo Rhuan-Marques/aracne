@@ -6,6 +6,7 @@ import (
 	"aracne/internal/topology/golang"
 )
 
+// Establishes bidirectional implementation relationships between all structs and interfaces in the topology.
 func matchStructsToInterfaces(gt *golang.GolangTopology) {
 	for ifaceID, iface := range gt.Interfaces {
 		delete(iface.Connections, golang.ConnImplBy)
@@ -40,6 +41,7 @@ func matchStructsToInterfaces(gt *golang.GolangTopology) {
 	}
 }
 
+// Checks whether a struct implements an interface by matching all interface method signatures.
 func implements(str golang.GolangStruct, iface golang.GolangInterface, gt *golang.GolangTopology) bool {
 	if len(iface.Methods) == 0 {
 		return false
@@ -72,10 +74,12 @@ func implements(str golang.GolangStruct, iface golang.GolangInterface, gt *golan
 
 var importPrefixRE = regexp.MustCompile(`\b\w+\.(\w+)\b`)
 
+// Removes import package prefix from a type string using regex.
 func stripImportPrefix(t string) string {
 	return importPrefixRE.ReplaceAllString(t, "$1")
 }
 
+// Checks if a method matches an interface method by name and stripped type signatures.
 func signaturesMatch(method golang.GolangFunction, ifaceMethod golang.FunctionDefinition) bool {
 	if method.Name != ifaceMethod.Name {
 		return false

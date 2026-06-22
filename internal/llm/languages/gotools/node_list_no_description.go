@@ -11,12 +11,14 @@ import (
 	"aracne/internal/topology/golang"
 )
 
+// Tool that lists Go resources without descriptions, filtering by resource kinds with configurable batch size.
 type NodeListNoDescription struct {
 	mgr       *golang.GoManager
 	targets   []domain.ResourceKind
 	batchSize int
 }
 
+// Creates a NodeListNoDescription instance to list resources without descriptions, with configurable resource kinds and batch size.
 func NewNodeListNoDescription(mgr *golang.GoManager, targets ...[]domain.ResourceKind) *NodeListNoDescription {
 	describeTargets := helper.DefaultDescribeTargets()
 	if len(targets) > 0 {
@@ -25,6 +27,7 @@ func NewNodeListNoDescription(mgr *golang.GoManager, targets ...[]domain.Resourc
 	return &NodeListNoDescription{mgr: mgr, targets: describeTargets, batchSize: helper.DefaultDescriptionBatchSize}
 }
 
+// Sets the batch size for splitting resources across executor subagents
 func (l *NodeListNoDescription) SetBatchSize(batchSize int) *NodeListNoDescription {
 	if batchSize > 0 {
 		l.batchSize = batchSize
@@ -32,18 +35,22 @@ func (l *NodeListNoDescription) SetBatchSize(batchSize int) *NodeListNoDescripti
 	return l
 }
 
+// Returns the tool name "node_list_no_description"
 func (l *NodeListNoDescription) Name() string {
 	return "node_list_no_description"
 }
 
+// Returns the user-facing description of the node_list_no_description tool for batching undescribed resources.
 func (l *NodeListNoDescription) Description() string {
 	return "List targeted resources that still need descriptions. Returns each resource's ID, name, and kind for batching into description executor tasks."
 }
 
+// Returns empty parameter list for the tool
 func (l *NodeListNoDescription) Parameters() []Parameter {
 	return nil
 }
 
+// Lists all resources without descriptions, filtered by target kinds, sorted by kind/name/ID with batch size guidance
 func (l *NodeListNoDescription) Run(args json.RawMessage) (string, error) {
 	topo, err := l.mgr.Generic().ReadAll()
 	if err != nil {

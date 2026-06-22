@@ -7,28 +7,34 @@ import (
 	"aracne/internal/topology"
 )
 
+// LLM tool to dismiss a bug report without deleting it.
 type BugDismiss struct {
 	mgr *topology.TopologyManager
 }
 
+// Constructs a BugDismiss tool for temporarily hiding topology issues.
 func NewBugDismiss(mgr *topology.TopologyManager) *BugDismiss {
 	return &BugDismiss{mgr: mgr}
 }
 
+// Returns the tool name 'bug_dismiss'.
 func (b *BugDismiss) Name() string {
 	return "bug_dismiss"
 }
 
+// Returns the tool description explaining that dismissed bugs are false positives kept as examples for the Bug Judge.
 func (b *BugDismiss) Description() string {
 	return "Mark a bug as 'dismissed' -- a false positive kept for reference. Dismissed bugs serve as examples for the Bug Judge."
 }
 
+// Returns the required bug_id parameter definition for the bug_dismiss tool.
 func (b *BugDismiss) Parameters() []Parameter {
 	return []Parameter{
 		{Name: "bug_id", Type: "string", Description: "The bug ID to dismiss", Required: true},
 	}
 }
 
+// Parses bug_id argument and dismisses the specified bug via the manager.
 func (b *BugDismiss) Run(args json.RawMessage) (string, error) {
 	var params struct {
 		BugID string `json:"bug_id"`

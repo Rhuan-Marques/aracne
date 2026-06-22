@@ -39,10 +39,14 @@ type scanningTool struct {
 	mode  helper.ReadScanMode
 }
 
+// Delegates to wrapped tool's name.
 func (s *scanningTool) Name() string            { return s.inner.Name() }
+// Delegates to wrapped tool's description.
 func (s *scanningTool) Description() string     { return s.inner.Description() }
+// Delegates to wrapped tool's parameters.
 func (s *scanningTool) Parameters() []Parameter { return s.inner.Parameters() }
 
+// Runs wrapped tool while triggering read scan before returning result.
 func (s *scanningTool) Run(args json.RawMessage) (string, error) {
 	// Best-effort: a scan failure must not block the read itself.
 	_ = s.mgr.RunReadScan(s.reg, s.mode)

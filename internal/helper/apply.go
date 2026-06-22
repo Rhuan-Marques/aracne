@@ -9,11 +9,13 @@ import (
 	"aracne/internal/topology/domain"
 )
 
+// Holds a resource description and its source code location.
 type resourceEntry struct {
 	Description string
 	Loc         domain.Location
 }
 
+// Writes resource descriptions from topology into source files at their definition locations.
 func ApplyDescriptions(topo *domain.Topology) error {
 	fileResources := make(map[string][]resourceEntry)
 
@@ -44,6 +46,7 @@ func ApplyDescriptions(topo *domain.Topology) error {
 	return nil
 }
 
+// Inserts resource descriptions as comments into source files at their respective locations.
 func applyFile(path string, entries []resourceEntry) error {
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].Loc.StartsAt > entries[j].Loc.StartsAt
@@ -70,6 +73,7 @@ func applyFile(path string, entries []resourceEntry) error {
 	return os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0644)
 }
 
+// Inserts a formatted comment above a target line, replacing existing comments if present.
 func insertComment(lines []string, startLine int, description string) []string {
 	idx := startLine - 1
 
@@ -109,11 +113,13 @@ func insertComment(lines []string, startLine int, description string) []string {
 	return result
 }
 
+// Checks if a line contains a comment (// or /* style).
 func isCommentLine(line string) bool {
 	trimmed := strings.TrimSpace(line)
 	return strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "/*")
 }
 
+// Extracts leading whitespace (spaces and tabs) from a line.
 func leadingWhitespace(line string) string {
 	for i, c := range line {
 		if c != ' ' && c != '\t' {
@@ -123,6 +129,7 @@ func leadingWhitespace(line string) string {
 	return ""
 }
 
+// Formats a multi-line description string as Go comments with // prefix.
 func formatComment(desc string) string {
 	parts := strings.Split(desc, "\n")
 	comment := make([]string, len(parts))

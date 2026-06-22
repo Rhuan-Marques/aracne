@@ -6,6 +6,7 @@ import (
 	"aracne/internal/topology/python"
 )
 
+// Extracts function dependencies by resolving references and calls within the function body.
 func analyzeFunctionBody(body *pyFunc, pr *ParseResult, gt *python.PythonTopology, funcInput []python.VariableDefinition, receiverClass *python.ClassID) map[python.ConnectionKind][]string {
 	conn := make(map[python.ConnectionKind][]string)
 
@@ -38,6 +39,7 @@ func analyzeFunctionBody(body *pyFunc, pr *ParseResult, gt *python.PythonTopolog
 	return conn
 }
 
+// Resolves method and function calls within a function body by mapping variable types and matching calls to class methods or global functions.
 func resolveBodyCallRefs(bodyCalls []pyBodyCall, bodyAssigns []pyBodyAssign, pr *ParseResult, gt *python.PythonTopology, add func(kind python.ConnectionKind, id string), funcInput []python.VariableDefinition, receiverClass *python.ClassID) {
 	varTypeMap := make(map[string]python.ClassID)
 
@@ -224,16 +226,19 @@ func lookupExtVarByName(name string, pr *ParseResult, gt *python.PythonTopology)
 	return ""
 }
 
+// Checks whether a class ID exists in the topology.
 func classExists(id python.ClassID, gt *python.PythonTopology) bool {
 	_, ok := gt.Classes[id]
 	return ok
 }
 
+// Checks whether a function ID exists in the Python topology's function registry.
 func funcExists(id python.FunctionID, gt *python.PythonTopology) bool {
 	_, ok := gt.Functions[id]
 	return ok
 }
 
+// Checks if an external variable exists in the Python topology.
 func extVarExists(id python.ExternalVarID, gt *python.PythonTopology) bool {
 	_, ok := gt.ExternalVars[id]
 	return ok
@@ -282,6 +287,7 @@ func resolveAssignClassID(valueType string, pr *ParseResult, gt *python.PythonTo
 	return "", false
 }
 
+// Resolves type references in function decorators, parameters, and return types.
 func resolveBodyReferences(body *pyFunc, pr *ParseResult, gt *python.PythonTopology, add func(kind python.ConnectionKind, id string)) {
 	seen := make(map[string]bool)
 	for _, dec := range body.Decorators {
@@ -301,6 +307,7 @@ func resolveBodyReferences(body *pyFunc, pr *ParseResult, gt *python.PythonTopol
 	}
 }
 
+// Resolves a decorator name to a function or class connection, handling both local lookups and external dependencies.
 func resolveDecoratorRef(dec string, pr *ParseResult, gt *python.PythonTopology, add func(kind python.ConnectionKind, id string), seen map[string]bool) {
 	if fid := lookupFuncByName(dec, pr, gt); fid != "" {
 		if !seen[string(fid)] {
@@ -316,6 +323,7 @@ func resolveDecoratorRef(dec string, pr *ParseResult, gt *python.PythonTopology,
 	addExternalDep(dec, pr, add)
 }
 
+// Resolves a type annotation to a class or function connection, treating it as either used or called based on lookup results.
 func resolveTypeRef(typeName string, pr *ParseResult, gt *python.PythonTopology, add func(kind python.ConnectionKind, id string), seen map[string]bool) {
 	clean := cleanTypeName(typeName)
 	if clean == "" {
@@ -383,6 +391,7 @@ func cleanTypeName(typeName string) string {
 	return clean
 }
 
+// Marks __init__ methods as constructors in their parent classes within the topology.
 func detectConstructors(gt *python.PythonTopology) {
 	for _, fn := range gt.Functions {
 		if fn.MethodFrom == nil {
@@ -398,6 +407,7 @@ func detectConstructors(gt *python.PythonTopology) {
 
 type PythonFunctionID = string
 
+// Gathers unique external dependencies from all modules into the topology's dependency list.
 func collectDependencies(gt *python.PythonTopology) {
 	seen := make(map[python.DependancyPath]bool)
 	for _, mod := range gt.Modules {
@@ -410,6 +420,7 @@ func collectDependencies(gt *python.PythonTopology) {
 	}
 }
 
+// Rebuilds class-to-method connections by populating ConnHasMethod edges from functions marked with MethodFrom references.
 func populateClassMethods(gt *python.PythonTopology) {
 	// Clear existing has_method edges first so re-running over the full
 	// topology during an incremental UpdateFile rebuilds them from scratch
@@ -430,6 +441,7 @@ func populateClassMethods(gt *python.PythonTopology) {
 	}
 }
 
+// Deduplicates connection maps by removing duplicate IDs within each connection kind while preserving order.
 func uniqueConns(conns map[python.ConnectionKind][]string) map[python.ConnectionKind][]string {
 	result := make(map[python.ConnectionKind][]string, len(conns))
 	for k, v := range conns {
@@ -448,6 +460,7 @@ func uniqueConns(conns map[python.ConnectionKind][]string) map[python.Connection
 	return result
 }
 
+// Resolves class variable references to their types, populating class connection maps with the referenced values.
 func resolveClassVarRefs(pr *ParseResult, gt *python.PythonTopology) {
 	for _, ref := range pr.ClassVarRefs {
 		cls, exists := gt.Classes[ref.ClassID]

@@ -15,6 +15,7 @@ func wantVis(v domain.Visibility, full bool) bool {
 	return (v == domain.VisibilityFull) == full
 }
 
+// Deduplicates string slices, preserving order and returning the original if empty.
 func dedupStr(in []string) []string {
 	if len(in) == 0 {
 		return in
@@ -31,6 +32,7 @@ func dedupStr(in []string) []string {
 	return out
 }
 
+// Writes import comments for internal modules and external dependencies to a string builder.
 func writeJSImports(b *strings.Builder, modules []javascript.PackagePath, deps []javascript.DependancyPath) {
 	if len(modules) == 0 && len(deps) == 0 {
 		return
@@ -63,6 +65,7 @@ func writeFullBlock(b *strings.Builder, full *javascript.FullBlock) {
 	b.WriteString("```\n")
 }
 
+// Renders a JavaScript function entry with ID, description, and full source block if visibility is full.
 func renderFunc(b *strings.Builder, prefix string, fn javascript.SimplifiedFunction) {
 	if fn.Visibility == domain.VisibilityFull && fn.Full != nil {
 		b.WriteString(fmt.Sprintf("## %s: %s\n", fn.ID, desc(fn.Description)))
@@ -72,6 +75,7 @@ func renderFunc(b *strings.Builder, prefix string, fn javascript.SimplifiedFunct
 	b.WriteString(fmt.Sprintf("%s%s: %s\n", prefix, fn.ID, desc(fn.Description)))
 }
 
+// Renders a JavaScript class usage entry with description, full source block if visibility is full, and all methods.
 func renderClassUsage(b *strings.Builder, cu javascript.ClassUsage) {
 	b.WriteString(fmt.Sprintf("## %s: %s\n", cu.ID, desc(cu.Description)))
 	if cu.Visibility == domain.VisibilityFull && cu.Full != nil {
@@ -82,6 +86,7 @@ func renderClassUsage(b *strings.Builder, cu javascript.ClassUsage) {
 	}
 }
 
+// Renders an external variable entry showing ID, optional value, description, and full source block if visibility is full.
 func renderExtVar(b *strings.Builder, ev javascript.SimplifiedExtVar) {
 	if ev.Visibility == domain.VisibilityFull && ev.Full != nil {
 		b.WriteString(fmt.Sprintf("## %s: %s\n", ev.ID, desc(ev.Description)))
@@ -95,6 +100,7 @@ func renderExtVar(b *strings.Builder, ev javascript.SimplifiedExtVar) {
 	b.WriteString(fmt.Sprintf("## %s%s\n", ev.ID, valStr))
 }
 
+// Formats incoming resource references into a "USED BY" section for display.
 func writeUsedBy(b *strings.Builder, incoming []domain.ResourceRef) {
 	if len(incoming) == 0 {
 		return

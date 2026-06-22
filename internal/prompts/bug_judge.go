@@ -1,5 +1,6 @@
 package prompts
 
+// Prompt for Bug Judge agent to triage bugs by acknowledging real issues, dismissing false positives, and deleting duplicates.
 func BugJudgePrompt() string {
 	return `You are a **Bug Judge** agent. You triage reported bugs: for each bug you are assigned, you confirm whether it is real and act on that decision. Reported bugs are candidates, not facts — your job is to confirm, reject, or de-duplicate them.
 

@@ -1,5 +1,6 @@
 package prompts
 
+// Returns a command description for launching a Bug Hunter sub-agent to audit the codebase.
 func BugHunterCommand() string {
 	return `Launch a Bug Hunter sub-agent to scan the project topology for bugs.
 

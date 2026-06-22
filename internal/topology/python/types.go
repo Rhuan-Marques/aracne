@@ -2,11 +2,13 @@ package python
 
 import "aracne/internal/topology/domain"
 
+// A Python function with its code snippet cut from the source.
 type FunctionCut struct {
 	PythonFunction
 	Cut string
 }
 
+// Represents a Python class with its source location cut range.
 type ClassCut struct {
 	PythonClass
 	Cut string
@@ -23,6 +25,7 @@ type FullBlock struct {
 	Cut       string
 }
 
+// Represents a Python function with its ID, name, description, input/output parameters, location, visibility, and optional full block details.
 type SimplifiedFunction struct {
 	ID          FunctionID
 	Name        string
@@ -34,6 +37,7 @@ type SimplifiedFunction struct {
 	Full        *FullBlock
 }
 
+// Represents a Python class with its methods, visibility, and full block context for topology queries.
 type ClassUsage struct {
 	ID          ClassID
 	Name        string
@@ -44,6 +48,7 @@ type ClassUsage struct {
 	Full        *FullBlock
 }
 
+// Simplified representation of a Python class with its ID, name, description, location, and interface implementation tracking.
 type SimplifiedClass struct {
 	ID                     ClassID
 	Name                   string
@@ -53,6 +58,7 @@ type SimplifiedClass struct {
 	NeedToImplementMethods []string
 }
 
+// Represents an external variable with its ID, name, description, value, location, visibility, and optional full block details.
 type SimplifiedExtVar struct {
 	ID          ExternalVarID
 	Name        string
@@ -63,6 +69,7 @@ type SimplifiedExtVar struct {
 	Full        *FullBlock
 }
 
+// Metadata for a code context block including kind, file location, line number, and code snippet.
 type ContextBlock struct {
 	Kind   string
 	FileID ModuleID
@@ -71,6 +78,7 @@ type ContextBlock struct {
 	Cut    string
 }
 
+// Provides complete context for a Python function including called functions, classes, dependencies, and incoming references.
 type PythonFunctionContext struct {
 	Function        *FunctionCut
 	ParentClass     *ClassCut
@@ -83,6 +91,7 @@ type PythonFunctionContext struct {
 	Blocks          []ContextBlock
 }
 
+// Holds context for a Python class including its constructor, bases, methods, dependencies, and incoming references.
 type PythonClassContext struct {
 	Class        *ClassCut
 	Constructor  *FunctionCut
@@ -96,11 +105,13 @@ type PythonClassContext struct {
 	Blocks       []ContextBlock
 }
 
+// Represents a Python module with an associated code cut/snippet.
 type ModuleCut struct {
 	PythonModule
 	Cut string
 }
 
+// Context view of a Python module containing its functions, classes, external variables, imports, dependencies, and code blocks.
 type PythonModuleContext struct {
 	Module       *ModuleCut
 	FromPackage  PackagePath
@@ -112,12 +123,14 @@ type PythonModuleContext struct {
 	Blocks       []ContextBlock
 }
 
+// Holds a dependency path with its usages and code blocks.
 type PythonDependencyContext struct {
 	Dependency DependancyPath
 	UsedBy     []ResourceUsage
 	Blocks     []ContextBlock
 }
 
+// Records a resource usage with its ID, kind, name, description, and source location.
 type ResourceUsage struct {
 	ID          string
 	Kind        domain.ResourceKind
@@ -126,6 +139,7 @@ type ResourceUsage struct {
 	Location    domain.Location
 }
 
+// Describes a topology warning with the affected resource kind, list of impacted functions, and a warning message.
 type TopologyWarning struct {
 	Resource          domain.ResourceKind
 	AffectedFunctions []FunctionID

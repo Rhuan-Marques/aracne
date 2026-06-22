@@ -9,28 +9,34 @@ import (
 	"aracne/internal/topology/golang"
 )
 
+// Tool that reads Go files with interconnected topology context by name or path.
 type ReadFile struct {
 	mgr *golang.GoManager
 }
 
+// Creates a new ReadFile instance for reading file contents from the Go topology.
 func NewReadFile(mgr *golang.GoManager) *ReadFile {
 	return &ReadFile{mgr: mgr}
 }
 
+// Returns the tool name "read_file".
 func (r *ReadFile) Name() string {
 	return "read_file"
 }
 
+// Returns the tool description for reading Go files with their interconnected topology context.
 func (r *ReadFile) Description() string {
 	return "Read a Go file's full source code and its interconnected context (package, functions, structs, interfaces, imports) from the project topology."
 }
 
+// Returns the required parameters for ReadFile: a file name/path string.
 func (r *ReadFile) Parameters() []Parameter {
 	return []Parameter{
 		{Name: "name", Type: "string", Description: "The file path or name (e.g. 'manager.go', 'internal/cli/init.go')", Required: true},
 	}
 }
 
+// Executes a file read by name, returning formatted Go file context or searching topology if not found directly.
 func (r *ReadFile) Run(args json.RawMessage) (string, error) {
 	var params struct {
 		Name string `json:"name"`

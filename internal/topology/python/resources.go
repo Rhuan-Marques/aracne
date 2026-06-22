@@ -9,6 +9,7 @@ type ModuleID = string
 type PackagePath = string
 type DependancyPath = string
 
+// Defines a variable with its name, type annotation, and optional resolved canonical class ID for cross-package type resolution.
 type VariableDefinition struct {
 	Name   string
 	Typing string
@@ -21,12 +22,14 @@ type VariableDefinition struct {
 	TypingID string
 }
 
+// Signature metadata for a Python function including name, input and output variable definitions.
 type FunctionDefinition struct {
 	Name   string
 	Input  []VariableDefinition
 	Output []VariableDefinition
 }
 
+// Complete topology graph of a Python codebase with all functions, classes, external variables, modules, dependencies, and errors.
 type PythonTopology struct {
 	Root         string
 	Functions    map[FunctionID]PythonFunction
@@ -37,6 +40,7 @@ type PythonTopology struct {
 	Errors       map[string]string
 }
 
+// Represents a Python function with metadata including name, decorators, inputs/outputs, and connections.
 type PythonFunction struct {
 	ID          FunctionID
 	Name        string
@@ -50,6 +54,7 @@ type PythonFunction struct {
 	IsAsync     bool
 }
 
+// Describes a Python class with its name, base classes, parameters, methods, and connections.
 type PythonClass struct {
 	ID                 ClassID
 	Name               string
@@ -64,6 +69,7 @@ type PythonClass struct {
 	HasAbstractMethods bool
 }
 
+// Represents a Python module with its ID, name, description, parent package, and connection metadata.
 type PythonModule struct {
 	ID          ModuleID
 	Name        string
@@ -72,6 +78,7 @@ type PythonModule struct {
 	Connections map[ConnectionKind][]string
 }
 
+// Represents an external variable with its name, type, value, and location.
 type PythonExternalVar struct {
 	ID          ExternalVarID
 	Name        string
@@ -81,6 +88,7 @@ type PythonExternalVar struct {
 	Location    domain.Location
 }
 
+// Represents a Python package dependency path.
 type PythonDependancy struct {
 	PackagePath DependancyPath
 }

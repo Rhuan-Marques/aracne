@@ -9,28 +9,34 @@ import (
 	"aracne/internal/topology/golang"
 )
 
+// Reads named type definitions from Go code via a GoManager instance
 type ReadNamedType struct {
 	mgr *golang.GoManager
 }
 
+// Constructor that creates a ReadNamedType tool instance for reading Go named types with topology context.
 func NewReadNamedType(mgr *golang.GoManager) *ReadNamedType {
 	return &ReadNamedType{mgr: mgr}
 }
 
+// Returns the tool name "read_named_type" for the ReadNamedType tool.
 func (r *ReadNamedType) Name() string {
 	return "read_named_type"
 }
 
+// Returns the tool description for reading a Go named type with its full context from the topology.
 func (r *ReadNamedType) Description() string {
 	return "Read a Go named type's full source code and its interconnected context (resources that use it, dependencies) from the project topology."
 }
 
+// Defines the "name" parameter for the ReadNamedType tool, accepting a Go named type name as required input.
 func (r *ReadNamedType) Parameters() []Parameter {
 	return []Parameter{
 		{Name: "name", Type: "string", Description: "The named type name (e.g. 'HandlerFunc', 'Bytes')", Required: true},
 	}
 }
 
+// Retrieves a Go named type's full source and context from topology by name, handling ambiguous results by listing all matches.
 func (r *ReadNamedType) Run(args json.RawMessage) (string, error) {
 	var params struct {
 		Name string `json:"name"`

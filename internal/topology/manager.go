@@ -30,14 +30,17 @@ func PartialIncrementalCount() int64 {
 	return atomic.LoadInt64(&partialIncrementalCount)
 }
 
+// Manages topology database operations and resource updates.
 type TopologyManager struct {
 	dbPath string
 }
 
+// Creates a new TopologyManager instance.
 func New() *TopologyManager {
 	return &TopologyManager{}
 }
 
+// Returns the database file path for the topology manager.
 func (m *TopologyManager) DbPath() string {
 	return m.dbPath
 }
@@ -72,6 +75,7 @@ func (m *TopologyManager) RunReadScan(reg *scanner.Registry, mode helper.ReadSca
 	}
 }
 
+// Scans codebase and writes the complete topology to the database.
 func (m *TopologyManager) FullScan(root string, reg *scanner.Registry) error {
 	topo, err := scanAllLanguages(root, reg)
 	if err != nil {
@@ -84,6 +88,7 @@ func (m *TopologyManager) FullScan(root string, reg *scanner.Registry) error {
 	return nil
 }
 
+// Scans codebase for changes and updates topology incrementally, handling added/modified/deleted files with optional partial-update optimization and cascading re-resolution of affected callers.
 func (m *TopologyManager) IncrementalScan(root string, reg *scanner.Registry) ([]domain.TopologyWarning, error) {
 	if info, err := os.Stat(root); err != nil {
 		return nil, fmt.Errorf("topology root %s is not accessible: %w", root, err)
@@ -361,6 +366,7 @@ func (m *TopologyManager) tryPartialIncremental(root string, reg *scanner.Regist
 	return true, allWarnings, nil
 }
 
+// Rescans codebase and preserves existing resource descriptions when re-indexing.
 func (m *TopologyManager) FullReScan(root string, reg *scanner.Registry) ([]domain.TopologyWarning, error) {
 	newTopo, err := scanAllLanguages(root, reg)
 	if err != nil {
@@ -390,11 +396,13 @@ func (m *TopologyManager) FullReScan(root string, reg *scanner.Registry) ([]doma
 	return nil, nil
 }
 
+// Sets the database path for the topology manager.
 func (m *TopologyManager) Load(path string) error {
 	m.dbPath = path
 	return nil
 }
 
+// Exports the topology database to a file.
 func (m *TopologyManager) Write(path string) error {
 	if m.dbPath == "" {
 		return nil
@@ -413,10 +421,12 @@ func (m *TopologyManager) Write(path string) error {
 	return err
 }
 
+// Loads and returns the complete topology graph from the database.
 func (m *TopologyManager) ReadAll() (*domain.Topology, error) {
 	return helper.ReadDb(m.dbPath)
 }
 
+// Extracts a slice of source code lines from a file based on start and end line numbers.
 func (m *TopologyManager) Cut(loc domain.Location) (*domain.CodeEntry, error) {
 	data, err := os.ReadFile(loc.Path)
 	if err != nil {
@@ -469,6 +479,7 @@ func (m *TopologyManager) WithFileLock(path string, fn func(waited bool) (string
 	return fn(waited)
 }
 
+// Scans and updates topology for a file, returning any warnings and syncing the database.
 func (m *TopologyManager) UpdateFile(path string, reg *scanner.Registry) ([]domain.TopologyWarning, error) {
 	topo, err := helper.ReadDb(m.dbPath)
 	if err != nil {
@@ -519,6 +530,7 @@ func (m *TopologyManager) UpdateFile(path string, reg *scanner.Registry) ([]doma
 	return finish(warnings)
 }
 
+// Detects and scans all language parsers in a root directory, merges their topologies, and normalizes the result.
 func scanAllLanguages(root string, reg *scanner.Registry) (*domain.Topology, error) {
 	langScanners := reg.DetectAll(root)
 	if len(langScanners) == 0 {
@@ -542,6 +554,7 @@ func scanAllLanguages(root string, reg *scanner.Registry) (*domain.Topology, err
 	return merged, nil
 }
 
+// Updates topology for a single file using a language-specific scanner, merges results back, and returns warnings.
 func updateFileWithScanner(topo *domain.Topology, langScanner scanner.LanguageScanner, path string) ([]domain.TopologyWarning, error) {
 	lang := langScanner.Name()
 	subTopo := languageSubTopology(topo, lang)
@@ -720,6 +733,7 @@ func (m *TopologyManager) partialNeedsCrossFileResolve(absPath string, upserts [
 	return false
 }
 
+// Extracts a language-specific subtopology containing only resources and errors for that language.
 func languageSubTopology(topo *domain.Topology, language string) *domain.Topology {
 	sub := &domain.Topology{
 		Root:      topo.Root,
@@ -745,6 +759,7 @@ func languageSubTopology(topo *domain.Topology, language string) *domain.Topolog
 	return sub
 }
 
+// Assigns a language tag to all untagged resources and initializes empty maps in the topology.
 func tagTopologyLanguage(topo *domain.Topology, language string) {
 	if topo == nil {
 		return
@@ -772,6 +787,7 @@ func tagTopologyLanguage(topo *domain.Topology, language string) {
 	}
 }
 
+// Merges source topology into destination, detecting resource ID collisions across languages.
 func mergeTopology(dst, src *domain.Topology) {
 	if src == nil {
 		return
@@ -803,6 +819,7 @@ func mergeTopology(dst, src *domain.Topology) {
 	}
 }
 
+// Removes resources and errors for a specific language while preserving language-neutral dependency nodes and their incoming edges.
 func removeLanguageResources(topo *domain.Topology, language string) {
 	removed := make(map[string]bool)
 	for id, res := range topo.Resources {
@@ -847,6 +864,7 @@ func removeLanguageResources(topo *domain.Topology, language string) {
 	}
 }
 
+// Populates each resource's language field, deduplicates languages, and sets topology.Language to the single language or "multi".
 func normalizeTopologyLanguages(topo *domain.Topology) {
 	if topo == nil {
 		return
@@ -876,6 +894,7 @@ func normalizeTopologyLanguages(topo *domain.Topology) {
 	}
 }
 
+// Returns a resource's language, falling back to the topology's language if unset.
 func resourceLanguage(res domain.Resource, fallback string) string {
 	if res.Language != "" {
 		return res.Language
@@ -886,6 +905,7 @@ func resourceLanguage(res domain.Resource, fallback string) string {
 	return ""
 }
 
+// Creates a deep copy of a Resource with independent properties and connections maps.
 func cloneResource(res domain.Resource) domain.Resource {
 	clone := res
 	clone.Properties = make(map[string]any, len(res.Properties))
@@ -899,6 +919,7 @@ func cloneResource(res domain.Resource) domain.Resource {
 	return clone
 }
 
+// Creates a shallow copy of the warnings map.
 func cloneWarnings(warnings map[string]domain.TopologyWarning) map[string]domain.TopologyWarning {
 	cloned := make(map[string]domain.TopologyWarning, len(warnings))
 	for id, warning := range warnings {
@@ -907,6 +928,7 @@ func cloneWarnings(warnings map[string]domain.TopologyWarning) map[string]domain
 	return cloned
 }
 
+// Returns warnings that exist in the after map but not in the before map, sorted by ID.
 func addedWarnings(before, after map[string]domain.TopologyWarning) []domain.TopologyWarning {
 	var added []domain.TopologyWarning
 	for id, warning := range after {
@@ -920,6 +942,7 @@ func addedWarnings(before, after map[string]domain.TopologyWarning) []domain.Top
 	return added
 }
 
+// Finds resource IDs by name, optionally filtered by resource kind.
 func (m *TopologyManager) FindResourcesByName(name string, kinds ...domain.ResourceKind) ([]string, error) {
 	topo, err := helper.ReadDb(m.dbPath)
 	if err != nil {
@@ -942,6 +965,7 @@ func (m *TopologyManager) FindResourcesByName(name string, kinds ...domain.Resou
 	return results, nil
 }
 
+// Creates and persists a new bug record with a generated ID, linked to a topology node.
 func (m *TopologyManager) CreateBug(nodeID string, description string) (*domain.KnownBug, error) {
 	bug := domain.KnownBug{
 		ID:          fmt.Sprintf("bug_%d_%d", time.Now().UnixNano(), atomic.AddInt64(&bugIDCounter, 1)),
@@ -955,34 +979,42 @@ func (m *TopologyManager) CreateBug(nodeID string, description string) (*domain.
 	return &bug, nil
 }
 
+// Retrieves known bugs from the database filtered by node ID and state.
 func (m *TopologyManager) ListBugs(nodeID string, state domain.BugState) ([]domain.KnownBug, error) {
 	return helper.ReadBugs(m.dbPath, nodeID, state)
 }
 
+// Marks a bug as acknowledged in the topology database
 func (m *TopologyManager) AcknowledgeBug(bugID string) error {
 	return helper.UpdateBugState(m.dbPath, bugID, domain.BugAcknowledged)
 }
 
+// Marks a bug as dismissed in the topology database.
 func (m *TopologyManager) DismissBug(bugID string) error {
 	return helper.UpdateBugState(m.dbPath, bugID, domain.BugDismissed)
 }
 
+// Deletes a single bug record by ID from the database.
 func (m *TopologyManager) DeleteBug(bugID string) error {
 	return helper.DeleteBug(m.dbPath, bugID)
 }
 
+// Deletes all bug records from the database.
 func (m *TopologyManager) DeleteAllBugs() error {
 	return helper.DeleteAllBugs(m.dbPath)
 }
 
+// Updates the description of a resource in the topology database.
 func (m *TopologyManager) UpdateDescription(id string, kind domain.ResourceKind, description string) error {
 	return helper.UpdateDescription(m.dbPath, kind, id, description)
 }
 
+// Removes descriptions for the specified resource kinds from the database and returns the count of cleared entries
 func (m *TopologyManager) ClearDescriptions(targets []domain.ResourceKind) (int64, error) {
 	return helper.ClearDescriptions(m.dbPath, targets)
 }
 
+// Retrieves all topology warnings from the database.
 func (m *TopologyManager) GetWarnings() (map[string]domain.TopologyWarning, error) {
 	topo, err := helper.ReadDb(m.dbPath)
 	if err != nil {
@@ -991,6 +1023,7 @@ func (m *TopologyManager) GetWarnings() (map[string]domain.TopologyWarning, erro
 	return topo.Warnings, nil
 }
 
+// Retrieves topology warnings filtered by source ID, target ID, and kind.
 func (m *TopologyManager) ListWarnings(sourceID, targetID string, kind domain.WarningKind) ([]domain.TopologyWarning, error) {
 	topo, err := helper.ReadDb(m.dbPath)
 	if err != nil {

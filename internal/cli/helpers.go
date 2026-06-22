@@ -16,6 +16,7 @@ import (
 	"aracne/internal/topology/scanner/pyscanner"
 )
 
+// Creates a scanner registry with registered Go, Python, JavaScript, and TypeScript scanners.
 func NewScannerRegistry() *scanner.Registry {
 	reg := scanner.NewRegistry()
 	reg.Register(goscanner.NewGoScanner())
@@ -25,6 +26,7 @@ func NewScannerRegistry() *scanner.Registry {
 	return reg
 }
 
+// Retrieves the project language from topology manager, defaulting to Go.
 func GetLanguage(manager *topology.TopologyManager) string {
 	topo, err := manager.ReadAll()
 	if err != nil || topo == nil {
@@ -50,6 +52,7 @@ func runReadScan(manager *topology.TopologyManager, reg *scanner.Registry) {
 	}
 }
 
+// Initializes topology manager and scanner registry, performing initial scan if needed.
 func InitRegistry(dbPath string) (*topology.TopologyManager, *scanner.Registry) {
 	reg := NewScannerRegistry()
 	mgr := topology.New()
@@ -69,6 +72,7 @@ func InitRegistry(dbPath string) (*topology.TopologyManager, *scanner.Registry) 
 	return mgr, reg
 }
 
+// Normalizes and maps a string name to the corresponding domain ResourceKind enum value.
 func MapResourceKind(name string) domain.ResourceKind {
 	normalized := strings.TrimSpace(name)
 	normalized = strings.TrimPrefix(normalized, "domain.")
@@ -104,6 +108,7 @@ func MapResourceKind(name string) domain.ResourceKind {
 	return ""
 }
 
+// Compares two warning maps and returns newly added and removed warnings.
 func DiffWarnings(before, after map[string]domain.TopologyWarning) (added, removed []domain.TopologyWarning) {
 	for id, w := range after {
 		if _, exists := before[id]; !exists {

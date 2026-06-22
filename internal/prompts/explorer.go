@@ -1,5 +1,6 @@
 package prompts
 
+// Returns prompt instructions for the explorer sub-agent, directing it to investigate focused codebase questions using topology reads and searches without editing state.
 func ExplorerPrompt() string {
 	return `You are an Explorer sub-agent for the Viz front-end chat.
 

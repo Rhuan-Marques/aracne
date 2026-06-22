@@ -9,6 +9,7 @@ import (
 	"aracne/internal/mcp"
 )
 
+// Starts an MCP server exposing topology tools for a specified agent profile.
 func RunServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	profileName := fs.String("tool-profile", "main", "Agent whose tools to serve: main, all, or a configured agent name (bug-hunter, bug-judge, bug-solver, descriptions-generation-executor)")

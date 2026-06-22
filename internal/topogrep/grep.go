@@ -13,6 +13,7 @@ import (
 	"aracne/internal/topology/domain"
 )
 
+// Represents a single grep match containing file path, line number, matched text, and optional topology resource metadata.
 type Match struct {
 	Path        string `json:"path"`
 	Line        int    `json:"line"`
@@ -21,6 +22,7 @@ type Match struct {
 	Description string `json:"description,omitempty"`
 }
 
+// Holds metadata for a resource in the topology: its ID, description, kind, and line span in source code.
 type resourceLocation struct {
 	id          string
 	description string
@@ -29,6 +31,7 @@ type resourceLocation struct {
 	endsAt      int
 }
 
+// Searches files recursively for a regex pattern and returns matches enriched with topology resource information.
 func Search(pattern, root string, topo *domain.Topology) ([]Match, error) {
 	if pattern == "" {
 		return nil, fmt.Errorf("pattern is required")
@@ -62,6 +65,7 @@ func Search(pattern, root string, topo *domain.Topology) ([]Match, error) {
 	return matches, nil
 }
 
+// Formats search matches into path:line:text output with optional ResourceID and Description metadata.
 func Format(matches []Match) string {
 	if len(matches) == 0 {
 		return ""
@@ -82,6 +86,7 @@ func Format(matches []Match) string {
 	return b.String()
 }
 
+// Recursively traverses a directory tree, visiting files while skipping excluded directories, and applying a callback function to regular files
 func walkSearch(root string, visit func(path string) error) error {
 	info, err := os.Stat(root)
 	if err != nil {
@@ -107,6 +112,7 @@ func walkSearch(root string, visit func(path string) error) error {
 	})
 }
 
+// Checks whether a directory should be skipped during filesystem traversal based on name (.git, .aracne, node_modules, vendor, or hidden dirs)
 func shouldSkipDir(path, name string) bool {
 	if name == "." {
 		return false
@@ -118,6 +124,7 @@ func shouldSkipDir(path, name string) bool {
 	return strings.HasPrefix(name, ".") && path != name
 }
 
+// Searches a file line-by-line for regex matches and returns matches paired with their corresponding topology resources when available.
 func searchFile(path string, re *regexp.Regexp, index map[string][]resourceLocation) ([]Match, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -154,6 +161,7 @@ func searchFile(path string, re *regexp.Regexp, index map[string][]resourceLocat
 	return matches, nil
 }
 
+// Builds a map from canonical file paths to sorted lists of resources in those files, enabling line-based resource lookup.
 func buildResourceIndex(topo *domain.Topology) map[string][]resourceLocation {
 	index := make(map[string][]resourceLocation)
 	if topo == nil {
@@ -186,6 +194,7 @@ func buildResourceIndex(topo *domain.Topology) map[string][]resourceLocation {
 	return index
 }
 
+// Selects the most specific topology resource for a given line, preferring scoped resources over file-level fallbacks.
 func bestResource(resources []resourceLocation, line int) *resourceLocation {
 	var fallback *resourceLocation
 	for i := range resources {
@@ -203,6 +212,7 @@ func bestResource(resources []resourceLocation, line int) *resourceLocation {
 	return fallback
 }
 
+// Calculates the byte range span of a resource location, returning a large value if bounds are unset
 func span(resource resourceLocation) int {
 	if resource.startsAt == 0 || resource.endsAt == 0 {
 		return 1 << 30
@@ -210,6 +220,7 @@ func span(resource resourceLocation) int {
 	return resource.endsAt - resource.startsAt
 }
 
+// Converts a file path to absolute, cleaned, and lowercased form for consistent resource indexing across platforms.
 func canonicalPath(path string) string {
 	if abs, err := filepath.Abs(path); err == nil {
 		path = abs
@@ -221,6 +232,7 @@ func canonicalPath(path string) string {
 	return path
 }
 
+// Converts a file path to relative form when possible, using forward slashes for display in search results.
 func displayPath(path string) string {
 	if rel, err := filepath.Rel(".", path); err == nil && !strings.HasPrefix(rel, "..") {
 		return filepath.ToSlash(rel)

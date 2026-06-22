@@ -11,6 +11,7 @@ var (
 	llmCharter     string
 )
 
+// Loads LLM integration charter from LLM_INTEGRATION_CHARTER.md or .aracne/LLM_INTEGRATION_CHARTER.md into global llmCharter.
 func loadLLMCharter() {
 	candidates := []string{
 		"LLM_INTEGRATION_CHARTER.md",
@@ -25,6 +26,7 @@ func loadLLMCharter() {
 	}
 }
 
+// Constructs the system prompt for JavaScript LLM interactions, combining the LLM charter with JavaScript-specific guidance.
 func BuildJavaScriptSystemPrompt() string {
 	llmCharterOnce.Do(loadLLMCharter)
 	if llmCharter != "" {
@@ -33,6 +35,7 @@ func BuildJavaScriptSystemPrompt() string {
 	return javascriptSpecificPrompt
 }
 
+// Constructs the system prompt for TypeScript LLM interactions, combining the LLM charter with TypeScript-specific guidance.
 func BuildTypeScriptSystemPrompt() string {
 	llmCharterOnce.Do(loadLLMCharter)
 	if llmCharter != "" {

@@ -7,6 +7,7 @@ import (
 	"aracne/internal/topology/python"
 )
 
+// Returns a description string or "no description" if empty.
 func desc(s string) string {
 	if s == "" {
 		return "no description"
@@ -14,6 +15,7 @@ func desc(s string) string {
 	return s
 }
 
+// Formats a Python module with its source code and hierarchical listing of functions, classes, and variables.
 func FormatPythonModuleContext(ctx *python.PythonModuleContext) string {
 	var b strings.Builder
 
@@ -47,6 +49,7 @@ func FormatPythonModuleContext(ctx *python.PythonModuleContext) string {
 	return b.String()
 }
 
+// Formats a Python external dependency with a list of resources that use it.
 func FormatPythonDependencyContext(ctx *python.PythonDependencyContext) string {
 	var b strings.Builder
 
@@ -66,6 +69,7 @@ func FormatPythonDependencyContext(ctx *python.PythonDependencyContext) string {
 	return b.String()
 }
 
+// Formats a Python function with its parent class, imports, and context including called functions and used classes.
 func FormatPythonFunctionContext(ctx *python.PythonFunctionContext) string {
 	var b strings.Builder
 
@@ -117,6 +121,7 @@ func FormatPythonFunctionContext(ctx *python.PythonFunctionContext) string {
 	return b.String()
 }
 
+// Formats a Python class with its imports, constructor, methods, base classes, and dependencies for LLM context.
 func FormatPythonClassContext(ctx *python.PythonClassContext) string {
 	var b strings.Builder
 

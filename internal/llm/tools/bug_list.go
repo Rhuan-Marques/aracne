@@ -9,22 +9,27 @@ import (
 	"aracne/internal/topology/domain"
 )
 
+// LLM tool to list all open bug reports from the topology database.
 type BugList struct {
 	mgr *topology.TopologyManager
 }
 
+// Constructs a BugList tool for retrieving all topology issues.
 func NewBugList(mgr *topology.TopologyManager) *BugList {
 	return &BugList{mgr: mgr}
 }
 
+// Returns the tool name "bug_list" for the bug listing tool.
 func (b *BugList) Name() string {
 	return "bug_list"
 }
 
+// Returns the description for the bug_list tool: lists known bugs with optional filtering by node ID or state.
 func (b *BugList) Description() string {
 	return "List all known bugs. Optionally filter by node ID or state (pending, acknowledged, dismissed)."
 }
 
+// Returns tool parameters: optional node_id and state filters for querying bugs.
 func (b *BugList) Parameters() []Parameter {
 	return []Parameter{
 		{Name: "node_id", Type: "string", Description: "Filter bugs by resource node ID", Required: false},
@@ -32,6 +37,7 @@ func (b *BugList) Parameters() []Parameter {
 	}
 }
 
+// Executes bug listing by querying the bug manager with optional filters and formats results as a readable string.
 func (b *BugList) Run(args json.RawMessage) (string, error) {
 	var params struct {
 		NodeID string `json:"node_id"`

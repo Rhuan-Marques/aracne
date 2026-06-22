@@ -11,6 +11,7 @@ var (
 	llmCharter     string
 )
 
+// Loads LLM integration charter from file, checking project root and .aracne/ directory.
 func loadLLMCharter() {
 	candidates := []string{
 		"LLM_INTEGRATION_CHARTER.md",
@@ -25,6 +26,7 @@ func loadLLMCharter() {
 	}
 }
 
+// Constructs the LLM system prompt for Python, combining charter and Python-specific instructions.
 func BuildPythonSystemPrompt() string {
 	llmCharterOnce.Do(loadLLMCharter)
 	if llmCharter != "" {

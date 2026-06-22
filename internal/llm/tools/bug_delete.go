@@ -7,28 +7,34 @@ import (
 	"aracne/internal/topology"
 )
 
+// LLM tool to permanently delete a bug report from the topology database.
 type BugDelete struct {
 	mgr *topology.TopologyManager
 }
 
+// Constructs a BugDelete tool for permanently removing topology issues.
 func NewBugDelete(mgr *topology.TopologyManager) *BugDelete {
 	return &BugDelete{mgr: mgr}
 }
 
+// Returns the tool name "bug_delete".
 func (b *BugDelete) Name() string {
 	return "bug_delete"
 }
 
+// Returns the description of the bug_delete tool: deletes bugs from the database after fixing or for removing false positives.
 func (b *BugDelete) Description() string {
 	return "Delete a bug from the database. Used by the Bug Solver after fixing, or by the Bug Judge for duplicate false positives."
 }
 
+// Returns the parameter schema for deleting a bug: bug_id (required string).
 func (b *BugDelete) Parameters() []Parameter {
 	return []Parameter{
 		{Name: "bug_id", Type: "string", Description: "The bug ID to delete", Required: true},
 	}
 }
 
+// Parses bug_id argument and deletes the specified bug from the manager.
 func (b *BugDelete) Run(args json.RawMessage) (string, error) {
 	var params struct {
 		BugID string `json:"bug_id"`

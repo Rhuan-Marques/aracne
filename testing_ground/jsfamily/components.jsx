@@ -8,7 +8,7 @@
 import React, { useState } from "react";
 import { Circle } from "./shapes.js";
 
-// Function component. `onSelect` is a function-typed prop that gets called.
+// React component that renders a button displaying a shape's description and click count, calling onSelect when clicked
 export function ShapeBadge({ shape, onSelect }) {
   const [count, setCount] = useState(0);
   const handle = () => {
@@ -18,15 +18,16 @@ export function ShapeBadge({ shape, onSelect }) {
   return <button onClick={handle}>{shape.describe()} {count}</button>;
 }
 
-// Class component extending a member-expression base (React.Component).
+// React component that renders a circle's area based on the radius prop.
 export class CircleView extends React.Component {
+// Instantiates a Circle with the provided radius and renders its computed area in a div.
   render() {
     const c = new Circle(this.props.radius); // `new` -> method resolves
     return <div>{c.area()}</div>;
   }
 }
 
-// A mixin: a function returning a (named) class expression.
+// Higher-order function that wraps a class with a serialize method to output JSON.
 const Serializable = (Base) =>
   class SerializableMixin extends Base {
     serialize() {
@@ -34,9 +35,9 @@ const Serializable = (Base) =>
     }
   };
 
-// `extends Serializable(Circle)` is the `extends Mixin(Base)` edge case: the
-// base resolves by the call's callee name ("Serializable").
+// Circle subclass mixed with Serializable, computing area with fallback to zero if parent method unavailable.
 export class SerializableCircle extends Serializable(Circle) {
+// Computes the circle's area by calling the parent method or returns zero if unavailable.
   area() {
     return super.area ? super.area() : 0;
   }

@@ -3,11 +3,13 @@
 const { Circle, Rectangle } = require("./shapes.js");
 const path = require("path"); // external dependency
 
+// Creates a Circle instance and returns its area
 function buildCircle(radius) {
   const c = new Circle(radius);
   return c.area();
 }
 
+// Creates a Rectangle instance and returns its area
 function rectInfo(w, h) {
   const r = new Rectangle(w, h);
   return r.area();

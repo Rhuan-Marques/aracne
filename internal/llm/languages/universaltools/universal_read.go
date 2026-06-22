@@ -1,10 +1,8 @@
 package universaltools
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -21,48 +19,67 @@ import (
 	"aracne/internal/topology/python"
 )
 
+// LLM tool that reads a function or method's source code with topology context.
 type UniversalReadFunction struct{ mgr *topology.TopologyManager }
+// LLM tool that reads a struct/class with topology context, delegating to language-specific handlers.
 type UniversalReadStruct struct{ mgr *topology.TopologyManager }
+// LLM tool that reads an interface, protocol, or abstract class with topology context.
 type UniversalReadInterface struct{ mgr *topology.TopologyManager }
+// LLM tool that reads file contents with optional line range filtering and topology context.
 type UniversalReadFile struct{ mgr *topology.TopologyManager }
+// LLM tool that reads a package and its language-specific topology context.
 type UniversalReadPackage struct{ mgr *topology.TopologyManager }
+// LLM tool that reads dependencies and formats language-specific topology context.
 type UniversalReadDependency struct{ mgr *topology.TopologyManager }
+// LLM tool that reads a Go named type or TypeScript type definition with topology context.
 type UniversalReadNamedType struct{ mgr *topology.TopologyManager }
 
+// Holds a resolved resource ID and its domain.Resource metadata for read operations.
 type readTarget struct {
 	id  string
 	res domain.Resource
 }
 
+// Creates a new UniversalReadFunction tool instance with the given topology manager.
 func NewReadFunction(mgr *topology.TopologyManager) *UniversalReadFunction {
 	return &UniversalReadFunction{mgr: mgr}
 }
+// Constructs a UniversalReadStruct tool for LLM access to struct/class sources and topology context.
 func NewReadStruct(mgr *topology.TopologyManager) *UniversalReadStruct {
 	return &UniversalReadStruct{mgr: mgr}
 }
+// Creates a new UniversalReadInterface tool instance with the given topology manager.
 func NewReadInterface(mgr *topology.TopologyManager) *UniversalReadInterface {
 	return &UniversalReadInterface{mgr: mgr}
 }
+// Creates a new UniversalReadFile tool instance with the given topology manager.
 func NewReadFile(mgr *topology.TopologyManager) *UniversalReadFile {
 	return &UniversalReadFile{mgr: mgr}
 }
+// Constructs a UniversalReadPackage tool for LLM access to package sources and topology context.
 func NewReadPackage(mgr *topology.TopologyManager) *UniversalReadPackage {
 	return &UniversalReadPackage{mgr: mgr}
 }
+// Creates a new UniversalReadDependency tool instance with the given topology manager.
 func NewReadDependency(mgr *topology.TopologyManager) *UniversalReadDependency {
 	return &UniversalReadDependency{mgr: mgr}
 }
+// Constructs a UniversalReadNamedType tool for LLM access to named type sources and topology context.
 func NewReadNamedType(mgr *topology.TopologyManager) *UniversalReadNamedType {
 	return &UniversalReadNamedType{mgr: mgr}
 }
 
+// Returns the tool name "read_function" for the LLM interface.
 func (r *UniversalReadFunction) Name() string { return "read_function" }
+// Returns the tool description for reading functions or methods with topology context.
 func (r *UniversalReadFunction) Description() string {
 	return "Read a function or method source and language-specific topology context."
 }
+// Returns parameter schema describing the function name or resource ID argument.
 func (r *UniversalReadFunction) Parameters() []tools.Parameter {
 	return nameParam("The function name or resource ID to read")
 }
+// Resolves a function/method by name and returns its source with language-specific topology context.
 func (r *UniversalReadFunction) Run(args json.RawMessage) (string, error) {
 	name, err := readNameArg(args)
 	if err != nil {
@@ -97,13 +114,17 @@ func (r *UniversalReadFunction) Run(args json.RawMessage) (string, error) {
 	}
 }
 
+// Returns the tool name "read_struct".
 func (r *UniversalReadStruct) Name() string { return "read_struct" }
+// Returns the description for the read_struct tool.
 func (r *UniversalReadStruct) Description() string {
 	return "Read a type/class source and language-specific topology context."
 }
+// Returns parameter schema for read_struct tool: the type/class name or resource ID to read.
 func (r *UniversalReadStruct) Parameters() []tools.Parameter {
 	return nameParam("The type/class name or resource ID to read")
 }
+// Executes read_struct tool by resolving target name, delegating to language-specific managers (Go/Python/JS/TS), and formatting output.
 func (r *UniversalReadStruct) Run(args json.RawMessage) (string, error) {
 	name, err := readNameArg(args)
 	if err != nil {
@@ -138,13 +159,17 @@ func (r *UniversalReadStruct) Run(args json.RawMessage) (string, error) {
 	}
 }
 
+// Returns the tool name "read_interface".
 func (r *UniversalReadInterface) Name() string { return "read_interface" }
+// Returns the description for the read_interface tool: "Read an interface, protocol, or abstract class context."
 func (r *UniversalReadInterface) Description() string {
 	return "Read an interface, protocol, or abstract class context."
 }
+// Returns parameters for read_interface: the interface/protocol name or resource ID to read.
 func (r *UniversalReadInterface) Parameters() []tools.Parameter {
 	return nameParam("The interface/protocol name or resource ID to read")
 }
+// Executes read_interface: resolves an interface/protocol/abstract-class by name/ID and returns formatted context for Go, Python, or TypeScript.
 func (r *UniversalReadInterface) Run(args json.RawMessage) (string, error) {
 	name, err := readNameArg(args)
 	if err != nil {
@@ -180,10 +205,13 @@ func (r *UniversalReadInterface) Run(args json.RawMessage) (string, error) {
 	}
 }
 
+// Returns the tool name "read_file" for the universal file reader.
 func (r *UniversalReadFile) Name() string { return "read_file" }
+// Returns the help text for read_file tool describing its ability to read file source with topology context and optional line range filtering.
 func (r *UniversalReadFile) Description() string {
 	return "Read a file/module source and language-specific topology context. Optionally pass start_line/end_line to read only a specific line range (raw lines, no context)."
 }
+// Returns the parameter schema for read_file tool: required file path, optional 1-indexed start_line and end_line for line range filtering.
 func (r *UniversalReadFile) Parameters() []tools.Parameter {
 	return []tools.Parameter{
 		{Name: "name", Type: "string", Description: "The file path or name to read", Required: true},
@@ -191,6 +219,7 @@ func (r *UniversalReadFile) Parameters() []tools.Parameter {
 		{Name: "end_line", Type: "integer", Description: "Optional 1-indexed last line to read, inclusive. Defaults to the end of the file when only start_line is given.", Required: false},
 	}
 }
+// Reads a file or line range by resolving its target and formatting content with language-specific topology context.
 func (r *UniversalReadFile) Run(args json.RawMessage) (string, error) {
 	name, startLine, endLine, err := readFileArgs(args)
 	if err != nil {
@@ -237,36 +266,23 @@ func (r *UniversalReadFile) Run(args json.RawMessage) (string, error) {
 	return readRawFileContent(name)
 }
 
+// Reads raw file content up to the configured maximum file size.
 func readRawFileContent(path string) (string, error) {
 	maxSize := helper.LoadConfig(helper.ConfigPath(".aracne/topology.db")).EffectiveMaxFileSize()
-	if info, err := os.Stat(path); err == nil && info.Size() > maxSize {
-		return "", fmt.Errorf("file %q is %d bytes, exceeding the configured read.max_file_size of %d bytes", path, info.Size(), maxSize)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("file %q not found in topology and cannot be read as file: %w", path, err)
-	}
-	if isBinary(data) {
-		return "", fmt.Errorf("binary file %q cannot be displayed as text", path)
-	}
-	return fmt.Sprintf("%s\n%s", filepath.Base(path), string(data)), nil
+	return helper.ReadRawFile(path, maxSize)
 }
 
-func isBinary(data []byte) bool {
-	n := len(data)
-	if n > 512 {
-		n = 512
-	}
-	return bytes.IndexByte(data[:n], 0) >= 0
-}
-
+// Returns the tool name "read_package".
 func (r *UniversalReadPackage) Name() string { return "read_package" }
+// Returns description: "Read a package and language-specific topology context."
 func (r *UniversalReadPackage) Description() string {
 	return "Read a package and language-specific topology context."
 }
+// Returns parameter schema for read_package tool: the package name or resource ID to read.
 func (r *UniversalReadPackage) Parameters() []tools.Parameter {
 	return nameParam("The package name or resource ID to read")
 }
+// Executes read_package: resolves the target package and returns formatted topology context for Go packages only.
 func (r *UniversalReadPackage) Run(args json.RawMessage) (string, error) {
 	name, err := readNameArg(args)
 	if err != nil {
@@ -290,13 +306,17 @@ func (r *UniversalReadPackage) Run(args json.RawMessage) (string, error) {
 	}
 }
 
+// Returns the name "read_dependency" for the UniversalReadDependency tool.
 func (r *UniversalReadDependency) Name() string { return "read_dependency" }
+// Returns the description string for the read_dependency tool.
 func (r *UniversalReadDependency) Description() string {
 	return "Read a dependency and language-specific reverse usage context."
 }
+// Returns the parameter schema for read_dependency tool: a single required string parameter for the dependency name or resource ID.
 func (r *UniversalReadDependency) Parameters() []tools.Parameter {
 	return nameParam("The dependency name or resource ID to read")
 }
+// Executes read_dependency tool by resolving a dependency name to its target, then delegates to the appropriate language-specific manager to format dependency context.
 func (r *UniversalReadDependency) Run(args json.RawMessage) (string, error) {
 	name, err := readNameArg(args)
 	if err != nil {
@@ -330,13 +350,17 @@ func (r *UniversalReadDependency) Run(args json.RawMessage) (string, error) {
 	}
 }
 
+// Returns the tool name "read_named_type".
 func (r *UniversalReadNamedType) Name() string { return "read_named_type" }
+// Returns the description for the read_named_type tool: "Read a Go named type source and topology context."
 func (r *UniversalReadNamedType) Description() string {
 	return "Read a Go named type source and topology context."
 }
+// Returns parameter schema requesting a named type name or resource ID to read.
 func (r *UniversalReadNamedType) Parameters() []tools.Parameter {
 	return nameParam("The named type name or resource ID to read")
 }
+// Reads a named type from topology and formats context for Go or TypeScript languages.
 func (r *UniversalReadNamedType) Run(args json.RawMessage) (string, error) {
 	name, err := readNameArg(args)
 	if err != nil {
@@ -364,6 +388,7 @@ func (r *UniversalReadNamedType) Run(args json.RawMessage) (string, error) {
 	}
 }
 
+// Creates a required string parameter named "name" for use in tool definitions.
 func nameParam(description string) []tools.Parameter {
 	return []tools.Parameter{{Name: "name", Type: "string", Description: description, Required: true}}
 }
@@ -375,6 +400,7 @@ func filterOption(mgr *topology.TopologyManager) topology.TopologyOption {
 	return topology.WithContextFilter(cfg.EffectiveContextFilter())
 }
 
+// Parses JSON arguments to extract a required "name" field.
 func readNameArg(args json.RawMessage) (string, error) {
 	var params struct {
 		Name string `json:"name"`
@@ -388,6 +414,7 @@ func readNameArg(args json.RawMessage) (string, error) {
 	return params.Name, nil
 }
 
+// Parses file read arguments (name, start_line, end_line) from JSON, validating that name is required.
 func readFileArgs(args json.RawMessage) (string, int, int, error) {
 	var params struct {
 		Name      string `json:"name"`
@@ -403,6 +430,7 @@ func readFileArgs(args json.RawMessage) (string, int, int, error) {
 	return params.Name, params.StartLine, params.EndLine, nil
 }
 
+// Resolves a resource name to a readTarget by filtering topology resources by kind.
 func resolveReadTarget(mgr *topology.TopologyManager, name string, kinds ...domain.ResourceKind) (readTarget, string, error) {
 	kindSet := make(map[domain.ResourceKind]bool, len(kinds))
 	for _, kind := range kinds {
@@ -411,6 +439,7 @@ func resolveReadTarget(mgr *topology.TopologyManager, name string, kinds ...doma
 	return resolveReadTargetWith(mgr, name, func(res domain.Resource) bool { return kindSet[res.Kind] })
 }
 
+// Resolves a resource name to a readTarget using a custom match predicate, with fallback language handling.
 func resolveReadTargetWith(mgr *topology.TopologyManager, name string, matches func(domain.Resource) bool) (readTarget, string, error) {
 	topo, err := mgr.ReadAll()
 	if err != nil {
@@ -460,6 +489,7 @@ func resolveReadTargetWith(mgr *topology.TopologyManager, name string, matches f
 	return candidates[0], "", nil
 }
 
+// Formats an error message listing multiple resource candidates matching a name query.
 func ambiguousTargets(name string, candidates []readTarget) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("Multiple resources matching %q found:\n", name))
@@ -469,10 +499,12 @@ func ambiguousTargets(name string, candidates []readTarget) string {
 	return b.String()
 }
 
+// Returns an error indicating that a tool does not support a given language for a resource.
 func unsupportedLanguage(tool string, target readTarget) error {
 	return fmt.Errorf("%s does not support language %q for resource %s", tool, target.res.Language, target.id)
 }
 
+// Extracts a boolean property value from a resource, defaulting to false if missing or not a bool.
 func boolProp(res domain.Resource, key string) bool {
 	value, ok := res.Properties[key]
 	if !ok || value == nil {
@@ -482,6 +514,7 @@ func boolProp(res domain.Resource, key string) bool {
 	return ok && b
 }
 
+// Generates a formatted summary of a Python class including name, type (ABC or Protocol), bases, and location.
 func pythonInterfaceSummary(mgr *topology.TopologyManager, id string) (string, error) {
 	topo, err := mgr.ReadAll()
 	if err != nil {

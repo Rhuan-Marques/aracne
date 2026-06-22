@@ -18,32 +18,40 @@ import (
 	"aracne/internal/topology/scanner"
 )
 
+// Executes bash commands in a workspace with topology scanning support.
 type BashTool struct {
 	workspace string
 	mgr       *topology.TopologyManager
 	reg       *scanner.Registry
 }
 
+// File glob matching tool with workspace context.
 type GlobTool struct {
 	workspace string
 }
 
+// Native tool for agents to ask the user a question.
 type AskUserQuestionTool struct{}
 
+// Constructs a BashTool with workspace, topology manager, and scanner registry.
 func NewBashTool(workspace string, mgr *topology.TopologyManager, reg *scanner.Registry) *BashTool {
 	return &BashTool{workspace: workspace, mgr: mgr, reg: reg}
 }
 
+// Creates a GlobTool for pattern-based file matching within a workspace.
 func NewGlobTool(workspace string) *GlobTool {
 	return &GlobTool{workspace: workspace}
 }
 
+// Returns the tool name "bash"
 func (b *BashTool) Name() string { return "bash" }
 
+// Returns the description for BashTool: executes terminal commands in the workspace and triggers incremental topology scan on success.
 func (b *BashTool) Description() string {
 	return "Execute a terminal command in the workspace. A successful command triggers an incremental topology scan."
 }
 
+// Returns parameters schema: command (string, required), workdir (string, optional), timeout_ms (number, optional)
 func (b *BashTool) Parameters() []tools.Parameter {
 	return []tools.Parameter{
 		{Name: "command", Type: "string", Description: "Command to execute", Required: true},
@@ -52,6 +60,7 @@ func (b *BashTool) Parameters() []tools.Parameter {
 	}
 }
 
+// Executes shell command with timeout support, runs incremental topology scan after completion, returns output or error
 func (b *BashTool) Run(args json.RawMessage) (string, error) {
 	var params struct {
 		Command   string `json:"command"`
@@ -102,12 +111,15 @@ func (b *BashTool) Run(args json.RawMessage) (string, error) {
 	return trimToolOutput(text), nil
 }
 
+// Returns tool name 'glob'
 func (g *GlobTool) Name() string { return "glob" }
 
+// Returns description of glob pattern file search capability
 func (g *GlobTool) Description() string {
 	return "Find files by glob pattern. Supports *, ?, and ** patterns."
 }
 
+// Returns parameter schema for glob file search with pattern and path
 func (g *GlobTool) Parameters() []tools.Parameter {
 	return []tools.Parameter{
 		{Name: "pattern", Type: "string", Description: "Glob pattern, for example **/*.go", Required: true},
@@ -115,6 +127,7 @@ func (g *GlobTool) Parameters() []tools.Parameter {
 	}
 }
 
+// Finds files matching a glob pattern relative to workspace root
 func (g *GlobTool) Run(args json.RawMessage) (string, error) {
 	var params struct {
 		Pattern string `json:"pattern"`
@@ -156,12 +169,15 @@ func (g *GlobTool) Run(args json.RawMessage) (string, error) {
 	return strings.Join(matches, "\n"), nil
 }
 
+// Returns the tool name "ask_user_question".
 func (a *AskUserQuestionTool) Name() string { return "ask_user_question" }
 
+// Returns the description for the AskUserQuestionTool: "Ask the user a question and wait for their answer before continuing."
 func (a *AskUserQuestionTool) Description() string {
 	return "Ask the user a question and wait for their answer before continuing."
 }
 
+// Returns tool parameters: question (required), options (optional array), and multiple (optional boolean).
 func (a *AskUserQuestionTool) Parameters() []tools.Parameter {
 	return []tools.Parameter{
 		{Name: "question", Type: "string", Description: "Question to ask the user", Required: true},
@@ -170,10 +186,12 @@ func (a *AskUserQuestionTool) Parameters() []tools.Parameter {
 	}
 }
 
+// Always returns an error, delegating handling to the chat session.
 func (a *AskUserQuestionTool) Run(args json.RawMessage) (string, error) {
 	return "", fmt.Errorf("ask_user_question is handled by the chat session")
 }
 
+// Converts a glob pattern (with *, **, ?) to a compiled regexp for matching file paths.
 func globRegexp(pattern string) (*regexp.Regexp, error) {
 	var b strings.Builder
 	b.WriteString("^")
@@ -200,6 +218,7 @@ func globRegexp(pattern string) (*regexp.Regexp, error) {
 	return regexp.Compile(b.String())
 }
 
+// Truncates tool output to 64KB with an ellipsis suffix indicating total bytes if exceeded.
 func trimToolOutput(text string) string {
 	const limit = 64000
 	if len(text) <= limit {

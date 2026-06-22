@@ -12,6 +12,7 @@ import (
 	"aracne/internal/topology/domain"
 )
 
+// Analyzes a project and builds/updates the topology database with configurable scan modes (hard, full, or incremental).
 func RunScan(args []string) {
 	fs := flag.NewFlagSet("scan", flag.ExitOnError)
 	root := fs.String("root", ".", "Root folder of the project to analyze")

@@ -7,10 +7,12 @@ import (
 	"aracne/internal/helper"
 )
 
+// Returns CLAUDE.md content tailored to the effective agent configuration for claude_code.
 func ClaudeMdContent() string {
 	return ClaudeMdContentForAgent(helper.DefaultConfig().EffectiveAgent("claude_code", "main"))
 }
 
+// Returns the agents.md content for the default OpenCode agent configuration.
 func AgentsMdContent() string {
 	return AgentsMdContentForAgent(helper.DefaultConfig().EffectiveAgent("opencode", "main"))
 }
@@ -27,6 +29,7 @@ func AgentsMdContentForAgent(eff helper.AgentConfig) string {
 	return agentInstructionsContent(eff, "aracne_")
 }
 
+// Wraps a string in backticks to format it as inline code.
 func bt(s string) string {
 	return "`" + s + "`"
 }
@@ -35,6 +38,7 @@ func bt(s string) string {
 
 var splitReadTools = []string{"read_function", "read_struct", "read_interface", "read_named_type", "read_file", "read_package", "read_dependency"}
 
+// Checks if a string exists in a list of strings.
 func inList(list []string, name string) bool {
 	for _, n := range list {
 		if n == name {
@@ -44,10 +48,13 @@ func inList(list []string, name string) bool {
 	return false
 }
 
+// Checks if a given MCP tool name is enabled in the agent config.
 func hasMCPTool(eff helper.AgentConfig, name string) bool { return inList(eff.MCPTools, name) }
 
+// Checks whether a native tool is allowed by verifying it's not in the agent config's blocked tools list.
 func nativeAllowed(eff helper.AgentConfig, key string) bool { return !inList(eff.BlockedTools, key) }
 
+// Returns the list of available split read tools (read_function, read_struct, etc.) supported by the agent configuration.
 func presentSplitReads(eff helper.AgentConfig) []string {
 	var out []string
 	for _, n := range splitReadTools {
@@ -58,11 +65,12 @@ func presentSplitReads(eff helper.AgentConfig) []string {
 	return out
 }
 
+// Checks whether the agent config supports MCP read tools (either generic read or any split read variant).
 func usesMCPRead(eff helper.AgentConfig) bool {
 	return hasMCPTool(eff, "read") || len(presentSplitReads(eff)) > 0
 }
 
-// --- sections --------------------------------------------------------------
+// Assembles navigation, tool, and behavioral guidance sections into complete agent instructions based on configuration and MCP tool prefix.
 
 func agentInstructionsContent(eff helper.AgentConfig, mcpToolPrefix string) string {
 	var b strings.Builder
@@ -88,6 +96,7 @@ func agentInstructionsContent(eff helper.AgentConfig, mcpToolPrefix string) stri
 	return b.String()
 }
 
+// Returns introductory text explaining aracne's role in codebase navigation and topology graphs.
 func introductionSection() string {
 	return `# Aracne Project Integration
 
@@ -96,6 +105,7 @@ This project uses **aracne** for codebase navigation. The topology database prov
 `
 }
 
+// Generates the "Navigation Model" section of agent instructions, explaining file exploration and MCP lookup tool usage based on agent config.
 func navigationModelSection(eff helper.AgentConfig) string {
 	b := &strings.Builder{}
 	fmt.Fprintf(b, "## Navigation Model\n\n")
@@ -114,6 +124,7 @@ func navigationModelSection(eff helper.AgentConfig) string {
 	return b.String()
 }
 
+// Generates documentation for available MCP lookup tools based on agent config and read modes.
 func lookupToolsSection(eff helper.AgentConfig, mcpToolPrefix string) string {
 	b := &strings.Builder{}
 
@@ -135,6 +146,7 @@ func lookupToolsSection(eff helper.AgentConfig, mcpToolPrefix string) string {
 	return b.String()
 }
 
+// Maps split read tool names to their descriptions for display in Claude.md documentation.
 func splitReadDescription(name string) string {
 	switch name {
 	case "read_function":
@@ -156,6 +168,7 @@ func splitReadDescription(name string) string {
 	}
 }
 
+// Builds markdown section documenting grep/search tools based on agent config capabilities
 func grepSection(eff helper.AgentConfig, mcpToolPrefix string) string {
 	if hasMCPTool(eff, "grep") {
 		return fmt.Sprintf("## Grep/Search\n\nUse the MCP tool %s for content search. It returns `path:line:match` plus `ResourceID` and `Description` when a match maps to a topology resource.\n\nDo *not* use your native `grep` tool.\nDo not use `grep`, `Select-String` or `rg` in the terminal", bt(mcpToolPrefix+"grep"))
@@ -166,6 +179,7 @@ func grepSection(eff helper.AgentConfig, mcpToolPrefix string) string {
 	return ""
 }
 
+// Generates markdown documentation for the CONTEXT section output from MCP read tools, explaining hierarchical resource relationships.
 func resourceContextSection(eff helper.AgentConfig) string {
 	// The "# CONTEXT:" output is produced only by the MCP read tools.
 	if !usesMCPRead(eff) {
@@ -191,6 +205,7 @@ func resourceContextSection(eff helper.AgentConfig) string {
 	return b.String()
 }
 
+// Builds markdown section documenting available edit/write tools based on agent config capabilities
 func editWriteSection(eff helper.AgentConfig, mcpToolPrefix string) string {
 	if hasMCPTool(eff, "edit") || hasMCPTool(eff, "write") {
 		return fmt.Sprintf("## Edit and Write:\n\nYou can edit files using the MCP tool %s.\nYou can write files using the MCP tool %s.\nAfter editing or writing, the context for the topology will be automatically updated to reflect your actions.\n\n**Note: NEVER try to edit or write using your native tools**\n\n", bt(mcpToolPrefix+"edit"), bt(mcpToolPrefix+"write"))
@@ -201,6 +216,7 @@ func editWriteSection(eff helper.AgentConfig, mcpToolPrefix string) string {
 	return ""
 }
 
+// Generates the "Other" section of agent instructions with bug report and topology warnings guidance when those tools are available.
 func otherSection(eff helper.AgentConfig, mcpToolPrefix string) string {
 	hasBugReport := hasMCPTool(eff, "bug_report")
 	hasWarnings := hasMCPTool(eff, "warnings_list")
@@ -220,6 +236,7 @@ func otherSection(eff helper.AgentConfig, mcpToolPrefix string) string {
 	return b.String()
 }
 
+// Returns markdown section explaining tool guard hooks and blocked_tools enforcement rules
 func guardNoteSection() string {
 	return "## Tool Guard\n\n" +
 		"An `arac guard` hook watches your tool calls. Whenever you use a native tool " +
@@ -254,6 +271,7 @@ func blocksShellReadOrGrep(eff helper.AgentConfig) bool {
 	return false
 }
 
+// Returns documentation on navigation best practices for exploring codebase topology instead of raw files.
 func howToNavigateSection() string {
 	return `## How to Navigate:
 
@@ -279,6 +297,7 @@ Use the topology manager to your advantage, only read entire files when:
 `
 }
 
+// Returns the behavioral rules section for agent instructions, covering conciseness, topology trust, accuracy, depth discipline, and exploration patterns.
 func behavioralRulesSection() string {
 	return `## Behavioral Rules
 
@@ -292,6 +311,7 @@ func behavioralRulesSection() string {
 `
 }
 
+// Returns closing goodbye text for generated prompt markdown
 func endingSection() string {
 	return "Good Luck in your task.\n"
 }

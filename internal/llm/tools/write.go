@@ -11,23 +11,28 @@ import (
 	"aracne/internal/topology/scanner"
 )
 
+// LLM tool for writing files with scanner registry and topology manager integration.
 type Write struct {
 	mgr *topology.TopologyManager
 	reg *scanner.Registry
 }
 
+// Creates a Write tool for editing and writing files with topology updates.
 func NewWrite(mgr *topology.TopologyManager, reg *scanner.Registry) *Write {
 	return &Write{mgr: mgr, reg: reg}
 }
 
+// Returns the tool name: "write"
 func (w *Write) Name() string {
 	return "write"
 }
 
+// Returns the tool description: "Write a new file, creating parent directories if needed."
 func (w *Write) Description() string {
 	return "Write a new file, creating parent directories if needed. Provide the file path and the content. The project topology is automatically updated. Overwrites file if it already existed"
 }
 
+// Returns required parameters: file_path (string) and content (string)
 func (w *Write) Parameters() []Parameter {
 	return []Parameter{
 		{Name: "file_path", Type: "string", Description: "The absolute path to the file to write", Required: true},
@@ -35,6 +40,7 @@ func (w *Write) Parameters() []Parameter {
 	}
 }
 
+// Parses JSON args, validates file_path, and executes file write with optional file locking
 func (w *Write) Run(args json.RawMessage) (string, error) {
 	var params struct {
 		FilePath string `json:"file_path"`
@@ -58,6 +64,7 @@ func (w *Write) Run(args json.RawMessage) (string, error) {
 	})
 }
 
+// Creates directories, writes file content, updates topology, and returns warnings if any
 func (w *Write) apply(filePath, contentStr string) (string, error) {
 	dir := filepath.Dir(filePath)
 	if err := os.MkdirAll(dir, 0755); err != nil {

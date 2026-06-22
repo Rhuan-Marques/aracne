@@ -58,11 +58,13 @@ type StreamEvent struct {
 
 type StreamCallback func(StreamEvent)
 
+// LLM interface for chat and streamed chat operations with tool support.
 type Provider interface {
 	Chat(messages []Message, tools []ToolDefinition) (*ChatResponse, error)
 	StreamChat(messages []Message, tools []ToolDefinition, emit StreamCallback) (*ChatResponse, error)
 }
 
+// Provides streaming chat responses with context using tools and messages.
 type ContextProvider interface {
 	StreamChatContext(ctx context.Context, messages []Message, tools []ToolDefinition, emit StreamCallback) (*ChatResponse, error)
 }

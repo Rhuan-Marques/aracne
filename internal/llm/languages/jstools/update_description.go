@@ -9,22 +9,27 @@ import (
 	"aracne/internal/topology/javascript"
 )
 
+// Tool that updates topology descriptions for JavaScript resources via LLM interaction.
 type UpdateDescriptionTool struct {
 	mgr *javascript.JavaScriptManager
 }
 
+// Creates an UpdateDescriptionTool for updating descriptions of JavaScript resources.
 func NewUpdateDescriptionTool(mgr *javascript.JavaScriptManager) *UpdateDescriptionTool {
 	return &UpdateDescriptionTool{mgr: mgr}
 }
 
+// Returns the name "update_description" for the LLM tool.
 func (u *UpdateDescriptionTool) Name() string {
 	return "update_description"
 }
 
+// Returns the description of the update_description LLM tool.
 func (u *UpdateDescriptionTool) Description() string {
 	return "Update the description of a resource in the topology database"
 }
 
+// Returns the parameter schema for the update_description tool: id, resource_name, and description.
 func (u *UpdateDescriptionTool) Parameters() []Parameter {
 	return []Parameter{
 		{Name: "id", Type: "string", Description: "Resource ID", Required: true},
@@ -33,6 +38,7 @@ func (u *UpdateDescriptionTool) Parameters() []Parameter {
 	}
 }
 
+// Executes the update_description tool to modify a resource's description in the topology database.
 func (u *UpdateDescriptionTool) Run(args json.RawMessage) (string, error) {
 	var params struct {
 		ID           string `json:"id"`

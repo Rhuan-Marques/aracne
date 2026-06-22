@@ -9,6 +9,7 @@ import (
 	"aracne/internal/chat"
 )
 
+// Lazily initializes and returns the chat Manager, broadcasting events to connected WebSocket clients.
 func (s *Server) chatManager() (*chat.Manager, error) {
 	s.chatMu.Lock()
 	defer s.chatMu.Unlock()
@@ -21,6 +22,7 @@ func (s *Server) chatManager() (*chat.Manager, error) {
 	return s.chatMgr, s.chatErr
 }
 
+// Router for /api/chat endpoints that delegates to provider, agents, sessions, or workflow handlers.
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	mgr, err := s.chatManager()
 	if err != nil {
@@ -62,6 +64,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// HTTP handler for chat provider settings, supporting GET to retrieve and POST/PUT to configure providers.
 func (s *Server) handleChatProvider(w http.ResponseWriter, r *http.Request, mgr *chat.Manager) {
 	switch r.Method {
 	case http.MethodGet:
@@ -99,6 +102,7 @@ func (s *Server) handleChatProvider(w http.ResponseWriter, r *http.Request, mgr 
 	}
 }
 
+// HTTP handler for chat session CRUD operations: list, create, get, delete, update, stop, send messages, regenerate, approve, answer questions, and resume task groups.
 func (s *Server) handleChatSessions(w http.ResponseWriter, r *http.Request, mgr *chat.Manager, parts []string) {
 	if len(parts) == 0 {
 		switch r.Method {
@@ -270,6 +274,7 @@ func (s *Server) handleChatSessions(w http.ResponseWriter, r *http.Request, mgr 
 	}
 }
 
+// HTTP handler that starts a workflow job and returns the job ID.
 func (s *Server) handleChatWorkflow(w http.ResponseWriter, r *http.Request, mgr *chat.Manager) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)

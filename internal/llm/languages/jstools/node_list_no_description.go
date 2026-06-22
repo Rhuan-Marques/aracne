@@ -11,12 +11,14 @@ import (
 	"aracne/internal/topology/javascript"
 )
 
+// Tool that lists JavaScript resources without descriptions, filtered by resource kind and processed in batches.
 type NodeListNoDescription struct {
 	mgr       *javascript.JavaScriptManager
 	targets   []domain.ResourceKind
 	batchSize int
 }
 
+// Creates a NodeListNoDescription tool for listing JavaScript resources without generating descriptions.
 func NewNodeListNoDescription(mgr *javascript.JavaScriptManager, targets ...[]domain.ResourceKind) *NodeListNoDescription {
 	describeTargets := helper.DefaultDescribeTargets()
 	if len(targets) > 0 {
@@ -25,6 +27,7 @@ func NewNodeListNoDescription(mgr *javascript.JavaScriptManager, targets ...[]do
 	return &NodeListNoDescription{mgr: mgr, targets: describeTargets, batchSize: helper.DefaultDescriptionBatchSize}
 }
 
+// Sets the batch size for processing node lists, returning the receiver for chaining.
 func (l *NodeListNoDescription) SetBatchSize(batchSize int) *NodeListNoDescription {
 	if batchSize > 0 {
 		l.batchSize = batchSize
@@ -32,18 +35,22 @@ func (l *NodeListNoDescription) SetBatchSize(batchSize int) *NodeListNoDescripti
 	return l
 }
 
+// Returns the command name "node_list_no_description".
 func (l *NodeListNoDescription) Name() string {
 	return "node_list_no_description"
 }
 
+// Returns the description explaining that NodeListNoDescription lists undocumented resources.
 func (l *NodeListNoDescription) Description() string {
 	return "List targeted resources that still need descriptions. Returns each resource's ID, name, and kind for batching into description executor tasks."
 }
 
+// Returns an empty parameter list for the node_list_no_description command.
 func (l *NodeListNoDescription) Parameters() []Parameter {
 	return nil
 }
 
+// Scans topology for undocumented JS/TS resources matching targets and formats them for batch assignment to description executors.
 func (l *NodeListNoDescription) Run(args json.RawMessage) (string, error) {
 	topo, err := l.mgr.Generic().ReadAll()
 	if err != nil {

@@ -12,6 +12,7 @@ import (
 	"aracne/internal/topology"
 )
 
+// Dispatches scanner subcommands; routes to RunScannerRun for the "run" action.
 func RunScanner(args []string) {
 	if len(args) < 1 {
 		fmt.Fprintln(os.Stderr, "Usage: arac scanner <run> [--db <path>]")
@@ -27,6 +28,7 @@ func RunScanner(args []string) {
 	}
 }
 
+// Watches source files for changes and runs incremental scans to update the topology database.
 func RunScannerRun(args []string) {
 	dbPath := ".aracne/topology.db"
 	for i := 0; i < len(args); i++ {

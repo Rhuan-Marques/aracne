@@ -22,10 +22,12 @@ var ownedConnTypes = map[string]bool{
 	"has_class":      true,
 }
 
+// Returns the file_manifest.json path given a database path.
 func ManifestPath(dbPath string) string {
 	return filepath.Join(filepath.Dir(dbPath), "file_manifest.json")
 }
 
+// Reads a file manifest from JSON, returning an empty manifest if the file is missing or invalid.
 func ReadManifest(path string) FileManifest {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -41,6 +43,7 @@ func ReadManifest(path string) FileManifest {
 	return m
 }
 
+// Serializes FileManifest to JSON and writes it to disk.
 func WriteManifest(m FileManifest, path string) error {
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
@@ -49,6 +52,7 @@ func WriteManifest(m FileManifest, path string) error {
 	return os.WriteFile(path, data, 0644)
 }
 
+// Synchronizes file manifest with current topology, updating timestamps and removing stale entries.
 func SyncManifest(topo *domain.Topology, dbPath string) {
 	manifestPath := ManifestPath(dbPath)
 	manifest := ReadManifest(manifestPath)
@@ -109,6 +113,7 @@ func SyncManifestFiles(dbPath string, paths []string) error {
 	return WriteManifest(manifest, manifestPath)
 }
 
+// Recursively collects source files of a given language from a directory, skipping ignored directories.
 func CollectSourceFiles(root, language string) ([]string, error) {
 	var files []string
 	absRoot, err := filepath.Abs(root)
@@ -143,6 +148,7 @@ func CollectSourceFiles(root, language string) ([]string, error) {
 	return files, nil
 }
 
+// Checks if a file path is a valid source file for a given language, excluding tests and ignored paths.
 func IsSourceFile(path, language string) bool {
 	if path == "" || isIgnoredSourcePath(path) {
 		return false
@@ -197,6 +203,7 @@ func isJavaScriptSourceName(name string) bool {
 	return true
 }
 
+// Checks if a file path should be skipped by testing all path components against ignored directories.
 func isIgnoredSourcePath(path string) bool {
 	for _, part := range strings.FieldsFunc(filepath.Clean(path), func(r rune) bool {
 		return r == '/' || r == '\\'
@@ -208,6 +215,7 @@ func isIgnoredSourcePath(path string) bool {
 	return false
 }
 
+// Checks if a directory name should be skipped during source scanning (vendor, .git, node_modules, etc.).
 func isIgnoredSourceDir(name string) bool {
 	return name == "vendor" || name == ".git" || name == "node_modules" ||
 		name == "__pycache__" || name == ".pytest_cache" ||
@@ -215,6 +223,7 @@ func isIgnoredSourceDir(name string) bool {
 		strings.HasPrefix(name, ".")
 }
 
+// Compares source files in a directory against a manifest to identify added, modified, and deleted files by language.
 func DiffScanFiles(root, language, manifestPath string) (added, modified, deleted []string, err error) {
 	manifest := ReadManifest(manifestPath)
 
@@ -261,6 +270,7 @@ func DiffScanFiles(root, language, manifestPath string) (added, modified, delete
 	return added, modified, deleted, nil
 }
 
+// Resolves a manifest path to absolute form, with fallback to WSL path conversion on Windows.
 func normalizeManifestPath(root, path string) string {
 	if _, err := os.Stat(path); err == nil {
 		if abs, absErr := filepath.Abs(path); absErr == nil {
@@ -279,6 +289,7 @@ func normalizeManifestPath(root, path string) string {
 	return path
 }
 
+// Converts Windows absolute paths (C:\...) to WSL-compatible paths (/mnt/c/...).
 func windowsPathToWSL(path string) string {
 	if len(path) < 3 || path[1] != ':' || (path[2] != '\\' && path[2] != '/') {
 		return path
@@ -294,6 +305,7 @@ func windowsPathToWSL(path string) string {
 	return filepath.Join("/mnt", string(drive), rest)
 }
 
+// Removes a file and its owned resources from the topology, cleaning up all references and returning warnings for resources that now reference deleted nodes.
 func RemoveFileResources(topo *domain.Topology, fileID string) []domain.TopologyWarning {
 	fileRes, ok := topo.Resources[fileID]
 	if !ok {
@@ -355,6 +367,7 @@ func RemoveFileResources(topo *domain.Topology, fileID string) []domain.Topology
 	return warnings
 }
 
+// Removes warnings from topology for resources that no longer exist.
 func CleanupOrphanedWarnings(topo *domain.Topology) {
 	for id, w := range topo.Warnings {
 		if _, ok := topo.Resources[w.SourceID]; !ok {

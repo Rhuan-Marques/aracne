@@ -10,22 +10,27 @@ import (
 	"aracne/internal/topology/domain"
 )
 
+// Exposes topology warnings to LLM tools via a TopologyManager.
 type WarningsList struct {
 	mgr *topology.TopologyManager
 }
 
+// Creates a WarningsList tool for retrieving topology consistency warnings.
 func NewWarningsList(mgr *topology.TopologyManager) *WarningsList {
 	return &WarningsList{mgr: mgr}
 }
 
+// Returns the tool name "warnings_list".
 func (w *WarningsList) Name() string {
 	return "warnings_list"
 }
 
+// Returns the description of the warnings_list tool explaining its purpose and supported filters.
 func (w *WarningsList) Description() string {
 	return "List all outstanding topology warnings. Warnings track missing references (UseMissingNode), removed resources (NodeRemoved), and signature changes (SignatureChanged). Use optional filters to narrow by source ID, target ID, or warning kind."
 }
 
+// Returns optional filter parameters for warnings_list: source_id, target_id, and kind.
 func (w *WarningsList) Parameters() []Parameter {
 	return []Parameter{
 		{Name: "source_id", Type: "string", Description: "Filter warnings by source resource ID", Required: false},
@@ -34,6 +39,7 @@ func (w *WarningsList) Parameters() []Parameter {
 	}
 }
 
+// Executes warnings_list query, returning filtered topology warnings grouped by kind with summary and details.
 func (w *WarningsList) Run(args json.RawMessage) (string, error) {
 	var params struct {
 		SourceID string `json:"source_id"`

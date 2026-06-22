@@ -13,6 +13,7 @@ import (
 	"aracne/internal/prompts"
 )
 
+// Prompts the user for confirmation before overwriting an existing file, returning true if they approve.
 func promptReplace(path string) bool {
 	fmt.Printf("File %s already exists. Replace? [y/N] ", path)
 	reader := bufio.NewReader(os.Stdin)
@@ -21,6 +22,7 @@ func promptReplace(path string) bool {
 	return answer == "y" || answer == "yes"
 }
 
+// Prompts user to confirm overwriting an existing config file.
 func promptReplaceConfigExists(path string) bool {
 	fmt.Printf("Config %s already exists. Overwrite? [y/N] ", path)
 	reader := bufio.NewReader(os.Stdin)
@@ -29,6 +31,7 @@ func promptReplaceConfigExists(path string) bool {
 	return answer == "y" || answer == "yes"
 }
 
+// Initializes Claude Code and/or OpenCode integrations with the topology database, with optional global installation and auto-confirm flags.
 func RunInit(args []string) {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
 	claude := fs.Bool("claude", false, "Initialize Claude Code integration")
@@ -56,6 +59,7 @@ func RunInit(args []string) {
 	}
 }
 
+// Initializes OpenCode integration by configuring MCP servers, permissions, commands, agents, and plugins.
 func initOpenCode(global bool, cfg *helper.Config, autoYes bool) {
 	configPath, configDir, agentsMdPath := opencodePaths(global)
 	os.MkdirAll(configDir, 0755)
@@ -115,6 +119,7 @@ func initOpenCode(global bool, cfg *helper.Config, autoYes bool) {
 	fmt.Println("[OpenCode] Restart OpenCode to activate the topology workflow.")
 }
 
+// Initializes Claude Code integration by configuring MCP servers, commands, agents, plugins, and guard hooks.
 func initClaudeCode(global bool, cfg *helper.Config, autoYes bool) {
 	mcpConfigPath, commandsDir, agentsDir, claudeMdPath := claudePaths(global)
 	claudeBaseDir := filepath.Dir(commandsDir)
@@ -162,6 +167,7 @@ func initClaudeCode(global bool, cfg *helper.Config, autoYes bool) {
 	fmt.Println("[Claude Code] Restart Claude Code to activate the topology workflow.")
 }
 
+// Converts a boolean permission flag to a string ("allow" or "deny").
 func nativePermission(allowed bool) string {
 	if allowed {
 		return "allow"
@@ -169,6 +175,7 @@ func nativePermission(allowed bool) string {
 	return "deny"
 }
 
+// Converts a string slice of tool names into a set (map) for fast membership testing.
 func toolNameSet(names []string) map[string]bool {
 	set := make(map[string]bool, len(names))
 	for _, n := range names {
@@ -177,6 +184,7 @@ func toolNameSet(names []string) map[string]bool {
 	return set
 }
 
+// Returns paths to opencode.json config, its directory, and agents doc (global or local).
 func opencodePaths(global bool) (string, string, string) {
 	if global {
 		home, err := os.UserHomeDir()
@@ -190,6 +198,7 @@ func opencodePaths(global bool) (string, string, string) {
 	return ".opencode/opencode.json", ".opencode", "AGENTS.md"
 }
 
+// Returns paths to Claude configuration files (.claude.json, commands, agents, CLAUDE.md) in either global home directory or local project directory
 func claudePaths(global bool) (string, string, string, string) {
 	if global {
 		home, err := os.UserHomeDir()
@@ -202,6 +211,7 @@ func claudePaths(global bool) (string, string, string, string) {
 	return ".mcp.json", ".claude/commands", ".claude/agents", "CLAUDE.md"
 }
 
+// Reads and parses a JSON configuration file, exiting on parse errors or returning an empty map if the file is missing.
 func readJSONConfig(path string) map[string]interface{} {
 	config := make(map[string]interface{})
 	data, err := os.ReadFile(path)
@@ -214,6 +224,7 @@ func readJSONConfig(path string) map[string]interface{} {
 	return config
 }
 
+// Determines whether to write a config value, prompting on overwrite unless autoYes is set; skips if key already exists and not approved.
 func shouldWriteConfig(config map[string]interface{}, key, path, label string, autoYes bool) bool {
 	if _, exists := config[key]; exists {
 		if autoYes || promptReplaceConfigExists(path) {
@@ -226,6 +237,7 @@ func shouldWriteConfig(config map[string]interface{}, key, path, label string, a
 	return true
 }
 
+// Marshals a config map to indented JSON and writes it to a file with directory creation.
 func writeJSONConfig(path string, config map[string]interface{}) {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", filepath.Dir(path), err)
@@ -258,6 +270,7 @@ func bugHunterOpenCodeCommand() string {
 	}, "\n")
 }
 
+// Returns instructions for hunting bugs across the codebase by partitioning and fanning out agent runs until no new bugs are found.
 func bugHunterCommandForAgent(agentRef string) string {
 	return strings.Join([]string{
 		"Hunt the whole codebase for bugs by fanning out the " + agentRef + " agent in parallel, then repeat until a round finds nothing new.",
@@ -270,6 +283,7 @@ func bugHunterCommandForAgent(agentRef string) string {
 	}, "\n")
 }
 
+// Returns instructions for triaging pending bugs by fanning out agent runs to classify each as duplicate, false positive, or genuine.
 func bugJudgeCommandForAgent(agentRef string) string {
 	return strings.Join([]string{
 		"Triage every pending bug by fanning out the " + agentRef + " agent — one run per pending bug, run in parallel.",
@@ -282,6 +296,7 @@ func bugJudgeCommandForAgent(agentRef string) string {
 	}, "\n")
 }
 
+// Returns instructions for fixing acknowledged bugs by fanning out agent runs to find root causes, make changes, and verify fixes.
 func bugSolverCommandForAgent(agentRef string) string {
 	return strings.Join([]string{
 		"Fix every acknowledged bug by fanning out the " + agentRef + " agent — one run per acknowledged bug, run in parallel.",
@@ -294,11 +309,13 @@ func bugSolverCommandForAgent(agentRef string) string {
 	}, "\n")
 }
 
+// Generates Claude agent YAML frontmatter with tools and MCP server configuration.
 func claudeAgentContent(name, description string, eff helper.AgentConfig, prompt string) string {
 	body := prompts.WithToolsListing(prompt, eff.MCPTools)
 	return fmt.Sprintf("---\nname: %s\ndescription: %s\ntools: %s\n%s%s---\n\n%s\n", name, description, strings.Join(claudeToolsForAgent(eff), ", "), agentModelFrontmatter(eff.Model), claudeMCPServersFrontmatter(name), body)
 }
 
+// Formats agent YAML frontmatter with description, model config, permissions, and tool listings.
 func openCodeAgentContent(description string, eff helper.AgentConfig, prompt string) string {
 	body := prompts.WithToolsListing(prompt, eff.MCPTools)
 	return fmt.Sprintf("---\ndescription: %s\nmode: subagent\n%spermission:\n%s---\n\n%s\n", description, agentModelFrontmatter(eff.Model), openCodePermissionsForAgent(eff), body)
@@ -316,6 +333,7 @@ func agentModelFrontmatter(model string) string {
 	return fmt.Sprintf("model: %s\n", model)
 }
 
+// Generates MCP server frontmatter YAML configuration for the arac serve tool with tool-profile and harness settings
 func claudeMCPServersFrontmatter(agentName string) string {
 	return fmt.Sprintf("mcpServers:\n  - aracne:\n      type: stdio\n      command: arac\n      args: [\"serve\", \"--tool-profile\", \"%s\", \"--harness\", \"claude_code\"]\n", agentName)
 }
@@ -425,24 +443,29 @@ func nativeToolNames() []struct{ key, claude string } {
 	}
 }
 
+// Writes a command markdown file with description and template content.
 func writeCommand(dir, name, description, template string, autoYes bool) {
 	writeMarkdownFile(filepath.Join(dir, name+".md"), "command "+name, fmt.Sprintf("---\ndescription: %s\n---\n\n%s\n", description, template), autoYes)
 }
 
+// Creates an OpenCode primary command markdown file with description, agent name, and template content.
 func writeOpenCodePrimaryCommand(dir, name, description, agentName, template string, autoYes bool) {
 	content := fmt.Sprintf("---\ndescription: %s\nagent: %s\n---\n\n%s\n", description, agentName, template)
 	writeMarkdownFile(filepath.Join(dir, name+".md"), "command "+name, content, autoYes)
 }
 
+// Creates an OpenCode command markdown file with description, agent, and template frontmatter.
 func writeOpenCodeCommand(dir, name, description, agentName, template string, autoYes bool) {
 	content := fmt.Sprintf("---\ndescription: %s\nagent: %s\nsubtask: true\n---\n\n%s\n", description, agentName, template)
 	writeMarkdownFile(filepath.Join(dir, name+".md"), "command "+name, content, autoYes)
 }
 
+// Writes an agent markdown file to disk with the given name and content.
 func writeAgent(dir, name, content string, autoYes bool) {
 	writeMarkdownFile(filepath.Join(dir, name+".md"), "agent "+name, content, autoYes)
 }
 
+// Writes markdown content to a file, prompting for confirmation if it already exists unless autoYes is set.
 func writeMarkdownFile(path, label, content string, autoYes bool) {
 	if _, err := os.Stat(path); err == nil {
 		if autoYes || promptReplace(path) {
@@ -468,6 +491,7 @@ const (
 	AracIntegrationEnd   = "Good Luck in your task."
 )
 
+// Updates or creates a markdown file by merging a new segment into an existing integration section.
 func writeMarkdownIntegrationFile(path, label, segment string) {
 	data, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
@@ -496,6 +520,7 @@ func writeMarkdownIntegrationFile(path, label, segment string) {
 	fmt.Printf("%s updated at %s\n", label, path)
 }
 
+// Replaces or inserts a markdown integration segment, preserving existing content and handling line endings.
 func updateMarkdownIntegrationSegment(existing, segment string) string {
 	lineEnding := markdownLineEnding(existing)
 	segment = normalizeMarkdownSegment(segment, lineEnding)
@@ -534,6 +559,7 @@ func updateMarkdownIntegrationSegment(existing, segment string) string {
 	return prefix + segment + suffix
 }
 
+// Normalizes markdown text by trimming whitespace and standardizing line endings to a specified format.
 func normalizeMarkdownSegment(segment, lineEnding string) string {
 	segment = strings.TrimSpace(segment)
 	segment = strings.ReplaceAll(segment, "\r\n", "\n")
@@ -544,6 +570,7 @@ func normalizeMarkdownSegment(segment, lineEnding string) string {
 	return segment + lineEnding
 }
 
+// Detects and returns the line ending style (CRLF or LF) used in the content.
 func markdownLineEnding(content string) string {
 	if strings.Contains(content, "\r\n") {
 		return "\r\n"
@@ -551,10 +578,12 @@ func markdownLineEnding(content string) string {
 	return "\n"
 }
 
+// Checks whether content ends with a trailing blank line (double newline).
 func hasTrailingBlankLine(content string) bool {
 	return strings.HasSuffix(content, "\n\n") || strings.HasSuffix(content, "\r\n\r\n")
 }
 
+// Returns the index where markdown integration content should be inserted, after BOM, frontmatter, and leading headings.
 func markdownIntegrationInsertionIndex(content string) int {
 	pos := 0
 	if strings.HasPrefix(content, "\ufeff") {
@@ -577,6 +606,7 @@ func markdownIntegrationInsertionIndex(content string) int {
 	return pos
 }
 
+// Skips YAML frontmatter (--- delimited block) from markdown content and returns position after it.
 func skipMarkdownFrontmatter(content string, pos int) int {
 	line, next := nextMarkdownLine(content, pos)
 	if strings.TrimSpace(line) != "---" {
@@ -592,6 +622,7 @@ func skipMarkdownFrontmatter(content string, pos int) int {
 	return pos
 }
 
+// Advances a position cursor past consecutive blank markdown lines, returning the offset of the next non-blank line.
 func skipBlankMarkdownLines(content string, pos int) int {
 	for pos < len(content) {
 		line, next := nextMarkdownLine(content, pos)
@@ -603,11 +634,13 @@ func skipBlankMarkdownLines(content string, pos int) int {
 	return pos
 }
 
+// Returns the markdown line containing the given position in the content.
 func lineAt(content string, pos int) string {
 	line, _ := nextMarkdownLine(content, pos)
 	return line
 }
 
+// Extracts the next line from markdown content starting at a given position, returning the line and next position.
 func nextMarkdownLine(content string, pos int) (string, int) {
 	if pos >= len(content) {
 		return "", len(content)
@@ -620,10 +653,12 @@ func nextMarkdownLine(content string, pos int) (string, int) {
 	return content[pos:next], next
 }
 
+// Checks whether a markdown line is a heading by detecting leading hash symbols.
 func markdownLineIsHeading(line string) bool {
 	return strings.HasPrefix(strings.TrimLeft(line, " \t"), "#")
 }
 
+// Searches for a markdown line matching a marker starting from a given position.
 func findMarkdownLine(content, marker string, from int) int {
 	for from < len(content) {
 		line, next := nextMarkdownLine(content, from)

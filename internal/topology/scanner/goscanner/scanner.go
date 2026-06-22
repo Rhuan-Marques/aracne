@@ -11,21 +11,27 @@ import (
 	"aracne/internal/topology/golang"
 )
 
+// Go AST scanner that parses Go source files to extract function, struct, interface, and variable definitions plus their call relationships.
 type GoScanner struct{}
 
+// Creates and returns a new GoScanner instance.
 func NewGoScanner() *GoScanner {
 	return &GoScanner{}
 }
 
+// Returns the scanner identifier for Go: "go"
 func (s *GoScanner) Name() string { return "go" }
 
+// Returns the file extensions supported by the Go scanner: .go
 func (s *GoScanner) Extensions() []string { return []string{".go"} }
 
+// Detects a Go project by checking for the presence of a go.mod file in the root directory.
 func (s *GoScanner) Detect(root string) bool {
 	_, err := os.Stat(filepath.Join(root, "go.mod"))
 	return err == nil
 }
 
+// Parses Go source files from root directory and builds complete topology with functions, structs, interfaces, and dependencies.
 func (s *GoScanner) Scan(root string) (*domain.Topology, error) {
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
@@ -197,6 +203,7 @@ func (s *GoScanner) Scan(root string) (*domain.Topology, error) {
 	return golang.ToGeneric(gt), nil
 }
 
+// Reanalyzes a single Go file and updates topology with new definitions and connections.
 func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.TopologyWarning, error) {
 	gt := golang.FromGeneric(topo)
 	if gt == nil {
@@ -647,6 +654,7 @@ func (s *GoScanner) applyFileUpdate(gt *golang.GolangTopology, pr *ParseResult, 
 	return warnings, nil
 }
 
+// Removes topology warnings related to a reanalyzed function.
 func (s *GoScanner) clearReanalyzedFunctionWarnings(gt *golang.GolangTopology, functionID golang.FunctionID) {
 	id := string(functionID)
 	for warnID, w := range gt.Warnings {
@@ -663,6 +671,7 @@ func (s *GoScanner) clearReanalyzedFunctionWarnings(gt *golang.GolangTopology, f
 	}
 }
 
+// Clears topology warnings when their target nodes are re-added or removed from the codebase.
 func (s *GoScanner) resolveWarnings(gt *golang.GolangTopology, pr *ParseResult, removedFuncs map[golang.FunctionID]golang.GolangFunction, removedStructs map[golang.StructID]golang.GolangStruct, removedNamedTypes map[golang.NamedTypeID]golang.GolangNamedType) {
 	newIDs := make(map[string]bool)
 	for _, fi := range pr.Functions {
@@ -728,6 +737,7 @@ func (s *GoScanner) resolveWarnings(gt *golang.GolangTopology, pr *ParseResult, 
 	}
 }
 
+// Resolves a use-missing warning by adding the appropriate connection type and cross-package dependency
 func (s *GoScanner) resolveUseMissingWarning(gt *golang.GolangTopology, w domain.TopologyWarning) {
 	sourceFn, ok := gt.Functions[golang.FunctionID(w.SourceID)]
 	if !ok {
@@ -780,31 +790,37 @@ func (s *GoScanner) sourceFunctionPackage(fn golang.GolangFunction) string {
 	return trimLastDotSegment(string(fn.ID))
 }
 
+// Checks if function ID exists in topology.
 func (s *GoScanner) existsInFunctions(gt *golang.GolangTopology, id string) bool {
 	_, ok := gt.Functions[golang.FunctionID(id)]
 	return ok
 }
 
+// Checks whether an ID exists in the structs map
 func (s *GoScanner) existsInStructs(gt *golang.GolangTopology, id string) bool {
 	_, ok := gt.Structs[golang.StructID(id)]
 	return ok
 }
 
+// Checks whether an ID exists in the named types map
 func (s *GoScanner) existsInNamedTypes(gt *golang.GolangTopology, id string) bool {
 	_, ok := gt.NamedTypes[golang.NamedTypeID(id)]
 	return ok
 }
 
+// Checks whether an ID exists in the interfaces map
 func (s *GoScanner) existsInInterfaces(gt *golang.GolangTopology, id string) bool {
 	_, ok := gt.Interfaces[golang.InterfaceID(id)]
 	return ok
 }
 
+// Checks if external variable ID exists in topology.
 func (s *GoScanner) existsInExtVars(gt *golang.GolangTopology, id string) bool {
 	_, ok := gt.ExternalVars[golang.ExternalVarID(id)]
 	return ok
 }
 
+// Finds all functions and structs that call or reference a target ID by a given connection type
 func (s *GoScanner) getCallers(gt *golang.GolangTopology, targetID string, connType string) []string {
 	var callers []string
 	for id, fn := range gt.Functions {
@@ -826,6 +842,7 @@ func (s *GoScanner) getCallers(gt *golang.GolangTopology, targetID string, connT
 	return callers
 }
 
+// Reads the module declaration from go.mod in the given root directory and returns the module path.
 func readModulePath(root string) (string, error) {
 	data, err := os.ReadFile(filepath.Join(root, "go.mod"))
 	if err != nil {
@@ -840,6 +857,7 @@ func readModulePath(root string) (string, error) {
 	return "", fmt.Errorf("no module declaration in go.mod")
 }
 
+// Computes the full package path for a directory relative to the module root.
 func getPackagePath(root, dir, modulePath string) golang.PackagePath {
 	if dir == root {
 		return golang.PackagePath(modulePath)
@@ -851,6 +869,7 @@ func getPackagePath(root, dir, modulePath string) golang.PackagePath {
 	return golang.PackagePath(modulePath + "/" + strings.ReplaceAll(rel, "\\", "/"))
 }
 
+// Recursively walks a directory tree and returns all non-test .go files, skipping vendor, .git, node_modules, and hidden directories.
 func collectGoFiles(root string) []string {
 	var files []string
 	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
@@ -872,6 +891,7 @@ func collectGoFiles(root string) []string {
 	return files
 }
 
+// Rebuilds the HasMethod connections for structs by iterating through all functions and linking methods to their receiver types.
 func populateStructMethods(gt *golang.GolangTopology) {
 	for id, str := range gt.Structs {
 		delete(str.Connections, golang.ConnHasMethod)
@@ -892,6 +912,7 @@ func populateStructMethods(gt *golang.GolangTopology) {
 	}
 }
 
+// Links New-prefixed functions to their struct constructors by matching return types.
 func detectConstructors(gt *golang.GolangTopology) {
 	for pkgPath, pkg := range gt.Packages {
 		for _, funcID := range pkg.HasFunctions() {
@@ -928,6 +949,7 @@ func detectConstructors(gt *golang.GolangTopology) {
 	}
 }
 
+// Collects all unique imported dependencies from Go files in the topology, deduplicating by package path.
 func collectDependencies(gt *golang.GolangTopology) {
 	seen := make(map[golang.DependancyPath]bool)
 	gt.Dependencies = nil
@@ -943,6 +965,7 @@ func collectDependencies(gt *golang.GolangTopology) {
 
 var goTypeTokenPattern = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?`)
 
+// Extracts and deduplicates named type references from function/struct/interface parameter and result types across parse results.
 func populateNamedTypeUsage(gt *golang.GolangTopology, parseResults []*ParseResult) {
 	for _, pr := range parseResults {
 		if pr == nil {
@@ -1001,6 +1024,7 @@ func populateNamedTypeUsage(gt *golang.GolangTopology, parseResults []*ParseResu
 	}
 }
 
+// Extracts all named type references (structs/interfaces) from a type string, filtering out builtins and external imports.
 func namedTypeRefsFromType(typing string, pr *ParseResult, gt *golang.GolangTopology) []golang.NamedTypeID {
 	var refs []golang.NamedTypeID
 	for _, token := range goTypeTokenPattern.FindAllString(typing, -1) {
@@ -1027,6 +1051,7 @@ func namedTypeRefsFromType(typing string, pr *ParseResult, gt *golang.GolangTopo
 	return refs
 }
 
+// Records named type references as connection edges, skipping self-references and duplicates.
 func addNamedTypeRefs(conns map[golang.ConnectionKind][]string, refs []golang.NamedTypeID, ownerID string) {
 	if conns == nil || len(refs) == 0 {
 		return
@@ -1041,6 +1066,7 @@ func addNamedTypeRefs(conns map[golang.ConnectionKind][]string, refs []golang.Na
 	}
 }
 
+// Checks whether a NamedTypeID exists in a slice.
 func containsNamedTypeID(ids []golang.NamedTypeID, target golang.NamedTypeID) bool {
 	for _, id := range ids {
 		if id == target {
@@ -1050,6 +1076,7 @@ func containsNamedTypeID(ids []golang.NamedTypeID, target golang.NamedTypeID) bo
 	return false
 }
 
+// Deduplicates connection lists by kind, removing duplicate IDs while preserving order and omitting empty lists.
 func uniqueConns(conns map[golang.ConnectionKind][]string) map[golang.ConnectionKind][]string {
 	result := make(map[golang.ConnectionKind][]string, len(conns))
 	for k, v := range conns {
@@ -1068,6 +1095,7 @@ func uniqueConns(conns map[golang.ConnectionKind][]string) map[golang.Connection
 	return result
 }
 
+// Compares two function signatures for equality based on input and output types.
 func signaturesEqualFn(a, b golang.GolangFunction) bool {
 	if len(a.Input) != len(b.Input) {
 		return false
@@ -1088,6 +1116,7 @@ func signaturesEqualFn(a, b golang.GolangFunction) bool {
 	return true
 }
 
+// Filters a string slice to exclude a specific item and returns the result.
 func removeString(slice []string, item string) []string {
 	var result []string
 	for _, s := range slice {
@@ -1098,6 +1127,7 @@ func removeString(slice []string, item string) []string {
 	return result
 }
 
+// Filters a string slice to exclude specified items.
 func removeStrings(slice []string, items ...string) []string {
 	if len(items) == 0 {
 		return slice
@@ -1115,6 +1145,7 @@ func removeStrings(slice []string, items ...string) []string {
 	return result
 }
 
+// Converts a slice of FunctionID to a string slice.
 func castFuncIDs(ids []golang.FunctionID) []string {
 	var result []string
 	for _, id := range ids {
@@ -1123,6 +1154,7 @@ func castFuncIDs(ids []golang.FunctionID) []string {
 	return result
 }
 
+// Converts a slice of StructIDs to []string by casting each element.
 func castStructIDs(ids []golang.StructID) []string {
 	var result []string
 	for _, id := range ids {
@@ -1131,6 +1163,7 @@ func castStructIDs(ids []golang.StructID) []string {
 	return result
 }
 
+// Converts a slice of InterfaceID to a string slice.
 func castInterfaceIDs(ids []golang.InterfaceID) []string {
 	var result []string
 	for _, id := range ids {
@@ -1139,6 +1172,7 @@ func castInterfaceIDs(ids []golang.InterfaceID) []string {
 	return result
 }
 
+// Converts a slice of ExternalVarID to a string slice.
 func castExtVarIDs(ids []golang.ExternalVarID) []string {
 	var result []string
 	for _, id := range ids {
@@ -1147,6 +1181,7 @@ func castExtVarIDs(ids []golang.ExternalVarID) []string {
 	return result
 }
 
+// Converts a slice of NamedTypeID to a string slice.
 func castNamedTypeIDs(ids []golang.NamedTypeID) []string {
 	var result []string
 	for _, id := range ids {

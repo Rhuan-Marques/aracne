@@ -28,7 +28,6 @@ func RunGuard(args []string) {
 // to use the aracne MCP equivalent (PostToolUse, always). Any read/parse error
 // fails open: nothing is emitted, so the tool call proceeds and the session is
 // never broken.
-//
 // The guard runs in the main Claude Code session, so it consults the
 // claude_code "main" agent's blocked_tools. Per-sub-agent blocked_tools are
 // not reachable here (the hook payload carries no sub-agent identity); those
@@ -141,7 +140,6 @@ func loadGuardConfig() (blocked map[string]bool, exemptPiped bool) {
 // `grep`) and ignores command names that appear only inside quoted arguments.
 // Residual false positives (heredocs, aliases, complex subshells) are
 // accepted; the worst case is an extra warning.
-//
 // When exemptPiped is set, a read/grep command that consumes piped stdin
 // (`cmd | tail`, `cmd | grep x`) is skipped: it views/filters command output,
 // which the MCP file/grep tools cannot serve. Direct file reads (`cat foo.go`)
@@ -242,6 +240,7 @@ func commandWord(segment string) string {
 	return baseName(fields[i])
 }
 
+// Returns true if a token is a valid environment variable assignment (VAR=value format).
 func isEnvAssignment(tok string) bool {
 	eq := strings.IndexByte(tok, '=')
 	if eq <= 0 {
@@ -258,6 +257,7 @@ func isEnvAssignment(tok string) bool {
 	return true
 }
 
+// Returns true if a token is a command wrapper like env, sudo, doas, command, nohup, time, exec, or builtin.
 func isCommandWrapper(tok string) bool {
 	switch strings.ToLower(baseName(tok)) {
 	case "env", "sudo", "doas", "command", "nohup", "time", "exec", "builtin":
@@ -276,9 +276,7 @@ func baseName(tok string) string {
 	return strings.TrimSuffix(tok, ".exe")
 }
 
-// ---------------------------------------------------------------------------
-// Decision emission (the single place that knows the hook wire format)
-// ---------------------------------------------------------------------------
+// Emits a PreToolUse hook event that denies tool execution with a reason as JSON.
 
 func emitPreToolDeny(output io.Writer, reason string) {
 	json.NewEncoder(output).Encode(map[string]interface{}{
@@ -290,6 +288,7 @@ func emitPreToolDeny(output io.Writer, reason string) {
 	})
 }
 
+// Emits a PostToolUse hook event with additional context message as JSON.
 func emitPostToolWarning(output io.Writer, msg string) {
 	json.NewEncoder(output).Encode(map[string]interface{}{
 		"hookSpecificOutput": map[string]interface{}{

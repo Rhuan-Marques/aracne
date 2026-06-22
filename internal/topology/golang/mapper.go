@@ -6,6 +6,7 @@ import (
 	"aracne/internal/topology/domain"
 )
 
+// Converts a generic domain topology to a Go-specific topology by mapping resources into typed collections.
 func FromGeneric(topo *domain.Topology) *GolangTopology {
 	if topo == nil {
 		return nil
@@ -148,6 +149,7 @@ func FromGeneric(topo *domain.Topology) *GolangTopology {
 	return gt
 }
 
+// Converts a GolangTopology to a language-agnostic domain.Topology for cross-language compatibility.
 func ToGeneric(gt *GolangTopology) *domain.Topology {
 	if gt == nil {
 		return nil
@@ -292,6 +294,7 @@ func ToGeneric(gt *GolangTopology) *domain.Topology {
 	return topo
 }
 
+// Converts string-keyed connection map to ConnectionKind-keyed map.
 func mapKindConn(conns map[string][]string) map[ConnectionKind][]string {
 	if conns == nil {
 		return make(map[ConnectionKind][]string)
@@ -303,6 +306,7 @@ func mapKindConn(conns map[string][]string) map[ConnectionKind][]string {
 	return result
 }
 
+// Converts between types by marshaling to JSON and unmarshaling to target.
 func jsonConvert(from any, to any) {
 	b, err := json.Marshal(from)
 	if err != nil {
@@ -311,6 +315,7 @@ func jsonConvert(from any, to any) {
 	json.Unmarshal(b, to)
 }
 
+// Converts a map of ConnectionKind to string slices into a map of string keys to string slices.
 func stringMapConn(conns map[ConnectionKind][]string) map[string][]string {
 	if conns == nil {
 		return make(map[string][]string)

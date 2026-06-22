@@ -66,6 +66,7 @@ func buildUpdateDescriptionTool(d toolDeps) tools.Tool {
 	}
 }
 
+// Builds a language-specific tool for generating node lists without descriptions.
 func buildNodeListNoDescriptionTool(d toolDeps) tools.Tool {
 	switch d.lang {
 	case "python":

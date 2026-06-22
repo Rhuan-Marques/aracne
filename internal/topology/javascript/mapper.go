@@ -6,6 +6,7 @@ import (
 	"aracne/internal/topology/domain"
 )
 
+// Converts a generic domain topology to a JavaScript-specific topology, mapping all resources and properties.
 func FromGeneric(topo *domain.Topology) *JavaScriptTopology {
 	if topo == nil {
 		return nil
@@ -187,6 +188,7 @@ func FromGeneric(topo *domain.Topology) *JavaScriptTopology {
 	return gt
 }
 
+// Converts a JavaScriptTopology into a generic domain.Topology, mapping functions, classes, interfaces, named types, variables, modules, and dependencies with their properties and connections.
 func ToGeneric(gt *JavaScriptTopology, language string) *domain.Topology {
 	if gt == nil {
 		return nil
@@ -337,6 +339,7 @@ func ToGeneric(gt *JavaScriptTopology, language string) *domain.Topology {
 	return topo
 }
 
+// Converts string-keyed connection map to ConnectionKind-keyed map.
 func mapKindConn(conns map[string][]string) map[ConnectionKind][]string {
 	if conns == nil {
 		return make(map[ConnectionKind][]string)
@@ -348,6 +351,7 @@ func mapKindConn(conns map[string][]string) map[ConnectionKind][]string {
 	return result
 }
 
+// Converts between arbitrary types via JSON marshaling and unmarshaling
 func jsonConvert(from any, to any) {
 	b, err := json.Marshal(from)
 	if err != nil {
@@ -356,6 +360,7 @@ func jsonConvert(from any, to any) {
 	json.Unmarshal(b, to)
 }
 
+// Converts ConnectionKind-keyed map to string-keyed connection map.
 func stringMapConn(conns map[ConnectionKind][]string) map[string][]string {
 	if conns == nil {
 		return make(map[string][]string)

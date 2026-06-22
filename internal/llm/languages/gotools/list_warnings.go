@@ -11,22 +11,27 @@ import (
 	"aracne/internal/topology/golang"
 )
 
+// Wraps a GoManager to implement the ListWarnings LLM tool for retrieving topology validation warnings.
 type ListWarnings struct {
 	mgr *golang.GoManager
 }
 
+// Creates a new ListWarnings instance for fetching Go topology warnings.
 func NewListWarnings(mgr *golang.GoManager) *ListWarnings {
 	return &ListWarnings{mgr: mgr}
 }
 
+// Returns the tool name "warnings_list" for LLM tool registration.
 func (l *ListWarnings) Name() string {
 	return "warnings_list"
 }
 
+// Returns the user-facing description of the warnings_list tool explaining its purpose and filters.
 func (l *ListWarnings) Description() string {
 	return "List all outstanding topology warnings. Warnings track missing references (UseMissingNode), removed resources (NodeRemoved), and signature changes (SignatureChanged). Use optional filters to narrow by source ID, target ID, or warning kind."
 }
 
+// Returns parameter schema for warnings_list: source_id, target_id, and kind filters.
 func (l *ListWarnings) Parameters() []tools.Parameter {
 	return []tools.Parameter{
 		{Name: "source_id", Type: "string", Description: "Filter warnings by source resource ID", Required: false},
@@ -35,6 +40,7 @@ func (l *ListWarnings) Parameters() []tools.Parameter {
 	}
 }
 
+// Executes warnings_list: queries, sorts, and formats topology warnings by kind and source ID.
 func (l *ListWarnings) Run(args json.RawMessage) (string, error) {
 	var params struct {
 		SourceID string `json:"source_id"`

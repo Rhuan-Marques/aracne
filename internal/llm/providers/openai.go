@@ -15,6 +15,7 @@ import (
 	"aracne/internal/llm"
 )
 
+// OpenAI LLM provider configuration holding API key, model name, base URL, and reasoning effort setting.
 type OpenAI struct {
 	apiKey          string
 	model           string
@@ -22,6 +23,7 @@ type OpenAI struct {
 	reasoningEffort string
 }
 
+// OpenAI API request payload with model, messages, optional tools, streaming, and reasoning effort parameters.
 type openAIRequest struct {
 	Model           string          `json:"model"`
 	Messages        []openAIMessage `json:"messages"`
@@ -36,6 +38,7 @@ func (o *OpenAI) SetReasoningEffort(effort string) {
 	o.reasoningEffort = effort
 }
 
+// OpenAI message with role, content, optional tool call ID and tool calls.
 type openAIMessage struct {
 	Role       string           `json:"role"`
 	Content    string           `json:"content"`
@@ -43,11 +46,13 @@ type openAIMessage struct {
 	ToolCalls  []openAIToolCall `json:"tool_calls,omitempty"`
 }
 
+// OpenAI tool definition with type and function schema for model invocation.
 type openAITool struct {
 	Type     string         `json:"type"`
 	Function openAIFunction `json:"function"`
 }
 
+// OpenAI function definition with name, description, parameters, and arguments.
 type openAIFunction struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description,omitempty"`
@@ -55,18 +60,21 @@ type openAIFunction struct {
 	Arguments   string         `json:"arguments,omitempty"`
 }
 
+// OpenAI tool invocation from model with ID, type, and function call details.
 type openAIToolCall struct {
 	ID       string         `json:"id"`
 	Type     string         `json:"type"`
 	Function openAIFunction `json:"function"`
 }
 
+// OpenAI API response payload containing message choices from model completion.
 type openAIResponse struct {
 	Choices []struct {
 		Message openAIMessage `json:"message"`
 	} `json:"choices"`
 }
 
+// Initializes an OpenAI LLM provider with API key, model, and base URL, using default GPT-4.1 model and environment variables as fallback.
 func NewOpenAI(apiKey, model, baseURL string) *OpenAI {
 	if apiKey == "" {
 		apiKey = os.Getenv("OPENAI_API_KEY")
@@ -80,14 +88,17 @@ func NewOpenAI(apiKey, model, baseURL string) *OpenAI {
 	return &OpenAI{apiKey: apiKey, model: model, baseURL: baseURL}
 }
 
+// Non-streaming chat completion for OpenAI that delegates to StreamChatContext without callback.
 func (o *OpenAI) Chat(messages []llm.Message, tools []llm.ToolDefinition) (*llm.ChatResponse, error) {
 	return o.StreamChatContext(context.Background(), messages, tools, nil)
 }
 
+// Streaming chat completion for OpenAI that delegates to StreamChatContext with a callback.
 func (o *OpenAI) StreamChat(messages []llm.Message, tools []llm.ToolDefinition, emit llm.StreamCallback) (*llm.ChatResponse, error) {
 	return o.StreamChatContext(context.Background(), messages, tools, emit)
 }
 
+// Streams chat completions from OpenAI API with context, emitting content/reasoning tokens and tool calls as they arrive.
 func (o *OpenAI) StreamChatContext(ctx context.Context, messages []llm.Message, tools []llm.ToolDefinition, emit llm.StreamCallback) (*llm.ChatResponse, error) {
 	if o.apiKey == "" {
 		return nil, fmt.Errorf("OPENAI_API_KEY is not configured")
@@ -190,6 +201,7 @@ func (o *OpenAI) StreamChatContext(ctx context.Context, messages []llm.Message, 
 	return result, nil
 }
 
+// OpenAI streaming response payload with delta content, reasoning, and tool call changes.
 type openAIStreamResponse struct {
 	Choices []struct {
 		Delta struct {
@@ -208,6 +220,7 @@ type openAIStreamResponse struct {
 	} `json:"choices"`
 }
 
+// Transforms generic tool definitions into OpenAI function-type tool format.
 func toOpenAITools(tools []llm.ToolDefinition) []openAITool {
 	out := make([]openAITool, 0, len(tools))
 	for _, tool := range tools {
@@ -223,6 +236,7 @@ func toOpenAITools(tools []llm.ToolDefinition) []openAITool {
 	return out
 }
 
+// Converts generic LLM messages to OpenAI format, preserving roles, content, and tool calls.
 func toOpenAIMessages(messages []llm.Message) []openAIMessage {
 	out := make([]openAIMessage, 0, len(messages))
 	for _, msg := range messages {
