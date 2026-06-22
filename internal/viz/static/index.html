@@ -147,7 +147,6 @@
 
     <section id="chatPage" class="page chatPage hidden">
       <div class="chatWorkspace" id="chatWorkspace">
-        <button type="button" id="chatSideToggle" class="chatSideToggle" aria-label="Toggle context panel" title="Toggle context panel">›</button>
       <div class="chatLayout">
         <header class="chatTop">
           <div>
@@ -206,6 +205,7 @@
         <div id="agentMenu" class="agentMenu hidden"></div>
       </div>
       <aside class="chatSidePanel" id="chatSidePanel">
+        <button type="button" id="chatSideToggle" class="chatSideToggle" aria-label="Toggle context panel" title="Toggle context panel">›</button>
         <section class="sidebarSection">
           <div class="sidebarTitleRow">
             <h3 class="sidebarTitle">Graph</h3>
@@ -214,6 +214,7 @@
           <div class="contextGraphCanvasWrap">
             <canvas id="contextGraphCanvas"></canvas>
             <div id="contextGraphEmpty" class="contextGraphEmpty">No resources in context yet.</div>
+            <button type="button" id="contextGraphFit" class="contextGraphFit" title="Fit graph to view">Fit</button>
           </div>
           <div class="contextGraphLegend">
             <span><span class="legendDot green"></span>Code seen</span>
