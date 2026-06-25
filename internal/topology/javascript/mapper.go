@@ -176,6 +176,9 @@ func FromGeneric(topo *domain.Topology) *JavaScriptTopology {
 			if de, ok := res.Properties["default_export"]; ok && de != nil {
 				mod.DefaultExport, _ = de.(string)
 			}
+			if rn, ok := res.Properties["re_exports_named"]; ok && rn != nil {
+				jsonConvert(rn, &mod.ReExportsNamed)
+			}
 			gt.Modules[mod.ID] = mod
 
 		case domain.ResourceDependency:
@@ -240,6 +243,14 @@ func ToGeneric(gt *JavaScriptTopology, language string) *domain.Topology {
 		}
 		if c.Constructor != nil {
 			props["constructor"] = string(*c.Constructor)
+		}
+		// Members folded in from a same-name interface (class + interface
+		// declaration merging) are surfaced alongside the class's own metadata.
+		if len(c.MergedInterfaceMethods) > 0 {
+			props["methods"] = c.MergedInterfaceMethods
+		}
+		if len(c.MergedInterfaceProperties) > 0 {
+			props["properties"] = c.MergedInterfaceProperties
 		}
 		topo.Resources[string(id)] = domain.Resource{
 			ID:          string(id),
@@ -309,6 +320,9 @@ func ToGeneric(gt *JavaScriptTopology, language string) *domain.Topology {
 		props := map[string]any{
 			"from_package":   string(m.FromPackage),
 			"default_export": m.DefaultExport,
+		}
+		if len(m.ReExportsNamed) > 0 {
+			props["re_exports_named"] = m.ReExportsNamed
 		}
 		topo.Resources[string(id)] = domain.Resource{
 			ID:          string(id),

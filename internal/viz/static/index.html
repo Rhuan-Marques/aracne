@@ -48,11 +48,6 @@
           <label>Search</label>
           <input id="query" placeholder="function, path, description">
 
-          <div class="actions">
-            <button id="loadGraph">Load View</button>
-            <button id="clear">Clear</button>
-          </div>
-
           <section id="depthControls" class="depthControls disabled" aria-label="Neighborhood depth">
             <div class="depthLabel">
               <span id="depthIcon"></span>
@@ -160,6 +155,7 @@
         </header>
         <div id="chatMessages" class="chatMessages clean" role="log" aria-live="polite" aria-relevant="additions text"></div>
         <button id="chatJumpLatest" type="button" class="jumpLatest hidden" aria-label="Jump to latest message">↓ Latest</button>
+        <div id="composerDock" class="composerDock">
         <div id="chatThinking" class="chatThinking hidden" role="status" aria-live="polite"><span></span><span></span><span></span> thinking</div>
         <div id="chatPending" class="chatPending"></div>
         <form id="chatComposer" class="modernComposer">
@@ -198,6 +194,7 @@
         </form>
         <div id="taskChatBackBar" class="taskBackBar hidden">
           <button type="button" data-task-back>Back to Main Chat</button>
+        </div>
         </div>
         <div id="chatModelMenu" class="agentMenu choiceMenu hidden"></div>
         <div id="chatModeMenu" class="agentMenu choiceMenu hidden"></div>

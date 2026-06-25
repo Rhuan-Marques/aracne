@@ -12,27 +12,29 @@ import (
 
 // Analyzes function bodies to extract variable types, interface types, and connection metadata during Go code parsing.
 type bodyAnalyzer struct {
-	pr          *ParseResult
-	gt          *golang.GolangTopology
-	conn        map[golang.ConnectionKind][]string
-	varTypeMap  map[string]golang.StructID
-	varIfaceMap map[string]golang.InterfaceID
-	callerID    golang.FunctionID
-	warnings    *map[string]domain.TopologyWarning
-	knownNames  map[string]bool
+	pr           *ParseResult
+	gt           *golang.GolangTopology
+	conn         map[golang.ConnectionKind][]string
+	varTypeMap   map[string]golang.StructID
+	varIfaceMap  map[string]golang.InterfaceID
+	varMethodMap map[string]golang.FunctionID
+	callerID     golang.FunctionID
+	warnings     *map[string]domain.TopologyWarning
+	knownNames   map[string]bool
 }
 
 // Creates a bodyAnalyzer instance initialized with function parameters, receiver, and known names for code body traversal.
 func newBodyAnalyzer(pr *ParseResult, gt *golang.GolangTopology, funcInput []golang.VariableDefinition, receiverName string, receiverStruct *golang.StructID, callerID golang.FunctionID, extraKnownNames []string) *bodyAnalyzer {
 	ba := &bodyAnalyzer{
-		pr:          pr,
-		gt:          gt,
-		conn:        make(map[golang.ConnectionKind][]string),
-		varTypeMap:  make(map[string]golang.StructID),
-		varIfaceMap: make(map[string]golang.InterfaceID),
-		callerID:    callerID,
-		warnings:    &gt.Warnings,
-		knownNames:  make(map[string]bool),
+		pr:           pr,
+		gt:           gt,
+		conn:         make(map[golang.ConnectionKind][]string),
+		varTypeMap:   make(map[string]golang.StructID),
+		varIfaceMap:  make(map[string]golang.InterfaceID),
+		varMethodMap: make(map[string]golang.FunctionID),
+		callerID:     callerID,
+		warnings:     &gt.Warnings,
+		knownNames:   make(map[string]bool),
 	}
 
 	for name := range goBuiltins {
@@ -199,7 +201,8 @@ func analyzeFunctionBody(body *ast.BlockStmt, pr *ParseResult, gt *golang.Golang
 	extraKnownNames = append(extraKnownNames, localVarNames...)
 	ba := newBodyAnalyzer(pr, gt, funcInput, receiverName, receiverStruct, callerID, extraKnownNames)
 
-	ast.Inspect(body, func(n ast.Node) bool {
+	var visit func(n ast.Node) bool
+	visit = func(n ast.Node) bool {
 		switch node := n.(type) {
 		case *ast.CallExpr:
 			ba.resolveCallExpr(node)
@@ -211,9 +214,16 @@ func analyzeFunctionBody(body *ast.BlockStmt, pr *ParseResult, gt *golang.Golang
 			ba.resolveAssignStmt(node)
 		case *ast.DeclStmt:
 			ba.resolveDeclStmt(node)
+		case *ast.TypeSwitchStmt:
+			// A type switch binds its variable to a different concrete type per
+			// case, so walk it manually (resolveTypeSwitchStmt) instead of
+			// letting ast.Inspect descend with no per-case type context.
+			ba.resolveTypeSwitchStmt(node, visit)
+			return false
 		}
 		return true
-	})
+	}
+	ast.Inspect(body, visit)
 
 	return ba.conn
 }
@@ -285,6 +295,12 @@ func (ba *bodyAnalyzer) resolveCallExpr(call *ast.CallExpr) {
 	}
 	switch fun := fun.(type) {
 	case *ast.Ident:
+		// A local bound to a method value (f := d.Sound) or method expression
+		// (g := Dog.Sound) and then invoked resolves to the underlying method.
+		if mid, ok := ba.varMethodMap[fun.Name]; ok {
+			ba.add(golang.ConnCalls, string(mid))
+			return
+		}
 		if ba.knownNames[fun.Name] {
 			return
 		}
@@ -492,10 +508,15 @@ func (ba *bodyAnalyzer) resolveAssignStmt(stmt *ast.AssignStmt) {
 		return
 	}
 
-	// Multi-value assignment from a single call: a, b := f()
+	// Multi-value assignment from a single source: a, b := f() or the comma-ok
+	// type assertion d, ok := a.(T).
 	if len(stmt.Rhs) == 1 && len(stmt.Lhs) > 1 {
-		if call, ok := stmt.Rhs[0].(*ast.CallExpr); ok {
-			ba.resolveMultiValueCallAssign(stmt.Lhs, call)
+		switch rhs := stmt.Rhs[0].(type) {
+		case *ast.CallExpr:
+			ba.resolveMultiValueCallAssign(stmt.Lhs, rhs)
+			return
+		case *ast.TypeAssertExpr:
+			ba.resolveTypeAssertAssign(stmt.Lhs, rhs)
 			return
 		}
 	}
@@ -521,8 +542,54 @@ func (ba *bodyAnalyzer) resolveAssignStmt(stmt *ast.AssignStmt) {
 			}
 		case *ast.CallExpr:
 			ba.resolveCallExprAssign(ident.Name, rhs)
+		case *ast.SelectorExpr:
+			ba.resolveMethodRefAssign(ident.Name, rhs)
+		case *ast.TypeAssertExpr:
+			// d := a.(T): single-value type assertion binds the concrete type.
+			if rhs.Type != nil {
+				ba.bindConcreteType(ident.Name, rhs.Type)
+			}
 		}
 	}
+}
+
+// resolveMethodRefAssign records that local `name` is bound to a method VALUE
+// (recv.Method, where recv is a struct-typed variable) or a method EXPRESSION
+// (Type.Method, where Type is a struct in this package). The bound method is
+// stored in varMethodMap so a later call through `name` (name(...)) resolves to
+// the underlying method in resolveCallExpr.
+func (ba *bodyAnalyzer) resolveMethodRefAssign(name string, sel *ast.SelectorExpr) {
+	xIdent, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return
+	}
+	// Method value: x is a struct-typed variable (d.Sound).
+	if structID, ok := ba.varTypeMap[xIdent.Name]; ok {
+		if mid, ok := ba.structMethodID(structID, sel.Sel.Name); ok {
+			ba.varMethodMap[name] = mid
+		}
+		return
+	}
+	// Method expression: x is a struct type in this package (Dog.Sound).
+	structID := golang.StructID(string(ba.pr.PkgPath) + "." + xIdent.Name)
+	if mid, ok := ba.structMethodID(structID, sel.Sel.Name); ok {
+		ba.varMethodMap[name] = mid
+	}
+}
+
+// structMethodID returns the FunctionID of the method named `methodName` on the
+// struct `structID`, if such a method exists in the topology.
+func (ba *bodyAnalyzer) structMethodID(structID golang.StructID, methodName string) (golang.FunctionID, bool) {
+	str, ok := ba.gt.Structs[structID]
+	if !ok {
+		return "", false
+	}
+	for _, mid := range str.Methods() {
+		if m, ok := ba.gt.Functions[mid]; ok && m.Name == methodName {
+			return mid, true
+		}
+	}
+	return "", false
 }
 
 // Records the type of a variable assigned from a composite literal, mapping it to its struct or interface type.
@@ -647,6 +714,102 @@ func (ba *bodyAnalyzer) resolveMultiValueCallAssign(lhs []ast.Expr, call *ast.Ca
 			continue
 		}
 		ba.resolveVarType(ident.Name, targetFunc.Output[i])
+	}
+}
+
+// resolveTypeAssertAssign handles the comma-ok type assertion `d, ok := a.(T)`:
+// it marks every LHS name as known and binds the first name to the asserted
+// concrete type T so a later method call on it resolves.
+func (ba *bodyAnalyzer) resolveTypeAssertAssign(lhs []ast.Expr, assert *ast.TypeAssertExpr) {
+	for _, l := range lhs {
+		if ident, ok := l.(*ast.Ident); ok && ident.Name != "_" {
+			ba.knownNames[ident.Name] = true
+		}
+	}
+	if assert.Type == nil || len(lhs) == 0 {
+		return
+	}
+	if ident, ok := lhs[0].(*ast.Ident); ok && ident.Name != "_" {
+		ba.bindConcreteType(ident.Name, assert.Type)
+	}
+}
+
+// resolveTypeSwitchStmt walks a type switch (`switch v := a.(type) { case T: ... }`)
+// manually so the bound variable carries the concrete per-case type while that
+// case body is analyzed; method calls on it then resolve to the concrete type's
+// method. The switch operand and each case body are still inspected via the
+// shared visitor. The binding is restored after the switch (the variable is
+// scoped to it).
+func (ba *bodyAnalyzer) resolveTypeSwitchStmt(stmt *ast.TypeSwitchStmt, visit func(ast.Node) bool) {
+	if stmt.Init != nil {
+		ast.Inspect(stmt.Init, visit)
+	}
+
+	var varName string
+	switch assign := stmt.Assign.(type) {
+	case *ast.AssignStmt:
+		if assign.Tok == token.DEFINE && len(assign.Lhs) == 1 {
+			if ident, ok := assign.Lhs[0].(*ast.Ident); ok && ident.Name != "_" {
+				varName = ident.Name
+			}
+		}
+		for _, rhs := range assign.Rhs {
+			ast.Inspect(rhs, visit)
+		}
+	case *ast.ExprStmt:
+		ast.Inspect(assign.X, visit)
+	}
+
+	prevStruct, hadStruct := ba.varTypeMap[varName]
+	prevIface, hadIface := ba.varIfaceMap[varName]
+
+	for _, clause := range stmt.Body.List {
+		cc, ok := clause.(*ast.CaseClause)
+		if !ok {
+			continue
+		}
+		if varName != "" {
+			delete(ba.varTypeMap, varName)
+			delete(ba.varIfaceMap, varName)
+			// A single concrete type per case gives the variable that type.
+			if len(cc.List) == 1 {
+				ba.bindConcreteType(varName, cc.List[0])
+			}
+		}
+		for _, bodyStmt := range cc.Body {
+			ast.Inspect(bodyStmt, visit)
+		}
+	}
+
+	if varName != "" {
+		delete(ba.varTypeMap, varName)
+		delete(ba.varIfaceMap, varName)
+		if hadStruct {
+			ba.varTypeMap[varName] = prevStruct
+		}
+		if hadIface {
+			ba.varIfaceMap[varName] = prevIface
+		}
+	}
+}
+
+// bindConcreteType records the struct/interface type written as `typeExpr` for
+// the local variable `name`, so later method calls on `name` resolve. Used for
+// type-assertion-bound (`d := a.(T)`) and type-switch-case-bound (`case T:`)
+// variables.
+func (ba *bodyAnalyzer) bindConcreteType(name string, typeExpr ast.Expr) {
+	typeStr := exprToString(typeExpr)
+	if typeStr == "" {
+		return
+	}
+	if sid := paramTypeNameToStruct(typeStr, ba.pr.PkgPath, ba.pr.ImportMap, ba.pr.ModulePath); sid != nil {
+		if _, ok := ba.gt.Structs[*sid]; ok {
+			ba.varTypeMap[name] = *sid
+			return
+		}
+	}
+	if iid := paramTypeNameToInterface(typeStr, ba.pr.PkgPath, ba.pr.ImportMap, ba.pr.ModulePath, ba.gt); iid != nil {
+		ba.varIfaceMap[name] = *iid
 	}
 }
 

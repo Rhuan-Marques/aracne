@@ -33,6 +33,10 @@ var (
 	// in. This is the real file-to-file import relationship surfaced in the
 	// "Packages & Modules" viz.
 	ConnImportsModule ConnectionKind = "imports_module"
+	// ConnReExportsModule is a module->module whole-module re-export edge
+	// (CommonJS `module.exports = require('./x')`): a name not defined in the
+	// re-exporting module resolves against the re-exported module's namespace.
+	ConnReExportsModule ConnectionKind = "re_exports_module"
 )
 
 // Returns functions called by a JavaScript function.

@@ -17,6 +17,23 @@ package tests_test
 // Structural reverse-edges (implemented_by) are recomputed globally and stay
 // consistent (G5/G6/G7). Per-scenario targeted asserts encode the correct
 // cold-scan behavior; the cross-mode check catches the incremental divergence.
+//
+// G1–G8 use runScenario (full multi-language corpus) and are therefore CURRENTLY
+// BLOCKED by the pre-existing JS/TS full-scan crash (a duplicate-connection
+// write-abort in the untracked jsfamily/tsfamily WIP that aborts copyCorpus's
+// scan). That crash is unrelated to Go and is tracked separately.
+//
+// G9–G19 cover additional Go edge cases and use runGoScenario (a GO-ONLY corpus
+// copy), so they run independently of that crash — mirroring the python-only
+// isolation trick. GREEN: G9 (mutual recursion calls), G10 (error interface +
+// sentinel), G11 (cross-pkg embedding / promotion-not-modeled), G14 (defer/go
+// calls), G15 (unexported interface matching + cross-visibility calls), G16
+// (init + package-init var), G18 (iota-expr/typed consts/struct tags), G19 (dot
+// import — no false internal edge). RED PROBES (assert the correct edge the
+// scanner does not yet produce; cross-mode-consistent, fail only on the targeted
+// assert): G12 method value/expression (bug ..._1), G13 type assertion/switch
+// (bug ..._2), G17 generic-interface satisfaction (bug ..._3). The same-file
+// duplicate-init write-abort (bug ..._4) is documented, not added to the corpus.
 
 import (
 	"testing"
@@ -44,6 +61,73 @@ const (
 
 	idHexagon     = "aracne/testing_ground/go/shapes.Hexagon"
 	idHexagonArea = "aracne/testing_ground/go/shapes.(Hexagon).Area"
+)
+
+// Stable resource IDs for the edge-case packages exercised by G9–G19.
+const (
+	// recursive
+	idRecPing    = "aracne/testing_ground/go/recursive.ping"
+	idRecPong    = "aracne/testing_ground/go/recursive.pong"
+	idRecBounce  = "aracne/testing_ground/go/recursive.Bounce"
+	idRecNodeLen = "aracne/testing_ground/go/recursive.(Node).Length"
+
+	// failure (error interface + sentinel)
+	idFailValidator = "aracne/testing_ground/go/failure.Validator"
+	idFailForm      = "aracne/testing_ground/go/failure.Form"
+	idFailValidate  = "aracne/testing_ground/go/failure.(Form).Validate"
+	idFailParseErr  = "aracne/testing_ground/go/failure.ParseError"
+	idFailErrEmpty  = "aracne/testing_ground/go/failure.ErrEmpty"
+	idFailCheck     = "aracne/testing_ground/go/failure.Check"
+	idFailWrap      = "aracne/testing_ground/go/failure.wrap"
+
+	// embedding
+	idEmbRecursivePkg = "aracne/testing_ground/go/recursive"
+	idEmbDecorated    = "aracne/testing_ground/go/embedding.Decorated"
+	idEmbDerived      = "aracne/testing_ground/go/embedding.Derived"
+	idEmbGreet        = "aracne/testing_ground/go/embedding.(Derived).Greet"
+	idEmbBaseHello    = "aracne/testing_ground/go/embedding.(Base).Hello"
+
+	// dispatch (method value/expr, type assertion/switch)
+	idDispDogSound = "aracne/testing_ground/go/dispatch.(Dog).Sound"
+	idDispCatSound = "aracne/testing_ground/go/dispatch.(Cat).Sound"
+	idDispMValue   = "aracne/testing_ground/go/dispatch.UseMethodValue"
+	idDispMExpr    = "aracne/testing_ground/go/dispatch.UseMethodExpr"
+	idDispAssert   = "aracne/testing_ground/go/dispatch.AssertAnimal"
+	idDispSwitch   = "aracne/testing_ground/go/dispatch.SwitchAnimal"
+
+	// concurrency (defer / go)
+	idConcWork    = "aracne/testing_ground/go/concurrency.Work"
+	idConcSpawn   = "aracne/testing_ground/go/concurrency.Spawn"
+	idConcSelect  = "aracne/testing_ground/go/concurrency.Select"
+	idConcProcess = "aracne/testing_ground/go/concurrency.process"
+	idConcCleanup = "aracne/testing_ground/go/concurrency.cleanup"
+
+	// visibility (unexported resources)
+	idVisReader      = "aracne/testing_ground/go/visibility.reader"
+	idVisFileReader  = "aracne/testing_ground/go/visibility.fileReader"
+	idVisNewReader   = "aracne/testing_ground/go/visibility.newReader"
+	idVisLoad        = "aracne/testing_ground/go/visibility.Load"
+	idVisDefaultPath = "aracne/testing_ground/go/visibility.defaultPath"
+
+	// inits
+	idInitInit     = "aracne/testing_ground/go/inits.init"
+	idInitConfig   = "aracne/testing_ground/go/inits.Config"
+	idInitReady    = "aracne/testing_ground/go/inits.Ready"
+	idInitReadyVar = "aracne/testing_ground/go/inits.ready"
+
+	// dotimport
+	idDotShout   = "aracne/testing_ground/go/dotimport.Shout"
+	idDotLoud    = "aracne/testing_ground/go/dotimport.Loud"
+	idDotToUpper = "aracne/testing_ground/go/dotimport.ToUpper" // phantom; must NOT exist as an edge
+
+	// generics (generic interface)
+	idGenContainer = "aracne/testing_ground/go/generics.Container"
+	idGenBox       = "aracne/testing_ground/go/generics.Box"
+
+	// edge (more.go: iota expr / typed consts / struct tags)
+	idEdgeKB       = "aracne/testing_ground/go/edge.KB"
+	idEdgePriority = "aracne/testing_ground/go/edge.Priority"
+	idEdgeTagged   = "aracne/testing_ground/go/edge.Tagged"
 )
 
 // A new Shape implementer used by the add/remove implementer scenarios.
@@ -276,6 +360,197 @@ func TestAtScaleGo_G8_AddMethodOnReturnedStruct(t *testing.T) {
 			assertResPresent(t, topo, mode, idCircleScale)
 			assertHasConn(t, topo, mode, idConsumerReport, connCalls, idCircleScale)
 			assertHasConn(t, topo, mode, idConsumerReport, connCalls, idCircleArea)
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// G9–G19: edge-case packages added to the Go corpus. Each touches a single
+// self-contained file so the construct is validated under incremental AND the
+// two cold modes, with strict cross-mode equality. Assertions encode the
+// authoritative cold-scan behavior. Scenarios marked "(red probe)" assert the
+// CORRECT behavior that the scanner does NOT yet produce — they fail on their
+// targeted assert (cross-mode equality still holds, since all modes agree on
+// the absence) and are traceable to a filed bug, mirroring G1–G3.
+// ---------------------------------------------------------------------------
+
+// G9: mutual recursion. ping<->pong and Bounce->ping each carry a calls edge.
+// A self-recursive method call through a struct field ((Node).Length ->
+// n.Next.Length()) is NOT resolved; asserted absent to document the limit.
+func TestAtScaleGo_G9_Recursion(t *testing.T) {
+	runGoScenario(t, scenario{
+		name:   "G9_recursion",
+		mutate: func(t *testing.T, root string) { touchCorpusFile(t, root, "go/recursive/recursive.go") },
+		assert: func(t *testing.T, topo *domain.Topology, mode string) {
+			assertHasConn(t, topo, mode, idRecBounce, connCalls, idRecPing)
+			assertHasConn(t, topo, mode, idRecPing, connCalls, idRecPong)
+			assertHasConn(t, topo, mode, idRecPong, connCalls, idRecPing)
+			assertNoConn(t, topo, mode, idRecNodeLen, connCalls, idRecNodeLen) // field-method recursion not modeled
+		},
+	})
+}
+
+// G10: error-handling. A struct implementing a LOCAL interface whose method
+// returns the builtin error; a method using a sentinel error var; constructor
+// chaining. The struct implementing only the BUILTIN error must NOT be wired to
+// the local Validator interface.
+func TestAtScaleGo_G10_ErrorInterface(t *testing.T) {
+	runGoScenario(t, scenario{
+		name:   "G10_error_interface",
+		mutate: func(t *testing.T, root string) { touchCorpusFile(t, root, "go/failure/failure.go") },
+		assert: func(t *testing.T, topo *domain.Topology, mode string) {
+			assertResPresent(t, topo, mode, idFailParseErr)
+			assertHasConn(t, topo, mode, idFailValidator, connImplBy, idFailForm)
+			assertHasConn(t, topo, mode, idFailForm, connImplements, idFailValidator)
+			assertHasConn(t, topo, mode, idFailValidate, connUsesExtvar, idFailErrEmpty)
+			assertHasConn(t, topo, mode, idFailValidate, connUsesStruct, idFailParseErr)
+			assertHasConn(t, topo, mode, idFailCheck, connCalls, idFailValidate)
+			assertHasConn(t, topo, mode, idFailCheck, connCalls, idFailWrap)
+			assertNoConn(t, topo, mode, idFailValidator, connImplBy, idFailParseErr) // builtin-error boundary
+		},
+	})
+}
+
+// G11: embedding. Cross-package embedding records uses_package (NOT uses_struct
+// to the embedded type), and promoted methods are not modeled (Greet's call to
+// the promoted Base.Hello does not resolve) — both asserted to lock current
+// behavior.
+func TestAtScaleGo_G11_Embedding(t *testing.T) {
+	runGoScenario(t, scenario{
+		name:   "G11_embedding",
+		mutate: func(t *testing.T, root string) { touchCorpusFile(t, root, "go/embedding/embedding.go") },
+		assert: func(t *testing.T, topo *domain.Topology, mode string) {
+			assertResPresent(t, topo, mode, idEmbDerived)
+			assertHasConn(t, topo, mode, idEmbDecorated, connUsesPkg, idEmbRecursivePkg)
+			assertNoConn(t, topo, mode, idEmbGreet, connCalls, idEmbBaseHello) // promotion not modeled
+		},
+	})
+}
+
+// G12 (red probe): a method VALUE (f := d.Sound) and a method EXPRESSION
+// (Dog.Sound) bound to a var and called do NOT resolve to a calls edge today
+// (filed: bug_1782267868402936812_1).
+func TestAtScaleGo_G12_MethodValueExpr(t *testing.T) {
+	runGoScenario(t, scenario{
+		name:   "G12_method_value_expr",
+		mutate: func(t *testing.T, root string) { touchCorpusFile(t, root, "go/dispatch/dispatch.go") },
+		assert: func(t *testing.T, topo *domain.Topology, mode string) {
+			assertHasConn(t, topo, mode, idDispMValue, connCalls, idDispDogSound)
+			assertHasConn(t, topo, mode, idDispMExpr, connCalls, idDispDogSound)
+		},
+	})
+}
+
+// G13 (red probe): a method call on a variable bound by a TYPE ASSERTION
+// (a.(Dog)) or a TYPE SWITCH (switch a.(type)) does NOT resolve to a calls edge
+// (filed: bug_1782267872456641805_2).
+func TestAtScaleGo_G13_TypeAssertSwitch(t *testing.T) {
+	runGoScenario(t, scenario{
+		name:   "G13_type_assert_switch",
+		mutate: func(t *testing.T, root string) { touchCorpusFile(t, root, "go/dispatch/dispatch.go") },
+		assert: func(t *testing.T, topo *domain.Topology, mode string) {
+			assertHasConn(t, topo, mode, idDispAssert, connCalls, idDispDogSound)
+			assertHasConn(t, topo, mode, idDispSwitch, connCalls, idDispDogSound)
+			assertHasConn(t, topo, mode, idDispSwitch, connCalls, idDispCatSound)
+		},
+	})
+}
+
+// G14: concurrency. A DEFERRED call, a GOROUTINE on a named function, an
+// ANONYMOUS goroutine, and a SELECT case all produce ordinary calls edges.
+func TestAtScaleGo_G14_DeferGoroutine(t *testing.T) {
+	runGoScenario(t, scenario{
+		name:   "G14_defer_goroutine",
+		mutate: func(t *testing.T, root string) { touchCorpusFile(t, root, "go/concurrency/concurrency.go") },
+		assert: func(t *testing.T, topo *domain.Topology, mode string) {
+			assertHasConn(t, topo, mode, idConcWork, connCalls, idConcCleanup)  // defer cleanup()
+			assertHasConn(t, topo, mode, idConcWork, connCalls, idConcProcess)  // go process(j)
+			assertHasConn(t, topo, mode, idConcSpawn, connCalls, idConcProcess) // go func(){ process() }()
+			assertHasConn(t, topo, mode, idConcSelect, connCalls, idConcProcess)
+		},
+	})
+}
+
+// G15: visibility. An unexported struct implements an unexported interface, and
+// an exported entry point resolves calls to the unexported constructor + method
+// across the visibility boundary.
+func TestAtScaleGo_G15_Visibility(t *testing.T) {
+	runGoScenario(t, scenario{
+		name:   "G15_visibility",
+		mutate: func(t *testing.T, root string) { touchCorpusFile(t, root, "go/visibility/visibility.go") },
+		assert: func(t *testing.T, topo *domain.Topology, mode string) {
+			assertResPresent(t, topo, mode, idVisReader)
+			assertResPresent(t, topo, mode, idVisFileReader)
+			assertHasConn(t, topo, mode, idVisReader, connImplBy, idVisFileReader)
+			assertHasConn(t, topo, mode, idVisFileReader, connImplements, idVisReader)
+			assertHasConn(t, topo, mode, idVisLoad, connCalls, idVisNewReader)
+			assertHasConn(t, topo, mode, idVisLoad, connUsesInterface, idVisReader)
+			assertHasConn(t, topo, mode, idVisNewReader, connUsesExtvar, idVisDefaultPath)
+		},
+	})
+}
+
+// G16: init function + a package-level var initialized by a local call. The
+// single init resource (id ...inits.init) and the Config var are present, and
+// init/Ready both reference the package var. (NOTE: two init() in the SAME file
+// collide on this id and abort the scan write — bug_1782267882609196041_4,
+// documented in the corpus README; deliberately NOT added to the corpus here.)
+func TestAtScaleGo_G16_InitAndPackageVar(t *testing.T) {
+	runGoScenario(t, scenario{
+		name:   "G16_init_and_package_var",
+		mutate: func(t *testing.T, root string) { touchCorpusFile(t, root, "go/inits/inits.go") },
+		assert: func(t *testing.T, topo *domain.Topology, mode string) {
+			assertResPresent(t, topo, mode, idInitInit)
+			assertResPresent(t, topo, mode, idInitConfig)
+			assertHasConn(t, topo, mode, idInitInit, connUsesExtvar, idInitReadyVar)
+			assertHasConn(t, topo, mode, idInitReady, connUsesExtvar, idInitReadyVar)
+		},
+	})
+}
+
+// G17 (red probe): Box[T] structurally satisfies the generic interface
+// Container[T] (Add(T)/Get(int)T), but generic-interface satisfaction matching
+// is not implemented, so the implements/implemented_by edges are missing
+// (filed: bug_1782267877103805981_3).
+func TestAtScaleGo_G17_GenericInterfaceImpl(t *testing.T) {
+	runGoScenario(t, scenario{
+		name:   "G17_generic_interface_impl",
+		mutate: func(t *testing.T, root string) { touchCorpusFile(t, root, "go/generics/generics.go") },
+		assert: func(t *testing.T, topo *domain.Topology, mode string) {
+			assertResPresent(t, topo, mode, idGenContainer)
+			assertResPresent(t, topo, mode, idGenBox)
+			assertHasConn(t, topo, mode, idGenContainer, connImplBy, idGenBox)
+			assertHasConn(t, topo, mode, idGenBox, connImplements, idGenContainer)
+		},
+	})
+}
+
+// G18: iota-EXPRESSION constants, a TYPED const block, and a STRUCT-TAGGED type
+// all become resources, and struct tags do not produce spurious edges.
+func TestAtScaleGo_G18_IotaTypedConstsTags(t *testing.T) {
+	runGoScenario(t, scenario{
+		name:   "G18_iota_typed_consts_tags",
+		mutate: func(t *testing.T, root string) { touchCorpusFile(t, root, "go/edge/more.go") },
+		assert: func(t *testing.T, topo *domain.Topology, mode string) {
+			assertResPresent(t, topo, mode, idEdgeKB)       // 1 << (10 * iota)
+			assertResPresent(t, topo, mode, idEdgePriority) // typed-const defined type
+			assertResPresent(t, topo, mode, idEdgeTagged)   // struct with json/xml tags
+		},
+	})
+}
+
+// G19: a DOT IMPORT (import . "strings"). The unqualified ToUpper must NOT
+// become a spurious internal edge; Loud's call to the internal Shout still
+// resolves. (A use_missing_node warning for ToUpper is emitted but warnings are
+// excluded from the cross-mode compare.)
+func TestAtScaleGo_G19_DotImport(t *testing.T) {
+	runGoScenario(t, scenario{
+		name:   "G19_dot_import",
+		mutate: func(t *testing.T, root string) { touchCorpusFile(t, root, "go/dotimport/dotimport.go") },
+		assert: func(t *testing.T, topo *domain.Topology, mode string) {
+			assertResPresent(t, topo, mode, idDotShout)
+			assertHasConn(t, topo, mode, idDotLoud, connCalls, idDotShout)
+			assertNoConn(t, topo, mode, idDotShout, connCalls, idDotToUpper)
 		},
 	})
 }

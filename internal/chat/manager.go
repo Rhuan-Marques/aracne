@@ -21,6 +21,7 @@ import (
 	"aracne/internal/topology/domain"
 	"aracne/internal/topology/scanner"
 )
+
 // Central chat orchestrator managing sessions, tools, scanners, topology, and LLM agents.
 
 type Manager struct {
@@ -50,6 +51,7 @@ type Manager struct {
 	providerConfig     ProviderConfig
 	providerConfigPath string
 }
+
 // Initializes a chat manager with topology database, config, scanner registry, tool registry, and session storage.
 
 func NewManager(dbPath, workspace string, emit func(Event)) (*Manager, error) {
@@ -123,6 +125,7 @@ func NewManager(dbPath, workspace string, emit func(Event)) (*Manager, error) {
 	}
 	return m, nil
 }
+
 // Returns all sessions as summaries, sorted by pinned status then recency
 
 func (m *Manager) ListSessions() []SessionSummary {
@@ -140,6 +143,7 @@ func (m *Manager) ListSessions() []SessionSummary {
 	})
 	return result
 }
+
 // Creates a new chat session with specified agent and title
 
 func (m *Manager) CreateSession(agent, title string) (*Session, error) {
@@ -171,6 +175,7 @@ func (m *Manager) CreateSession(agent, title string) (*Session, error) {
 	m.recordEvent(session.ID, "session_created", map[string]any{"session_id": session.ID})
 	return session, nil
 }
+
 // Retrieves a session by ID with thread-safe locking and formats it for response
 
 func (m *Manager) GetSession(id string) (*Session, error) {
@@ -182,6 +187,7 @@ func (m *Manager) GetSession(id string) (*Session, error) {
 	}
 	return m.sessionForResponseLocked(session), nil
 }
+
 // Removes a session from storage and active sessions
 
 // ContextFilter returns the resolved read context-filter from the active
@@ -193,7 +199,7 @@ func (m *Manager) ContextFilter() domain.ContextFilter {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.config == nil {
-// Updates a session's title and/or pinned status, then persists changes.
+		// Updates a session's title and/or pinned status, then persists changes.
 		return domain.DefaultContextFilter()
 	}
 	return m.config.EffectiveContextFilter()
@@ -219,10 +225,10 @@ func (m *Manager) UpdateSession(id string, title *string, pinned *bool) (*Sessio
 	if title != nil {
 		if trimmed := strings.TrimSpace(*title); trimmed != "" {
 			session.Title = trimmed
-// RewindAndResend truncates the conversation back to (and including) the given
-// user message, then re-sends it with optionally edited content. Used for
-// edit-and-resend and regenerate. User messages map 1:1 between the display
-// transcript and the LLM transcript, so the Nth user turn is a safe cut point.
+			// RewindAndResend truncates the conversation back to (and including) the given
+			// user message, then re-sends it with optionally edited content. Used for
+			// edit-and-resend and regenerate. User messages map 1:1 between the display
+			// transcript and the LLM transcript, so the Nth user turn is a safe cut point.
 		}
 	}
 	if pinned != nil {
@@ -275,7 +281,7 @@ func (m *Manager) RewindAndResend(sessionID, messageID, newContent string) (*Ses
 				llmCut = i
 				break
 			}
-// Truncates conversation back to and including the last user message, then resends it
+			// Truncates conversation back to and including the last user message, then resends it
 		}
 	}
 	session.Messages = append([]SessionMessage(nil), session.Messages[:msgIdx]...)
@@ -297,7 +303,7 @@ func (m *Manager) RegenerateLast(sessionID string) (*Session, error) {
 	if err != nil {
 		m.mu.Unlock()
 		return nil, err
-// Updates the manager's configuration and rebuilds tool and agent registries.
+		// Updates the manager's configuration and rebuilds tool and agent registries.
 	}
 	lastUserID := ""
 	for i := len(session.Messages) - 1; i >= 0; i-- {
@@ -309,14 +315,14 @@ func (m *Manager) RegenerateLast(sessionID string) (*Session, error) {
 	m.mu.Unlock()
 	if lastUserID == "" {
 		return nil, fmt.Errorf("no user message to regenerate")
-// Returns the current LLM provider configuration state
+		// Returns the current LLM provider configuration state
 	}
 	return m.RewindAndResend(sessionID, lastUserID, "")
 }
 
 func (m *Manager) SetConfig(cfg *helper.Config) {
 	if cfg == nil {
-// Merges provider configuration with existing secrets, persists it to disk, and updates the active provider.
+		// Merges provider configuration with existing secrets, persists it to disk, and updates the active provider.
 		return
 	}
 	m.mu.Lock()
@@ -336,7 +342,7 @@ func (m *Manager) SetProviderConfig(config ProviderConfig) (ProviderConfigState,
 	m.mu.Lock()
 	merged := mergeProviderSecrets(config, m.providerConfig)
 	m.mu.Unlock()
-// Sets the active LLM provider and model, updating the manager's current provider settings.
+	// Sets the active LLM provider and model, updating the manager's current provider settings.
 	merged = normalizeProviderConfig(merged)
 	if err := saveProviderConfig(m.providerConfigPath, merged); err != nil {
 		return ProviderConfigState{}, err
@@ -359,7 +365,7 @@ func (m *Manager) SetProvider(settings ProviderSettings) ProviderSettings {
 		if settings.APIKey != "" {
 			configured.APIKey = settings.APIKey
 		}
-// Sends a user message to a chat session and queues the LLM run if not already processing.
+		// Sends a user message to a chat session and queues the LLM run if not already processing.
 		m.provider = configured
 	} else {
 		if settings.Provider == "" {
@@ -409,7 +415,7 @@ func (m *Manager) Send(sessionID string, req SendRequest) (*Session, error) {
 	session.Messages = append(session.Messages, msg)
 	session.LLMMessages = replaceSystemPrompt(session.LLMMessages, m.systemPrompt(session.Mode, session.Agent))
 	session.LLMMessages = append(session.LLMMessages, llm.Message{Role: "user", Content: req.Content})
-// Processes approval or rejection for a pending approval in a session
+	// Processes approval or rejection for a pending approval in a session
 	session.UpdatedAt = time.Now().UTC()
 	if err := m.saveLocked(session); err != nil {
 		m.mu.Unlock()
@@ -447,7 +453,7 @@ func (m *Manager) ResolveApproval(sessionID, approvalID string, approved bool) (
 	}
 	session.PendingApprovals = append(session.PendingApprovals[:idx], session.PendingApprovals[idx+1:]...)
 	_ = m.saveLocked(session)
-// Records an answer to a pending question in a session
+	// Records an answer to a pending question in a session
 	m.mu.Unlock()
 
 	if approved {
@@ -459,6 +465,7 @@ func (m *Manager) ResolveApproval(sessionID, approvalID string, approved bool) (
 		m.recordEvent(sessionID, "approval_resolved", map[string]any{"approval_id": approvalID, "approved": false})
 		m.appendToolResult(sessionID, pending.ToolCall, "User declined this tool call.", "declined")
 	}
+	m.processToolCalls(sessionID, m.takePendingToolCalls(sessionID))
 	m.startRun(sessionID)
 	return m.GetSession(sessionID)
 }
@@ -478,7 +485,7 @@ func (m *Manager) AnswerQuestion(sessionID, questionID, answer string) (*Session
 			idx = i
 			break
 		}
-// Starts an asynchronous run for a session, handling state management and triggering the main conversation loop.
+		// Starts an asynchronous run for a session, handling state management and triggering the main conversation loop.
 	}
 	if idx < 0 {
 		m.mu.Unlock()
@@ -490,6 +497,7 @@ func (m *Manager) AnswerQuestion(sessionID, questionID, answer string) (*Session
 
 	m.recordEvent(sessionID, "question_answered", map[string]any{"question_id": questionID})
 	m.appendToolResult(sessionID, pending.ToolCall, answer, "completed")
+	m.processToolCalls(sessionID, m.takePendingToolCalls(sessionID))
 	m.startRun(sessionID)
 	return m.GetSession(sessionID)
 }
@@ -506,7 +514,7 @@ func (m *Manager) startRun(sessionID string) {
 	m.recordEvent(sessionID, "run_started", map[string]any{"active": true})
 	go func() {
 		defer func() {
-// Marks a session for stop, cancels its LLM context and running tasks, interrupts non-CreateTasks tool calls, and records the stop event.
+			// Marks a session for stop, cancels its LLM context and running tasks, interrupts non-CreateTasks tool calls, and records the stop event.
 			m.mu.Lock()
 			if cancel := m.runningCancels[sessionID]; cancel != nil {
 				cancel()
@@ -538,7 +546,7 @@ func (m *Manager) StopSession(sessionID string) (*Session, error) {
 		copy := tc
 		interrupted = &copy
 	}
-// Initiates an LLM API call and manages task group lifecycle for the session.
+	// Initiates an LLM API call and manages task group lifecycle for the session.
 	prefix := sessionID + ":"
 	for key, cancel := range m.taskGroupCancels {
 		if strings.HasPrefix(key, prefix) {
@@ -550,21 +558,21 @@ func (m *Manager) StopSession(sessionID string) (*Session, error) {
 	if interrupted != nil {
 		m.appendToolResult(sessionID, *interrupted, "Tool interrupted.", "interrupted")
 	}
-// Records a stop_requested event and retrieves the session after an LLM call completes.
+	// Records a stop_requested event and retrieves the session after an LLM call completes.
 	m.recordEvent(sessionID, "stop_requested", map[string]any{"active": false})
 	return m.GetSession(sessionID)
 }
 
 func (m *Manager) beginLLMCall(sessionID string) (context.Context, bool) {
 	m.mu.Lock()
-// Checks if a stop is requested for a session and creates a cancellable context if not stopped.
+	// Checks if a stop is requested for a session and creates a cancellable context if not stopped.
 	defer m.mu.Unlock()
 	if m.stopRequested[sessionID] {
 		return nil, false
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m.runningCancels[sessionID] = cancel
-// Marks a tool call as running for a session.
+	// Marks a tool call as running for a session.
 	return ctx, true
 }
 
@@ -575,7 +583,7 @@ func (m *Manager) finishLLMCall(sessionID string) {
 }
 
 func (m *Manager) isStopRequested(sessionID string) bool {
-// Clears a running tool call from the session's tracking map, returning true if successfully removed.
+	// Clears a running tool call from the session's tracking map, returning true if successfully removed.
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.stopRequested[sessionID]
@@ -589,7 +597,7 @@ func (m *Manager) markRunningTool(sessionID string, tc llm.ToolCall) bool {
 	}
 	m.runningToolCalls[sessionID] = tc
 	return true
-// Clears a running tool call from the session's tool call tracking map.
+	// Clears a running tool call from the session's tool call tracking map.
 }
 
 func (m *Manager) clearRunningTool(sessionID, toolCallID string) bool {
@@ -597,7 +605,7 @@ func (m *Manager) clearRunningTool(sessionID, toolCallID string) bool {
 	defer m.mu.Unlock()
 	if tc, ok := m.runningToolCalls[sessionID]; ok && tc.ID == toolCallID {
 		delete(m.runningToolCalls, sessionID)
-// Runs the main conversation loop, streaming LLM responses and handling tool calls until completion or interruption.
+		// Runs the main conversation loop, streaming LLM responses and handling tool calls until completion or interruption.
 	}
 	interrupted := m.interruptedTools[toolCallID]
 	if interrupted {
@@ -623,6 +631,9 @@ func (m *Manager) runLoop(sessionID string) {
 		if err != nil || len(session.PendingApprovals) > 0 || len(session.PendingQuestions) > 0 {
 			m.mu.Unlock()
 			return
+		}
+		if ensureToolResultsComplete(session) {
+			_ = m.saveLocked(session)
 		}
 		messages := append([]llm.Message(nil), session.LLMMessages...)
 		providerSettings := m.providerForSession(session)
@@ -683,20 +694,106 @@ func (m *Manager) runLoop(sessionID string) {
 			m.mu.Unlock()
 		}
 
-// Prepares a tool call for execution, enforcing permissions and handling ask_user_question and auto-approval logic.
+		// Prepares a tool call for execution, enforcing permissions and handling ask_user_question and auto-approval logic.
 		if len(resp.ToolCalls) == 0 {
 			return
 		}
-		for _, tc := range resp.ToolCalls {
-			if paused := m.prepareOrExecuteTool(sessionID, tc); paused {
-				return
-			}
-			if m.isStopRequested(sessionID) {
-				return
-			}
+		if m.processToolCalls(sessionID, resp.ToolCalls) {
+			return
 		}
 	}
 	m.appendAssistantError(sessionID, fmt.Errorf("exceeded max chat iterations"))
+}
+
+// processToolCalls runs the given tool calls in order. When one pauses (needs
+// approval, asks a question, or the run is stopped mid-batch) the remaining calls
+// are persisted to session.PendingToolCalls so a later resume can finish them, and
+// it returns true. It returns false once the whole batch has been drained.
+func (m *Manager) processToolCalls(sessionID string, tcs []llm.ToolCall) bool {
+	for i, tc := range tcs {
+		if paused := m.prepareOrExecuteTool(sessionID, tc); paused {
+			m.setPendingToolCalls(sessionID, tcs[i+1:])
+			return true
+		}
+		if m.isStopRequested(sessionID) {
+			m.setPendingToolCalls(sessionID, tcs[i+1:])
+			return true
+		}
+	}
+	m.setPendingToolCalls(sessionID, nil)
+	return false
+}
+
+// setPendingToolCalls stores the not-yet-processed tool calls of the current
+// assistant turn so an approval/question resume can drain them later.
+func (m *Manager) setPendingToolCalls(sessionID string, tcs []llm.ToolCall) {
+	m.mu.Lock()
+	session, err := m.getSessionLocked(sessionID)
+	if err == nil {
+		if len(tcs) == 0 {
+			session.PendingToolCalls = nil
+		} else {
+			session.PendingToolCalls = append([]llm.ToolCall(nil), tcs...)
+		}
+		_ = m.saveLocked(session)
+	}
+	m.mu.Unlock()
+}
+
+// takePendingToolCalls returns and clears any queued sibling tool calls from a
+// paused assistant turn.
+func (m *Manager) takePendingToolCalls(sessionID string) []llm.ToolCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	session, err := m.getSessionLocked(sessionID)
+	if err != nil {
+		return nil
+	}
+	tcs := session.PendingToolCalls
+	if len(tcs) > 0 {
+		session.PendingToolCalls = nil
+		_ = m.saveLocked(session)
+	}
+	return tcs
+}
+
+// ensureToolResultsComplete appends a synthetic tool result for any tool_call in
+// the most recent assistant turn that lacks a matching role:"tool" message, so the
+// provider invariant "every tool_call must be answered before the next request"
+// always holds. This backstops interrupted/cancelled/crashed tool runs that would
+// otherwise orphan a tool_call. Returns true if it modified the session.
+func ensureToolResultsComplete(session *Session) bool {
+	lastAssistant := -1
+	for i := len(session.LLMMessages) - 1; i >= 0; i-- {
+		msg := session.LLMMessages[i]
+		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
+			lastAssistant = i
+			break
+		}
+	}
+	if lastAssistant < 0 {
+		return false
+	}
+	answered := map[string]bool{}
+	for _, msg := range session.LLMMessages[lastAssistant+1:] {
+		switch msg.Role {
+		case "tool":
+			if msg.ToolCallID != "" {
+				answered[msg.ToolCallID] = true
+			}
+		case "assistant", "user":
+			// The conversation already moved past this turn; nothing to backfill.
+			return false
+		}
+	}
+	changed := false
+	for _, tc := range session.LLMMessages[lastAssistant].ToolCalls {
+		if !answered[tc.ID] {
+			session.LLMMessages = append(session.LLMMessages, llm.Message{Role: "tool", Content: "Tool call did not complete.", ToolCallID: tc.ID})
+			changed = true
+		}
+	}
+	return changed
 }
 
 func (m *Manager) prepareOrExecuteTool(sessionID string, tc llm.ToolCall) bool {
@@ -722,7 +819,7 @@ func (m *Manager) prepareOrExecuteTool(sessionID string, tc llm.ToolCall) bool {
 		approval := PendingApproval{ID: newID("approval"), CreatedAt: time.Now().UTC(), Reason: decision.Reason, ToolCall: tc}
 		m.mu.Lock()
 		session, err := m.getSessionLocked(sessionID)
-// Dispatches tool call execution to handlers for ask_user_question, CreateTasks, or registry-registered tools.
+		// Dispatches tool call execution to handlers for ask_user_question, CreateTasks, or registry-registered tools.
 		if err == nil {
 			session.PendingApprovals = append(session.PendingApprovals, approval)
 			session.UpdatedAt = time.Now().UTC()
@@ -759,7 +856,7 @@ func (m *Manager) executeToolCall(sessionID string, tc llm.ToolCall) error {
 	m.recordEvent(sessionID, "tool_running", map[string]any{"tool_call_id": tc.ID})
 	result, err := tool.Run(json.RawMessage(tc.Function.Arguments))
 	if m.clearRunningTool(sessionID, tc.ID) {
-// Parses and processes a question tool call from the LLM with options and multiple-choice support.
+		// Parses and processes a question tool call from the LLM with options and multiple-choice support.
 		return nil
 	}
 	if err != nil {
@@ -785,7 +882,7 @@ func (m *Manager) createQuestion(sessionID string, tc llm.ToolCall) error {
 		return fmt.Errorf("invalid question arguments: %w", err)
 	}
 	if strings.TrimSpace(params.Question) == "" {
-// Adds a tool message to the session's LLM conversation history and records the event.
+		// Adds a tool message to the session's LLM conversation history and records the event.
 		return fmt.Errorf("question is required")
 	}
 	question := PendingQuestion{ID: newID("question"), CreatedAt: time.Now().UTC(), Question: params.Question, Options: params.Options, Multiple: params.Multiple, ToolCall: tc}
@@ -821,7 +918,7 @@ func (m *Manager) appendToolResult(sessionID string, tc llm.ToolCall, result, st
 	m.mu.Lock()
 	session, err := m.getSessionLocked(sessionID)
 	if err == nil {
-// Appends an error message from the assistant to the session and marks the conversation as failed.
+		// Appends an error message from the assistant to the session and marks the conversation as failed.
 		session.LLMMessages = append(session.LLMMessages, llm.Message{Role: "tool", Content: result, ToolCallID: tc.ID})
 		for i := len(session.Messages) - 1; i >= 0; i-- {
 			if session.Messages[i].ToolCallID == tc.ID {
@@ -840,7 +937,7 @@ func (m *Manager) appendToolResult(sessionID string, tc llm.ToolCall, result, st
 func (m *Manager) appendAssistantError(sessionID string, err error) {
 	status := "error"
 	var contractErr *ProviderContractError
-// Generates a session title using an LLM provider or falls back to title derived from content.
+	// Generates a session title using an LLM provider or falls back to title derived from content.
 	if errors.As(err, &contractErr) {
 		status = "warning"
 	}
@@ -871,7 +968,7 @@ func (m *Manager) generateTitle(sessionID, firstPrompt string) {
 		m.updateTitle(sessionID, titleFromContent(firstPrompt))
 		return
 	}
-// Sets the title of a chat session, either generated by LLM or derived from initial content.
+	// Sets the title of a chat session, either generated by LLM or derived from initial content.
 	resp, err := provider.Chat([]llm.Message{
 		{Role: "system", Content: "Generate a concise chat title from the user's first message. Return only the title, no quotes, no punctuation unless necessary. Max 6 words."},
 		{Role: "user", Content: firstPrompt},
@@ -886,6 +983,7 @@ func (m *Manager) generateTitle(sessionID, firstPrompt string) {
 	}
 	m.updateTitle(sessionID, title)
 }
+
 // Determines if a tool call should be auto-approved based on session provider settings and reason.
 
 func (m *Manager) updateTitle(sessionID, title string) {
@@ -912,7 +1010,7 @@ func (m *Manager) autoApprove(sessionID string, tc llm.ToolCall, reason string) 
 	settings := m.providerForSession(session)
 	m.mu.Unlock()
 	provider, err := newProvider(settings)
-// Records a session event with metadata for audit and tracing purposes.
+	// Records a session event with metadata for audit and tracing purposes.
 	if err != nil {
 		return false
 	}
@@ -929,7 +1027,7 @@ func (m *Manager) autoApprove(sessionID string, tc llm.ToolCall, reason string) 
 }
 
 func (m *Manager) recordEvent(sessionID, typ string, payload map[string]any) {
-// Retrieves a session by ID (must be called within a held mutex lock).
+	// Retrieves a session by ID (must be called within a held mutex lock).
 	event := Event{ID: newID("evt"), SessionID: sessionID, Type: typ, CreatedAt: time.Now().UTC(), Payload: payload}
 	m.mu.Lock()
 	if session, err := m.getSessionLocked(sessionID); err == nil {
@@ -942,12 +1040,12 @@ func (m *Manager) recordEvent(sessionID, typ string, payload map[string]any) {
 	m.mu.Unlock()
 	if m.emit != nil {
 		m.emit(event)
-// Persists a session to storage (must be called with mutex held).
+		// Persists a session to storage (must be called with mutex held).
 	}
 }
 
 func (m *Manager) getSessionLocked(id string) (*Session, error) {
-// Prepares a session for API response by resolving provider settings.
+	// Prepares a session for API response by resolving provider settings.
 	if session, ok := m.sessions[id]; ok {
 		return session, nil
 	}
@@ -960,7 +1058,7 @@ func (m *Manager) getSessionLocked(id string) (*Session, error) {
 }
 
 func (m *Manager) saveLocked(session *Session) error {
-// Returns the provider settings configured for a session.
+	// Returns the provider settings configured for a session.
 	return m.store.Save(session)
 }
 
@@ -972,7 +1070,7 @@ func (m *Manager) sessionForResponseLocked(session *Session) *Session {
 		for i := range copy.TaskGroups {
 			copy.TaskGroups[i].Processing = m.runningTaskGroups[taskGroupRunKey(session.ID, copy.TaskGroups[i].ID)]
 		}
-// Retrieves the interaction mode from a session for permission policy decisions.
+		// Retrieves the interaction mode from a session for permission policy decisions.
 	}
 	return &copy
 }
@@ -982,7 +1080,7 @@ func (m *Manager) providerForSession(session *Session) ProviderSettings {
 	if configured, ok := providerSettingsForName(m.providerConfig, session.Provider, session.Model); ok {
 		settings = configured
 	}
-// Retrieves the approval mode setting from a session for permission policy decisions.
+	// Retrieves the approval mode setting from a session for permission policy decisions.
 	if session.Model != "" {
 		settings.Model = session.Model
 	}
@@ -992,7 +1090,7 @@ func (m *Manager) providerForSession(session *Session) ProviderSettings {
 func (m *Manager) sessionMode(sessionID string) Mode {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-// Returns the system prompt string for the LLM based on the session mode and agent.
+	// Returns the system prompt string for the LLM based on the session mode and agent.
 	if session, err := m.getSessionLocked(sessionID); err == nil {
 		return session.Mode
 	}
@@ -1001,7 +1099,7 @@ func (m *Manager) sessionMode(sessionID string) Mode {
 
 func (m *Manager) sessionApprovalMode(sessionID string) ApprovalMode {
 	m.mu.Lock()
-// Converts tool definitions to a format suitable for LLM consumption.
+	// Converts tool definitions to a format suitable for LLM consumption.
 	defer m.mu.Unlock()
 	if session, err := m.getSessionLocked(sessionID); err == nil {
 		return session.ApprovalMode
@@ -1010,7 +1108,7 @@ func (m *Manager) sessionApprovalMode(sessionID string) ApprovalMode {
 }
 
 func (m *Manager) systemPrompt(mode Mode, sessionAgent string) string {
-	base := "You are a codebase LLM chat inside aracne. Use tools to inspect and modify the workspace. Native read tools return topology-aware context and native edit/write tools update topology. In Plan Mode, do not mutate files or topology; produce plans and ask clarifying questions. In Build Mode, implement requested changes with minimal edits. Report confirmed unrelated bugs with bug_report instead of fixing them. Current mode: " + string(mode) + agentKindPrompt(m.agentDir)
+	base := "You are a codebase LLM chat inside aracne. Use tools to inspect and modify the workspace. Native read tools return topology-aware context and native edit/write tools update topology. Prefer specific resource read functions (read_struct, read_function, etc.) instead of the base read_file function. In Plan Mode, do not mutate files or topology; produce plans and ask clarifying questions. In Build Mode, implement requested changes with minimal edits. Report confirmed unrelated bugs with bug_report instead of fixing them. Current mode: " + string(mode) + agentKindPrompt(m.agentDir)
 	if prompt := agentPrompt(sessionAgent); prompt != "" {
 		return base + "\n\nYou are running as the " + normalizeAgent(sessionAgent) + " agent. Follow this agent instruction:\n\n" + prompt
 	}
@@ -1066,9 +1164,9 @@ func newProvider(settings ProviderSettings) (llm.Provider, error) {
 		if apiKey == "" {
 			apiKey = os.Getenv("DEEPSEEK_API_KEY")
 		}
-// isOpenAIReasoningModel reports whether an OpenAI model accepts the
-// reasoning_effort parameter. Sending it to a non-reasoning model is an API
-// error, so reasoning is only applied when the model is reasoning-capable.
+		// isOpenAIReasoningModel reports whether an OpenAI model accepts the
+		// reasoning_effort parameter. Sending it to a non-reasoning model is an API
+		// error, so reasoning is only applied when the model is reasoning-capable.
 		// DeepSeek selects reasoning via the model (deepseek-reasoner), not a
 		// request parameter, so ThinkingBudget is handled by model choice.
 		provider = providers.NewDeepSeekWithConfig(apiKey, settings.Model, settings.BaseURL)
@@ -1087,8 +1185,8 @@ func newProvider(settings ProviderSettings) (llm.Provider, error) {
 func isOpenAIReasoningModel(model string) bool {
 	m := strings.ToLower(strings.TrimSpace(model))
 	if m == "" {
-// openAIReasoningEffort maps a thinking-token budget to an OpenAI reasoning
-// effort tier.
+		// openAIReasoningEffort maps a thinking-token budget to an OpenAI reasoning
+		// effort tier.
 		return false
 	}
 	if strings.Contains(m, "reason") {
@@ -1107,7 +1205,7 @@ func isOpenAIReasoningModel(model string) bool {
 // effort tier.
 func openAIReasoningEffort(budget int) string {
 	switch {
-// Sends a chat request to the wrapped provider and wraps any contract errors.
+	// Sends a chat request to the wrapped provider and wraps any contract errors.
 	case budget <= 0:
 		return ""
 	case budget < 2048:
@@ -1116,7 +1214,7 @@ func openAIReasoningEffort(budget int) string {
 		return "medium"
 	default:
 		return "high"
-// Streams a chat request to the wrapped provider and wraps any contract errors.
+		// Streams a chat request to the wrapped provider and wraps any contract errors.
 	}
 }
 
@@ -1125,7 +1223,7 @@ type contractGuardProvider struct {
 }
 
 func (p contractGuardProvider) Chat(messages []llm.Message, tools []llm.ToolDefinition) (*llm.ChatResponse, error) {
-// Wraps provider's StreamChat to catch and convert contract errors into ProviderContractError.
+	// Wraps provider's StreamChat to catch and convert contract errors into ProviderContractError.
 	resp, err := p.provider.Chat(messages, tools)
 	if err != nil && isContractError(err) {
 		return nil, &ProviderContractError{Err: err}
@@ -1137,7 +1235,7 @@ func (p contractGuardProvider) StreamChat(messages []llm.Message, tools []llm.To
 	resp, err := p.provider.StreamChat(messages, tools, emit)
 	if err != nil && isContractError(err) {
 		return nil, &ProviderContractError{Err: err}
-// Checks if an error indicates a contract violation (incomplete read, write, or edit).
+		// Checks if an error indicates a contract violation (incomplete read, write, or edit).
 	}
 	return resp, err
 }
@@ -1145,8 +1243,8 @@ func (p contractGuardProvider) StreamChat(messages []llm.Message, tools []llm.To
 func (p contractGuardProvider) StreamChatContext(ctx context.Context, messages []llm.Message, tools []llm.ToolDefinition, emit llm.StreamCallback) (*llm.ChatResponse, error) {
 	if contextual, ok := p.provider.(llm.ContextProvider); ok {
 		resp, err := contextual.StreamChatContext(ctx, messages, tools, emit)
-// chatModelSelection returns the model id from viz.chat.agents.model, stripping
-// any "provider/" prefix. Empty means "use the providers.json default".
+		// chatModelSelection returns the model id from viz.chat.agents.model, stripping
+		// any "provider/" prefix. Empty means "use the providers.json default".
 		if err != nil && isContractError(err) {
 			return nil, &ProviderContractError{Err: err}
 		}
@@ -1171,7 +1269,7 @@ func chatModelSelection(cfg *helper.Config) string {
 		return ""
 	}
 	if idx := strings.LastIndex(model, "/"); idx >= 0 {
-// Returns the default model for a given LLM provider.
+		// Returns the default model for a given LLM provider.
 		return strings.TrimSpace(model[idx+1:])
 	}
 	return model
@@ -1186,6 +1284,7 @@ func defaultProviderSettings() ProviderSettings {
 	}
 	return ProviderSettings{Provider: ProviderDeepSeek, Model: defaultModel(ProviderDeepSeek)}
 }
+
 // Returns the default model for a given LLM provider.
 
 func defaultModel(provider ProviderName) string {
@@ -1194,7 +1293,7 @@ func defaultModel(provider ProviderName) string {
 	}
 	switch provider {
 	case ProviderAnthropic:
-// Normalizes an ApprovalMode value to a valid state.
+		// Normalizes an ApprovalMode value to a valid state.
 		return "fable-5"
 	case ProviderDeepSeek:
 		return "deepseek-v4-pro"
@@ -1204,7 +1303,7 @@ func defaultModel(provider ProviderName) string {
 }
 
 func normalizeMode(mode Mode) Mode {
-// Replaces the system prompt in an LLM request with a custom prompt.
+	// Replaces the system prompt in an LLM request with a custom prompt.
 	if mode == ModePlan {
 		return ModePlan
 	}
@@ -1213,7 +1312,7 @@ func normalizeMode(mode Mode) Mode {
 
 func normalizeApprovalMode(mode ApprovalMode) ApprovalMode {
 	switch mode {
-// Sanitizes generated title text by trimming whitespace and removing quotes and special characters.
+	// Sanitizes generated title text by trimming whitespace and removing quotes and special characters.
 	case ApprovalAuto, ApprovalAlways:
 		return mode
 	default:
@@ -1241,7 +1340,7 @@ func cleanGeneratedTitle(content string) string {
 	content = strings.Join(fields, " ")
 	if len(content) > 64 {
 		content = content[:64]
-// Generates a unique ID with the given prefix.
+		// Generates a unique ID with the given prefix.
 	}
 	return content
 }

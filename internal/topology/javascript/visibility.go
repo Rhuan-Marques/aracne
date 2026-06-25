@@ -143,6 +143,23 @@ func containsID(ids []string, target string) bool {
 	return false
 }
 
+// dropSelf removes any item whose ID equals self (the resource being read), so
+// the resource never appears in its own forward "# CONTEXT:" lists (e.g. a
+// recursive function calling itself, or a self-referential class).
+func dropSelf[T any](items []T, self string, idOf func(T) string) []T {
+	if self == "" {
+		return items
+	}
+	out := items[:0:0]
+	for _, it := range items {
+		if idOf(it) == self {
+			continue
+		}
+		out = append(out, it)
+	}
+	return out
+}
+
 // Determines if a function uses a target by checking calls, classes, interfaces, variables, and types
 func functionUses(fn JavaScriptFunction, target string) bool {
 	return containsID(fn.Calls(), target) ||
@@ -194,7 +211,7 @@ func (m *JavaScriptManager) incomingRefs(gt *JavaScriptTopology, targetID string
 // Filters a function's context by applying visibility rules to its called functions, used classes, and external variables, and optionally includes incoming references.
 
 func (m *JavaScriptManager) filterFunctionContext(gt *JavaScriptTopology, ctx *JavaScriptFunctionContext, filter domain.ContextFilter, targetID string) {
-	ctx.CalledFunctions = m.applyFuncList(gt, filter, ctx.CalledFunctions)
+	ctx.CalledFunctions = m.applyFuncList(gt, filter, dropSelf(ctx.CalledFunctions, targetID, func(f SimplifiedFunction) string { return f.ID }))
 	ctx.ClassesUsed = m.applyClassUsages(gt, filter, ctx.ClassesUsed)
 	ctx.ExtVarsUsed = m.applyExtVars(gt, filter, ctx.ExtVarsUsed)
 	if filter.IncludeIncoming {
@@ -205,7 +222,7 @@ func (m *JavaScriptManager) filterFunctionContext(gt *JavaScriptTopology, ctx *J
 // Filters a class's context by applying visibility rules to its methods, used classes, and external variables, and optionally includes incoming references.
 func (m *JavaScriptManager) filterClassContext(gt *JavaScriptTopology, ctx *JavaScriptClassContext, filter domain.ContextFilter, targetID string) {
 	ctx.Methods = m.applyFuncList(gt, filter, ctx.Methods)
-	ctx.ClassesUsed = m.applyClassUsages(gt, filter, ctx.ClassesUsed)
+	ctx.ClassesUsed = m.applyClassUsages(gt, filter, dropSelf(ctx.ClassesUsed, targetID, func(c ClassUsage) string { return c.ID }))
 	ctx.ExtVarsUsed = m.applyExtVars(gt, filter, ctx.ExtVarsUsed)
 	if filter.IncludeIncoming {
 		ctx.Incoming = m.incomingRefs(gt, targetID)

@@ -24,6 +24,7 @@ const (
 	ntFunctionSignature     = "function_signature"
 	ntClassDeclaration      = "class_declaration"
 	ntAbstractClassDecl     = "abstract_class_declaration"
+	ntClass                 = "class"
 	ntClassBody             = "class_body"
 	ntClassHeritage         = "class_heritage"
 	ntExtendsClause         = "extends_clause"
@@ -49,15 +50,23 @@ const (
 	ntVariableDeclarator    = "variable_declarator"
 	ntImportStatement       = "import_statement"
 	ntImportClause          = "import_clause"
+	ntImportRequireClause   = "import_require_clause"
 	ntNamedImports          = "named_imports"
 	ntImportSpecifier       = "import_specifier"
 	ntNamespaceImport       = "namespace_import"
+	ntDynamicImport         = "import"
+	ntAwaitExpression       = "await_expression"
 	ntExportStatement       = "export_statement"
 	ntExportClause          = "export_clause"
 	ntExportSpecifier       = "export_specifier"
+	ntNamespaceExport       = "namespace_export"
 	ntCallExpression        = "call_expression"
 	ntNewExpression         = "new_expression"
 	ntMemberExpression      = "member_expression"
+	ntParenthesizedExpr     = "parenthesized_expression"
+	ntNonNullExpression     = "non_null_expression"
+	ntAsExpression          = "as_expression"
+	ntSuper                 = "super"
 	ntIdentifier            = "identifier"
 	ntTypeIdentifier        = "type_identifier"
 	ntPropertyIdentifier    = "property_identifier"
@@ -69,6 +78,7 @@ const (
 	ntPair                  = "pair"
 	ntShorthandProperty     = "shorthand_property_identifier"
 	ntString                = "string"
+	ntComputedPropertyName  = "computed_property_name"
 	ntAssignmentPattern     = "assignment_pattern"
 	ntRestPattern           = "rest_pattern"
 	ntObjectPattern         = "object_pattern"
@@ -80,6 +90,8 @@ const (
 	ntGenericType           = "generic_type"
 	ntTypeArguments         = "type_arguments"
 	ntArrayType             = "array_type"
+	ntUnionType             = "union_type"
+	ntNestedTypeIdentifier  = "nested_type_identifier"
 	ntAccessibilityModifier = "accessibility_modifier"
 	ntDecorator             = "decorator"
 )
@@ -105,6 +117,15 @@ type importInfo struct {
 	Namespace    bool
 }
 
+// namedReExport records a named ESM re-export (`export {Orig as Exported} from
+// "./src"`): the name a consumer sees (Exported), the original name in the
+// source module (Original, possibly "default"), and the source specifier.
+type namedReExport struct {
+	Exported string
+	Original string
+	Source   string
+}
+
 // Represents a parsed JavaScript function with parameters, return type, async/generator flags, and captured calls and assignments
 type jsFunc struct {
 	Name        string
@@ -118,20 +139,26 @@ type jsFunc struct {
 
 // Represents a function or method call in a function body with object, method, or function name and line number
 type jsBodyCall struct {
-	ObjectName string
-	MethodName string
-	Func       string
-	IsNew      bool
-	LineNo     int
+	ObjectName         string
+	ObjectNewClass     string // class name when the receiver is an inline `new X(...)` expression
+	ObjectCallFunc     string // function name when the receiver is an inline `f(...)` call expression
+	ObjectCastClass    string // class name when the receiver is a TS cast `(x as T)` / `(<T>x)`
+	ObjectMethodObject string // receiver variable when the receiver is an inline method call `v.m(...)`
+	ObjectMethodName   string // method name when the receiver is an inline method call `v.m(...)`
+	MethodName         string
+	Func               string
+	IsNew              bool
+	LineNo             int
 }
 
 // Represents a variable assignment in a function body with optional constructor call, method call, alias, or TypeScript type annotation
 type jsBodyAssign struct {
-	Name         string
-	NewClass     string // value is `new X(...)`
-	CallFunc     string // value is `foo(...)`
-	AliasOf      string // value is a bare identifier
-	DeclaredType string // TypeScript `const x: Foo = ...` annotation
+	Name            string
+	NewClass        string // value is `new X(...)`
+	CallFunc        string // value is `foo(...)`
+	AliasOf         string // value is a bare identifier
+	DeclaredType    string // TypeScript `const x: Foo = ...` annotation
+	DeclaredTypeArg string // first generic type argument of the annotation, e.g. Circle in Box<Circle>
 }
 
 // Holds a parsed JavaScript/TypeScript function and its associated AST body node.
@@ -151,11 +178,19 @@ type ParseResult struct {
 	ExternalImports []js.JavaScriptDependancy
 	ImportMap       map[string]importInfo
 	Exports         map[string]string
-	Classes         []js.JavaScriptClass
-	Functions       []FunctionParse
-	ExternalVars    []js.JavaScriptExternalVar
-	Interfaces      []js.JavaScriptInterface
-	NamedTypes      []js.JavaScriptNamedType
+	// ReExportAll holds source specifiers re-exported wholesale via CommonJS
+	// `module.exports = <whole-module require binding>` or ESM `export * from
+	// "./src"`. Resolved to module IDs in resolveTopology and surfaced as
+	// re_exports_module edges.
+	ReExportAll []string
+	// ReExportNamed holds named ESM re-exports (`export {Orig as Exported} from
+	// "./src"`). Resolved in resolveTopology to per-module re-export targets.
+	ReExportNamed []namedReExport
+	Classes       []js.JavaScriptClass
+	Functions     []FunctionParse
+	ExternalVars  []js.JavaScriptExternalVar
+	Interfaces    []js.JavaScriptInterface
+	NamedTypes    []js.JavaScriptNamedType
 }
 
 // Extracts the text content of a tree-sitter node from source bytes.
@@ -168,8 +203,37 @@ func nodeText(n *sitter.Node, src []byte) string {
 
 // Returns the 1-indexed starting line number of a tree-sitter node.
 func startLine(n *sitter.Node) int { return int(n.StartPoint().Row) + 1 }
+
 // Returns the 1-indexed ending line number of an AST node.
-func endLine(n *sitter.Node) int   { return int(n.EndPoint().Row) + 1 }
+func endLine(n *sitter.Node) int { return int(n.EndPoint().Row) + 1 }
+
+// memberName resolves the static name of a class member's `name` node. For a
+// computed property name backed by a static literal (e.g. `["dynamic"]` or
+// `[42]`), it returns the literal value so the resource ID is well-formed
+// (`Class.dynamic`). For genuinely dynamic names (identifiers, member/Symbol
+// expressions) it returns the inner expression text, which keeps the ID free
+// of bracket/quote syntax.
+func memberName(nameNode *sitter.Node, src []byte) string {
+	if nameNode == nil {
+		return ""
+	}
+	if nameNode.Type() != ntComputedPropertyName {
+		return nodeText(nameNode, src)
+	}
+	inner := nameNode.NamedChild(0)
+	if inner == nil {
+		return strings.Trim(nodeText(nameNode, src), "[]")
+	}
+	switch inner.Type() {
+	case ntString:
+		// Static string literal name → use the property name (drop the quotes).
+		return trimSpecifier(nodeText(inner, src))
+	default:
+		// Numbers, identifiers, member/Symbol expressions, etc.: use the raw
+		// expression text so the ID has no bracket/quote syntax.
+		return nodeText(inner, src)
+	}
+}
 
 // Finds the first named child node matching a given type.
 func childByType(n *sitter.Node, typ string) *sitter.Node {
@@ -242,9 +306,9 @@ func parseTopLevel(node *sitter.Node, exported bool, src []byte, pr *ParseResult
 	case ntExportStatement:
 		parseExport(node, src, pr)
 	case ntFunctionDeclaration, ntGeneratorFuncDecl, ntFunctionSignature:
-		pr.Functions = append(pr.Functions, parseFunctionDecl(node, src, pr, exported))
+		pr.Functions = append(pr.Functions, parseFunctionDecl(node, src, pr, exported, ""))
 	case ntClassDeclaration, ntAbstractClassDecl:
-		parseClass(node, src, pr, exported)
+		parseClass(node, src, pr, exported, "", "")
 	case ntInterfaceDeclaration:
 		parseInterface(node, src, pr)
 	case ntTypeAliasDeclaration:
@@ -268,6 +332,22 @@ func parseTopLevel(node *sitter.Node, exported bool, src []byte, pr *ParseResult
 
 // Extracts import source and bindings from an ES6 import statement, tracking internal vs external imports and mapping local names to their sources.
 func parseImport(node *sitter.Node, src []byte, pr *ParseResult) {
+	// TypeScript import-equals: `import x = require("./mod")`. tree-sitter models
+	// this as an import_require_clause inside the import_statement (not an
+	// import_clause). Route it through parseRequireBinding so the binding is
+	// registered as a whole-module namespace import, like `import * as x`,
+	// letting member access (`x.Class`) resolve.
+	if rc := childByType(node, ntImportRequireClause); rc != nil {
+		srcNode := rc.ChildByFieldName("source")
+		if srcNode == nil {
+			srcNode = childByType(rc, ntString)
+		}
+		if source := trimSpecifier(nodeText(srcNode, src)); source != "" {
+			parseRequireBinding(childByType(rc, ntIdentifier), source, src, pr)
+		}
+		return
+	}
+
 	srcNode := node.ChildByFieldName("source")
 	if srcNode == nil {
 		srcNode = childByType(node, ntString)
@@ -323,11 +403,31 @@ func parseExport(node *sitter.Node, src []byte, pr *ParseResult) {
 		return
 	}
 	if hasChildToken(node, "default") {
+		// Anonymous default-exported function/class declarations land in the
+		// `value` field as expressions (function_expression / class) rather than
+		// the `declaration` field, and carry no name. Extract them as resources
+		// named "default" so the module default_export resolves.
+		if value := node.ChildByFieldName("value"); value != nil {
+			switch value.Type() {
+			case ntFunctionExpression, ntGeneratorFunction:
+				fp := parseFunctionDecl(value, src, pr, true, "default")
+				pr.Functions = append(pr.Functions, fp)
+				pr.Exports["default"] = fp.Function.Name
+				return
+			case ntClass:
+				parseClass(value, src, pr, true, "default", "")
+				pr.Exports["default"] = "default"
+				return
+			}
+		}
 		if id := childByType(node, ntIdentifier); id != nil {
 			pr.Exports["default"] = nodeText(id, src)
 		}
 		return
 	}
+	// A `from "./src"` source turns an export clause / `*` into a re-export that
+	// forwards to another module's bindings instead of binding local names.
+	source := trimSpecifier(nodeText(node.ChildByFieldName("source"), src))
 	if clause := childByType(node, ntExportClause); clause != nil {
 		for i := 0; i < int(clause.NamedChildCount()); i++ {
 			spec := clause.NamedChild(i)
@@ -339,10 +439,25 @@ func parseExport(node *sitter.Node, src []byte, pr *ParseResult) {
 			if alias := spec.ChildByFieldName("alias"); alias != nil {
 				exported = nodeText(alias, src)
 			}
-			if exported != "" {
+			if exported == "" {
+				continue
+			}
+			if source != "" {
+				// `export {Orig as Exported} from "./src"`: forward to the source
+				// module's symbol, preserving the name translation.
+				pr.ReExportNamed = append(pr.ReExportNamed, namedReExport{Exported: exported, Original: name, Source: source})
+			} else {
 				pr.Exports[exported] = name
 			}
 		}
+		return
+	}
+	// Clause-less re-exports. `export * from "./src"` flattens the source
+	// module's namespace, so it is a whole-module re-export. `export * as ns
+	// from "./src"` instead binds a single namespace object; its members are not
+	// flattened, so it must NOT become a whole-module re-export edge.
+	if source != "" && childByType(node, ntNamespaceExport) == nil {
+		pr.ReExportAll = append(pr.ReExportAll, source)
 	}
 }
 
@@ -385,6 +500,22 @@ func parseCommonJSExport(assign *sitter.Node, src []byte, pr *ParseResult) {
 
 	if obj == "exports" || strings.HasSuffix(obj, ".exports") {
 		if prop != "" && prop != "exports" {
+			if right != nil {
+				switch right.Type() {
+				case ntArrowFunction, ntFunctionExpression, ntGeneratorFunction:
+					pr.Functions = append(pr.Functions, parseFunctionValue(prop, right, src, pr, true))
+					pr.Exports[prop] = prop
+					return
+				case ntClass:
+					parseClass(right, src, pr, true, prop, "")
+					clsName := nodeText(right.ChildByFieldName("name"), src)
+					if clsName == "" {
+						clsName = prop
+					}
+					pr.Exports[prop] = clsName
+					return
+				}
+			}
 			pr.Exports[prop] = localExportName(right, src, prop)
 			return
 		}
@@ -392,7 +523,16 @@ func parseCommonJSExport(assign *sitter.Node, src []byte, pr *ParseResult) {
 	if obj == "module" && prop == "exports" && right != nil {
 		switch right.Type() {
 		case ntIdentifier:
-			pr.Exports["default"] = nodeText(right, src)
+			name := nodeText(right, src)
+			// `module.exports = <whole-module require binding>` re-exports the
+			// required module's named exports through this module, rather than
+			// binding a single default. Record the re-export source so consumers
+			// resolve names through to the required module.
+			if info, ok := pr.ImportMap[name]; ok && info.Namespace && info.Internal {
+				pr.ReExportAll = append(pr.ReExportAll, info.Source)
+				return
+			}
+			pr.Exports["default"] = name
 		case ntObject:
 			for i := 0; i < int(right.NamedChildCount()); i++ {
 				p := right.NamedChild(i)
@@ -420,8 +560,11 @@ func localExportName(value *sitter.Node, src []byte, fallback string) string {
 }
 
 // Parses function declarations and extracts metadata including parameters, return types, async/generator flags, and body calls.
-func parseFunctionDecl(node *sitter.Node, src []byte, pr *ParseResult, exported bool) FunctionParse {
+func parseFunctionDecl(node *sitter.Node, src []byte, pr *ParseResult, exported bool, defaultName string) FunctionParse {
 	name := nodeText(node.ChildByFieldName("name"), src)
+	if name == "" {
+		name = defaultName
+	}
 	isGen := node.Type() == ntGeneratorFuncDecl || hasChildToken(node, "*")
 	isAsync := hasChildToken(node, "async")
 	body := node.ChildByFieldName("body")
@@ -433,7 +576,7 @@ func parseFunctionDecl(node *sitter.Node, src []byte, pr *ParseResult, exported 
 		IsAsync:     isAsync,
 		IsGenerator: isGen,
 	}
-	raw.BodyCalls, raw.BodyAssigns = collectBody(body, src)
+	raw.BodyCalls, raw.BodyAssigns = collectBody(node.ChildByFieldName("parameters"), body, src, pr)
 
 	fn := js.JavaScriptFunction{
 		ID:          pr.ModulePath + "." + name,
@@ -451,8 +594,14 @@ func parseFunctionDecl(node *sitter.Node, src []byte, pr *ParseResult, exported 
 }
 
 // Parses a class declaration node, extracting class metadata, methods, and base classes, then appends to ParseResult.
-func parseClass(node *sitter.Node, src []byte, pr *ParseResult, exported bool) {
-	name := nodeText(node.ChildByFieldName("name"), src)
+func parseClass(node *sitter.Node, src []byte, pr *ParseResult, exported bool, defaultName, forceName string) {
+	name := forceName
+	if name == "" {
+		name = nodeText(node.ChildByFieldName("name"), src)
+	}
+	if name == "" {
+		name = defaultName
+	}
 	if name == "" {
 		return
 	}
@@ -489,7 +638,7 @@ func parseClass(node *sitter.Node, src []byte, pr *ParseResult, exported bool) {
 
 // Parses a class method definition, extracting name, parameters, return type, modifiers (async, static, getter/setter), and body calls/assignments.
 func parseMethod(node *sitter.Node, src []byte, pr *ParseResult, classID string, abstract bool) FunctionParse {
-	name := nodeText(node.ChildByFieldName("name"), src)
+	name := memberName(node.ChildByFieldName("name"), src)
 	isAsync := hasChildToken(node, "async")
 	isGen := hasChildToken(node, "*")
 	isStatic := hasChildToken(node, "static")
@@ -512,7 +661,7 @@ func parseMethod(node *sitter.Node, src []byte, pr *ParseResult, classID string,
 		IsAsync:     isAsync,
 		IsGenerator: isGen,
 	}
-	raw.BodyCalls, raw.BodyAssigns = collectBody(body, src)
+	raw.BodyCalls, raw.BodyAssigns = collectBody(node.ChildByFieldName("parameters"), body, src, pr)
 
 	cid := js.ClassID(classID)
 	fn := js.JavaScriptFunction{
@@ -673,6 +822,18 @@ func parseVarDeclaration(node *sitter.Node, src []byte, pr *ParseResult, exporte
 			continue
 		}
 
+		// Dynamic import bound to a variable:
+		//   const mod = await import("./shapes.js")
+		//   const mod = import("./shapes.js")
+		// Treat it like a namespace require so the module dependency is
+		// registered and member access (`mod.Circle`) resolves.
+		if dyn := dynamicImportCall(value); dyn != nil {
+			if source := trimSpecifier(requireSource(dyn, src)); source != "" {
+				parseRequireBinding(nameNode, source, src, pr)
+			}
+			continue
+		}
+
 		if nameNode == nil || nameNode.Type() != ntIdentifier {
 			continue
 		}
@@ -683,6 +844,20 @@ func parseVarDeclaration(node *sitter.Node, src []byte, pr *ParseResult, exporte
 			case ntArrowFunction, ntFunctionExpression, ntGeneratorFunction:
 				pr.Functions = append(pr.Functions, parseFunctionValue(name, value, src, pr, exported))
 				continue
+			case ntClass:
+				// A class expression assigned to a binding (`const X = class {...}`)
+				// is extracted as a class named after the binding, just like class
+				// declarations and function expressions. Any inner class name is
+				// shadow-scoped, so the binding name wins (and matches the export).
+				parseClass(value, src, pr, exported, "", name)
+				continue
+			case ntObject:
+				// Object-literal members (method shorthand, getter/setter, and
+				// arrow/function-expression properties) become callable function
+				// resources named `<var>.<member>`, so member calls
+				// (`geometryOps.makeCircle()`) resolve to them. The binding itself
+				// is still registered as a variable below (no `continue`).
+				parseObjectLiteralMethods(name, value, src, pr, exported)
 			}
 		}
 
@@ -748,7 +923,7 @@ func parseFunctionValue(name string, value *sitter.Node, src []byte, pr *ParseRe
 		IsAsync:     isAsync,
 		IsGenerator: isGen,
 	}
-	raw.BodyCalls, raw.BodyAssigns = collectBody(body, src)
+	raw.BodyCalls, raw.BodyAssigns = collectBody(value.ChildByFieldName("parameters"), body, src, pr)
 
 	kind := "function"
 	if value.Type() == ntArrowFunction {
@@ -767,6 +942,87 @@ func parseFunctionValue(name string, value *sitter.Node, src []byte, pr *ParseRe
 		Exported:    exported,
 	}
 	return FunctionParse{Function: fn, Body: raw}
+}
+
+// parseObjectLiteralMethods extracts callable resources from an object-literal
+// bound to a variable (`const ops = { make(){...}, scale: (x)=>..., get y(){} }`).
+// Method shorthand, getters/setters, and arrow/function-expression properties
+// each become a top-level function resource named `<var>.<member>`, so member
+// calls (`ops.make()`) resolve to them. They carry no MethodFrom: the owning
+// object is a variable, not a class.
+func parseObjectLiteralMethods(objVar string, obj *sitter.Node, src []byte, pr *ParseResult, exported bool) {
+	for i := 0; i < int(obj.NamedChildCount()); i++ {
+		m := obj.NamedChild(i)
+		var nameNode, fn *sitter.Node
+		switch m.Type() {
+		case ntMethodDefinition:
+			nameNode, fn = m.ChildByFieldName("name"), m
+		case ntPair:
+			val := m.ChildByFieldName("value")
+			if val == nil {
+				continue
+			}
+			switch val.Type() {
+			case ntArrowFunction, ntFunctionExpression, ntGeneratorFunction:
+				nameNode, fn = m.ChildByFieldName("key"), val
+			default:
+				continue
+			}
+		default:
+			continue
+		}
+		name := memberName(nameNode, src)
+		if name == "" {
+			continue
+		}
+		pr.Functions = append(pr.Functions, parseObjectMember(objVar, name, fn, src, pr, exported))
+	}
+}
+
+// parseObjectMember builds the function resource for a single object-literal
+// member. `fn` is the member's function node (the method_definition itself for
+// shorthand/accessors, or the arrow/function-expression value for a property).
+func parseObjectMember(objVar, name string, fn *sitter.Node, src []byte, pr *ParseResult, exported bool) FunctionParse {
+	isAsync := hasChildToken(fn, "async")
+	isGen := fn.Type() == ntGeneratorFunction || hasChildToken(fn, "*")
+	body := fn.ChildByFieldName("body")
+
+	raw := &jsFunc{
+		Name:        name,
+		Params:      extractParams(fn, src),
+		Output:      returnTypeDefs(fn, src),
+		IsAsync:     isAsync,
+		IsGenerator: isGen,
+	}
+	raw.BodyCalls, raw.BodyAssigns = collectBody(fn.ChildByFieldName("parameters"), body, src, pr)
+
+	kind := "method"
+	switch fn.Type() {
+	case ntArrowFunction:
+		kind = "arrow"
+	case ntFunctionExpression:
+		kind = "function"
+	default: // method_definition
+		if hasChildToken(fn, "get") {
+			kind = "getter"
+		} else if hasChildToken(fn, "set") {
+			kind = "setter"
+		}
+	}
+
+	jf := js.JavaScriptFunction{
+		ID:          pr.ModulePath + "." + objVar + "." + name,
+		Name:        name,
+		Input:       raw.Params,
+		Output:      raw.Output,
+		Loc:         domain.Location{Path: pr.FileID, StartsAt: startLine(fn), EndsAt: endLine(fn)},
+		Connections: make(map[js.ConnectionKind][]string),
+		IsAsync:     isAsync,
+		IsGenerator: isGen,
+		Kind:        kind,
+		Exported:    exported,
+	}
+	return FunctionParse{Function: jf, Body: raw}
 }
 
 // Extracts function parameters from a function node, handling both single and multi-parameter declarations.
@@ -831,6 +1087,29 @@ func typeAnnotationName(ta *sitter.Node, src []byte) string {
 	return ""
 }
 
+// typeAnnotationArg returns the first generic type argument of a type annotation,
+// e.g. "Circle" for `: Box<Circle>`, or "" when the annotation is non-generic.
+func typeAnnotationArg(ta *sitter.Node, src []byte) string {
+	for i := 0; i < int(ta.NamedChildCount()); i++ {
+		n := ta.NamedChild(i)
+		if n.Type() != ntGenericType {
+			return ""
+		}
+		args := n.ChildByFieldName("type_arguments")
+		if args == nil {
+			args = childByType(n, ntTypeArguments)
+		}
+		if args == nil {
+			return ""
+		}
+		for j := 0; j < int(args.NamedChildCount()); j++ {
+			return typeRefName(args.NamedChild(j), src)
+		}
+		return ""
+	}
+	return ""
+}
+
 // Extracts the name from a TypeScript/JavaScript type reference node, handling identifiers, generics, arrays, and member expressions.
 func typeRefName(n *sitter.Node, src []byte) string {
 	switch n.Type() {
@@ -844,6 +1123,24 @@ func typeRefName(n *sitter.Node, src []byte) string {
 		for i := 0; i < int(n.NamedChildCount()); i++ {
 			return typeRefName(n.NamedChild(i), src)
 		}
+	case ntUnionType:
+		// Union (`A | B`): resolve against the first member that yields a
+		// usable type name (conservative — a method call on a union-typed
+		// value resolves to its first member).
+		for i := 0; i < int(n.NamedChildCount()); i++ {
+			if name := typeRefName(n.NamedChild(i), src); name != "" {
+				return name
+			}
+		}
+	case ntNestedTypeIdentifier:
+		// Namespace-qualified type (`Geo.Point`): keep the full dotted name so it
+		// resolves to the namespace-scoped resource (ID `<module>.Geo.Point`).
+		if mod := n.ChildByFieldName("module"); mod != nil {
+			if name := n.ChildByFieldName("name"); name != nil {
+				return nodeText(mod, src) + "." + nodeText(name, src)
+			}
+		}
+		return nodeText(n, src)
 	case ntMemberExpression:
 		if prop := n.ChildByFieldName("property"); prop != nil {
 			return nodeText(prop, src)
@@ -903,11 +1200,58 @@ func baseNameFromExpr(n *sitter.Node, src []byte) string {
 			return nodeText(prop, src)
 		}
 	case ntCallExpression:
+		// Mixin / HOF base (e.g. Tagged(Timestamped(Circle))): the real base
+		// class is the innermost class identifier argument, not the called
+		// mixin function. Best-effort: resolve the first argument that yields a
+		// name, recursing through nested mixin calls.
+		if args := n.ChildByFieldName("arguments"); args != nil {
+			for i := 0; i < int(args.NamedChildCount()); i++ {
+				if name := baseNameFromExpr(args.NamedChild(i), src); name != "" {
+					return name
+				}
+			}
+		}
+		// Fall back to the called function name (factory-style base).
 		if f := n.ChildByFieldName("function"); f != nil {
 			return baseNameFromExpr(f, src)
 		}
 	}
 	return ""
+}
+
+// unwrapReceiver strips TypeScript receiver wrappers that do not change which
+// value a method is called on: parentheses (`( … )`) and non-null assertions
+// (`x!`). It deliberately leaves an `as`/`<T>` cast in place so callers can read
+// the cast's target type (see castTypeNode). `(c as Circle)!.m()` therefore
+// unwraps to the inner `as_expression`.
+func unwrapReceiver(n *sitter.Node) *sitter.Node {
+	for n != nil {
+		switch n.Type() {
+		case ntParenthesizedExpr, ntNonNullExpression:
+			inner := n.NamedChild(0)
+			if inner == nil {
+				return n
+			}
+			n = inner
+		default:
+			return n
+		}
+	}
+	return n
+}
+
+// castTypeNode returns the target-type node of a TypeScript cast receiver
+// (`x as T` -> the `T` node), or nil when n is not a cast. The cast type is the
+// last named child of an `as_expression`.
+func castTypeNode(n *sitter.Node) *sitter.Node {
+	if n == nil || n.Type() != ntAsExpression {
+		return nil
+	}
+	cnt := int(n.NamedChildCount())
+	if cnt == 0 {
+		return nil
+	}
+	return n.NamedChild(cnt - 1)
 }
 
 // Extracts decorator names from a class or function node, parsing decorator syntax and removing parentheses if present.
@@ -930,12 +1274,9 @@ func extractDecorators(node *sitter.Node, src []byte) []string {
 }
 
 // Recursively extracts function calls and variable assignments from a function body AST node.
-func collectBody(bodyNode *sitter.Node, src []byte) ([]jsBodyCall, []jsBodyAssign) {
+func collectBody(paramsNode, bodyNode *sitter.Node, src []byte, pr *ParseResult) ([]jsBodyCall, []jsBodyAssign) {
 	var calls []jsBodyCall
 	var assigns []jsBodyAssign
-	if bodyNode == nil {
-		return calls, assigns
-	}
 
 	var walk func(n *sitter.Node)
 	walk = func(n *sitter.Node) {
@@ -945,31 +1286,100 @@ func collectBody(bodyNode *sitter.Node, src []byte) ([]jsBodyCall, []jsBodyAssig
 		switch n.Type() {
 		case ntCallExpression:
 			if fn := n.ChildByFieldName("function"); fn != nil {
+				if fn.Type() == ntDynamicImport {
+					// Dynamic `import("./mod.js")` inside a body: register the
+					// module dependency and, when bound to a variable
+					// (`const m = await import(...)`), record the binding as a
+					// namespace import so member access (`m.Class`) resolves.
+					registerDynamicImport(n, src, pr)
+				}
 				switch fn.Type() {
 				case ntIdentifier:
 					calls = append(calls, jsBodyCall{Func: nodeText(fn, src), LineNo: startLine(n)})
+				case ntSuper:
+					// `super(...)` constructor call: resolved against the
+					// enclosing class's base-class constructor.
+					calls = append(calls, jsBodyCall{
+						ObjectName: "super",
+						MethodName: "constructor",
+						Func:       nodeText(fn, src),
+						LineNo:     startLine(n),
+					})
 				case ntMemberExpression:
 					obj := fn.ChildByFieldName("object")
 					prop := fn.ChildByFieldName("property")
 					if obj != nil && prop != nil {
-						calls = append(calls, jsBodyCall{
-							ObjectName: nodeText(obj, src),
+						// Unwrap TS receiver wrappers so the underlying
+						// expression drives resolution: parentheses `( … )` and
+						// non-null assertions `x!`. An `as`/`<T>` cast is left
+						// in place so its target type can be captured below.
+						recv := unwrapReceiver(obj)
+						bc := jsBodyCall{
+							ObjectName: nodeText(recv, src),
 							MethodName: nodeText(prop, src),
 							Func:       nodeText(fn, src),
 							LineNo:     startLine(n),
-						})
+						}
+						// Method called on a TS cast (`(x as Circle).bar()` or
+						// `(<Circle>x).bar()`): the cast's target type drives
+						// resolution regardless of the operand's static type.
+						if t := castTypeNode(recv); t != nil {
+							bc.ObjectCastClass = typeRefName(t, src)
+						}
+						// Method chained directly on a `new` expression
+						// (`new Foo().bar()`): record the constructed class so
+						// the call resolves like the intermediate-variable form.
+						if recv.Type() == ntNewExpression {
+							if c := recv.ChildByFieldName("constructor"); c != nil {
+								bc.ObjectNewClass = baseNameFromExpr(c, src)
+							}
+						}
+						// Method chained directly on a call expression
+						// (`getCircle().bar()`): record the called function so
+						// the call resolves via the callee's return type.
+						if recv.Type() == ntCallExpression {
+							if f := recv.ChildByFieldName("function"); f != nil {
+								switch f.Type() {
+								case ntIdentifier:
+									bc.ObjectCallFunc = nodeText(f, src)
+								case ntMemberExpression:
+									// Method chained on a method call
+									// (`b.get().area()`): record the inner
+									// receiver + method so the chain resolves
+									// via the inner method's return type
+									// (incl. a propagated generic type argument).
+									io := f.ChildByFieldName("object")
+									ip := f.ChildByFieldName("property")
+									if io != nil && io.Type() == ntIdentifier && ip != nil {
+										bc.ObjectMethodObject = nodeText(io, src)
+										bc.ObjectMethodName = nodeText(ip, src)
+									}
+								}
+							}
+						}
+						calls = append(calls, bc)
 					}
 				}
 			}
 		case ntNewExpression:
 			if c := n.ChildByFieldName("constructor"); c != nil {
-				calls = append(calls, jsBodyCall{Func: baseNameFromExpr(c, src), IsNew: true, LineNo: startLine(n)})
+				bc := jsBodyCall{Func: baseNameFromExpr(c, src), IsNew: true, LineNo: startLine(n)}
+				// `new ns.Class()`: record the namespace qualifier so the
+				// class resolves through a namespace import (incl. dynamic
+				// `await import(...)`).
+				if c.Type() == ntMemberExpression {
+					if obj := c.ChildByFieldName("object"); obj != nil && obj.Type() == ntIdentifier {
+						bc.ObjectName = nodeText(obj, src)
+					}
+				}
+				calls = append(calls, bc)
 			}
 		case ntVariableDeclarator:
 			if name := n.ChildByFieldName("name"); name != nil && name.Type() == ntIdentifier {
 				a := assignFrom(nodeText(name, src), n.ChildByFieldName("value"), src)
 				if ta := n.ChildByFieldName("type"); ta != nil {
 					a.DeclaredType = typeAnnotationName(ta, src)
+					a.DeclaredTypeArg = typeAnnotationArg(ta, src)
 				}
 				assigns = append(assigns, a)
 			}
@@ -982,8 +1392,34 @@ func collectBody(bodyNode *sitter.Node, src []byte) ([]jsBodyCall, []jsBodyAssig
 			walk(n.NamedChild(i))
 		}
 	}
+	// Default-parameter initializers are part of the function body: a call in a
+	// default value (e.g. `f(c = makeCircle(1))`) should produce a call edge
+	// from the enclosing function. walk handles nil nodes safely.
+	walk(paramsNode)
 	walk(bodyNode)
 	return calls, assigns
+}
+
+// registerDynamicImport handles a dynamic `import("./mod.js")` call expression
+// found inside a function body. It registers the imported module as a file
+// dependency (so the imports_module edge is created) and, when the import
+// result is bound to a variable (`const m = await import(...)` or
+// `const m = import(...)`), records the binding as a namespace import so member
+// access (`m.Class`) resolves like a static `import * as m`.
+func registerDynamicImport(call *sitter.Node, src []byte, pr *ParseResult) {
+	source := trimSpecifier(requireSource(call, src))
+	if source == "" {
+		return
+	}
+	p := call.Parent()
+	if p != nil && p.Type() == ntAwaitExpression {
+		p = p.Parent()
+	}
+	var name *sitter.Node
+	if p != nil && p.Type() == ntVariableDeclarator {
+		name = p.ChildByFieldName("name")
+	}
+	parseRequireBinding(name, source, src, pr)
 }
 
 // Parses an assignment value node to extract new class instantiations, function calls, or variable aliases.
@@ -1011,6 +1447,24 @@ func assignFrom(name string, val *sitter.Node, src []byte) jsBodyAssign {
 func isRequireCall(call *sitter.Node, src []byte) bool {
 	f := call.ChildByFieldName("function")
 	return f != nil && f.Type() == ntIdentifier && nodeText(f, src) == "require"
+}
+
+// dynamicImportCall unwraps a value node to the underlying dynamic `import("...")`
+// call expression, peeling an enclosing `await`. Returns nil when the value is
+// not a dynamic import.
+func dynamicImportCall(value *sitter.Node) *sitter.Node {
+	if value == nil {
+		return nil
+	}
+	if value.Type() == ntAwaitExpression {
+		value = value.NamedChild(0)
+	}
+	if value != nil && value.Type() == ntCallExpression {
+		if f := value.ChildByFieldName("function"); f != nil && f.Type() == ntDynamicImport {
+			return value
+		}
+	}
+	return nil
 }
 
 // Extracts the string argument from a require() call node.

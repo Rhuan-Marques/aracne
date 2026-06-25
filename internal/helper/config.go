@@ -337,7 +337,7 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// Returns the default set of resource kinds that require descriptions: Functions, Methods, Types, and Interfaces.
+// Returns the default set of resource kinds that require descriptions: Functions, Methods, Types, Interfaces, and Files.
 
 func DefaultNeedDescription() []domain.ResourceKind {
 	return []domain.ResourceKind{
@@ -345,6 +345,7 @@ func DefaultNeedDescription() []domain.ResourceKind {
 		domain.ResourceMethod,
 		domain.ResourceType,
 		domain.ResourceInterface,
+		domain.ResourceFile,
 	}
 }
 

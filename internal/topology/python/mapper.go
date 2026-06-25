@@ -134,10 +134,13 @@ func ToGeneric(gt *PythonTopology) *domain.Topology {
 
 	for id, fn := range gt.Functions {
 		props := map[string]any{
-			"input":      fn.Input,
-			"output":     fn.Output,
-			"decorators": fn.Decorators,
-			"is_async":   fn.IsAsync,
+			"input":        fn.Input,
+			"output":       fn.Output,
+			"decorators":   fn.Decorators,
+			"is_async":     fn.IsAsync,
+			"py_body_line": fn.BodyLine,
+			"py_doc_start": fn.DocStart,
+			"py_doc_end":   fn.DocEnd,
 		}
 		if fn.MethodFrom != nil {
 			props["method_from"] = string(*fn.MethodFrom)
@@ -164,6 +167,9 @@ func ToGeneric(gt *PythonTopology) *domain.Topology {
 			"is_abc":               c.IsABC,
 			"is_protocol":          c.IsProtocol,
 			"has_abstract_methods": c.HasAbstractMethods,
+			"py_body_line":         c.BodyLine,
+			"py_doc_start":         c.DocStart,
+			"py_doc_end":           c.DocEnd,
 		}
 		if c.Constructor != nil {
 			props["constructor"] = string(*c.Constructor)

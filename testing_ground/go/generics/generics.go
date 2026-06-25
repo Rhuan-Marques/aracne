@@ -1,11 +1,18 @@
 // Package generics exercises Go generics: a constraint interface (type set),
 // generic types with one and two type parameters, a generic constructor,
-// generic functions, a function-typed parameter, and instantiation syntax.
+// generic functions, a function-typed parameter, instantiation syntax, a
+// GENERIC INTERFACE, a struct that satisfies a generic interface, and a
+// multi-approximation constraint.
 package generics
 
 // Number is a constraint interface using a type set (union of approximations).
 type Number interface {
 	~int | ~int64 | ~float64
+}
+
+// Ordered is a wider constraint adding ~string — a MULTI-APPROXIMATION type set.
+type Ordered interface {
+	~int | ~int64 | ~float64 | ~string
 }
 
 // Stack is a generic type with a single type parameter.
@@ -38,6 +45,25 @@ type Pair[K comparable, V any] struct {
 	Value V
 }
 
+// Container is a GENERIC INTERFACE (its methods mention the type parameter T).
+// Box below is a candidate implementer — probes generic-interface satisfaction
+// matching.
+type Container[T any] interface {
+	Add(v T)
+	Get(i int) T
+}
+
+// Box is a generic type that SATISFIES Container[T] (Add + Get over T).
+type Box[T any] struct {
+	items []T
+}
+
+// Add appends to the box (half of the Container[T] contract).
+func (b *Box[T]) Add(v T) { b.items = append(b.items, v) }
+
+// Get returns the i-th element (the other half of the Container[T] contract).
+func (b *Box[T]) Get(i int) T { return b.items[i] }
+
 // Map applies fn to each element — a generic function with a FUNCTION-TYPED
 // parameter and two type parameters.
 func Map[T, U any](in []T, fn func(T) U) []U {
@@ -57,12 +83,24 @@ func Sum[T Number](values ...T) T {
 	return total
 }
 
-// Use instantiates the generics: Stack[int], Map[int,int], Sum[int].
+// Max returns the larger of two values using the Ordered (multi-approximation)
+// constraint.
+func Max[T Ordered](a, b T) T {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// Use instantiates the generics: Stack[int], Map[int,int], Sum[int], Box[int],
+// Max[int].
 func Use() int {
 	s := NewStack[int]()
 	s.Push(10)
 	s.Push(20)
 	v, _ := s.Pop()
 	doubled := Map([]int{1, 2, 3}, func(n int) int { return n * 2 })
-	return v + Sum(doubled...)
+	b := &Box[int]{}
+	b.Add(v)
+	return Max(b.Get(0), Sum(doubled...))
 }

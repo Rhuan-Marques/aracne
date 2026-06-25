@@ -191,6 +191,34 @@ func applyParsedFile(gt *js.JavaScriptTopology, pr *ParseResult) {
 		mod.Connections[js.ConnHasVar] = append(mod.Connections[js.ConnHasVar], string(v.ID))
 	}
 	for _, iface := range pr.Interfaces {
+		if cls, ok := gt.Classes[iface.ID]; ok {
+			// TypeScript class + interface declaration merging: a class and a
+			// same-name interface share one resource ID. Keep the class as the
+			// primary resource and fold the interface's members into it, rather
+			// than letting the interface overwrite the class. Classes are applied
+			// before interfaces above, so the class is already present here.
+			cls.MergedInterfaceMethods = append(cls.MergedInterfaceMethods, iface.Methods...)
+			cls.MergedInterfaceProperties = append(cls.MergedInterfaceProperties, iface.Properties...)
+			if cls.Description == "" {
+				cls.Description = iface.Description
+			}
+			gt.Classes[iface.ID] = cls
+			continue
+		}
+		if existing, ok := gt.Interfaces[iface.ID]; ok {
+			// TypeScript declaration merging: multiple same-name interface
+			// declarations merge their members rather than the later one
+			// overwriting the earlier. IDs are module-qualified, so this only
+			// collides for merged declarations within the same file.
+			existing.Methods = append(existing.Methods, iface.Methods...)
+			existing.Properties = append(existing.Properties, iface.Properties...)
+			existing.Bases = append(existing.Bases, iface.Bases...)
+			if existing.Description == "" {
+				existing.Description = iface.Description
+			}
+			gt.Interfaces[iface.ID] = existing
+			continue
+		}
 		gt.Interfaces[iface.ID] = iface
 		mod.Connections[js.ConnHasInterface] = append(mod.Connections[js.ConnHasInterface], string(iface.ID))
 	}
@@ -213,10 +241,18 @@ func resolveTopology(gt *js.JavaScriptTopology, results []*ParseResult) {
 
 	for _, pr := range results {
 		imports := resolveModuleImports(pr, gt)
-		if len(imports) > 0 {
+		reexports := resolveModuleReExports(pr, gt)
+		named := resolveNamedReExports(pr, gt)
+		if len(imports) > 0 || len(reexports) > 0 || len(named) > 0 {
 			mod := gt.Modules[js.ModuleID(pr.FileID)]
 			for _, target := range imports {
 				mod.Connections[js.ConnImportsModule] = append(mod.Connections[js.ConnImportsModule], string(target))
+			}
+			for _, target := range reexports {
+				mod.Connections[js.ConnReExportsModule] = append(mod.Connections[js.ConnReExportsModule], string(target))
+			}
+			if len(named) > 0 {
+				mod.ReExportsNamed = named
 			}
 			mod.Connections = uniqueConns(mod.Connections)
 			gt.Modules[js.ModuleID(pr.FileID)] = mod

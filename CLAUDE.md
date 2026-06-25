@@ -94,3 +94,271 @@ Use the topology manager to your advantage, only read entire files when:
 6. **Avoid circular exploration** — If you already read a resource, do not re-read it in the same session. Trust your context.
 
 Good Luck in your task.
+
+---
+
+# Project Reference: What Aracne *Is* and How It Works
+
+> Everything above this line is the *injected integration contract* — it tells an
+> LLM how to navigate a project that has aracne installed. Everything below is a
+> reference for working *on aracne itself*: what the codebase contains, how the
+> pieces fit, and the surfaces a user can drive.
+
+## 1. One-paragraph summary
+
+**Aracne** is a static-analysis engine that scans a multi-language source tree
+(**Go, Python, JavaScript, TypeScript**) and builds a **"topology"**: a directed
+graph of every package/module, file, function, method, type (struct/class),
+interface, named type, variable, and dependency, plus the edges between them
+(calls, uses, implements/implemented-by, imports, etc.). The graph is persisted
+to an **SQLite database** (`.aracne/topology.db`) and kept current as files are
+edited. On top of that graph it exposes **topology-aware code navigation** to
+LLM agents (so the model queries a pre-analyzed graph with rich descriptions
+instead of grepping raw files) and to humans (via a CLI and a web visualizer).
+The shipped binary is **`arac`** (module `aracne`, Go 1.25).
+
+## 2. Repository map
+
+```
+main.go                      Subcommand dispatcher → internal/cli.*
+CLAUDE.md / AGENTS.md        Injected integration contract (Claude Code / OpenCode)
+LLM_INTEGRATION_CHARTER.md   Long-form spec of the three integration modes
+.aracne/                     Per-project state: topology.db, config.json, file_manifest.json,
+                             optimization_rules.json, providers.json, agents/*.md, chat/*.json
+.claude/ .opencode/          Harness integrations: agents, slash commands, hooks, plugins, MCP config
+internal/
+  cli/            Every `arac <cmd>` entry point (scan, serve, viz, agent, init, read, grep,
+                  edit, write, descriptions, bug, analyze, guard, update-file, …) + tool-registry wiring
+  topology/       The engine
+    domain/         Pure model: Resource, Topology, ResourceKind, TopologyWarning, KnownBug, Location, Visibility, Cut
+    scanner/        Registry + LanguageScanner/PartialUpdater interfaces
+      goscanner/      Go parser (stdlib go/ast, go/parser, go/token)
+      pyscanner/      Python parser (custom, no external grammar)
+      jsscanner/      JS + TS parser (tree-sitter via CGO — needs gcc)
+    golang/ python/ javascript/   Per-language managers + mapper/connections/resources/visibility (graph builders)
+  helper/         Storage + plumbing: sqlite/db, manifest, incremental & partial writes, config, apply/edit, normalize
+  llm/
+    provider.go     Provider interface (Chat / StreamChat) + message/tool types
+    providers/      anthropic, openai, deepseek implementations
+    agent/          Internal REPL agent loop + sub-agent runner
+    tools/          MCP tool implementations (read*, grep, edit, write, bug_*, warnings_list, ls) + Registry
+    languages/      Per-language tool flavors: gotools / jstools / pythontools / universaltools
+  mcp/            JSON-RPC 2.0 MCP server over stdio (initialize / tools/list / tools/call)
+  chat/           Proprietary chat engine behind the viz UI (sessions, native tools, CreateTasks sub-agents)
+  viz/            HTTP server + go:embed'd static SPA (graph + chat) + websocket + context-graph
+  prompts/        Generators for CLAUDE.md/AGENTS.md, agent .md files, slash commands, system prompts
+  toolspec/       Single source of truth catalog of tool names (MCP vs chat vs blockable-native)
+  topogrep/       Topology-annotated grep (path:line:match + ResourceID + Description)
+tests/            Cross-cutting suites incl. atscale_* topology-consistency (3 scan modes) + per-scanner tests
+testing_ground/   Hand-built multi-language corpus of edge cases (see its README.md)
+```
+
+## 3. Core model (`internal/topology/domain`)
+
+- **`Resource`** — one node: `ID`, `Kind`, `Name`, `Language`, `Description`,
+  `Location` (file + start/end line), free-form `Properties` (e.g. typed
+  `input`/`output`/`underlying`), and `Connections` (`map[edgeType][]targetID`).
+- **`ResourceKind`** — `package`, `file`, `function`, `method`, `type`,
+  `named_type`, `interface`, `variable`, `dependency`. (Python/JS are
+  *modules-first*: they drop the `package` node in favor of file-first IDs and
+  `imports_module` edges.)
+- **`Topology`** — `Root`, `Language`/`Languages`, `Resources` map, `Warnings`
+  map, `Errors` map. Multiple languages merge into one graph (`Language="multi"`).
+- **`TopologyWarning`** — surfaced after edits: `use_missing_node`,
+  `node_removed`, `signature_changed`. Tells an agent its change may have broken
+  callers.
+- **`KnownBug`** — a reported defect on a node with state `pending` →
+  `acknowledged` / `dismissed`, driving the bug-hunter/judge/solver workflow.
+
+## 4. The scanning pipeline (`internal/topology`)
+
+- **`scanner.Registry`** holds the `LanguageScanner` implementations and detects
+  which apply to a root (by detection file *and* by recursively finding source
+  files, skipping `.git`/`.aracne`/`node_modules`/`vendor`/`__pycache__`).
+- **`TopologyManager`** (`manager.go`) is the orchestrator:
+  - `FullScan` / `FullReScan` (the latter preserves descriptions) / `IncrementalScan`.
+  - **Incremental scan** diffs the on-disk tree against `file_manifest.json`,
+    then takes one of two paths:
+    - **Partial fast-path** (`tryPartialIncremental` + `PartialUpdater`): a single
+      changed source file whose edit touches no cross-file signature/identity is
+      persisted as a *scoped delta* without loading the whole graph.
+    - **Full two-phase path**: parse every changed file, then re-resolve changed
+      files **plus reverse-caller files** of any symbol whose signature/identity
+      changed, so body edges (`calls`, `uses_*`) never go stale. Correctness over
+      coverage — anything unsafe falls back here.
+  - Per-file edit serialization via `WithFileLock` (parallel sub-agents editing
+    the *same* file can't clobber each other; different files run concurrently).
+  - Also the home of bug/description/warning CRUD that the tools call into.
+- **Storage** lives in `internal/helper`: pure-Go `modernc.org/sqlite`,
+  incremental/scoped writes (`WriteIncremental`, `WriteScopedResources`),
+  manifest sync, orphan cleanup, and resource fingerprinting for minimal diffs.
+
+## 5. Configuration — `.aracne/config.json` (`internal/helper/config.go`)
+
+A free-form schema (a clean break from older formats — invalid/old files are
+overwritten with defaults). Top-level sections:
+
+- **`scan`** / **`scanner`** — default mode (`default`/`hard`/`all`) for the
+  one-shot `arac scan` and the live scanner; `update_frequency`.
+- **`read`** — `max_file_size`; **`scan`** (`none`/`default`/`full`/`hard` — run a
+  topology scan *before* every read/grep); **`context_filter`** (how verbosely
+  the `# CONTEXT:` block renders neighbors, incoming "USED BY" edges, small-fn
+  threshold, hide-undocumented); **`pipe_passthrough`** (whether the guard
+  exempts piped reads like `cmd | tail`).
+- **`descriptions`** — which `kinds` to document + `style_exemplars` count.
+- **`llm`** — per-harness agent config under `<any>` / `opencode` / `claude_code`,
+  each with `main_agent` + named `agents`. Fields: `model`, `mcp_tools`,
+  `blocked_tools`, `plugins`, `params`. Resolution: per-harness block beats
+  `<any>`; `"<inherits>"`/absent fields fall back to the main agent
+  (`EffectiveAgent`). This is what `arac init` and `arac serve --tool-profile`
+  consult to decide what each agent can do.
+- **`viz`** — `graph.optimization_rules` path + `chat` (self-contained
+  proprietary-chat `main_agent` + sub-agent tool lists; never inherits from `llm`).
+
+Every tool name in the config is validated against the **`toolspec`** catalog at
+load/init time so typos fail fast.
+
+## 6. The tool catalog (`internal/toolspec`)
+
+Single source of truth for tool names referenceable in config. Each `Spec`
+marks whether it's a valid **MCP** tool (`llm.*.mcp_tools`) and/or a **chat**
+tool (`viz.chat.*.tools`). Catalog highlights:
+
+- **Reads** — generic `read` + per-kind `read_function`, `read_struct`,
+  `read_interface`, `read_named_type`, `read_file`, `read_package`,
+  `read_dependency`. `grep` is topology-annotated.
+- **Mutations** — `edit`, `write` (MCP versions sync the topology DB inline).
+- **Topology/maintenance** — `warnings_list`, `update_description`,
+  `node_list_no_description`.
+- **Bugs** — `bug_report`, `bug_list`, `bug_acknowledge`, `bug_dismiss`, `bug_delete`.
+- **Chat-only native** — `ls`, `bash`, `glob`, `ask_user_question`, `CreateTasks`.
+- **Blockable native** (for `blocked_tools` + the guard hook) — `read`, `grep`,
+  `edit`, `write`, `bash`; the catalog also maps native tool names
+  (`Read`/`Grep`/…), POSIX shell (`cat`/`head`/`grep`/`sed`/…) and PowerShell
+  cmdlets to their aracne equivalents so the guard can warn/block shell bypasses.
+
+`internal/cli/tool_profiles.go` maps each MCP tool name → constructor; most reads
+use the **universal** implementations, and only `update_description` /
+`node_list_no_description` dispatch per language (go/js/python managers).
+
+## 7. User-facing surfaces (the harnesses)
+
+There are **four** ways to use aracne, all over the same topology engine:
+
+### A. CLI (`arac <subcommand>`) — `internal/cli`, dispatched from `main.go`
+Direct, no LLM. Key commands (full list in `usage.go` / `PrintUsage`):
+`scan` (`--all`/`--hard`/`--default`/`--debug`), `read`/`grep`,
+`resource list`, `node count`, `warnings list`, `bug <report|list|acknowledge|
+dismiss|delete>`, `descriptions <generate|apply|clear>`, `update-file`,
+`update-description`, `edit`/`write` (stdin JSON), `analyze dead-code`,
+`check-updates`, `init`, `disable`, `guard`, `serve`, `viz serve`, `agent`.
+
+### B. MCP server (`arac serve`) — `internal/mcp`
+JSON-RPC 2.0 over **stdio** (`initialize`, `tools/list`, `tools/call`). This is
+how **Claude Code** and **OpenCode** consume aracne (configured in `.mcp.json` /
+`opencode.json`). Flags: `--tool-profile` (`main`, `all`, or a configured agent
+name) and `--harness` (`claude_code`|`opencode`) — together they select which
+config-resolved tool set is exposed. No API key needed; the host platform brings
+its own model.
+
+### C. Internal agent (`arac agent`) — `internal/llm/agent` + `providers`
+A self-contained REPL agent that talks **directly to an LLM provider**
+(`RunAgent` uses **DeepSeek**, requiring `DEEPSEEK_API_KEY`; anthropic & openai
+providers also exist). It runs the same topology tool set and a topology-aware
+system prompt, with a sub-agent runner for fan-out (e.g. description executors).
+
+### D. Web visualizer + chat (`arac viz serve`) — `internal/viz` + `internal/chat`
+A local HTTP server (default `127.0.0.1:7331`) serving a **`go:embed`'d static
+SPA** (`internal/viz/static/`: `index.html`, `app.js`, `styles.css`) with two
+screens — **Visualization** (graph) and **Chat** — plus a Settings page.
+HTTP API: `/api/graph`, `/api/neighborhood`, `/api/context-graph`,
+`/api/search`, `/api/node/…`, `/api/summary`, `/api/warnings`, `/api/bugs`,
+`/api/config`, `/api/optimization-rules`, `/api/chat[/…]`, and `/api/ws`
+(websocket for streaming). Graph "modes": *Packages & Modules*, *Data Flow*,
+*Custom*; with language filtering, search, and neighborhood-depth controls.
+
+The **chat backend** (`internal/chat`) is aracne's own agent harness powering
+the viz Chat tab: session store (`.aracne/chat/*.json`), an LLM provider, an
+**agent registry**, **native tools** (`ls`/`bash`/`glob`), a workspace-scoped
+**permission policy**, and **`CreateTasks`** for spawning parallel sub-agents
+(explorer, bug-hunter/judge/solver, descriptions executor). Its tool lists are
+configured entirely under `viz.chat` and are independent of the `llm` section.
+
+## 8. Agent workflows
+
+These are defined as harness **slash commands** + **agent definitions** (markdown
+under `.claude/`, `.opencode/`, `.aracne/agents/`) and are mirrored by the
+in-repo skills:
+
+- **Descriptions** — `descriptions generate` lists undocumented resources,
+  batches them, and fans out **descriptions-generation-executor** sub-agents that
+  read each resource and write a concise description; `descriptions apply` writes
+  them back as source doc-comments; `descriptions clear` removes them.
+- **Bug pipeline** — **bug-hunter** scans the topology and files bugs
+  (`pending`); **bug-judge** triages them against dismissed patterns
+  (`acknowledged`/`dismissed`); **bug-solver** fixes acknowledged bugs and
+  deletes them. The main agent orchestrates the fan-out (hence it keeps read-only
+  `bug_list`).
+
+## 9. Harness integration & guards (`arac init`)
+
+`arac init` (flags `--claude`, `--opencode`, `--global`, `-y`) wires aracne into
+a project: generates the injected **CLAUDE.md / AGENTS.md**, the MCP config
+(`.mcp.json` / `opencode.json`), agent + command markdown, and harness hooks/
+plugins. Two hooks ship for Claude Code:
+
+- **`arac-guard.sh`** → `arac guard --claude-hook`: the **Tool Guard**. Watches
+  tool calls; reminds the model to use the aracne MCP tool whenever it reaches
+  for a native `Read`/`Grep`/`Edit`/`Write` or a shell equivalent
+  (`cat`/`grep`/`sed`/PowerShell …). Tools listed in a harness's `blocked_tools`
+  are blocked outright (blocking `grep` also blocks `rg`/`Select-String` run via
+  Bash; blocking `bash` blocks the Bash tool entirely). Piped reads
+  (`cmd | grep`) are exempt unless `read.pipe_passthrough:false`.
+- **`arac-update-file.sh`** → `arac update-file --claude-hook`: re-parses a file
+  into the topology after a **native** edit, keeping the graph current even when
+  the change bypassed the MCP `edit`/`write` tools.
+- OpenCode additionally gets `arac-native-edit-sync.js` (a plugin doing the same
+  topology sync on native edits).
+
+## 10. Languages & known quirks
+
+- **Go** — stdlib `go/ast` parser; richest support (cross-package return-type
+  inference, interface↔struct matching, generics, embedding).
+- **Python** — custom parser; ABC/Protocol/dataclass, inheritance, decorators,
+  cross-module resolution; *modules-first* (file IDs, `imports_module`).
+- **JavaScript + TypeScript** — share one **tree-sitter (CGO)** scanner, so the
+  build **requires gcc**. JS and TS are **independent topologies** (no
+  cross-language import resolution). TS adds interfaces/type-aliases/enums and
+  annotation-driven method resolution. Also *modules-first*.
+- Scanners skip test/build artifacts: Go `*_test.go`, Python `test_*.py`, JS/TS
+  `*.test.*`/`*.spec.*`/`*.min.*`, and dot/vendor dirs.
+
+## 11. Building, testing, running
+
+- **Build**: `go build -o bin/arac .` (CGO must be enabled for the JS/TS
+  tree-sitter scanner — needs `gcc`). SQLite is pure-Go (`modernc.org/sqlite`),
+  no C SQLite required.
+- **Front-end**: the SPA is plain HTML/JS/CSS embedded via `go:embed`; rebuild
+  the Go binary to pick up static changes. `package.json` only pulls
+  `lucide-react` for icon assets.
+- **Tests**: `go test ./...`. Notable: `tests/atscale_*` run a 3-scan-mode
+  (full / incremental / hard) **topology-consistency** suite across languages;
+  per-scanner tests under `tests/` and each `*scanner/`; `internal/**/_test.go`.
+- **`testing_ground/`** is a deliberately edge-case-dense corpus (one topology
+  per language family) used to exercise live edit/scan; see
+  `testing_ground/README.md` for the resource-ID formats and the parser corner
+  cases it documents.
+
+## 12. Working on this codebase (orientation tips)
+
+- The CLI is the index: to find what a command does, start at the `case` in
+  `main.go`, jump to `internal/cli/<name>.go`.
+- To change *what a resource lookup returns*, look at `internal/llm/languages/*`
+  (formatting/context) and `internal/topology/<lang>/*` (graph building).
+- To change *what gets stored or how incremental scans behave*, look at
+  `internal/topology/manager.go` + `internal/helper/{db,incremental,partial,manifest}.go`.
+- To change *which tools an agent gets*, edit `.aracne/config.json` (validated
+  against `internal/toolspec`); registration lives in
+  `internal/cli/tool_profiles.go`.
+- The MCP server, the internal agent, and the viz chat all reuse the same tool
+  layer — keep behavior at parity across them (per the integration charter).

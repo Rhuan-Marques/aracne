@@ -22,6 +22,13 @@ type pyImportTarget struct {
 	// module (`from .shapes import Circle` -> "Circle"); it is "" when the alias
 	// binds a module itself (`from . import shapes`, `import pkg.shapes`).
 	Symbol string
+	// PkgModulePath/PkgSymbol describe the package-symbol fallback for a
+	// `from . import X` / `from .. import X` import: X is usually a submodule
+	// (ModulePath/FilePath above) but may instead be a name defined in the
+	// package's __init__.py. PkgModulePath is that __init__ module's ID prefix
+	// and PkgSymbol is X. Both are "" for every other import form.
+	PkgModulePath string
+	PkgSymbol     string
 }
 
 // resolveInternalImport maps one internal import to its target module using pure
@@ -53,10 +60,18 @@ func resolveInternalImport(imp pyImport, importerFile, moduleRoot string) (pyImp
 		}
 
 		if imp.Module == "" {
-			// `from .[.] import <submodule>`: the imported name is a submodule,
-			// so the alias binds a module (no symbol).
+			// `from .[.] import <name>`: name is usually a submodule, so the alias
+			// binds a module (no symbol). But name may instead be a symbol defined
+			// in the package's __init__.py; record that fallback so a consumer can
+			// resolve it when the submodule file doesn't exist.
 			stem := filepath.Join(append([]string{baseDir}, strings.Split(imp.Name, ".")...)...)
-			return pyImportTarget{ModulePath: pyModulePath(moduleRoot, stem+".py"), FilePath: stem + ".py"}, true
+			pkgInit := filepath.Join(baseDir, "__init__.py")
+			return pyImportTarget{
+				ModulePath:    pyModulePath(moduleRoot, stem+".py"),
+				FilePath:      stem + ".py",
+				PkgModulePath: pyModulePath(moduleRoot, pkgInit),
+				PkgSymbol:     imp.Name,
+			}, true
 		}
 
 		// `from [.]module import <symbol>`: the symbol lives in the module file.
@@ -121,6 +136,14 @@ func resolvePyModuleImports(pr *ParseResult, gt *python.PythonTopology) []python
 		}
 		if mid, ok := findModuleFile(stem, gt); ok {
 			emit(mid)
+			continue
+		}
+		// `from . import X` where X is not a submodule but a symbol defined in
+		// the package's __init__.py: the import edge points at that package.
+		if tgt.PkgModulePath != "" {
+			if mid, ok := findModuleFile(filepath.Dir(stem), gt); ok {
+				emit(mid)
+			}
 		}
 	}
 	return out

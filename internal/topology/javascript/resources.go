@@ -83,6 +83,12 @@ type JavaScriptClass struct {
 	Connections   map[ConnectionKind][]string
 	Constructor   *FunctionID
 	Exported      bool
+	// MergedInterfaceMethods/Properties hold members folded in from a same-name
+	// interface declaration (TypeScript class + interface declaration merging).
+	// The class stays the primary resource; these inline signatures are surfaced
+	// as the class resource's "methods"/"properties" properties.
+	MergedInterfaceMethods    []FunctionDefinition
+	MergedInterfaceProperties []VariableDefinition
 }
 
 // JavaScriptInterface models a TypeScript interface (JavaScript has none). Methods and
@@ -121,7 +127,20 @@ type JavaScriptModule struct {
 	// DefaultExport is the local name bound to this module's `export default`
 	// (or CommonJS `module.exports = name`), used to resolve default imports.
 	DefaultExport string
-	Connections   map[ConnectionKind][]string
+	// ReExportsNamed maps an exported name to the (module, original name) it
+	// forwards to via a named ESM re-export (`export {Orig as Exported} from
+	// "./src"`). A consumer importing the exported name resolves through to the
+	// source symbol, with name translation the whole-module re-export edge can't
+	// express.
+	ReExportsNamed map[string]ReExportTarget
+	Connections    map[ConnectionKind][]string
+}
+
+// ReExportTarget is the destination of a named re-export: the source module and
+// the original symbol name within it (which may be "default").
+type ReExportTarget struct {
+	Module ModuleID
+	Name   string
 }
 
 // Represents an external variable with ID, name, type, value, and export/location metadata.

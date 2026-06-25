@@ -15,6 +15,12 @@ var (
 	ConnHasMethod   ConnectionKind = "methods"
 	ConnInherits    ConnectionKind = "inherits"
 	ConnInheritedBy ConnectionKind = "inherited_by"
+	// ConnImplements / ConnImplementedBy capture structural Protocol
+	// conformance: a class that defines every member of a typing.Protocol it
+	// does not nominally inherit. They mirror the implements/implemented_by edge
+	// kinds the Go and JS/TS scanners emit for interfaces.
+	ConnImplements    ConnectionKind = "implements"
+	ConnImplementedBy ConnectionKind = "implemented_by"
 	ConnConstructor ConnectionKind = "constructor"
 	ConnHasFunc     ConnectionKind = "has_function"
 	ConnHasClass    ConnectionKind = "has_class"
@@ -67,6 +73,16 @@ func (c *PythonClass) Inherits() []ClassID {
 // Returns the list of class IDs that inherit from this PythonClass.
 func (c *PythonClass) InheritedBy() []ClassID {
 	return castSlice[ClassID](c.Connections[ConnInheritedBy])
+}
+
+// Returns the list of Protocol class IDs this class structurally implements.
+func (c *PythonClass) Implements() []ClassID {
+	return castSlice[ClassID](c.Connections[ConnImplements])
+}
+
+// Returns the list of class IDs that structurally implement this Protocol.
+func (c *PythonClass) ImplementedBy() []ClassID {
+	return castSlice[ClassID](c.Connections[ConnImplementedBy])
 }
 
 // Returns the list of package paths used by this Python class

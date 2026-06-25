@@ -264,7 +264,7 @@ func bugHunterOpenCodeCommand() string {
 		"Scan the whole codebase for confirmed correctness, reliability, and security bugs — you are the only hunter this run, so cover every package, not just one slice.",
 		"",
 		"1. Work through the source package by package, inspecting functions, methods, types, and interfaces with the read tools.",
-		"2. Report every confirmed bug with bug_report (precise node_id + concrete scenario; no style issues or speculation).",
+		"2. Report every confirmed bug with bug_report on the root-cause node — the resource that must be fixed, not a downstream symptom (precise node_id + concrete scenario; no style issues or speculation).",
 		"3. After a full pass, make another focused pass over anything you were unsure about; stop when a pass finds nothing new.",
 		"4. Report how many bugs you reported.",
 	}, "\n")
@@ -276,7 +276,7 @@ func bugHunterCommandForAgent(agentRef string) string {
 		"Hunt the whole codebase for bugs by fanning out the " + agentRef + " agent in parallel, then repeat until a round finds nothing new.",
 		"",
 		"1. Partition the source tree into areas (top-level packages or directories; use ls/grep to enumerate them).",
-		"2. Launch the " + agentRef + " agent once per area, running as many concurrently as the platform allows. Each run reports every confirmed bug with bug_report (precise node_id + concrete scenario; no style issues or speculation).",
+		"2. Launch the " + agentRef + " agent once per area, running as many concurrently as the platform allows. Each run reports every confirmed bug with bug_report on the root-cause node — the resource that must be fixed, not a downstream symptom (precise node_id + concrete scenario; no style issues or speculation).",
 		"3. Call bug_list to see what has already been reported, then run another parallel round telling each hunter not to re-report existing bugs — only new, distinct ones.",
 		"4. Repeat step 3 until a round adds no new bugs, or after a small number of rounds.",
 		"5. Report how many distinct bugs were reported in total.",

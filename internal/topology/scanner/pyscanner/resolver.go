@@ -64,11 +64,23 @@ func resolveBodyCallRefs(bodyCalls []pyBodyCall, bodyAssigns []pyBodyAssign, pr 
 
 	// Build from local assignments
 	for _, assign := range bodyAssigns {
-		if assign.ValueType == "" || assign.Name == "" {
+		if assign.Name == "" {
 			continue
 		}
-		if cid, ok := resolveAssignClassID(assign.ValueType, pr, gt); ok {
-			varTypeMap[assign.Name] = cid
+		if assign.ValueType != "" {
+			if cid, ok := resolveAssignClassID(assign.ValueType, pr, gt); ok {
+				varTypeMap[assign.Name] = cid
+				continue
+			}
+		}
+		// `x = a <op> b`: type x as the class produced by a's operator dunder
+		// (e.g. Vector.__add__ -> Vector) so a later x.method() / x[i] resolves.
+		if assign.OpLeft != "" && assign.OpDunder != "" {
+			if leftCID, ok := varTypeMap[assign.OpLeft]; ok {
+				if cid, ok := dunderReturnClassID(leftCID, assign.OpDunder, pr, gt); ok {
+					varTypeMap[assign.Name] = cid
+				}
+			}
 		}
 	}
 
@@ -78,12 +90,36 @@ func resolveBodyCallRefs(bodyCalls []pyBodyCall, bodyAssigns []pyBodyAssign, pr 
 			// Direct function call: resolve via same-module or imported name.
 			if fid := lookupFuncByName(call.Func, pr, gt); fid != "" {
 				add(python.ConnCalls, string(fid))
+			} else if cid := lookupClassByName(call.Func, pr, gt); cid != "" {
+				// Not a function: a bare class reference (instantiation in a
+				// comprehension / context manager, or a match class-pattern)
+				// with no trailing method call still uses the class.
+				if receiverClass == nil || cid != *receiverClass {
+					add(python.ConnUsesClass, string(cid))
+				}
+			}
+			continue
+		}
+
+		// super().method(...) resolves against the receiver class's bases.
+		if call.ObjectName == "super" {
+			if receiverClass != nil {
+				resolveSuperMethod(*receiverClass, call.MethodName, gt, add)
 			}
 			continue
 		}
 
 		classID, ok := varTypeMap[call.ObjectName]
 		if !ok {
+			// `mod.func()` / `mod.Class()` where mod is an imported module alias
+			// (not a typed local): resolve the dotted call against that module.
+			if fid := lookupFuncByName(call.Func, pr, gt); fid != "" {
+				add(python.ConnCalls, string(fid))
+			} else if cid := lookupClassByName(call.Func, pr, gt); cid != "" {
+				if receiverClass == nil || cid != *receiverClass {
+					add(python.ConnUsesClass, string(cid))
+				}
+			}
 			continue
 		}
 
@@ -105,6 +141,72 @@ func resolveBodyCallRefs(bodyCalls []pyBodyCall, bodyAssigns []pyBodyAssign, pr 
 			}
 		}
 	}
+}
+
+// resolveSuperMethod resolves a super().method(...) call by walking the receiver
+// class's base classes breadth-first (MRO order) and recording a Calls edge to
+// the first inherited method whose name matches methodName.
+func resolveSuperMethod(receiver python.ClassID, methodName string, gt *python.PythonTopology, add func(kind python.ConnectionKind, id string)) {
+	if methodName == "" {
+		return
+	}
+	visited := map[python.ClassID]bool{receiver: true}
+	var queue []python.ClassID
+	if cls, ok := gt.Classes[receiver]; ok {
+		queue = append(queue, cls.Inherits()...)
+	}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		if visited[cur] {
+			continue
+		}
+		visited[cur] = true
+		cls, ok := gt.Classes[cur]
+		if !ok {
+			continue
+		}
+		for _, mid := range cls.Methods() {
+			if m, ok := gt.Functions[mid]; ok && m.Name == methodName {
+				add(python.ConnCalls, string(mid))
+				return
+			}
+		}
+		queue = append(queue, cls.Inherits()...)
+	}
+}
+
+// dunderReturnClassID resolves the class produced by leftClass.<dunder>(...),
+// used to type the result of a binary operation (e.g. `c = a + b` where a's
+// __add__ returns a class). It mirrors resolveAssignClassID's return-type
+// resolution and tolerates a forward-reference (quoted) return annotation.
+func dunderReturnClassID(leftClass python.ClassID, dunder string, pr *ParseResult, gt *python.PythonTopology) (python.ClassID, bool) {
+	cls, ok := gt.Classes[leftClass]
+	if !ok {
+		return "", false
+	}
+	for _, mid := range cls.Methods() {
+		m, ok := gt.Functions[mid]
+		if !ok || m.Name != dunder || len(m.Output) == 0 {
+			continue
+		}
+		out := m.Output[0]
+		if out.TypingID != "" && classExists(python.ClassID(out.TypingID), gt) {
+			return python.ClassID(out.TypingID), true
+		}
+		typing := strings.Trim(out.Typing, "'\"")
+		if typing == "" {
+			return "", false
+		}
+		if cid := python.ClassID(pyModulePath(pr.ModuleRoot, m.Loc.Path) + "." + typing); classExists(cid, gt) {
+			return cid, true
+		}
+		if cid := lookupClassByName(typing, pr, gt); cid != "" {
+			return cid, true
+		}
+		return "", false
+	}
+	return "", false
 }
 
 // pyBuiltinTypes are predeclared/typing names that are never topology classes,
@@ -169,9 +271,18 @@ func lookupClassByName(name string, pr *ParseResult, gt *python.PythonTopology) 
 	if cid := python.ClassID(pr.ModulePath + "." + name); classExists(cid, gt) {
 		return cid
 	}
-	if tgt, ok := pr.ImportTargets[name]; ok && tgt.Symbol != "" {
-		if cid := python.ClassID(tgt.ModulePath + "." + tgt.Symbol); classExists(cid, gt) {
-			return cid
+	if tgt, ok := pr.ImportTargets[name]; ok {
+		if tgt.Symbol != "" {
+			if cid := python.ClassID(tgt.ModulePath + "." + tgt.Symbol); classExists(cid, gt) {
+				return cid
+			}
+		}
+		// `from . import X` / `from .. import X` where X is a class in the
+		// package __init__ rather than a submodule.
+		if tgt.PkgSymbol != "" {
+			if cid := python.ClassID(tgt.PkgModulePath + "." + tgt.PkgSymbol); classExists(cid, gt) {
+				return cid
+			}
 		}
 	}
 	if i := strings.Index(name, "."); i > 0 {
@@ -179,6 +290,11 @@ func lookupClassByName(name string, pr *ParseResult, gt *python.PythonTopology) 
 			if cid := python.ClassID(tgt.ModulePath + "." + name[i+1:]); classExists(cid, gt) {
 				return cid
 			}
+		}
+	}
+	for _, sp := range starModulePrefixes(name, pr) {
+		if cid := python.ClassID(sp + name); classExists(cid, gt) {
+			return cid
 		}
 	}
 	return ""
@@ -190,9 +306,18 @@ func lookupFuncByName(name string, pr *ParseResult, gt *python.PythonTopology) p
 	if fid := python.FunctionID(pr.ModulePath + "." + name); funcExists(fid, gt) {
 		return fid
 	}
-	if tgt, ok := pr.ImportTargets[name]; ok && tgt.Symbol != "" {
-		if fid := python.FunctionID(tgt.ModulePath + "." + tgt.Symbol); funcExists(fid, gt) {
-			return fid
+	if tgt, ok := pr.ImportTargets[name]; ok {
+		if tgt.Symbol != "" {
+			if fid := python.FunctionID(tgt.ModulePath + "." + tgt.Symbol); funcExists(fid, gt) {
+				return fid
+			}
+		}
+		// `from . import X` / `from .. import X` where X is a function in the
+		// package __init__ rather than a submodule.
+		if tgt.PkgSymbol != "" {
+			if fid := python.FunctionID(tgt.PkgModulePath + "." + tgt.PkgSymbol); funcExists(fid, gt) {
+				return fid
+			}
 		}
 	}
 	if i := strings.Index(name, "."); i > 0 {
@@ -200,6 +325,11 @@ func lookupFuncByName(name string, pr *ParseResult, gt *python.PythonTopology) p
 			if fid := python.FunctionID(tgt.ModulePath + "." + name[i+1:]); funcExists(fid, gt) {
 				return fid
 			}
+		}
+	}
+	for _, sp := range starModulePrefixes(name, pr) {
+		if fid := python.FunctionID(sp + name); funcExists(fid, gt) {
+			return fid
 		}
 	}
 	return ""
@@ -211,9 +341,18 @@ func lookupExtVarByName(name string, pr *ParseResult, gt *python.PythonTopology)
 	if vid := python.ExternalVarID(pr.ModulePath + "." + name); extVarExists(vid, gt) {
 		return vid
 	}
-	if tgt, ok := pr.ImportTargets[name]; ok && tgt.Symbol != "" {
-		if vid := python.ExternalVarID(tgt.ModulePath + "." + tgt.Symbol); extVarExists(vid, gt) {
-			return vid
+	if tgt, ok := pr.ImportTargets[name]; ok {
+		if tgt.Symbol != "" {
+			if vid := python.ExternalVarID(tgt.ModulePath + "." + tgt.Symbol); extVarExists(vid, gt) {
+				return vid
+			}
+		}
+		// `from . import X` / `from .. import X` where X is a module-level var in
+		// the package __init__ rather than a submodule.
+		if tgt.PkgSymbol != "" {
+			if vid := python.ExternalVarID(tgt.PkgModulePath + "." + tgt.PkgSymbol); extVarExists(vid, gt) {
+				return vid
+			}
 		}
 	}
 	if i := strings.Index(name, "."); i > 0 {
@@ -223,7 +362,28 @@ func lookupExtVarByName(name string, pr *ParseResult, gt *python.PythonTopology)
 			}
 		}
 	}
+	for _, sp := range starModulePrefixes(name, pr) {
+		if vid := python.ExternalVarID(sp + name); extVarExists(vid, gt) {
+			return vid
+		}
+	}
 	return ""
+}
+
+// starModulePrefixes returns the candidate ID prefixes that a bare `name` could
+// carry when made visible by a `from .m import *` star import. It yields nothing
+// for a dotted name (star imports only bind bare top-level names). Each star
+// module is tried both as a plain module (`prefix.`) and as a package
+// (`prefix/__init__.`).
+func starModulePrefixes(name string, pr *ParseResult) []string {
+	if len(pr.StarImports) == 0 || strings.Contains(name, ".") {
+		return nil
+	}
+	out := make([]string, 0, len(pr.StarImports)*2)
+	for _, sp := range pr.StarImports {
+		out = append(out, sp+".", sp+"/__init__.")
+	}
+	return out
 }
 
 // Checks whether a class ID exists in the topology.
@@ -296,15 +456,59 @@ func resolveBodyReferences(body *pyFunc, pr *ParseResult, gt *python.PythonTopol
 
 	seen2 := make(map[string]bool)
 	for _, param := range body.Params {
-		if param.Typing != "" {
+		resolveAnnotationRefs(param.TypeRefs, pr, gt, add, seen2)
+		if len(param.TypeRefs) == 0 && param.Typing != "" {
 			resolveTypeRef(param.Typing, pr, gt, add, seen2)
 		}
 	}
 	for _, result := range body.Results {
-		if result.Typing != "" {
+		resolveAnnotationRefs(result.TypeRefs, pr, gt, add, seen2)
+		if len(result.TypeRefs) == 0 && result.Typing != "" {
 			resolveTypeRef(result.Typing, pr, gt, add, seen2)
 		}
 	}
+}
+
+// resolveAnnotationRefs resolves every inner type name extracted from a
+// (possibly composite/generic) annotation — Optional[X], Union[A,B], A | B,
+// list[X], dict[k,V], Callable[[A],B], quoted forward refs, and alias names — to
+// its edge, so each named class yields its own uses_class edge.
+func resolveAnnotationRefs(refs []string, pr *ParseResult, gt *python.PythonTopology, add func(kind python.ConnectionKind, id string), seen map[string]bool) {
+	for _, ref := range refs {
+		resolveAnnotationRef(ref, pr, gt, add, seen, 0)
+	}
+}
+
+// resolveAnnotationRef resolves a single type name to a uses_class / calls /
+// uses_dependency edge. A name that is a module-level type alias (PEP 695
+// `type X = ...` or `X = list[Y]`) expands to the inner types it aliases,
+// transitively (bounded by depth to guard against alias cycles).
+func resolveAnnotationRef(name string, pr *ParseResult, gt *python.PythonTopology, add func(kind python.ConnectionKind, id string), seen map[string]bool, depth int) {
+	if name == "" {
+		return
+	}
+	if cid := lookupClassByName(name, pr, gt); cid != "" {
+		add(python.ConnUsesClass, string(cid))
+		return
+	}
+	if fid := lookupFuncByName(name, pr, gt); fid != "" {
+		if !seen[string(fid)] {
+			seen[string(fid)] = true
+			add(python.ConnCalls, string(fid))
+		}
+		return
+	}
+	if depth < 8 {
+		if aliasRefs, ok := pr.TypeAliases[name]; ok {
+			for _, r := range aliasRefs {
+				if r != name {
+					resolveAnnotationRef(r, pr, gt, add, seen, depth+1)
+				}
+			}
+			return
+		}
+	}
+	addExternalDep(name, pr, add)
 }
 
 // Resolves a decorator name to a function or class connection, handling both local lookups and external dependencies.
@@ -481,6 +685,35 @@ func resolveClassVarRefs(pr *ParseResult, gt *python.PythonTopology) {
 		}
 
 		resolveValueRef(ref.RefValue, pr, gt, add)
+		gt.Classes[ref.ClassID] = cls
+	}
+}
+
+// resolveMetaclassRefs resolves each `class C(metaclass=Meta)` reference to a
+// uses_class edge from C to the metaclass.
+func resolveMetaclassRefs(pr *ParseResult, gt *python.PythonTopology) {
+	for _, ref := range pr.MetaclassRefs {
+		cls, exists := gt.Classes[ref.ClassID]
+		if !exists {
+			continue
+		}
+		mid := lookupClassByName(ref.Name, pr, gt)
+		if mid == "" {
+			continue
+		}
+		if cls.Connections == nil {
+			cls.Connections = make(map[python.ConnectionKind][]string)
+		}
+		found := false
+		for _, existing := range cls.Connections[python.ConnUsesClass] {
+			if existing == string(mid) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			cls.Connections[python.ConnUsesClass] = append(cls.Connections[python.ConnUsesClass], string(mid))
+		}
 		gt.Classes[ref.ClassID] = cls
 	}
 }

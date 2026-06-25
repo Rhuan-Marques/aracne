@@ -2124,6 +2124,7 @@
       updateTaskChatControls(false);
       box.innerHTML = (hasConfiguredProviders() ? '<div class="chatWelcome"><h2>Welcome</h2><p>Ask Aracne to inspect topology, plan changes, run tools, or build features.</p></div>' : providerSetupCTA()) + renderQueuedMessages();
       el('chatPending').innerHTML = '';
+      syncComposerDockSpace();
       updateJumpLatest();
       return;
     }
@@ -2132,6 +2133,7 @@
       if (renderTaskChat(box, session)) {
         updateTaskChatControls(true);
         renderChatPending();
+        syncComposerDockSpace();
         if (stick) box.scrollTop = box.scrollHeight;
         updateJumpLatest();
         return;
@@ -2155,9 +2157,10 @@
       if (strong && openKeys[strong.textContent]) d.open = true;
     });
     restoreFocus(box, focusSnap);
+    renderChatPending();
+    syncComposerDockSpace();
     if (stick) box.scrollTop = box.scrollHeight;
     updateJumpLatest();
-    renderChatPending();
   }
 
   function formatToolInput(obj) {
@@ -2367,6 +2370,17 @@
     if (!input) return;
     input.style.height = 'auto';
     input.style.height = Math.min(260, input.scrollHeight) + 'px';
+    syncComposerDockSpace();
+  }
+
+  function syncComposerDockSpace() {
+    var dock = el('composerDock');
+    var box = el('chatMessages');
+    if (!dock || !box) return;
+    var h = dock.offsetHeight;
+    box.style.paddingBottom = (h + 28) + 'px';
+    var jump = el('chatJumpLatest');
+    if (jump) jump.style.bottom = (h + 34) + 'px';
   }
 
   function recordSentHistory(content) {
@@ -2790,9 +2804,16 @@
   }
   function updateModeControls() {
     var mode = el('mode').value;
-    el('customControls').classList.toggle('hidden', mode !== 'custom');
+    var custom = mode === 'custom';
+    var customControls = el('customControls');
+    customControls.classList.toggle('hidden', !custom);
     el('modeHelp').textContent = modeHelp[mode] || '';
-    el('loadGraph').textContent = mode === 'custom' ? 'Load Custom Slice' : 'Load ' + el('mode').selectedOptions[0].text;
+    // In custom mode the Graph Optimization block sits below the custom filters;
+    // otherwise it stays directly under the depth controls.
+    var toggle = el('graphOptimizationToggle');
+    var menu = el('optimizationMenu');
+    if (custom) customControls.after(toggle, menu);
+    else customControls.before(toggle, menu);
   }
 
   canvas.addEventListener('mousedown', function (e) {
@@ -2869,7 +2890,9 @@
     loadGraph();
   });
   el('language').addEventListener('change', loadGraph);
-  el('loadGraph').onclick = loadGraph;
+  el('strictEdges').addEventListener('change', loadGraph);
+  el('limit').addEventListener('change', loadGraph);
+  el('path').addEventListener('change', loadGraph);
   el('depthControls').addEventListener('click', function (e) {
     var button = e.target.closest('.depthButton');
     if (!button || button.disabled || !state.selected) return;
@@ -2884,19 +2907,6 @@
   };
   el('optimizationRules').addEventListener('click', handleOptimizationClick);
   el('optimizationRules').addEventListener('change', handleOptimizationChange);
-  el('clear').onclick = function () {
-    state.nodes = [];
-    state.edges = [];
-    state.nodeMap = new Map();
-    state.selected = null;
-    state.hoveredID = null;
-    updateDepthControls();
-    el('inspector').innerHTML = '<div class="empty">Select a node.</div>';
-    el('codePanel').innerHTML = '<div class="empty">No source available.</div>';
-    el('codeTab').classList.add('disabled');
-    switchInspectorTab('inspector');
-    draw();
-  };
   el('zoomIn').onclick = function () { state.userTouched = true; state.scale *= 1.15; draw(); };
   el('zoomOut').onclick = function () { state.userTouched = true; state.scale *= 0.85; draw(); };
   el('fit').onclick = fit;
@@ -3035,6 +3045,7 @@
   if (el('chatNewButton')) el('chatNewButton').onclick = function () { cancelEdit(); navigate('/chat'); };
   if (el('chatJumpLatest')) el('chatJumpLatest').onclick = scrollChatToBottom;
   el('chatMessages').addEventListener('scroll', updateJumpLatest);
+  window.addEventListener('resize', syncComposerDockSpace);
   [['chatModelButton', 'chatModelMenu'], ['chatModeButton', 'chatModeMenu'], ['chatApprovalModeButton', 'chatApprovalModeMenu'], ['agentButton', 'agentMenu'], ['mainModelDefaultButton', 'mainModelDefaultMenu']].forEach(function (pair) {
     var button = el(pair[0]);
     var menu = el(pair[1]);
@@ -3482,6 +3493,31 @@
   var contextGraphTimer = null;
   var contextGraphSeq = 0;
   var contextGraphScopeKey = '';
+  // The chat context-graph sidebar starts closed for every new chat. It auto-opens
+  // once on the first graph event that brings resources into context; the user can
+  // also open/close it manually with the toggle handle. A manual toggle pins the
+  // state so later graph events won't override the user's choice.
+  var sideUserToggled = false;
+
+  function syncSideToggle() {
+    var ws = el('chatWorkspace'), toggle = el('chatSideToggle');
+    if (toggle) toggle.textContent = ws && ws.classList.contains('sideCollapsed') ? '‹' : '›';
+  }
+  function setSideCollapsed(collapsed) {
+    var ws = el('chatWorkspace');
+    if (!ws) return;
+    ws.classList.toggle('sideCollapsed', !!collapsed);
+    syncSideToggle();
+    if (!collapsed && contextGraph) contextGraph.resize();
+  }
+  function maybeAutoOpenSidebar(resp) {
+    if (sideUserToggled) return;
+    if (document.body.dataset.route !== 'chat') return;
+    var nodes = resp && resp.nodes ? resp.nodes : [];
+    if (!nodes.length) return;
+    var ws = el('chatWorkspace');
+    if (ws && ws.classList.contains('sideCollapsed')) setSideCollapsed(false);
+  }
 
   function ensureContextGraph() {
     if (!contextGraph) {
@@ -3516,6 +3552,7 @@
     api('/api/context-graph?' + params(scope)).then(function (resp) {
       if (seq !== contextGraphSeq || scopeKey(contextScope()) !== key) return;
       mg.update(resp || {nodes: [], edges: []});
+      maybeAutoOpenSidebar(resp);
     }).catch(function () {});
   }
   function scheduleContextGraphRefresh() {
@@ -3528,6 +3565,9 @@
     var key = scopeKey(contextScope());
     if (key === contextGraphScopeKey) return;
     contextGraphScopeKey = key;
+    // New/changed chat: re-arm auto-open and start the sidebar closed.
+    sideUserToggled = false;
+    setSideCollapsed(true);
     var mg = ensureContextGraph();
     if (mg) mg.update({nodes: [], edges: []});
     refreshContextGraph();
@@ -3536,17 +3576,13 @@
   (function initContextPanel() {
     var ws = el('chatWorkspace');
     var toggle = el('chatSideToggle');
-    function syncToggle() {
-      if (toggle) toggle.textContent = ws && ws.classList.contains('sideCollapsed') ? '‹' : '›';
-    }
-    if (ws && localStorage.getItem('aracneChatSideCollapsed') === '1') ws.classList.add('sideCollapsed');
-    syncToggle();
+    // Start closed; the sidebar slides in on the first graph event or a manual open.
+    if (ws) ws.classList.add('sideCollapsed');
+    syncSideToggle();
     if (ws && toggle) {
       toggle.addEventListener('click', function () {
-        var collapsed = ws.classList.toggle('sideCollapsed');
-        try { localStorage.setItem('aracneChatSideCollapsed', collapsed ? '1' : '0'); } catch (e) {}
-        syncToggle();
-        if (!collapsed && contextGraph) contextGraph.resize();
+        sideUserToggled = true;
+        setSideCollapsed(!ws.classList.contains('sideCollapsed'));
       });
     }
     var fitBtn = el('contextGraphFit');
@@ -3570,14 +3606,16 @@
     emptyLabel: 'All kinds',
     search: false,
     icon: 'layers',
-    color: function (value) { return colors[value] || '#e2e8f0'; }
+    color: function (value) { return colors[value] || '#e2e8f0'; },
+    onChange: loadGraph
   });
   enhanceMultiSelect(el('edgeKind'), {
     title: 'Edge types',
     emptyLabel: 'All edge types',
     search: true,
     icon: 'git-branch',
-    color: edgeColor
+    color: edgeColor,
+    onChange: loadGraph
   });
   enhanceMultiSelect(el('needDescription'), {
     title: 'Need Description',

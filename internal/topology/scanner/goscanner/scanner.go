@@ -146,6 +146,7 @@ func (s *GoScanner) Scan(root string) (*domain.Topology, error) {
 			file.Connections[golang.ConnHasVar] = append(file.Connections[golang.ConnHasVar], string(v.ID))
 		}
 
+		file.Connections = uniqueConns(file.Connections)
 		gt.Files[filePath] = file
 
 		pkg := gt.Packages[file.FromPackage]
@@ -312,6 +313,7 @@ func (s *GoScanner) applyFileUpdate(gt *golang.GolangTopology, pr *ParseResult, 
 			gt.ExternalVars[v.ID] = v
 			newFile.Connections[golang.ConnHasVar] = append(newFile.Connections[golang.ConnHasVar], string(v.ID))
 		}
+		newFile.Connections = uniqueConns(newFile.Connections)
 		gt.Files[golang.FileID(absPath)] = newFile
 
 		pkg, exists := gt.Packages[pkgPath]
@@ -610,6 +612,7 @@ func (s *GoScanner) applyFileUpdate(gt *golang.GolangTopology, pr *ParseResult, 
 		gt.ExternalVars[v.ID] = v
 		newFile.Connections[golang.ConnHasVar] = append(newFile.Connections[golang.ConnHasVar], string(v.ID))
 	}
+	newFile.Connections = uniqueConns(newFile.Connections)
 	gt.Files[golang.FileID(absPath)] = newFile
 
 	pkg = gt.Packages[pkgPath]

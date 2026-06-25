@@ -59,6 +59,7 @@ type Session struct {
 	TaskGroups       []TaskGroup       `json:"task_groups,omitempty"`
 	PendingApprovals []PendingApproval `json:"pending_approvals,omitempty"`
 	PendingQuestions []PendingQuestion `json:"pending_questions,omitempty"`
+	PendingToolCalls []llm.ToolCall    `json:"pending_tool_calls,omitempty"`
 }
 
 // Lightweight session summary with metadata, message count, and pending approval/question counts.

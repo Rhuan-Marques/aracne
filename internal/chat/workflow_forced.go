@@ -300,7 +300,7 @@ func (m *Manager) descriptionWorkflowPrompt(batch []workflowResource, topo *doma
 // Generates prompt for bug-hunting workflow, assigning resources and tracking already-reported bugs.
 func (m *Manager) bugHunterWorkflowPrompt(batch []workflowResource, reportedByNode map[string][]domain.KnownBug) string {
 	var b strings.Builder
-	b.WriteString("Inspect only these assigned resources for confirmed correctness, reliability, and security bugs. Read each one and the context it touches, and report every confirmed bug with bug_report (precise node_id + concrete scenario). Do not report style issues or speculation.\n\n")
+	b.WriteString("Inspect only these assigned resources for confirmed correctness, reliability, and security bugs. Read each one and the context it touches, and report every confirmed bug with bug_report on the node at the root of the issue — the resource whose code must change to fix it, not a node that merely exhibits the symptom (precise node_id + concrete scenario). Do not report style issues or speculation.\n\n")
 	b.WriteString("Assigned resources:\n")
 	for _, res := range batch {
 		b.WriteString(fmt.Sprintf("- ID: %s\n  Name: %s\n  Kind: %s\n", res.ID, res.Name, res.Kind))

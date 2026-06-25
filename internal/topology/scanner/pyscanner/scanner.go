@@ -122,6 +122,7 @@ func (s *PythonScanner) Scan(root string) (*domain.Topology, error) {
 	populateClassMethods(gt)
 	detectConstructors(gt)
 	matchClassInheritance(gt)
+	matchProtocolImplementations(gt)
 
 	// Resolve module->module import edges now that every module is present.
 	for _, fp := range parseResults {
@@ -130,6 +131,13 @@ func (s *PythonScanner) Scan(root string) (*domain.Topology, error) {
 		for _, target := range resolvePyModuleImports(fp.result, gt) {
 			mod.Connections[python.ConnImportsModule] = append(mod.Connections[python.ConnImportsModule], string(target))
 		}
+		// Dedup containment/import edges before they reach the write layer:
+		// constructs that bind one resource ID multiple times (@overload
+		// signatures, property getter/setter/deleter, or a name bound in sibling
+		// control-flow branches) otherwise emit duplicate has_* edges that abort
+		// the whole topology write on the connections UNIQUE constraint. Mirrors
+		// the dedup the incremental UpdateFile path already applies.
+		mod.Connections = uniqueConns(mod.Connections)
 		gt.Modules[moduleID] = mod
 	}
 
@@ -149,6 +157,7 @@ func (s *PythonScanner) Scan(root string) (*domain.Topology, error) {
 			}
 		}
 		resolveClassVarRefs(fp.result, gt)
+		resolveMetaclassRefs(fp.result, gt)
 	}
 
 	collectDependencies(gt)
@@ -289,6 +298,7 @@ func (s *PythonScanner) UpdateFile(topo *domain.Topology, path string) ([]domain
 	populateClassMethods(gt)
 	detectConstructors(gt)
 	matchClassInheritance(gt)
+	matchProtocolImplementations(gt)
 
 	// Re-resolve module->module imports for the updated file now that all
 	// modules are present.
@@ -314,6 +324,7 @@ func (s *PythonScanner) UpdateFile(topo *domain.Topology, path string) ([]domain
 		}
 	}
 	resolveClassVarRefs(pr, gt)
+	resolveMetaclassRefs(pr, gt)
 
 	collectDependencies(gt)
 	delete(gt.Errors, absPath)

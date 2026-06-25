@@ -56,7 +56,16 @@ func WriteDb(topo *domain.Topology, path string) error {
 		}
 		defer resStmt.Close()
 
-		connStmt, err := tx.Prepare("INSERT INTO connections VALUES (?, ?, ?)")
+		// INSERT OR REPLACE (not a bare INSERT) so a duplicate edge — same
+		// (source_id, conn_type, target_id) — collapses to a single row instead
+		// of aborting the ENTIRE topology write on the connections UNIQUE
+		// constraint. Same-id definitions (e.g. @overload signatures, a
+		// property's getter/setter/deleter, or a name bound in sibling
+		// control-flow branches) can legitimately yield duplicate containment
+		// edges; the incremental writers (WriteIncremental / WriteScopedResources)
+		// already use OR REPLACE for exactly this reason — this keeps the
+		// full-scan path consistent with them.
+		connStmt, err := tx.Prepare("INSERT OR REPLACE INTO connections VALUES (?, ?, ?)")
 		if err != nil {
 			return err
 		}

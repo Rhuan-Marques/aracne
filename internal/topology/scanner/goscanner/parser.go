@@ -285,6 +285,15 @@ func (pr *ParseResult) processFuncDecl(funcDecl *ast.FuncDecl, fset *token.FileS
 	if funcDecl.Recv != nil {
 		recvType := exprToString(funcDecl.Recv.List[0].Type)
 		structName := strings.TrimPrefix(recvType, "*")
+		// Strip the receiver's type-parameter list (e.g. Box[T] -> Box,
+		// Pair[K, V] -> Pair) so a generic type's methods link to the same
+		// struct ID the type was registered under (typeSpec.Name, without
+		// brackets). Otherwise MethodFrom never matches the struct and the
+		// method set stays empty (breaking method links and interface
+		// satisfaction for generic types).
+		if idx := strings.IndexByte(structName, '['); idx >= 0 {
+			structName = structName[:idx]
+		}
 		structID := golang.StructID(string(pr.PkgPath) + "." + structName)
 		f.MethodFrom = &structID
 		f.ID = golang.FunctionID(string(pr.PkgPath) + ".(" + structName + ")." + funcDecl.Name.Name)
@@ -397,6 +406,13 @@ func commentText(group *ast.CommentGroup) string {
 	}
 	var comments []string
 	for _, c := range group.List {
+		// Skip compiler directives (//go:embed, //go:build, //line, //export, …).
+		// They are not documentation; storing one as a description and later
+		// re-emitting it as a normal comment would corrupt the directive
+		// (e.g. "//go:embed" -> "// go:embed", which silently disables the embed).
+		if strings.HasPrefix(c.Text, "//") && isDirectiveComment(c.Text[2:]) {
+			continue
+		}
 		text := strings.TrimSpace(strings.TrimPrefix(c.Text, "//"))
 		text = strings.TrimSpace(strings.TrimPrefix(text, "/*"))
 		text = strings.TrimSpace(strings.TrimSuffix(text, "*/"))
@@ -405,6 +421,30 @@ func commentText(group *ast.CommentGroup) string {
 		}
 	}
 	return strings.Join(comments, "\n")
+}
+
+// isDirectiveComment reports whether comment text (without the leading "//") is a
+// Go compiler directive such as "go:embed", "go:build", "line 5", or "export Foo".
+// Mirrors the rule used by go/ast: "line " or //[a-z0-9]+:... with no spaces in
+// the tool:name prefix.
+func isDirectiveComment(c string) bool {
+	if strings.HasPrefix(c, "line ") || strings.HasPrefix(c, "extern ") || strings.HasPrefix(c, "export ") {
+		return true
+	}
+	colon := strings.Index(c, ":")
+	if colon <= 0 || colon+1 >= len(c) {
+		return false
+	}
+	for i := 0; i <= colon+1; i++ {
+		if i == colon {
+			continue
+		}
+		b := c[i]
+		if !('a' <= b && b <= 'z' || '0' <= b && b <= '9') {
+			return false
+		}
+	}
+	return true
 }
 
 // Returns the text from the preferred comment group, or falls back to the fallback comment group.

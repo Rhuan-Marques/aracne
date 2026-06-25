@@ -18,11 +18,13 @@ func isFunc(gt *js.JavaScriptTopology, id string) bool {
 	_, ok := gt.Functions[js.FunctionID(id)]
 	return ok
 }
+
 // Checks whether an ID exists in the JavaScript topology's classes map.
 func isClass(gt *js.JavaScriptTopology, id string) bool {
 	_, ok := gt.Classes[js.ClassID(id)]
 	return ok
 }
+
 // Checks if an identifier is registered as an external variable
 func isVar(gt *js.JavaScriptTopology, id string) bool {
 	_, ok := gt.ExternalVars[js.ExternalVarID(id)]
@@ -61,13 +63,27 @@ func resolveSpecifier(importerFile, source string, gt *js.JavaScriptTopology) (s
 // recorded DefaultExport. This is topology-driven so Scan and UpdateFile resolve
 // identically without needing per-file export tables.
 func resolveExport(gt *js.JavaScriptTopology, abs, modulePath, importedName string) (exportRef, bool) {
+	return resolveExportFrom(gt, abs, modulePath, importedName, nil)
+}
+
+// resolveExportFrom is resolveExport with a visited set so a whole-module
+// re-export chain (`module.exports = require('./x')`) is followed without
+// looping on circular re-exports. A name not defined locally falls through to
+// each re_exports_module target's namespace.
+func resolveExportFrom(gt *js.JavaScriptTopology, abs, modulePath, importedName string, visited map[string]bool) (exportRef, bool) {
+	if visited == nil {
+		visited = make(map[string]bool)
+	}
+	if visited[abs] {
+		return exportRef{}, false
+	}
+	visited[abs] = true
+
 	name := importedName
 	if name == "default" {
-		mod, ok := gt.Modules[abs]
-		if !ok || mod.DefaultExport == "" {
-			return exportRef{}, false
+		if mod, ok := gt.Modules[abs]; ok && mod.DefaultExport != "" {
+			name = mod.DefaultExport
 		}
-		name = mod.DefaultExport
 	}
 	id := modulePath + "." + name
 	switch {
@@ -78,7 +94,70 @@ func resolveExport(gt *js.JavaScriptTopology, abs, modulePath, importedName stri
 	case isVar(gt, id):
 		return exportRef{Kind: js.ConnUsesExtVar, ID: id}, true
 	}
+	mod, ok := gt.Modules[abs]
+	if !ok {
+		return exportRef{}, false
+	}
+	// Named re-export: `export {Orig as importedName} from "./src"` forwards the
+	// requested name to a (possibly differently named) symbol in another module.
+	if t, ok := mod.ReExportsNamed[importedName]; ok {
+		target := string(t.Module)
+		if ref, ok := resolveExportFrom(gt, target, jsModulePath(gt.Root, target), t.Name, visited); ok {
+			return ref, true
+		}
+	}
+	// Whole-module re-export fallback: resolve the (still original) imported name
+	// against each re-exported module's namespace.
+	for _, target := range mod.Connections[js.ConnReExportsModule] {
+		if ref, ok := resolveExportFrom(gt, target, jsModulePath(gt.Root, target), importedName, visited); ok {
+			return ref, true
+		}
+	}
 	return exportRef{}, false
+}
+
+// resolveModuleReExports resolves a file's whole-module re-export specifiers
+// (CommonJS `module.exports = require('./x')`) to the module (file) IDs they
+// re-export, deduped. These become re_exports_module edges that let a consumer
+// resolve a name through the re-exporting module to the source module.
+func resolveModuleReExports(pr *ParseResult, gt *js.JavaScriptTopology) []js.ModuleID {
+	var mods []js.ModuleID
+	seen := make(map[js.ModuleID]bool)
+	for _, source := range pr.ReExportAll {
+		abs, ok := resolveSpecifier(pr.FileID, source, gt)
+		if !ok {
+			continue
+		}
+		mid := js.ModuleID(abs)
+		if mid != "" && !seen[mid] {
+			seen[mid] = true
+			mods = append(mods, mid)
+		}
+	}
+	return mods
+}
+
+// resolveNamedReExports resolves a file's named ESM re-exports (`export {Orig as
+// Exported} from "./src"`) to a table mapping each exported name to the source
+// module ID + original symbol name. Stored on the module so a consumer importing
+// the exported name resolves through to the source symbol (with name translation
+// the whole-module re-export edge can't express).
+func resolveNamedReExports(pr *ParseResult, gt *js.JavaScriptTopology) map[string]js.ReExportTarget {
+	if len(pr.ReExportNamed) == 0 {
+		return nil
+	}
+	out := make(map[string]js.ReExportTarget)
+	for _, re := range pr.ReExportNamed {
+		abs, ok := resolveSpecifier(pr.FileID, re.Source, gt)
+		if !ok {
+			continue
+		}
+		out[re.Exported] = js.ReExportTarget{Module: js.ModuleID(abs), Name: re.Original}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // resolveModuleImports resolves a file's internal import specifiers to the
@@ -121,6 +200,10 @@ func analyzeFunctionBody(body *jsFunc, pr *ParseResult, gt *js.JavaScriptTopolog
 	}
 
 	varTypeMap := make(map[string]js.ClassID)
+	// varTypeArg records a variable's generic type argument (the resolved class
+	// inside `Box<Circle>`), so a method whose return type is the class's type
+	// parameter (`Box.get(): T`) can be propagated to that argument.
+	varTypeArg := make(map[string]js.ClassID)
 
 	// TypeScript type annotations (params, declared local vars, return type). Each resolves
 	// to a class (→ enables method-call resolution), an interface, or a named type, and the
@@ -131,8 +214,18 @@ func analyzeFunctionBody(body *jsFunc, pr *ParseResult, gt *js.JavaScriptTopolog
 			return
 		}
 		add(kind, id)
-		if isClass && varName != "" {
+		if varName == "" {
+			return
+		}
+		if isClass {
 			varTypeMap[varName] = js.ClassID(id)
+		} else if kind == js.ConnUsesNamedType {
+			// Type-alias indirection: a param typed as `type C = Circle` records a
+			// uses_named_type edge to C, but method calls still need the underlying
+			// class. Follow the alias through to Circle so `c.area()` resolves.
+			if cid, ok := resolveAliasedClass(id, pr, gt); ok {
+				varTypeMap[varName] = cid
+			}
 		}
 	}
 	for _, p := range body.Params {
@@ -144,6 +237,13 @@ func analyzeFunctionBody(body *jsFunc, pr *ParseResult, gt *js.JavaScriptTopolog
 	for _, a := range body.BodyAssigns {
 		if a.DeclaredType != "" {
 			registerType(a.Name, a.DeclaredType)
+		}
+		// Generic instantiation: record the type argument of `const b: Box<Circle>`
+		// so a chained call into a method returning the type parameter resolves.
+		if a.Name != "" && a.DeclaredTypeArg != "" {
+			if _, id, isClass := resolveTypeName(a.DeclaredTypeArg, pr, gt); isClass && id != "" {
+				varTypeArg[a.Name] = js.ClassID(id)
+			}
 		}
 	}
 
@@ -185,7 +285,11 @@ func analyzeFunctionBody(body *jsFunc, pr *ParseResult, gt *js.JavaScriptTopolog
 	for _, call := range body.BodyCalls {
 		switch {
 		case call.IsNew:
-			if cid, ok := resolveClassName(call.Func, pr, gt); ok {
+			cid, ok := resolveClassName(call.Func, pr, gt)
+			if !ok && call.ObjectName != "" {
+				cid, ok = resolveNamespaceClass(call.ObjectName, call.Func, pr, gt)
+			}
+			if ok {
 				add(js.ConnUsesClass, string(cid))
 				if c, ok := gt.Classes[cid]; ok && c.Constructor != nil {
 					add(js.ConnCalls, string(*c.Constructor))
@@ -196,7 +300,7 @@ func analyzeFunctionBody(body *jsFunc, pr *ParseResult, gt *js.JavaScriptTopolog
 			resolveDirectCall(call.Func, pr, gt, add)
 
 		default:
-			resolveMethodCall(call, pr, gt, varTypeMap, receiverClass, add)
+			resolveMethodCall(call, pr, gt, varTypeMap, varTypeArg, receiverClass, add)
 		}
 	}
 
@@ -308,7 +412,7 @@ func resolveFunctionID(name string, pr *ParseResult, gt *js.JavaScriptTopology) 
 }
 
 // Resolves a method call on an object, handling namespace imports, this-references, and variable type tracking.
-func resolveMethodCall(call jsBodyCall, pr *ParseResult, gt *js.JavaScriptTopology, varTypeMap map[string]js.ClassID, receiverClass *js.ClassID, add func(js.ConnectionKind, string)) {
+func resolveMethodCall(call jsBodyCall, pr *ParseResult, gt *js.JavaScriptTopology, varTypeMap map[string]js.ClassID, varTypeArg map[string]js.ClassID, receiverClass *js.ClassID, add func(js.ConnectionKind, string)) {
 	// namespace import: ns.member()
 	if info, ok := pr.ImportMap[call.ObjectName]; ok && info.Namespace {
 		if !info.Internal {
@@ -329,11 +433,125 @@ func resolveMethodCall(call jsBodyCall, pr *ParseResult, gt *js.JavaScriptTopolo
 		return
 	}
 
+	// super.method() / super(...) resolve against the enclosing class's base
+	// class: `super.area()` -> Base.area, `super(...)` -> Base.constructor.
+	if call.ObjectName == "super" {
+		if receiverClass == nil {
+			return
+		}
+		rc, ok := gt.Classes[*receiverClass]
+		if !ok || len(rc.Bases) == 0 {
+			return
+		}
+		bid, ok := resolveClassName(rc.Bases[0], pr, gt)
+		if !ok {
+			return
+		}
+		if call.MethodName == "constructor" {
+			if bc, ok := gt.Classes[bid]; ok && bc.Constructor != nil {
+				add(js.ConnCalls, string(*bc.Constructor))
+			}
+		} else {
+			addMethodOf(bid, call.MethodName, gt, add)
+		}
+		return
+	}
+
+	// method chained directly on a `new` expression: new Foo().bar()
+	if call.ObjectNewClass != "" {
+		if cid, ok := resolveClassName(call.ObjectNewClass, pr, gt); ok {
+			add(js.ConnUsesClass, string(cid))
+			addMethodOf(cid, call.MethodName, gt, add)
+		}
+		return
+	}
+
+	// method chained directly on a call expression: getCircle().bar() follows
+	// the callee's return type, mirroring the intermediate-variable form
+	// (`const x = getCircle(); x.bar()`).
+	if call.ObjectCallFunc != "" {
+		if fid, ok := resolveFunctionID(call.ObjectCallFunc, pr, gt); ok {
+			if f, ok := gt.Functions[fid]; ok && len(f.Output) > 0 {
+				if cid := js.ClassID(f.Output[0].TypingID); cid != "" {
+					if _, ok := gt.Classes[cid]; ok {
+						add(js.ConnUsesClass, string(cid))
+						addMethodOf(cid, call.MethodName, gt, add)
+					}
+				}
+			}
+		}
+		return
+	}
+
+	// method called on a TS cast: `(x as Circle).bar()` resolves against the
+	// cast's target type, regardless of the operand's own static type.
+	if call.ObjectCastClass != "" {
+		if cid, ok := resolveClassName(call.ObjectCastClass, pr, gt); ok {
+			add(js.ConnUsesClass, string(cid))
+			addMethodOf(cid, call.MethodName, gt, add)
+		}
+		return
+	}
+
+	// method chained on another method call: `b.get().area()`. Resolve the inner
+	// receiver's class, follow the inner method's return type (propagating the
+	// receiver's generic type argument when the return type is a type parameter,
+	// e.g. `Box<Circle>.get() -> Circle`), then resolve the outer method.
+	if call.ObjectMethodName != "" {
+		if cid, ok := varTypeMap[call.ObjectMethodObject]; ok {
+			if rcid, ok := methodReturnClass(cid, call.ObjectMethodName, varTypeArg[call.ObjectMethodObject], gt); ok {
+				add(js.ConnUsesClass, string(rcid))
+				addMethodOf(rcid, call.MethodName, gt, add)
+			}
+		}
+		return
+	}
+
+	// member call on a local object-literal variable: `geometryOps.makeCircle()`
+	// resolves to the function extracted for that object member.
+	if call.ObjectName != "" {
+		if id := pr.ModulePath + "." + call.ObjectName + "." + call.MethodName; isFunc(gt, id) {
+			add(js.ConnCalls, id)
+			return
+		}
+	}
+
 	// variable known to hold a class instance
 	if cid, ok := varTypeMap[call.ObjectName]; ok {
 		add(js.ConnUsesClass, string(cid))
 		addMethodOf(cid, call.MethodName, gt, add)
 	}
+}
+
+// methodReturnClass resolves the class returned by cid.<methodName>(). When the
+// method's declared return type resolves to a concrete class, that class is
+// returned. When the return type is declared but unresolved (a generic type
+// parameter) and the receiver was instantiated with a type argument, the type
+// argument is propagated as the result class (`Box<Circle>.get() -> Circle`).
+func methodReturnClass(cid js.ClassID, methodName string, typeArg js.ClassID, gt *js.JavaScriptTopology) (js.ClassID, bool) {
+	c, ok := gt.Classes[cid]
+	if !ok {
+		return "", false
+	}
+	for _, mid := range c.Methods() {
+		mfn, ok := gt.Functions[mid]
+		if !ok || mfn.Name != methodName || len(mfn.Output) == 0 {
+			continue
+		}
+		out := mfn.Output[0]
+		if rcid := js.ClassID(out.TypingID); rcid != "" {
+			if _, ok := gt.Classes[rcid]; ok {
+				return rcid, true
+			}
+		}
+		// Return type declared but unresolved → treat it as the class's generic
+		// type parameter and propagate the receiver's instantiation argument.
+		if out.Typing != "" && typeArg != "" {
+			return typeArg, true
+		}
+		return "", false
+	}
+	return "", false
 }
 
 // Finds and records a connection to a named method of a given class.
@@ -351,6 +569,24 @@ func addMethodOf(cid js.ClassID, methodName string, gt *js.JavaScriptTopology, a
 }
 
 // Resolves a class name to its ID, checking local scope and imported modules with full export resolution.
+// resolveNamespaceClass resolves `new ns.Class()` where ns is an internal
+// namespace import (static `import * as ns`, a require namespace binding, or a
+// dynamic `await import(...)`), returning the imported class's ID.
+func resolveNamespaceClass(nsObject, member string, pr *ParseResult, gt *js.JavaScriptTopology) (js.ClassID, bool) {
+	info, ok := pr.ImportMap[nsObject]
+	if !ok || !info.Namespace || !info.Internal {
+		return "", false
+	}
+	abs, ok := resolveSpecifier(pr.FileID, info.Source, gt)
+	if !ok {
+		return "", false
+	}
+	if ref, ok := resolveExport(gt, abs, moduleKey(abs, pr), member); ok && ref.Kind == js.ConnUsesClass {
+		return js.ClassID(ref.ID), true
+	}
+	return "", false
+}
+
 func resolveClassName(name string, pr *ParseResult, gt *js.JavaScriptTopology) (js.ClassID, bool) {
 	localID := js.ClassID(pr.ModulePath + "." + name)
 	if _, ok := gt.Classes[localID]; ok {
@@ -417,6 +653,31 @@ func resolveTypeName(name string, pr *ParseResult, gt *js.JavaScriptTopology) (j
 		imported = name
 	}
 	return classify(moduleKey(abs, pr) + "." + imported)
+}
+
+// resolveAliasedClass follows a type-alias named_type to the class it ultimately
+// aliases (`type C = Circle` -> Circle), chasing chained aliases (`type C = D;
+// type D = Circle`) until a class is reached. Returns the class ID, or false when
+// the alias does not bottom out in a class. The visited set guards circular aliases.
+func resolveAliasedClass(namedTypeID string, pr *ParseResult, gt *js.JavaScriptTopology) (js.ClassID, bool) {
+	visited := make(map[string]bool)
+	for cur := namedTypeID; cur != "" && !visited[cur]; {
+		visited[cur] = true
+		nt, ok := gt.NamedTypes[js.NamedTypeID(cur)]
+		if !ok || nt.Underlying == "" {
+			return "", false
+		}
+		kind, id, isClass := resolveTypeName(nt.Underlying, pr, gt)
+		if isClass {
+			return js.ClassID(id), true
+		}
+		if kind == js.ConnUsesNamedType {
+			cur = id
+			continue
+		}
+		return "", false
+	}
+	return "", false
 }
 
 // moduleKey returns the modulePath (exportIndex/ID namespace) for the module at

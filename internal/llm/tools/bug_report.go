@@ -24,13 +24,13 @@ func (b *BugReport) Name() string {
 
 // Returns the description for the bug_report tool: reports a bug on a resource in pending state for triage.
 func (b *BugReport) Description() string {
-	return "Report a bug on a resource node. The bug starts in 'pending' state and will be triaged by the Bug Judge."
+	return "Report a bug on a resource node. Target the root of the issue: file the bug on the node whose code must change to fix it (the root cause), not a node that merely exhibits the symptom. The bug starts in 'pending' state and will be triaged by the Bug Judge."
 }
 
 // Defines bug report parameters: node_id and description, both required strings.
 func (b *BugReport) Parameters() []Parameter {
 	return []Parameter{
-		{Name: "node_id", Type: "string", Description: "The resource ID of the node containing the bug", Required: true},
+		{Name: "node_id", Type: "string", Description: "The resource ID of the node at the root of the bug — the resource whose code must change to fix it, not a node that merely exhibits the symptom", Required: true},
 		{Name: "description", Type: "string", Description: "Clear description of the bug", Required: true},
 	}
 }

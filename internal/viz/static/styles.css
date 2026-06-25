@@ -3,6 +3,7 @@
   --panel: #171b24;
   --panel2: #1f2531;
   --text: #e8edf6;
+  --text-strong: #f8fafc;
   --muted: #98a2b3;
   --line: #2c3444;
   --accent: #74d4ff;
@@ -30,6 +31,7 @@ body {
 .shell {
   display: grid;
   grid-template-columns: 320px minmax(0, 1fr) 360px;
+  grid-template-rows: minmax(0, 1fr);
   height: 100vh;
   overflow: hidden;
 }
@@ -41,6 +43,7 @@ body {
   overflow-x: hidden;
   padding: 18px;
   min-width: 0;
+  min-height: 0;
 }
 
 .left {
@@ -997,6 +1000,7 @@ body.graph-inspector-hidden .right {
   border-radius: 12px;
   background: rgba(2, 6, 23, 0.55);
   white-space: pre-wrap;
+  color: var(--text-strong);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.92em;
   line-height: 1.55;
@@ -1021,6 +1025,7 @@ body.graph-inspector-hidden .right {
 
 .messageMarkdown {
   white-space: normal;
+  color: var(--text-strong);
 }
 
 .messageMarkdown > :first-child {
@@ -1144,6 +1149,10 @@ body.graph-inspector-hidden .right {
     width: calc(100vw - 20px);
     padding: 16px 0 18px;
   }
+  .composerDock {
+    width: calc(100vw - 20px);
+    bottom: 14px;
+  }
   .composerFooter {
     flex-wrap: wrap;
   }
@@ -1250,10 +1259,35 @@ body.graph-inspector-hidden .right {
   min-height: calc(100vh - 64px);
   margin: 0 auto;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto auto auto;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 14px;
   padding: 32px 0 22px;
   position: relative;
+}
+
+.composerDock {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 22px;
+  width: min(980px, calc(100vw - 32px));
+  z-index: 6;
+  display: grid;
+  gap: 10px;
+  pointer-events: none;
+}
+.composerDock > * { pointer-events: auto; }
+.composerDock .chatPending:empty { display: none; }
+.composerDock::before {
+  content: "";
+  position: absolute;
+  left: -16px;
+  right: -16px;
+  bottom: -22px;
+  top: -40px;
+  background: linear-gradient(180deg, transparent, var(--bg) 55%);
+  pointer-events: none;
+  z-index: -1;
 }
 
 .chatTop {
@@ -1978,6 +2012,7 @@ body.graph-inspector-hidden .right {
 .toolIO {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  color: var(--text-strong);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
   background: rgba(8, 11, 18, 0.6);
@@ -1995,7 +2030,7 @@ body.graph-inspector-hidden .right {
   left: 50%;
   transform: translateX(-50%);
   bottom: 220px;
-  z-index: 4;
+  z-index: 7;
   padding: 6px 14px;
   border-radius: 999px;
   border: 1px solid rgba(116, 212, 255, 0.4);
@@ -2103,7 +2138,7 @@ body.graph-inspector-hidden .right {
   top: 64px;
   right: 0;
   bottom: 0;
-  width: min(460px, 40vw);
+  width: min(380px, 34vw);
   z-index: 20;
   display: flex;
   flex-direction: column;

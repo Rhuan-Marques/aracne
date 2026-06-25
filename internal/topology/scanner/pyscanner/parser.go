@@ -25,17 +25,26 @@ type pyImport struct {
 
 // Captures Python class metadata including name, docstring, base classes, decorators, methods, class variables, and abstractness/protocol flags.
 type pyClass struct {
-	Name               string   `json:"name"`
-	Docstring          string   `json:"docstring"`
-	Bases              []string `json:"bases"`
-	Decorators         []string `json:"decorators"`
-	Methods            []pyFunc `json:"methods"`
-	ClassVars          []pyVar  `json:"class_vars"`
-	IsABC              bool     `json:"is_abc"`
-	IsProtocol         bool     `json:"is_protocol"`
-	HasAbstractMethods bool     `json:"has_abstract_methods"`
-	Lineno             int      `json:"lineno"`
-	EndLineno          int      `json:"end_lineno"`
+	Name       string   `json:"name"`
+	Docstring  string   `json:"docstring"`
+	Bases      []string `json:"bases"`
+	Decorators []string `json:"decorators"`
+	Methods    []pyFunc `json:"methods"`
+	ClassVars  []pyVar  `json:"class_vars"`
+	// NestedClasses holds classes defined in this class's body (e.g. Outer.Inner),
+	// so they can be extracted as their own qualified resources.
+	NestedClasses []pyClass `json:"nested_classes"`
+	// Metaclass is the name in `class C(metaclass=Meta)` (empty when absent),
+	// recorded so a uses_class edge to the metaclass can be emitted.
+	Metaclass          string `json:"metaclass"`
+	IsABC              bool   `json:"is_abc"`
+	IsProtocol         bool   `json:"is_protocol"`
+	HasAbstractMethods bool   `json:"has_abstract_methods"`
+	Lineno             int    `json:"lineno"`
+	EndLineno          int    `json:"end_lineno"`
+	BodyLineno         int    `json:"body_lineno"`
+	DocStart           int    `json:"doc_start"`
+	DocEnd             int    `json:"doc_end"`
 }
 
 // Represents a function or method call within a Python function body with the called function name, object/method context, and line number.
@@ -47,10 +56,15 @@ type pyBodyCall struct {
 }
 
 // Struct capturing an assignment statement in Python source: variable name, inferred value type, and line number.
+// OpLeft/OpDunder are set for `x = a <op> b` assignments (the left operand name
+// and the operator's dunder, e.g. __add__) so the resolver can type x as the
+// class produced by the operand's operator dunder.
 type pyBodyAssign struct {
 	Name      string `json:"name"`
 	ValueType string `json:"value_type"`
 	LineNo    int    `json:"lineno"`
+	OpLeft    string `json:"op_left"`
+	OpDunder  string `json:"op_dunder"`
 }
 
 // Represents a Python function or method with signature, docstring, decorators, async/property/abstract flags, parameters, return values, and body calls/assignments.
@@ -68,21 +82,32 @@ type pyFunc struct {
 	Parent     *string        `json:"parent"`
 	BodyCalls  []pyBodyCall   `json:"body_calls"`
 	BodyAssign []pyBodyAssign `json:"body_assignments"`
+	BodyLineno int            `json:"body_lineno"`
+	DocStart   int            `json:"doc_start"`
+	DocEnd     int            `json:"doc_end"`
 }
 
 // Represents a Python variable definition with its name and type annotation.
+// TypeRefs holds the inner class names extracted from a composite/generic
+// annotation (e.g. Optional[Alpha] -> [Optional, Alpha]) so each can resolve to
+// its own uses_class edge.
 type pyVarDef struct {
-	Name   string `json:"name"`
-	Typing string `json:"typing"`
+	Name     string   `json:"name"`
+	Typing   string   `json:"typing"`
+	TypeRefs []string `json:"type_refs"`
 }
 
 // Represents a Python variable with its name, type annotation, value, and source location.
+// TypeRefs holds the inner type names when the variable is a type alias
+// (PEP 695 `type X = ...` or an old-style `X = list[Y]`), enabling transitive
+// resolution of annotations that name the alias.
 type pyVar struct {
-	Name      string `json:"name"`
-	Typing    string `json:"typing"`
-	Value     string `json:"value"`
-	Lineno    int    `json:"lineno"`
-	EndLineno int    `json:"end_lineno"`
+	Name      string   `json:"name"`
+	Typing    string   `json:"typing"`
+	Value     string   `json:"value"`
+	TypeRefs  []string `json:"type_refs"`
+	Lineno    int      `json:"lineno"`
+	EndLineno int      `json:"end_lineno"`
 }
 
 // Aggregates all top-level Python file contents: docstring, imports, import map, functions, classes, and module-level variables.
@@ -155,7 +180,17 @@ type ParseResult struct {
 	// ImportTargets maps each internal-import alias to the module it resolves to,
 	// used to build cross-file symbol IDs (alias -> target module path + symbol).
 	ImportTargets map[string]pyImportTarget
-	ClassVarRefs  []ClassVarRef
+	// StarImports holds the module-path prefixes of `from .m import *` imports,
+	// so bare names defined in those modules resolve to a symbol in this file.
+	StarImports  []string
+	ClassVarRefs []ClassVarRef
+	// MetaclassRefs records each class's `metaclass=Meta` reference, resolved to a
+	// uses_class edge after every class is registered.
+	MetaclassRefs []MetaclassRef
+	// TypeAliases maps a module-level type-alias name to the inner type names it
+	// expands to (PEP 695 `type X = ...` and old-style `X = list[Y]`), so an
+	// annotation naming the alias resolves transitively to the aliased classes.
+	TypeAliases map[string][]string
 }
 
 // Holds parsed function metadata including signature, AST body, and call/assignment analyses
@@ -170,6 +205,13 @@ type FunctionParse struct {
 type ClassVarRef struct {
 	ClassID  python.ClassID
 	RefValue string
+}
+
+// Represents a class's metaclass reference (`class C(metaclass=Meta)`), resolved
+// to a uses_class edge once all classes are registered.
+type MetaclassRef struct {
+	ClassID python.ClassID
+	Name    string
 }
 
 // Parses a Python file and extracts classes, functions, variables, and imports into a ParseResult
@@ -189,6 +231,7 @@ func ParseFile(filePath string, pkgPath python.PackagePath, moduleRoot string) (
 		ModuleRoot:      moduleRoot,
 		ImportMap:       raw.ImportMap,
 		ImportTargets:   make(map[string]pyImportTarget),
+		TypeAliases:     make(map[string][]string),
 	}
 
 	for _, imp := range raw.Imports {
@@ -198,11 +241,19 @@ func ParseFile(filePath string, pkgPath python.PackagePath, moduleRoot string) (
 			pr.InternalImports = append(pr.InternalImports, python.PackagePath(imp.Name))
 			pr.InternalImportRecords = append(pr.InternalImportRecords, imp)
 			if tgt, ok := resolveInternalImport(imp, filePath, moduleRoot); ok {
-				alias := imp.Alias
-				if alias == "" {
-					alias = imp.Name
+				if imp.Alias == "*" || imp.Name == "*" {
+					// `from .m import *`: the alias is not a usable name; record
+					// the source module so bare names defined there resolve here.
+					if tgt.ModulePath != "" {
+						pr.StarImports = append(pr.StarImports, tgt.ModulePath)
+					}
+				} else {
+					alias := imp.Alias
+					if alias == "" {
+						alias = imp.Name
+					}
+					pr.ImportTargets[alias] = tgt
 				}
-				pr.ImportTargets[alias] = tgt
 			}
 		} else {
 			pr.ExternalImports = append(pr.ExternalImports, python.PythonDependancy{
@@ -212,22 +263,7 @@ func ParseFile(filePath string, pkgPath python.PackagePath, moduleRoot string) (
 	}
 
 	for _, cls := range raw.Classes {
-		c := convertClass(cls, filePath, modulePath)
-		pr.Classes = append(pr.Classes, c)
-
-		for _, cv := range cls.ClassVars {
-			if isResolvableRef(cv.Value) {
-				pr.ClassVarRefs = append(pr.ClassVarRefs, ClassVarRef{
-					ClassID:  c.ID,
-					RefValue: cv.Value,
-				})
-			}
-		}
-
-		for _, method := range cls.Methods {
-			f := convertFunction(method, filePath, modulePath, &c.ID, pr.ImportMap, pr.ImportTargets)
-			pr.Functions = append(pr.Functions, FunctionParse{Function: f, Body: &method, BodyCalls: method.BodyCalls, BodyAssigns: method.BodyAssign})
-		}
+		pr.addClassTree(cls, filePath, modulePath, modulePath)
 	}
 
 	for _, fn := range raw.Functions {
@@ -237,6 +273,9 @@ func ParseFile(filePath string, pkgPath python.PackagePath, moduleRoot string) (
 
 	for _, v := range raw.Variables {
 		id := python.ExternalVarID(modulePath + "." + v.Name)
+		if len(v.TypeRefs) > 0 {
+			pr.TypeAliases[v.Name] = v.TypeRefs
+		}
 		var val *any
 		if v.Value != "" && v.Value != "None" {
 			var x any = v.Value
@@ -259,6 +298,117 @@ func ParseFile(filePath string, pkgPath python.PackagePath, moduleRoot string) (
 	return pr, nil
 }
 
+// addClassTree registers a class and everything it owns: its methods, class-var
+// references, member resources (Enum/NamedTuple/TypedDict fields), a synthesized
+// dataclass constructor, its metaclass reference, and — recursively — any nested
+// classes (Outer.Inner). idPrefix is the ID namespace the class is keyed under
+// (the module path for a top-level class, the parent class's ID for a nested
+// one); modulePath stays the real module path for type resolution.
+func (pr *ParseResult) addClassTree(cls pyClass, filePath, modulePath, idPrefix string) {
+	c := convertClass(cls, filePath, idPrefix)
+	pr.Classes = append(pr.Classes, c)
+
+	for _, cv := range cls.ClassVars {
+		if isResolvableRef(cv.Value) {
+			pr.ClassVarRefs = append(pr.ClassVarRefs, ClassVarRef{
+				ClassID:  c.ID,
+				RefValue: cv.Value,
+			})
+		}
+	}
+
+	if cls.Metaclass != "" {
+		pr.MetaclassRefs = append(pr.MetaclassRefs, MetaclassRef{
+			ClassID: c.ID,
+			Name:    cls.Metaclass,
+		})
+	}
+
+	hasInit := false
+	for _, method := range cls.Methods {
+		if method.Name == "__init__" {
+			hasInit = true
+		}
+		f := convertFunction(method, filePath, modulePath, &c.ID, pr.ImportMap, pr.ImportTargets)
+		pr.Functions = append(pr.Functions, FunctionParse{Function: f, Body: &method, BodyCalls: method.BodyCalls, BodyAssigns: method.BodyAssign})
+	}
+
+	// Enum members and class-based NamedTuple/TypedDict fields are modeled as
+	// member variable resources keyed under the class (e.g. Color.RED, PointNT.x).
+	if isMemberFieldClass(cls.Bases) {
+		for _, cv := range cls.ClassVars {
+			pr.ExternalVars = append(pr.ExternalVars, python.PythonExternalVar{
+				ID:     python.ExternalVarID(string(c.ID) + "." + cv.Name),
+				Name:   cv.Name,
+				Typing: cv.Typing,
+				Location: domain.Location{
+					Path:     filePath,
+					StartsAt: cv.Lineno,
+					EndsAt:   cv.EndLineno,
+				},
+			})
+		}
+	}
+
+	// A @dataclass with no explicit __init__ gets a synthesized constructor so
+	// instantiation resolves to a real constructor resource.
+	if !hasInit && isDataclass(cls.Decorators) {
+		var input []python.VariableDefinition
+		for _, cv := range cls.ClassVars {
+			input = append(input, python.VariableDefinition{
+				Name:     cv.Name,
+				Typing:   cv.Typing,
+				TypingID: canonicalTypeID(cv.Typing, modulePath, pr.ImportMap, pr.ImportTargets),
+			})
+		}
+		ctorID := python.FunctionID(string(c.ID) + ".__init__")
+		ctor := python.PythonFunction{
+			ID:          ctorID,
+			Name:        "__init__",
+			Input:       input,
+			Loc:         domain.Location{Path: filePath, StartsAt: cls.Lineno, EndsAt: cls.EndLineno},
+			Connections: make(map[python.ConnectionKind][]string),
+			MethodFrom:  &c.ID,
+		}
+		pr.Functions = append(pr.Functions, FunctionParse{Function: ctor})
+	}
+
+	for _, nested := range cls.NestedClasses {
+		pr.addClassTree(nested, filePath, modulePath, string(c.ID))
+	}
+}
+
+// isMemberFieldClass reports whether a class's bases mark it as an Enum,
+// NamedTuple, or TypedDict — kinds whose class-level assignments are modeled as
+// member field resources rather than ordinary class attributes.
+func isMemberFieldClass(bases []string) bool {
+	for _, b := range bases {
+		name := b
+		if i := strings.LastIndex(b, "."); i >= 0 {
+			name = b[i+1:]
+		}
+		switch name {
+		case "Enum", "IntEnum", "StrEnum", "Flag", "IntFlag", "NamedTuple", "TypedDict":
+			return true
+		}
+	}
+	return false
+}
+
+// isDataclass reports whether any decorator is the @dataclass decorator.
+func isDataclass(decorators []string) bool {
+	for _, d := range decorators {
+		name := d
+		if i := strings.LastIndex(d, "."); i >= 0 {
+			name = d[i+1:]
+		}
+		if name == "dataclass" {
+			return true
+		}
+	}
+	return false
+}
+
 // Converts a parsed Python class into a PythonClass topology resource with metadata.
 func convertClass(cls pyClass, filePath string, modulePath string) python.PythonClass {
 	id := python.ClassID(modulePath + "." + cls.Name)
@@ -273,6 +423,9 @@ func convertClass(cls pyClass, filePath string, modulePath string) python.Python
 		IsABC:              cls.IsABC,
 		IsProtocol:         cls.IsProtocol,
 		HasAbstractMethods: cls.HasAbstractMethods,
+		BodyLine:           cls.BodyLineno,
+		DocStart:           cls.DocStart,
+		DocEnd:             cls.DocEnd,
 	}
 }
 
@@ -310,6 +463,9 @@ func convertFunction(fn pyFunc, filePath string, modulePath string, classID *pyt
 		Connections: make(map[python.ConnectionKind][]string),
 		MethodFrom:  classID,
 		IsAsync:     fn.IsAsync,
+		BodyLine:    fn.BodyLineno,
+		DocStart:    fn.DocStart,
+		DocEnd:      fn.DocEnd,
 	}
 }
 

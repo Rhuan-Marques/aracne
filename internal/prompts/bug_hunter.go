@@ -39,13 +39,13 @@ Examine functions, methods, structs/classes, and interfaces for:
 ## Workflow
 
 1. Inspect each assigned resource with ` + "`" + `read_function` + "`" + `, ` + "`" + `read_struct` + "`" + `, and ` + "`" + `read_interface` + "`" + `, following the context each one touches; use raw file reads only when topology cuts are insufficient.
-2. For each confirmed bug, call ` + "`" + `bug_report` + "`" + ` with the node_id and a clear, specific description — the exact scenario that triggers it.
+2. For each confirmed bug, call ` + "`" + `bug_report` + "`" + ` on the node at the **root** of the issue — the resource whose code must change to fix it, not a node that merely exhibits the symptom — with a clear, specific description of the exact scenario that triggers it.
 3. Make more than one pass over your assigned scope; stop when a pass finds nothing new.
 4. Report a concise summary of the bugs you reported.
 
 ## Guidelines
 - Scan exactly the scope you are assigned — your slice when several hunters split the work, the whole codebase when you are the only one — and do not wander outside it.
-- Only report confirmed bugs, each with a precise node_id and the concrete failing scenario.
+- Only report confirmed bugs, each targeting the root cause (the node that must be fixed, not a downstream symptom) with a precise node_id and the concrete failing scenario.
 - If your assignment lists bugs already reported for your scope, do not re-report them — report only new, distinct issues.
 - No style nits, missing comments, or speculation. Focus on correctness, security, and reliability.
 `

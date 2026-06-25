@@ -132,7 +132,7 @@ func TestInitOpenCodeConfig_Structure(t *testing.T) {
 	raw := readFile(t, dir, ".opencode/opencode.json")
 	var cfg struct {
 		MCP        map[string]interface{} `json:"mcp"`
-		Permission map[string]string      `json:"permission"`
+		Permission map[string]interface{} `json:"permission"`
 	}
 	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
 		t.Fatalf("parse opencode.json: %v\ncontent: %s", err, raw)
@@ -161,8 +161,19 @@ func TestInitOpenCodeConfig_Structure(t *testing.T) {
 	if cfg.Permission["edit"] != "deny" {
 		t.Fatalf("permission.edit = %q, want deny (native edit blocked by default, MCP edit used)", cfg.Permission["edit"])
 	}
-	if cfg.Permission["bash"] != "allow" {
-		t.Fatalf("permission.bash = %q, want allow (bash not blocked by default)", cfg.Permission["bash"])
+	// bash is not fully blocked, but native read/grep are, so the bash permission
+	// is a glob map that allows everything except the shell forms of read/grep.
+	bash, ok := cfg.Permission["bash"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("permission.bash should be a glob-pattern object, got %T: %v", cfg.Permission["bash"], cfg.Permission["bash"])
+	}
+	if bash["*"] != "allow" {
+		t.Fatalf("permission.bash[\"*\"] = %v, want allow", bash["*"])
+	}
+	for _, denied := range []string{"grep *", "cat *"} {
+		if bash[denied] != "deny" {
+			t.Fatalf("permission.bash[%q] = %v, want deny (shell bypass of blocked read/grep)", denied, bash[denied])
+		}
 	}
 	if cfg.Permission["aracne_*"] != "deny" {
 		t.Fatalf("permission.aracne_* = %q, want deny", cfg.Permission["aracne_*"])

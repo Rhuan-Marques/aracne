@@ -10,7 +10,7 @@ import (
 	_ "embed"
 )
 
-// go:embed provider_models.json
+//go:embed provider_models.json
 var providerModelsJSON []byte
 
 var supportedProviderOrder = []ProviderName{ProviderAnthropic, ProviderOpenAI, ProviderDeepSeek}

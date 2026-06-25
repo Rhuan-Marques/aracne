@@ -203,6 +203,23 @@ func containsID(ids []string, target string) bool {
 	return false
 }
 
+// dropSelf removes any item whose ID equals self (the resource being read), so
+// the resource never appears in its own forward "# CONTEXT:" lists (e.g. a
+// recursive function calling itself, or a self-referential struct).
+func dropSelf[T any](items []T, self string, idOf func(T) string) []T {
+	if self == "" {
+		return items
+	}
+	out := items[:0:0]
+	for _, it := range items {
+		if idOf(it) == self {
+			continue
+		}
+		out = append(out, it)
+	}
+	return out
+}
+
 // Determines whether a function uses a target resource via calls, struct/interface/variable/named-type usage.
 func functionUses(fn GolangFunction, target string) bool {
 	return containsID(fn.Calls(), target) ||
@@ -256,7 +273,7 @@ func (m *GoManager) incomingRefs(gt *GolangTopology, targetID string) []domain.R
 // Filters a function's context (called functions, structs, interfaces, variables, and incoming references) by visibility rules.
 
 func (m *GoManager) filterFunctionContext(gt *GolangTopology, ctx *GoFunctionContext, filter domain.ContextFilter, targetID string) {
-	ctx.CalledFunctions = m.applyFuncList(gt, filter, ctx.CalledFunctions)
+	ctx.CalledFunctions = m.applyFuncList(gt, filter, dropSelf(ctx.CalledFunctions, targetID, func(f SimplifiedFunction) string { return f.ID }))
 	ctx.StructsUsed = m.applyStructUsages(gt, filter, ctx.StructsUsed)
 	ctx.InterfacesUsed = m.applyInterfaceUsages(gt, filter, ctx.InterfacesUsed)
 	ctx.ExtVarsUsed = m.applyExtVars(gt, filter, ctx.ExtVarsUsed)
@@ -268,7 +285,7 @@ func (m *GoManager) filterFunctionContext(gt *GolangTopology, ctx *GoFunctionCon
 // Filters a struct's context (methods, structs used, interfaces used, variables, and incoming references) by visibility rules.
 func (m *GoManager) filterStructContext(gt *GolangTopology, ctx *GoStructContext, filter domain.ContextFilter, targetID string) {
 	ctx.Methods = m.applyFuncList(gt, filter, ctx.Methods)
-	ctx.StructsUsed = m.applyStructUsages(gt, filter, ctx.StructsUsed)
+	ctx.StructsUsed = m.applyStructUsages(gt, filter, dropSelf(ctx.StructsUsed, targetID, func(s StructUsage) string { return s.ID }))
 	ctx.InterfacesUsed = m.applyInterfaceUsages(gt, filter, ctx.InterfacesUsed)
 	ctx.ExtVarsUsed = m.applyExtVars(gt, filter, ctx.ExtVarsUsed)
 	if filter.IncludeIncoming {

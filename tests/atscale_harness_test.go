@@ -51,6 +51,8 @@ const (
 	connUsesNamedType = "uses_named_type"
 	connImportsDep    = "imports_dependency"
 	connMethods       = "methods"
+	connUsesExtvar    = "uses_extvar"
+	connUsesPkg       = "uses_package"
 )
 
 // ---------------------------------------------------------------------------
@@ -113,6 +115,57 @@ func copyCorpus(t *testing.T) string {
 	})
 	if err != nil {
 		t.Fatalf("copy corpus: %v", err)
+	}
+	writeFile(t, filepath.Join(root, "go.mod"), "module aracne\n\ngo 1.25\n")
+	return root
+}
+
+// copyGoCorpus copies only <repo>/testing_ground/go into
+// <tmp>/aracne/testing_ground/go and drops a synthetic go.mod, so a scan rooted
+// at <tmp>/aracne yields the same "aracne/testing_ground/go/..." resource IDs as
+// the full corpus — but WITHOUT the Python/JS/TS trees. The JS/TS scanner
+// currently aborts the multi-language write (a pre-existing crash); scanning Go
+// in isolation lets Go scenarios run regardless. Returns the scan root.
+func copyGoCorpus(t *testing.T) string {
+	t.Helper()
+	src := filepath.Join(projectRoot(), "testing_ground", "go")
+	if _, err := os.Stat(src); err != nil {
+		t.Fatalf("go corpus not found at %s: %v", src, err)
+	}
+	root := filepath.Join(t.TempDir(), "aracne")
+	dst := filepath.Join(root, "testing_ground", "go")
+	skip := map[string]bool{".aracne": true, ".git": true}
+	err := filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, relErr := filepath.Rel(src, path)
+		if relErr != nil {
+			return relErr
+		}
+		if rel == "." {
+			return os.MkdirAll(dst, 0o755)
+		}
+		for _, seg := range strings.Split(rel, string(os.PathSeparator)) {
+			if skip[seg] {
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+		}
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		return os.WriteFile(target, data, 0o644)
+	})
+	if err != nil {
+		t.Fatalf("copy go corpus: %v", err)
 	}
 	writeFile(t, filepath.Join(root, "go.mod"), "module aracne\n\ngo 1.25\n")
 	return root
@@ -239,14 +292,30 @@ func readTopo(t *testing.T, db string) *domain.Topology {
 	return topo
 }
 
-// runScenario copies the corpus, runs setup, takes a baseline scan, applies the
-// mutation, then produces the incremental / cold-full / cold-hard topologies,
-// runs the per-mode assertions, and enforces strict cross-mode equality.
+// runScenario copies the FULL corpus, runs setup, takes a baseline scan, applies
+// the mutation, then produces the incremental / cold-full / cold-hard
+// topologies, runs the per-mode assertions, and enforces strict cross-mode
+// equality.
 func runScenario(t *testing.T, sc scenario) {
+	runScenarioWith(t, sc, copyCorpus)
+}
+
+// runGoScenario is runScenario over a Go-ONLY corpus copy (copyGoCorpus). The
+// Go resource IDs are identical, but the other language subtrees are excluded so
+// the scenario sidesteps the pre-existing JS/TS multi-language scan crash. Use
+// it for Go edge-case scenarios that must run independently of that crash.
+func runGoScenario(t *testing.T, sc scenario) {
+	runScenarioWith(t, sc, copyGoCorpus)
+}
+
+// runScenarioWith is runScenario parameterized by the corpus-copy function, so a
+// language-focused suite can scan a single-language subtree while reusing the
+// shared mutate / assert / cross-mode-equality machinery.
+func runScenarioWith(t *testing.T, sc scenario, copyCorpusFn func(*testing.T) string) {
 	t.Helper()
 	t.Parallel()
 
-	root := copyCorpus(t)
+	root := copyCorpusFn(t)
 	if sc.setup != nil {
 		sc.setup(t, root)
 	}

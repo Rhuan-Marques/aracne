@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// go:embed static/*
+//go:embed static/*
 var embeddedStatic embed.FS
 
 // Returns an HTTP handler that serves embedded static files with app route fallback to index
