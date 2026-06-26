@@ -153,7 +153,7 @@ func TestTSFamilyEdgecases(t *testing.T) {
 		t.Run("ambient_module_class_extracted", func(t *testing.T) {
 			jtWantRes(t, topo, "VirtualCircle")
 		})
-		// GAP (bug …_30): members of `declare global { ... }` are dropped.
+		// OK (bug …_30 fixed): members of `declare global { ... }` are extracted.
 		t.Run("declare_global_members_extracted", func(t *testing.T) {
 			jtWantRes(t, topo, "globalHelper")
 		})

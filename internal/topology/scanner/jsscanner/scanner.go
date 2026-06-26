@@ -268,7 +268,21 @@ func resolveTopology(gt *js.JavaScriptTopology, results []*ParseResult) {
 			if fp.Body == nil {
 				continue
 			}
-			conns := analyzeFunctionBody(fp.Body, pr, gt, fp.Function.MethodFrom)
+			// fnScope is the namespace scope enclosing this function: for a method
+			// it is the class's container; for a plain function it is the parent of
+			// its own ID. For a top-level symbol this equals pr.ModulePath. It lets a
+			// namespace-qualified call resolve relative to the caller's namespace
+			// (e.g. A.viaNested -> A.B.deep), which pr.ModulePath alone (reset to the
+			// file scope after parsing) cannot express.
+			scopeOf := string(fp.Function.ID)
+			if fp.Function.MethodFrom != nil {
+				scopeOf = string(*fp.Function.MethodFrom)
+			}
+			fnScope := pr.ModulePath
+			if i := strings.LastIndex(scopeOf, "."); i >= len(pr.ModulePath) {
+				fnScope = scopeOf[:i]
+			}
+			conns := analyzeFunctionBody(fp.Body, pr, gt, fp.Function.MethodFrom, fnScope)
 			f := gt.Functions[fp.Function.ID]
 			if f.Connections == nil {
 				f.Connections = make(map[js.ConnectionKind][]string)

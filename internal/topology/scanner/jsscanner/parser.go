@@ -319,7 +319,17 @@ func parseTopLevel(node *sitter.Node, exported bool, src []byte, pr *ParseResult
 		parseNamespace(node, src, pr)
 	case ntAmbientDeclaration:
 		for i := 0; i < int(node.NamedChildCount()); i++ {
-			parseTopLevel(node.NamedChild(i), exported, src, pr)
+			child := node.NamedChild(i)
+			// `declare global { ... }` wraps its augmentations in a statement_block
+			// (unlike `declare module "x" { ... }`, whose child is a `module` node).
+			// Recurse into the block so the global members are extracted.
+			if child.Type() == ntStatementBlock {
+				for j := 0; j < int(child.NamedChildCount()); j++ {
+					parseTopLevel(child.NamedChild(j), exported, src, pr)
+				}
+				continue
+			}
+			parseTopLevel(child, exported, src, pr)
 		}
 	case ntLexicalDeclaration, ntVariableDeclaration:
 		parseVarDeclaration(node, src, pr, exported)

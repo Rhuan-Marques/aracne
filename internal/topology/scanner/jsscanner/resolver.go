@@ -181,7 +181,7 @@ func resolveModuleImports(pr *ParseResult, gt *js.JavaScriptTopology) []js.Modul
 }
 
 // Extracts type annotations, instance creations, and method/function calls from a function body to build connection edges.
-func analyzeFunctionBody(body *jsFunc, pr *ParseResult, gt *js.JavaScriptTopology, receiverClass *js.ClassID) map[js.ConnectionKind][]string {
+func analyzeFunctionBody(body *jsFunc, pr *ParseResult, gt *js.JavaScriptTopology, receiverClass *js.ClassID, fnScope string) map[js.ConnectionKind][]string {
 	conn := make(map[js.ConnectionKind][]string)
 	if body == nil {
 		return conn
@@ -300,7 +300,7 @@ func analyzeFunctionBody(body *jsFunc, pr *ParseResult, gt *js.JavaScriptTopolog
 			resolveDirectCall(call.Func, pr, gt, add)
 
 		default:
-			resolveMethodCall(call, pr, gt, varTypeMap, varTypeArg, receiverClass, add)
+			resolveMethodCall(call, pr, gt, varTypeMap, varTypeArg, receiverClass, fnScope, add)
 		}
 	}
 
@@ -412,7 +412,7 @@ func resolveFunctionID(name string, pr *ParseResult, gt *js.JavaScriptTopology) 
 }
 
 // Resolves a method call on an object, handling namespace imports, this-references, and variable type tracking.
-func resolveMethodCall(call jsBodyCall, pr *ParseResult, gt *js.JavaScriptTopology, varTypeMap map[string]js.ClassID, varTypeArg map[string]js.ClassID, receiverClass *js.ClassID, add func(js.ConnectionKind, string)) {
+func resolveMethodCall(call jsBodyCall, pr *ParseResult, gt *js.JavaScriptTopology, varTypeMap map[string]js.ClassID, varTypeArg map[string]js.ClassID, receiverClass *js.ClassID, fnScope string, add func(js.ConnectionKind, string)) {
 	// namespace import: ns.member()
 	if info, ok := pr.ImportMap[call.ObjectName]; ok && info.Namespace {
 		if !info.Internal {
@@ -507,12 +507,24 @@ func resolveMethodCall(call jsBodyCall, pr *ParseResult, gt *js.JavaScriptTopolo
 		return
 	}
 
-	// member call on a local object-literal variable: `geometryOps.makeCircle()`
-	// resolves to the function extracted for that object member.
+	// member call on a local object-literal variable (`geometryOps.makeCircle()`)
+	// or a namespace-qualified call (`B.deep()` inside namespace A). Resolution
+	// walks the enclosing namespace scopes from the caller's own scope out to the
+	// module root, so a nested-namespace member resolves (A.viaNested -> A.B.deep).
 	if call.ObjectName != "" {
-		if id := pr.ModulePath + "." + call.ObjectName + "." + call.MethodName; isFunc(gt, id) {
-			add(js.ConnCalls, id)
-			return
+		for scope := fnScope; ; {
+			if id := scope + "." + call.ObjectName + "." + call.MethodName; isFunc(gt, id) {
+				add(js.ConnCalls, id)
+				return
+			}
+			if scope == pr.ModulePath {
+				break
+			}
+			idx := strings.LastIndex(scope, ".")
+			if idx < len(pr.ModulePath) {
+				break
+			}
+			scope = scope[:idx]
 		}
 	}
 
