@@ -108,8 +108,9 @@ Good Luck in your task.
 
 **Aracne** is a static-analysis engine that scans a multi-language source tree
 (**Go, Python, JavaScript, TypeScript**) and builds a **"topology"**: a directed
-graph of every package/module, file, function, method, type (struct/class),
-interface, named type, variable, and dependency, plus the edges between them
+graph of every package/module, file, function, method, struct (a.k.a. class in
+JS/TS/Python), interface, named type, variable, and dependency, plus the edges
+between them
 (calls, uses, implements/implemented-by, imports, etc.). The graph is persisted
 to an **SQLite database** (`.aracne/topology.db`) and kept current as files are
 edited. On top of that graph it exposes **topology-aware code navigation** to
@@ -158,7 +159,7 @@ testing_ground/   Hand-built multi-language corpus of edge cases (see its README
 - **`Resource`** — one node: `ID`, `Kind`, `Name`, `Language`, `Description`,
   `Location` (file + start/end line), free-form `Properties` (e.g. typed
   `input`/`output`/`underlying`), and `Connections` (`map[edgeType][]targetID`).
-- **`ResourceKind`** — `package`, `file`, `function`, `method`, `type`,
+- **`ResourceKind`** — `package`, `file`, `function`, `method`, `struct`,
   `named_type`, `interface`, `variable`, `dependency`. (Python/JS are
   *modules-first*: they drop the `package` node in favor of file-first IDs and
   `imports_module` edges.)

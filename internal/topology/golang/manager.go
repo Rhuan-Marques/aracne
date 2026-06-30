@@ -52,7 +52,7 @@ func (m *GoManager) ReadFunction(id string, opts ...topology.TopologyOption) (*G
 	}
 	ctx.Function = &FunctionCut{GolangFunction: fn, Cut: funcCut.Cut}
 
-	if opt.HasResource(domain.ResourceType) && fn.MethodFrom != nil {
+	if opt.HasResource(domain.ResourceStruct) && fn.MethodFrom != nil {
 		if parent, ok := gt.Structs[*fn.MethodFrom]; ok {
 			parentCut, err := m.generic.Cut(parent.Loc)
 			if err != nil {
@@ -79,7 +79,7 @@ func (m *GoManager) ReadFunction(id string, opts ...topology.TopologyOption) (*G
 		}
 	}
 
-	if opt.HasResource(domain.ResourceType) {
+	if opt.HasResource(domain.ResourceStruct) {
 		for _, structID := range fn.UsesStruct() {
 			s, ok := gt.Structs[structID]
 			if !ok {
@@ -408,7 +408,7 @@ func (m *GoManager) ReadStruct(id string, opts ...topology.TopologyOption) (*GoS
 		}
 	}
 
-	if opt.HasResource(domain.ResourceType) {
+	if opt.HasResource(domain.ResourceStruct) {
 		for refStructID := range constructorStructRefs {
 			su, ok := gt.Structs[refStructID]
 			if !ok {
@@ -646,7 +646,7 @@ func (m *GoManager) ReadInterface(id string, opts ...topology.TopologyOption) (*
 	}
 	ctx.Interface = &InterfaceCut{GolangInterface: iface, Cut: interfaceCut.Cut}
 
-	if opt.HasResource(domain.ResourceType) || opt.HasResource(domain.ResourceFunction) {
+	if opt.HasResource(domain.ResourceStruct) || opt.HasResource(domain.ResourceFunction) {
 		for _, implStructID := range iface.ImplementedBy() {
 			implStruct, ok := gt.Structs[implStructID]
 			if !ok {
@@ -756,12 +756,12 @@ func (m *GoManager) ReadNamedType(id string, opts ...topology.TopologyOption) (*
 			}
 		}
 	}
-	if opt.HasResource(domain.ResourceType) {
+	if opt.HasResource(domain.ResourceStruct) {
 		for _, s := range gt.Structs {
 			if usesNamedType(s.UsesNamedType(), namedTypeID) {
 				ctx.UsedBy = append(ctx.UsedBy, ResourceUsage{
 					ID:          string(s.ID),
-					Kind:        domain.ResourceType,
+					Kind:        domain.ResourceStruct,
 					Name:        s.Name,
 					Description: s.Description,
 					Location:    s.Loc,
@@ -959,7 +959,7 @@ func (m *GoManager) ReadFile(id string, opts ...topology.TopologyOption) (*GoFil
 		}
 	}
 
-	if opt.HasResource(domain.ResourceType) {
+	if opt.HasResource(domain.ResourceStruct) {
 		for _, sID := range f.Structs() {
 			s, ok := gt.Structs[sID]
 			if !ok {
@@ -1141,7 +1141,7 @@ func (m *GoManager) ReadPackage(id string, opts ...topology.TopologyOption) (*Go
 		}
 	}
 
-	if opt.HasResource(domain.ResourceType) {
+	if opt.HasResource(domain.ResourceStruct) {
 		for _, sID := range pkg.HasStructs() {
 			s, ok := gt.Structs[sID]
 			if !ok {
@@ -1307,7 +1307,7 @@ func (m *GoManager) ReadDependency(id string, opts ...topology.TopologyOption) (
 			if d == depPath {
 				ctx.UsedBy = append(ctx.UsedBy, ResourceUsage{
 					ID:          string(sID),
-					Kind:        domain.ResourceType,
+					Kind:        domain.ResourceStruct,
 					Name:        s.Name,
 					Description: s.Description,
 					Location:    s.Loc,
@@ -1375,7 +1375,7 @@ func (m *GoManager) ReadResourceAndCut(id string, kind domain.ResourceKind) (*do
 				break
 			}
 		}
-	case domain.ResourceType:
+	case domain.ResourceStruct:
 		gt := FromGeneric(topo)
 		for _, s := range gt.Structs {
 			if string(s.ID) == id {

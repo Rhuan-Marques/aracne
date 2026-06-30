@@ -50,7 +50,7 @@ func TestContextFilterFor(t *testing.T) {
 		t.Errorf("ext var = %d, want Full", got)
 	}
 	// A struct/type is always Normal by kind.
-	if got := full.For(ResourceType, 0, true); got != VisibilityNormal {
+	if got := full.For(ResourceStruct, 0, true); got != VisibilityNormal {
 		t.Errorf("type = %d, want Normal", got)
 	}
 }
@@ -63,11 +63,11 @@ func TestContextFilterHideNoDescription(t *testing.T) {
 		HideNoDescription: true,
 	}
 	// Normal resource without description is hidden.
-	if got := f.For(ResourceType, 0, false); got != VisibilityHidden {
+	if got := f.For(ResourceStruct, 0, false); got != VisibilityHidden {
 		t.Errorf("no-desc Normal = %d, want Hidden", got)
 	}
 	// With a description it stays Normal.
-	if got := f.For(ResourceType, 0, true); got != VisibilityNormal {
+	if got := f.For(ResourceStruct, 0, true); got != VisibilityNormal {
 		t.Errorf("described Normal = %d, want Normal", got)
 	}
 	// A small function resolves Full and is exempt from hide_no_description.

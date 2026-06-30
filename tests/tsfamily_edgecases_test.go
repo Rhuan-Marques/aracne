@@ -41,13 +41,13 @@ func TestTSFamilyEdgecases(t *testing.T) {
 			jtWantKind(t, topo, "merge_ns.widget", domain.ResourceFunction)
 		})
 		t.Run("class_namespace_merge_keeps_class", func(t *testing.T) {
-			jtWantKind(t, topo, "merge_ns.Holder", domain.ResourceType)
+			jtWantKind(t, topo, "merge_ns.Holder", domain.ResourceStruct)
 			jtWantRes(t, topo, "merge_ns.Holder.value")
 		})
 		// GAP (bug …_20): a class merged with a same-name interface is OVERWRITTEN
 		// by the interface — the class (and its methods) are lost.
 		t.Run("class_interface_merge_keeps_class", func(t *testing.T) {
-			jtWantKind(t, topo, "merge_iface.Combo", domain.ResourceType)
+			jtWantKind(t, topo, "merge_iface.Combo", domain.ResourceStruct)
 		})
 	})
 

@@ -49,9 +49,23 @@ func FromGeneric(topo *domain.Topology) *PythonTopology {
 				cid := ClassID(mf)
 				f.MethodFrom = &cid
 			}
+			// Restore the doc-location metadata (symmetric with ToGeneric).
+			// Values are float64 when read from the DB (JSON) but int in-memory;
+			// jsonConvert handles both into the int field. Dropping these made an
+			// incremental re-resolve diverge from a cold scan (all 0 vs real lines)
+			// and misplaced docstrings in `descriptions apply`.
+			if v, ok := res.Properties["py_body_line"]; ok {
+				jsonConvert(v, &f.BodyLine)
+			}
+			if v, ok := res.Properties["py_doc_start"]; ok {
+				jsonConvert(v, &f.DocStart)
+			}
+			if v, ok := res.Properties["py_doc_end"]; ok {
+				jsonConvert(v, &f.DocEnd)
+			}
 			gt.Functions[f.ID] = f
 
-		case domain.ResourceType:
+		case domain.ResourceStruct:
 			c := PythonClass{
 				ID:          ClassID(id),
 				Name:        res.Name,
@@ -77,6 +91,17 @@ func FromGeneric(topo *domain.Topology) *PythonTopology {
 			}
 			if ham, ok := res.Properties["has_abstract_methods"].(bool); ok {
 				c.HasAbstractMethods = ham
+			}
+			// Restore the doc-location metadata (symmetric with ToGeneric); see
+			// the matching note in the function branch above.
+			if v, ok := res.Properties["py_body_line"]; ok {
+				jsonConvert(v, &c.BodyLine)
+			}
+			if v, ok := res.Properties["py_doc_start"]; ok {
+				jsonConvert(v, &c.DocStart)
+			}
+			if v, ok := res.Properties["py_doc_end"]; ok {
+				jsonConvert(v, &c.DocEnd)
 			}
 			gt.Classes[c.ID] = c
 
@@ -176,7 +201,7 @@ func ToGeneric(gt *PythonTopology) *domain.Topology {
 		}
 		topo.Resources[string(id)] = domain.Resource{
 			ID:          string(id),
-			Kind:        domain.ResourceType,
+			Kind:        domain.ResourceStruct,
 			Name:        c.Name,
 			Description: c.Description,
 			Location:    c.Loc,

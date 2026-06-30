@@ -104,42 +104,73 @@ func oneLine(s string) string {
 	return s
 }
 
-// BuildDescriptionExemplars returns up to limit already-described resources that
-// share a source file with the assigned batch, to anchor house style. Returns
-// nil when limit <= 0 or nothing qualifies.
+// BuildDescriptionExemplars returns up to limit already-described resources to
+// anchor house style for the assigned batch. Candidates are ranked Kind-first,
+// file as tiebreaker: a resource of the same Kind as the batch is always
+// preferred over a different Kind, and within a Kind one sharing a source file
+// with the batch wins. Returns nil when limit <= 0 or nothing qualifies.
 func BuildDescriptionExemplars(topo *domain.Topology, batchIDs []string, limit int) []DescriptionExemplar {
 	if topo == nil || limit <= 0 || len(batchIDs) == 0 {
 		return nil
 	}
 	batch := make(map[string]bool, len(batchIDs))
 	paths := make(map[string]bool)
+	kinds := make(map[domain.ResourceKind]bool)
 	for _, id := range batchIDs {
 		batch[id] = true
-		if res, ok := topo.Resources[id]; ok && res.Location.Path != "" {
-			paths[res.Location.Path] = true
+		if res, ok := topo.Resources[id]; ok {
+			if res.Location.Path != "" {
+				paths[res.Location.Path] = true
+			}
+			kinds[res.Kind] = true
 		}
 	}
-	if len(paths) == 0 {
-		return nil
-	}
+
 	ids := make([]string, 0, len(topo.Resources))
 	for id := range topo.Resources {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
-	var out []DescriptionExemplar
+
+	type candidate struct {
+		ex   DescriptionExemplar
+		rank int
+	}
+	var cands []candidate
 	for _, id := range ids {
 		if batch[id] {
 			continue
 		}
 		res := topo.Resources[id]
-		if strings.TrimSpace(res.Description) == "" || !paths[res.Location.Path] {
+		if strings.TrimSpace(res.Description) == "" {
 			continue
 		}
-		out = append(out, DescriptionExemplar{Name: res.Name, Kind: res.Kind, Description: res.Description})
-		if len(out) >= limit {
-			break
+		sameKind := kinds[res.Kind]
+		sameFile := res.Location.Path != "" && paths[res.Location.Path]
+		// 0: same Kind + same file, 1: same Kind, 2: same file, 3: neither.
+		rank := 3
+		switch {
+		case sameKind && sameFile:
+			rank = 0
+		case sameKind:
+			rank = 1
+		case sameFile:
+			rank = 2
 		}
+		cands = append(cands, candidate{
+			ex:   DescriptionExemplar{Name: res.Name, Kind: res.Kind, Description: res.Description},
+			rank: rank,
+		})
+	}
+	// Stable sort preserves the pre-sorted ID order within each rank.
+	sort.SliceStable(cands, func(i, j int) bool { return cands[i].rank < cands[j].rank })
+
+	if len(cands) > limit {
+		cands = cands[:limit]
+	}
+	out := make([]DescriptionExemplar, 0, len(cands))
+	for _, c := range cands {
+		out = append(out, c.ex)
 	}
 	return out
 }
@@ -149,7 +180,7 @@ func singleDescriptionInstruction(kind domain.ResourceKind) string {
 	switch kind {
 	case domain.ResourceFunction, domain.ResourceMethod:
 		return "1 line: what it does, plus any notable params, returns, or side effects."
-	case domain.ResourceType, domain.ResourceNamedType:
+	case domain.ResourceStruct, domain.ResourceNamedType:
 		return "1 line: what it represents and its key fields or methods."
 	case domain.ResourceInterface:
 		return "1 line: the contract and key methods."
@@ -198,7 +229,7 @@ func descriptionGuidelinesForKinds(resources []DescriptionResource) []string {
 // Returns description guidelines for a resource kind, specifying line limits and key details to include per type.
 func pluralDescriptionInstruction(kind domain.ResourceKind) string {
 	switch kind {
-	case domain.ResourceType, domain.ResourceNamedType:
+	case domain.ResourceStruct, domain.ResourceNamedType:
 		return "Types: 1 line each — what they represent and key fields/methods"
 	case domain.ResourceInterface:
 		return "Interfaces: 1 line each — contract and key methods"

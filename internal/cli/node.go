@@ -84,9 +84,13 @@ func RunResourceList(args []string) {
 	}
 
 	var targetSet map[domain.ResourceKind]bool
+	var filter domain.ContextFilter
+	var includeNotVisible bool
 	if noDesc {
 		cfg := helper.EnsureConfig(helper.ConfigPath(".aracne/topology.db"))
 		targetSet = helper.DescribeTargetSet(cfg.Descriptions.Kinds)
+		filter = cfg.EffectiveContextFilter()
+		includeNotVisible = cfg.Descriptions.IncludeNotVisible
 	}
 
 	var ids []string
@@ -95,7 +99,7 @@ func RunResourceList(args []string) {
 		if len(kindSet) > 0 && !kindSet[kind] {
 			continue
 		}
-		if noDesc && (res.Description != "" || !targetSet[res.Kind]) {
+		if noDesc && !helper.ShouldDescribe(res, targetSet, filter, includeNotVisible) {
 			continue
 		}
 		if query != "" && !resourceMatchesQuery(id, res.ID, res.Name, query) {
@@ -141,6 +145,8 @@ func RunNodeCountNoDescription() {
 	manager, _ := InitRegistry(".aracne/topology.db")
 	cfg := helper.EnsureConfig(helper.ConfigPath(".aracne/topology.db"))
 	targetSet := helper.DescribeTargetSet(cfg.Descriptions.Kinds)
+	filter := cfg.EffectiveContextFilter()
+	includeNotVisible := cfg.Descriptions.IncludeNotVisible
 
 	topo, err := manager.ReadAll()
 	if err != nil {
@@ -150,7 +156,7 @@ func RunNodeCountNoDescription() {
 
 	var count int
 	for _, res := range topo.Resources {
-		if res.Description == "" && targetSet[res.Kind] {
+		if helper.ShouldDescribe(res, targetSet, filter, includeNotVisible) {
 			count++
 		}
 	}

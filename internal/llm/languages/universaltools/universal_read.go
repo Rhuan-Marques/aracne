@@ -9,28 +9,38 @@ import (
 
 	"aracne/internal/helper"
 	"aracne/internal/llm/languages/gotools"
+	"aracne/internal/llm/languages/javatools"
 	"aracne/internal/llm/languages/jstools"
 	"aracne/internal/llm/languages/pythontools"
+	"aracne/internal/llm/languages/rusttools"
 	"aracne/internal/llm/tools"
 	"aracne/internal/topology"
 	"aracne/internal/topology/domain"
 	"aracne/internal/topology/golang"
+	"aracne/internal/topology/java"
 	"aracne/internal/topology/javascript"
 	"aracne/internal/topology/python"
+	"aracne/internal/topology/rust"
 )
 
 // LLM tool that reads a function or method's source code with topology context.
 type UniversalReadFunction struct{ mgr *topology.TopologyManager }
+
 // LLM tool that reads a struct/class with topology context, delegating to language-specific handlers.
 type UniversalReadStruct struct{ mgr *topology.TopologyManager }
+
 // LLM tool that reads an interface, protocol, or abstract class with topology context.
 type UniversalReadInterface struct{ mgr *topology.TopologyManager }
+
 // LLM tool that reads file contents with optional line range filtering and topology context.
 type UniversalReadFile struct{ mgr *topology.TopologyManager }
+
 // LLM tool that reads a package and its language-specific topology context.
 type UniversalReadPackage struct{ mgr *topology.TopologyManager }
+
 // LLM tool that reads dependencies and formats language-specific topology context.
 type UniversalReadDependency struct{ mgr *topology.TopologyManager }
+
 // LLM tool that reads a Go named type or TypeScript type definition with topology context.
 type UniversalReadNamedType struct{ mgr *topology.TopologyManager }
 
@@ -44,26 +54,32 @@ type readTarget struct {
 func NewReadFunction(mgr *topology.TopologyManager) *UniversalReadFunction {
 	return &UniversalReadFunction{mgr: mgr}
 }
+
 // Constructs a UniversalReadStruct tool for LLM access to struct/class sources and topology context.
 func NewReadStruct(mgr *topology.TopologyManager) *UniversalReadStruct {
 	return &UniversalReadStruct{mgr: mgr}
 }
+
 // Creates a new UniversalReadInterface tool instance with the given topology manager.
 func NewReadInterface(mgr *topology.TopologyManager) *UniversalReadInterface {
 	return &UniversalReadInterface{mgr: mgr}
 }
+
 // Creates a new UniversalReadFile tool instance with the given topology manager.
 func NewReadFile(mgr *topology.TopologyManager) *UniversalReadFile {
 	return &UniversalReadFile{mgr: mgr}
 }
+
 // Constructs a UniversalReadPackage tool for LLM access to package sources and topology context.
 func NewReadPackage(mgr *topology.TopologyManager) *UniversalReadPackage {
 	return &UniversalReadPackage{mgr: mgr}
 }
+
 // Creates a new UniversalReadDependency tool instance with the given topology manager.
 func NewReadDependency(mgr *topology.TopologyManager) *UniversalReadDependency {
 	return &UniversalReadDependency{mgr: mgr}
 }
+
 // Constructs a UniversalReadNamedType tool for LLM access to named type sources and topology context.
 func NewReadNamedType(mgr *topology.TopologyManager) *UniversalReadNamedType {
 	return &UniversalReadNamedType{mgr: mgr}
@@ -71,14 +87,17 @@ func NewReadNamedType(mgr *topology.TopologyManager) *UniversalReadNamedType {
 
 // Returns the tool name "read_function" for the LLM interface.
 func (r *UniversalReadFunction) Name() string { return "read_function" }
+
 // Returns the tool description for reading functions or methods with topology context.
 func (r *UniversalReadFunction) Description() string {
 	return "Read a function or method source and language-specific topology context."
 }
+
 // Returns parameter schema describing the function name or resource ID argument.
 func (r *UniversalReadFunction) Parameters() []tools.Parameter {
 	return nameParam("The function name or resource ID to read")
 }
+
 // Resolves a function/method by name and returns its source with language-specific topology context.
 func (r *UniversalReadFunction) Run(args json.RawMessage) (string, error) {
 	name, err := readNameArg(args)
@@ -109,6 +128,18 @@ func (r *UniversalReadFunction) Run(args json.RawMessage) (string, error) {
 			return "", fmt.Errorf("read function: %w", err)
 		}
 		return jstools.FormatJavaScriptFunctionContext(ctx), nil
+	case "rust":
+		ctx, err := rust.NewRustManager(r.mgr).ReadFunction(target.id, filter)
+		if err != nil {
+			return "", fmt.Errorf("read function: %w", err)
+		}
+		return rusttools.FormatRustFunctionContext(ctx), nil
+	case "java":
+		ctx, err := java.NewJavaManager(r.mgr).ReadFunction(target.id, filter)
+		if err != nil {
+			return "", fmt.Errorf("read function: %w", err)
+		}
+		return javatools.FormatJavaFunctionContext(ctx), nil
 	default:
 		return "", unsupportedLanguage("read_function", target)
 	}
@@ -116,21 +147,24 @@ func (r *UniversalReadFunction) Run(args json.RawMessage) (string, error) {
 
 // Returns the tool name "read_struct".
 func (r *UniversalReadStruct) Name() string { return "read_struct" }
+
 // Returns the description for the read_struct tool.
 func (r *UniversalReadStruct) Description() string {
 	return "Read a type/class source and language-specific topology context."
 }
+
 // Returns parameter schema for read_struct tool: the type/class name or resource ID to read.
 func (r *UniversalReadStruct) Parameters() []tools.Parameter {
 	return nameParam("The type/class name or resource ID to read")
 }
+
 // Executes read_struct tool by resolving target name, delegating to language-specific managers (Go/Python/JS/TS), and formatting output.
 func (r *UniversalReadStruct) Run(args json.RawMessage) (string, error) {
 	name, err := readNameArg(args)
 	if err != nil {
 		return "", err
 	}
-	target, message, err := resolveReadTarget(r.mgr, name, domain.ResourceType)
+	target, message, err := resolveReadTarget(r.mgr, name, domain.ResourceStruct)
 	if err != nil || message != "" {
 		return message, err
 	}
@@ -154,6 +188,18 @@ func (r *UniversalReadStruct) Run(args json.RawMessage) (string, error) {
 			return "", fmt.Errorf("read class: %w", err)
 		}
 		return jstools.FormatJavaScriptClassContext(ctx), nil
+	case "rust":
+		ctx, err := rust.NewRustManager(r.mgr).ReadStruct(target.id, filter)
+		if err != nil {
+			return "", fmt.Errorf("read struct: %w", err)
+		}
+		return rusttools.FormatRustStructContext(ctx), nil
+	case "java":
+		ctx, err := java.NewJavaManager(r.mgr).ReadStruct(target.id, filter)
+		if err != nil {
+			return "", fmt.Errorf("read struct: %w", err)
+		}
+		return javatools.FormatJavaStructContext(ctx), nil
 	default:
 		return "", unsupportedLanguage("read_struct", target)
 	}
@@ -161,14 +207,17 @@ func (r *UniversalReadStruct) Run(args json.RawMessage) (string, error) {
 
 // Returns the tool name "read_interface".
 func (r *UniversalReadInterface) Name() string { return "read_interface" }
+
 // Returns the description for the read_interface tool: "Read an interface, protocol, or abstract class context."
 func (r *UniversalReadInterface) Description() string {
 	return "Read an interface, protocol, or abstract class context."
 }
+
 // Returns parameters for read_interface: the interface/protocol name or resource ID to read.
 func (r *UniversalReadInterface) Parameters() []tools.Parameter {
 	return nameParam("The interface/protocol name or resource ID to read")
 }
+
 // Executes read_interface: resolves an interface/protocol/abstract-class by name/ID and returns formatted context for Go, Python, or TypeScript.
 func (r *UniversalReadInterface) Run(args json.RawMessage) (string, error) {
 	name, err := readNameArg(args)
@@ -179,7 +228,7 @@ func (r *UniversalReadInterface) Run(args json.RawMessage) (string, error) {
 		if res.Kind == domain.ResourceInterface {
 			return true
 		}
-		return res.Language == "python" && res.Kind == domain.ResourceType && (boolProp(res, "is_abc") || boolProp(res, "is_protocol"))
+		return res.Language == "python" && res.Kind == domain.ResourceStruct && (boolProp(res, "is_abc") || boolProp(res, "is_protocol"))
 	})
 	if err != nil || message != "" {
 		return message, err
@@ -200,6 +249,18 @@ func (r *UniversalReadInterface) Run(args json.RawMessage) (string, error) {
 			return "", fmt.Errorf("read interface: %w", err)
 		}
 		return jstools.FormatJavaScriptInterfaceContext(ctx), nil
+	case "rust":
+		ctx, err := rust.NewRustManager(r.mgr).ReadInterface(target.id, filter)
+		if err != nil {
+			return "", fmt.Errorf("read interface: %w", err)
+		}
+		return rusttools.FormatRustInterfaceContext(ctx), nil
+	case "java":
+		ctx, err := java.NewJavaManager(r.mgr).ReadInterface(target.id, filter)
+		if err != nil {
+			return "", fmt.Errorf("read interface: %w", err)
+		}
+		return javatools.FormatJavaInterfaceContext(ctx), nil
 	default:
 		return "", unsupportedLanguage("read_interface", target)
 	}
@@ -207,10 +268,12 @@ func (r *UniversalReadInterface) Run(args json.RawMessage) (string, error) {
 
 // Returns the tool name "read_file" for the universal file reader.
 func (r *UniversalReadFile) Name() string { return "read_file" }
+
 // Returns the help text for read_file tool describing its ability to read file source with topology context and optional line range filtering.
 func (r *UniversalReadFile) Description() string {
 	return "Read a file/module source and language-specific topology context. Optionally pass start_line/end_line to read only a specific line range (raw lines, no context)."
 }
+
 // Returns the parameter schema for read_file tool: required file path, optional 1-indexed start_line and end_line for line range filtering.
 func (r *UniversalReadFile) Parameters() []tools.Parameter {
 	return []tools.Parameter{
@@ -219,6 +282,7 @@ func (r *UniversalReadFile) Parameters() []tools.Parameter {
 		{Name: "end_line", Type: "integer", Description: "Optional 1-indexed last line to read, inclusive. Defaults to the end of the file when only start_line is given.", Required: false},
 	}
 }
+
 // Reads a file or line range by resolving its target and formatting content with language-specific topology context.
 func (r *UniversalReadFile) Run(args json.RawMessage) (string, error) {
 	name, startLine, endLine, err := readFileArgs(args)
@@ -261,6 +325,18 @@ func (r *UniversalReadFile) Run(args json.RawMessage) (string, error) {
 				return "", fmt.Errorf("read module: %w", err)
 			}
 			return jstools.FormatJavaScriptModuleContext(ctx), nil
+		case "rust":
+			ctx, err := rust.NewRustManager(r.mgr).ReadModule(target.id)
+			if err != nil {
+				return "", fmt.Errorf("read module: %w", err)
+			}
+			return rusttools.FormatRustModuleContext(ctx), nil
+		case "java":
+			ctx, err := java.NewJavaManager(r.mgr).ReadModule(target.id)
+			if err != nil {
+				return "", fmt.Errorf("read module: %w", err)
+			}
+			return javatools.FormatJavaModuleContext(ctx), nil
 		}
 	}
 	return readRawFileContent(name)
@@ -274,14 +350,17 @@ func readRawFileContent(path string) (string, error) {
 
 // Returns the tool name "read_package".
 func (r *UniversalReadPackage) Name() string { return "read_package" }
+
 // Returns description: "Read a package and language-specific topology context."
 func (r *UniversalReadPackage) Description() string {
 	return "Read a package and language-specific topology context."
 }
+
 // Returns parameter schema for read_package tool: the package name or resource ID to read.
 func (r *UniversalReadPackage) Parameters() []tools.Parameter {
 	return nameParam("The package name or resource ID to read")
 }
+
 // Executes read_package: resolves the target package and returns formatted topology context for Go packages only.
 func (r *UniversalReadPackage) Run(args json.RawMessage) (string, error) {
 	name, err := readNameArg(args)
@@ -308,14 +387,17 @@ func (r *UniversalReadPackage) Run(args json.RawMessage) (string, error) {
 
 // Returns the name "read_dependency" for the UniversalReadDependency tool.
 func (r *UniversalReadDependency) Name() string { return "read_dependency" }
+
 // Returns the description string for the read_dependency tool.
 func (r *UniversalReadDependency) Description() string {
 	return "Read a dependency and language-specific reverse usage context."
 }
+
 // Returns the parameter schema for read_dependency tool: a single required string parameter for the dependency name or resource ID.
 func (r *UniversalReadDependency) Parameters() []tools.Parameter {
 	return nameParam("The dependency name or resource ID to read")
 }
+
 // Executes read_dependency tool by resolving a dependency name to its target, then delegates to the appropriate language-specific manager to format dependency context.
 func (r *UniversalReadDependency) Run(args json.RawMessage) (string, error) {
 	name, err := readNameArg(args)
@@ -345,6 +427,18 @@ func (r *UniversalReadDependency) Run(args json.RawMessage) (string, error) {
 			return "", fmt.Errorf("read dependency: %w", err)
 		}
 		return jstools.FormatJavaScriptDependencyContext(ctx), nil
+	case "rust":
+		ctx, err := rust.NewRustManager(r.mgr).ReadDependency(target.id)
+		if err != nil {
+			return "", fmt.Errorf("read dependency: %w", err)
+		}
+		return rusttools.FormatRustDependencyContext(ctx), nil
+	case "java":
+		ctx, err := java.NewJavaManager(r.mgr).ReadDependency(target.id)
+		if err != nil {
+			return "", fmt.Errorf("read dependency: %w", err)
+		}
+		return javatools.FormatJavaDependencyContext(ctx), nil
 	default:
 		return "", unsupportedLanguage("read_dependency", target)
 	}
@@ -352,14 +446,17 @@ func (r *UniversalReadDependency) Run(args json.RawMessage) (string, error) {
 
 // Returns the tool name "read_named_type".
 func (r *UniversalReadNamedType) Name() string { return "read_named_type" }
+
 // Returns the description for the read_named_type tool: "Read a Go named type source and topology context."
 func (r *UniversalReadNamedType) Description() string {
 	return "Read a Go named type source and topology context."
 }
+
 // Returns parameter schema requesting a named type name or resource ID to read.
 func (r *UniversalReadNamedType) Parameters() []tools.Parameter {
 	return nameParam("The named type name or resource ID to read")
 }
+
 // Reads a named type from topology and formats context for Go or TypeScript languages.
 func (r *UniversalReadNamedType) Run(args json.RawMessage) (string, error) {
 	name, err := readNameArg(args)
@@ -383,6 +480,12 @@ func (r *UniversalReadNamedType) Run(args json.RawMessage) (string, error) {
 			return "", fmt.Errorf("read named type: %w", err)
 		}
 		return jstools.FormatJavaScriptNamedTypeContext(ctx), nil
+	case "rust":
+		ctx, err := rust.NewRustManager(r.mgr).ReadNamedType(target.id)
+		if err != nil {
+			return "", fmt.Errorf("read named type: %w", err)
+		}
+		return rusttools.FormatRustNamedTypeContext(ctx), nil
 	default:
 		return "", unsupportedLanguage("read_named_type", target)
 	}

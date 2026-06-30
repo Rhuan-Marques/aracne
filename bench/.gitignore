@@ -1,0 +1,9 @@
+results/
+work/
+repos/
+fixtures/
+samples/
+.venv/
+config.yaml
+__pycache__/
+*.pyc

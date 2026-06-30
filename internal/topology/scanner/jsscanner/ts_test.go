@@ -39,7 +39,7 @@ export class RealService implements Service {
 	if svc == nil {
 		t.Fatal("expected interface Service")
 	}
-	cls := findByName(topo, domain.ResourceType, "RealService")
+	cls := findByName(topo, domain.ResourceStruct, "RealService")
 	if cls == nil {
 		t.Fatal("expected class RealService")
 	}
@@ -220,7 +220,7 @@ export abstract class Base {
 `)
 	topo := scanTS(t, dir)
 
-	base := findByName(topo, domain.ResourceType, "Base")
+	base := findByName(topo, domain.ResourceStruct, "Base")
 	if base == nil {
 		t.Fatal("expected abstract class Base")
 	}

@@ -114,7 +114,7 @@ func (m *JavaScriptManager) applyClassUsages(gt *JavaScriptTopology, filter doma
 	var out []ClassUsage
 	for _, cu := range classes {
 		cu.Methods = m.applyFuncList(gt, filter, cu.Methods)
-		eff := filter.For(domain.ResourceType, 0, visHasDesc(cu.Description))
+		eff := filter.For(domain.ResourceStruct, 0, visHasDesc(cu.Description))
 		for _, mth := range cu.Methods {
 			eff = eff.Max(mth.Visibility)
 		}
@@ -196,7 +196,7 @@ func (m *JavaScriptManager) incomingRefs(gt *JavaScriptTopology, targetID string
 			continue
 		}
 		refs = append(refs, domain.ResourceRef{
-			ID: cID, Kind: domain.ResourceType, Name: c.Name, Description: c.Description, Location: c.Loc,
+			ID: cID, Kind: domain.ResourceStruct, Name: c.Name, Description: c.Description, Location: c.Loc,
 		})
 	}
 	sort.SliceStable(refs, func(i, j int) bool {

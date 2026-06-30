@@ -98,7 +98,7 @@ func setupWorkflowManager(t *testing.T, serverURL string, populateTopo bool) *Ma
 	if populateTopo {
 		manager.mu.Lock()
 		if manager.config.Descriptions.Kinds == nil {
-			manager.config.Descriptions.Kinds = []domain.ResourceKind{domain.ResourceFunction, domain.ResourceType}
+			manager.config.Descriptions.Kinds = []domain.ResourceKind{domain.ResourceFunction, domain.ResourceStruct}
 		}
 		manager.mu.Unlock()
 	}
@@ -129,7 +129,7 @@ func setupWorkflowTopologyDB(t *testing.T, dir string) {
 			"func_main": {ID: "func_main", Name: "main", Kind: domain.ResourceFunction, Location: domain.Location{Path: paths["main.go"], StartsAt: 3, EndsAt: 3}, Description: "the main function"},
 			"func_foo":  {ID: "func_foo", Name: "foo", Kind: domain.ResourceFunction, Location: domain.Location{Path: paths["foo.go"], StartsAt: 3, EndsAt: 5}, Description: ""},
 			"func_bar":  {ID: "func_bar", Name: "bar", Kind: domain.ResourceFunction, Location: domain.Location{Path: paths["bar.go"], StartsAt: 3, EndsAt: 5}, Description: ""},
-			"type_baz":  {ID: "type_baz", Name: "Baz", Kind: domain.ResourceType, Location: domain.Location{Path: paths["baz.go"], StartsAt: 3, EndsAt: 5}, Description: ""},
+			"type_baz":  {ID: "type_baz", Name: "Baz", Kind: domain.ResourceStruct, Location: domain.Location{Path: paths["baz.go"], StartsAt: 3, EndsAt: 5}, Description: ""},
 		},
 		Warnings: make(map[string]domain.TopologyWarning),
 		Errors:   make(map[string]string),

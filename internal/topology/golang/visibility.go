@@ -128,7 +128,7 @@ func (m *GoManager) applyStructUsages(gt *GolangTopology, filter domain.ContextF
 	var out []StructUsage
 	for _, su := range structs {
 		su.Methods = m.applyFuncList(gt, filter, su.Methods)
-		eff := filter.For(domain.ResourceType, 0, visHasDesc(su.Description))
+		eff := filter.For(domain.ResourceStruct, 0, visHasDesc(su.Description))
 		for _, mth := range su.Methods {
 			eff = eff.Max(mth.Visibility)
 		}
@@ -151,7 +151,7 @@ func (m *GoManager) applyImplList(gt *GolangTopology, filter domain.ContextFilte
 	var out []InterfaceImplementation
 	for _, impl := range impls {
 		impl.Methods = m.applyFuncList(gt, filter, impl.Methods)
-		eff := filter.For(domain.ResourceType, 0, visHasDesc(impl.Description))
+		eff := filter.For(domain.ResourceStruct, 0, visHasDesc(impl.Description))
 		for _, mth := range impl.Methods {
 			eff = eff.Max(mth.Visibility)
 		}
@@ -250,7 +250,7 @@ func (m *GoManager) incomingRefs(gt *GolangTopology, targetID string) []domain.R
 			continue
 		}
 		refs = append(refs, domain.ResourceRef{
-			ID: sID, Kind: domain.ResourceType, Name: s.Name, Description: s.Description, Location: s.Loc,
+			ID: sID, Kind: domain.ResourceStruct, Name: s.Name, Description: s.Description, Location: s.Loc,
 		})
 	}
 	for ifaceID, iface := range gt.Interfaces {

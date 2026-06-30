@@ -145,8 +145,8 @@ func parseDeadCodeKind(value string) (domain.ResourceKind, error) {
 	switch s {
 	case "function", "method":
 		return domain.ResourceFunction, nil
-	case "type", "struct":
-		return domain.ResourceType, nil
+	case "struct":
+		return domain.ResourceStruct, nil
 	case "interface":
 		return domain.ResourceInterface, nil
 	case "named_type":
@@ -154,7 +154,7 @@ func parseDeadCodeKind(value string) (domain.ResourceKind, error) {
 	case "variable", "external_var", "extvar":
 		return domain.ResourceVariable, nil
 	default:
-		return "", fmt.Errorf("unknown resource kind %q (valid: function, type, interface, named_type, variable)", value)
+		return "", fmt.Errorf("unknown resource kind %q (valid: function, struct, interface, named_type, variable)", value)
 	}
 }
 

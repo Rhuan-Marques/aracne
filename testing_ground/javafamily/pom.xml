@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A hand-built Java corpus for exercising the aracne topology engine. It mirrors
+  the jsfamily / tsfamily / rustfamily corpora: many interconnected resources
+  with a deliberate emphasis on edge cases (every resource kind and as many
+  cross-resource interactions as the Java scanner tracks).
+
+  Maven layout: sources live under src/main/java/com/aracne/<subpkg>/. The whole
+  tree is ONE topology, rooted at this pom.xml (the scanner's detection file).
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.aracne</groupId>
+    <artifactId>javafamily</artifactId>
+    <version>0.1.0</version>
+    <packaging>jar</packaging>
+
+    <properties>
+        <maven.compiler.release>17</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <dependencies>
+        <!--
+          `guava` is declared purely to exercise the external-dependency
+          (`imports_dependency`) edge from external/ExternalUser.java. It is the
+          ONLY external dependency in the corpus; everything else is internal or
+          JDK (java.* / javax.* -> external root, no internal edge).
+        -->
+        <dependency>
+            <groupId>com.google.guava</groupId>
+            <artifactId>guava</artifactId>
+            <version>33.2.1-jre</version>
+        </dependency>
+    </dependencies>
+</project>

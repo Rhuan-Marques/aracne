@@ -300,7 +300,7 @@ func TestFromGenericRoundtrip(t *testing.T) {
 			},
 			"pkg.MyStruct": {
 				ID:       "pkg.MyStruct",
-				Kind:     domain.ResourceType,
+				Kind:     domain.ResourceStruct,
 				Name:     "MyStruct",
 				Location: domain.Location{StartsAt: 10, EndsAt: 15, Path: "main.go"},
 				Properties: map[string]any{

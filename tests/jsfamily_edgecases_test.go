@@ -184,12 +184,12 @@ func TestJSFamilyEdgecases(t *testing.T) {
 		})
 		// GAP (bug …_13): anonymous `export default class` is dropped.
 		t.Run("anon_default_class_extracted", func(t *testing.T) {
-			jtWantAtLeast(t, topo, "anon_default_class", domain.ResourceType, 1)
+			jtWantAtLeast(t, topo, "anon_default_class", domain.ResourceStruct, 1)
 		})
 		// OK: an export list with renames still extracts the underlying decls.
 		t.Run("renamed_exports_extracted", func(t *testing.T) {
 			jtWantKind(t, topo, "renames.localHelper", domain.ResourceFunction)
-			jtWantKind(t, topo, "renames.Widget", domain.ResourceType)
+			jtWantKind(t, topo, "renames.Widget", domain.ResourceStruct)
 			jtWantRes(t, topo, "renames.Widget.build")
 			jtWantKind(t, topo, "renames.LOCAL", domain.ResourceVariable)
 		})
@@ -210,7 +210,7 @@ func TestJSFamilyEdgecases(t *testing.T) {
 			jtWantAtLeast(t, topo, "cjs_assign", domain.ResourceFunction, 1)
 		})
 		t.Run("exports_assignment_extracts_class", func(t *testing.T) {
-			jtWantAtLeast(t, topo, "cjs_assign", domain.ResourceType, 1)
+			jtWantAtLeast(t, topo, "cjs_assign", domain.ResourceStruct, 1)
 		})
 	})
 
@@ -295,12 +295,12 @@ func TestJSFamilyEdgecases(t *testing.T) {
 		// OK: a getter+setter with the SAME name yields ONE accessor and does NOT
 		// abort the write (regression guard for a previously-known abort bug).
 		t.Run("getter_setter_same_name_no_abort", func(t *testing.T) {
-			jtWantKind(t, topo, "getset_bug.Thermostat", domain.ResourceType)
+			jtWantKind(t, topo, "getset_bug.Thermostat", domain.ResourceStruct)
 			jtWantRes(t, topo, "getset_bug.Thermostat.temp")
 		})
 		// GAP (bug …_15): a class EXPRESSION assigned to a const is not extracted.
 		t.Run("class_expression_extracted", func(t *testing.T) {
-			jtWantKind(t, topo, "classexpr.Anon", domain.ResourceType)
+			jtWantKind(t, topo, "classexpr.Anon", domain.ResourceStruct)
 		})
 		// GAP (bug …_16): a mixin/call-expression base does not resolve inheritance.
 		t.Run("mixin_base_resolves_root_class", func(t *testing.T) {

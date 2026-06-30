@@ -693,7 +693,7 @@ func TestReadNamedType(t *testing.T) {
 	want := map[string]domain.ResourceKind{
 		"example.com/readctx.Alias":        domain.ResourceNamedType,
 		"example.com/readctx.Reader":       domain.ResourceInterface,
-		"example.com/readctx.Store":        domain.ResourceType,
+		"example.com/readctx.Store":        domain.ResourceStruct,
 		"example.com/readctx.(Store).Read": domain.ResourceMethod,
 		"example.com/readctx.UseID":        domain.ResourceFunction,
 	}

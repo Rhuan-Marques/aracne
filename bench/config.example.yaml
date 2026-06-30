@@ -1,0 +1,61 @@
+# aracne benchmark configuration. Copy to bench/config.yaml to use, or pass --config.
+# CLI flags override anything set here.
+#
+# PREPARE-ONCE / RUN-MANY, five phases (subcommands of run_benchmark.py). Both generation
+# AND the A/B run can use Claude Code or OpenCode, with any model:
+#   1) sample   -> oversampled candidate manifest (bench/samples/<id>.candidates.jsonl)
+#   2) prepare  -> clone + `arac init --claude --opencode` + scan each candidate (token-free),
+#                  DROP repos with too many describable nodes, write the FINAL manifest
+#   3) generate -> batch-fill descriptions into EVERY fixture via the chosen backend
+#                  (default claude_code/haiku, on Max; or opencode/<provider/model>, off Max).
+#                  Resumable; scoped by kind. (Or run /descriptions-generate by hand.)
+#   4) freeze   -> snapshot warm artifacts + report description coverage
+#   5) run      -> the A/B matrix (baseline vs aracne) over the manifest + warm fixtures
+
+samples: 2                                   # FINAL tasks per language (small; scale up deliberately)
+oversample: 3                                 # sample samples x this, prune oversized repos in `prepare`
+languages: [go, javascript, typescript, rust, python]
+seeds: 1                                      # repetitions per task per arm (consistency)
+sample_seed: 0                                # RNG seed selecting WHICH tasks are drawn
+sample_id: default                            # manifest filename stem (all phases share it)
+samples_dir: null                             # null -> bench/samples
+fixtures_dir: null                            # null -> bench/fixtures (warm worktrees + snapshots live here)
+max_describable_nodes: 600                    # `prepare` drops candidate repos bigger than this
+
+arms: [baseline, aracne]
+run_harness: claude_code                      # claude_code | opencode  (SAME for both arms)
+model: haiku                                  # run model for BOTH arms (cheap default; opencode -> provider/model)
+max_turns: 30                                 # hard cap per run (cost guardrail)
+timeout_s: 1800                               # per-run wall-clock cap (seconds)
+arac_bin: arac                                # path to the aracne binary (PATH or absolute)
+scan_mode: hard                               # `arac scan` mode used when preparing fixtures
+coverage_min: 0.5                             # min description coverage for the aracne arm
+allow_cold: false                             # bypass the coverage guardrail (structure-only topology)
+
+# Description generation (`generate` subcommand):
+gen_harness: claude_code                      # claude_code (haiku, on Max) | opencode (off Max)
+gen_model: haiku                              # orchestrator model; executors are haiku via agent frontmatter
+                                              #   (opencode -> a provider/model, e.g. deepseek/deepseek-v4-flash)
+gen_kinds: [function, method, struct, interface]  # scope which kinds get described (drop `file` etc.)
+gen_max_turns: 300                            # generation loops over waves; needs headroom
+gen_timeout_s: 3600                           # per-worktree wall-clock cap for generation
+gen_parallel: 1                               # worktrees warmed concurrently (keep low; rate-limits)
+gen_mcp_override: true                        # claude_code only: serve --tool-profile all during gen
+regenerate: false                             # generate even for fixtures already at/above coverage_min
+out: null                                     # default: bench/results/<sample_id>
+keep_workdir: false                           # keep ephemeral baseline checkouts for debugging
+
+sources:
+  multi_swe_bench:                            # Go / JavaScript / TypeScript / Rust
+    dataset: ByteDance-Seed/Multi-SWE-bench
+    # DIRECTORY name per aracne language inside the dataset repo. Multi-SWE-bench exposes
+    # only the 'default' config; language is the top-level dir (c/cpp/go/java/js/rust/ts),
+    # so the harness downloads <dir>/*.jsonl via huggingface_hub (not an HF builder config).
+    lang_config: { go: go, javascript: js, typescript: ts, rust: rust }
+    local_dir: null                           # optional: dir of <lang>/*.jsonl (skips HF)
+    eval_config: {}                           # template for the Docker grading config.json
+  swe_bench:                                  # Python
+    dataset: princeton-nlp/SWE-bench_Lite
+    split: test
+    model_name: aracne-bench
+    max_workers: 4

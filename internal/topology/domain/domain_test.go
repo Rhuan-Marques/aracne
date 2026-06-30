@@ -13,7 +13,7 @@ func TestResourceKindConstants(t *testing.T) {
 		{ResourceFile, "file"},
 		{ResourceFunction, "function"},
 		{ResourceMethod, "method"},
-		{ResourceType, "type"},
+		{ResourceStruct, "struct"},
 		{ResourceNamedType, "named_type"},
 		{ResourceInterface, "interface"},
 		{ResourceVariable, "variable"},
@@ -154,7 +154,7 @@ func TestTopologyConstruction(t *testing.T) {
 		Language: "go",
 		Resources: map[string]Resource{
 			"f1": {ID: "f1", Kind: ResourceFunction, Name: "Foo"},
-			"s1": {ID: "s1", Kind: ResourceType, Name: "Bar"},
+			"s1": {ID: "s1", Kind: ResourceStruct, Name: "Bar"},
 		},
 		Warnings: map[string]TopologyWarning{
 			"w1": {ID: "w1", SourceID: "f1", Kind: WarnUseMissingNode, TargetID: "nonexistent"},

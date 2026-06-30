@@ -427,7 +427,7 @@ func TestClearDescriptionsFiltersTargets(t *testing.T) {
 	topo := &domain.Topology{
 		Resources: map[string]domain.Resource{
 			"f1": {ID: "f1", Kind: domain.ResourceFunction, Name: "Foo", Description: "function description"},
-			"t1": {ID: "t1", Kind: domain.ResourceType, Name: "Thing", Description: "type description"},
+			"t1": {ID: "t1", Kind: domain.ResourceStruct, Name: "Thing", Description: "type description"},
 			"m1": {ID: "m1", Kind: domain.ResourceMethod, Name: "Method"},
 		},
 	}
@@ -725,7 +725,7 @@ func TestApplyDescriptions_SkippedKinds(t *testing.T) {
 
 func TestDefaultConfigDescriptions(t *testing.T) {
 	cfg := DefaultConfig()
-	want := []domain.ResourceKind{domain.ResourceFunction, domain.ResourceMethod, domain.ResourceType, domain.ResourceInterface, domain.ResourceFile}
+	want := []domain.ResourceKind{domain.ResourceFunction, domain.ResourceMethod, domain.ResourceStruct, domain.ResourceInterface}
 	if len(cfg.Descriptions.Kinds) != len(want) {
 		t.Fatalf("Descriptions.Kinds = %v, want %v", cfg.Descriptions.Kinds, want)
 	}
@@ -736,6 +736,51 @@ func TestDefaultConfigDescriptions(t *testing.T) {
 	}
 	if got := cfg.AgentParam("claude_code", "descriptions-generation-executor", "max-batch-size", 0); got != DefaultDescriptionBatchSize {
 		t.Fatalf("executor max-batch-size = %d, want %d", got, DefaultDescriptionBatchSize)
+	}
+}
+
+func TestShouldDescribe(t *testing.T) {
+	targets := DescribeTargetSet([]domain.ResourceKind{domain.ResourceFunction, domain.ResourceVariable, domain.ResourceStruct})
+
+	// Small functions render as full code, external vars are hidden.
+	filter := domain.ContextFilter{
+		ExtVarsVisibility: domain.VisibilityHidden,
+		SmallFnVisibility: domain.VisibilityFull,
+		SmallFnThreshold:  5,
+	}
+
+	bigFn := domain.Resource{Kind: domain.ResourceFunction, Location: domain.Location{StartsAt: 1, EndsAt: 20}}
+	smallFn := domain.Resource{Kind: domain.ResourceFunction, Location: domain.Location{StartsAt: 1, EndsAt: 3}}
+	extVar := domain.Resource{Kind: domain.ResourceVariable}
+	described := domain.Resource{Kind: domain.ResourceFunction, Description: "already documented", Location: domain.Location{StartsAt: 1, EndsAt: 20}}
+	offTarget := domain.Resource{Kind: domain.ResourceInterface, Location: domain.Location{StartsAt: 1, EndsAt: 20}}
+
+	cases := []struct {
+		name              string
+		res               domain.Resource
+		includeNotVisible bool
+		want              bool
+	}{
+		{"normal-size fn always counts", bigFn, false, true},
+		{"small fn rendered full is skipped", smallFn, false, false},
+		{"small fn included when include_not_visible", smallFn, true, true},
+		{"hidden external var is skipped", extVar, false, false},
+		{"external var included when include_not_visible", extVar, true, true},
+		{"already-described is skipped", described, false, false},
+		{"off-target kind is skipped", offTarget, false, false},
+	}
+	for _, tc := range cases {
+		if got := ShouldDescribe(tc.res, targets, filter, tc.includeNotVisible); got != tc.want {
+			t.Errorf("%s: ShouldDescribe = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+
+	// Under the default all-normal filter, visibility never skips a target.
+	if !ShouldDescribe(smallFn, targets, domain.DefaultContextFilter(), false) {
+		t.Errorf("small fn should count under default all-normal filter")
+	}
+	if !ShouldDescribe(extVar, targets, domain.DefaultContextFilter(), false) {
+		t.Errorf("external var should count under default all-normal filter")
 	}
 }
 
@@ -759,14 +804,14 @@ func TestLoadConfigCleanBreakOnOldFormat(t *testing.T) {
 
 func TestLoadConfigNewSchema(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
-	if err := os.WriteFile(path, []byte(`{"descriptions":{"kinds":["file","type"]},"scan":{"mode":"all"}}`), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"descriptions":{"kinds":["file","struct"]},"scan":{"mode":"all"}}`), 0644); err != nil {
 		t.Fatalf("WriteFile config: %v", err)
 	}
 	cfg, ok := LoadConfigStrict(path)
 	if !ok {
 		t.Fatal("new-schema config should parse cleanly")
 	}
-	if len(cfg.Descriptions.Kinds) != 2 || cfg.Descriptions.Kinds[0] != domain.ResourceFile || cfg.Descriptions.Kinds[1] != domain.ResourceType {
+	if len(cfg.Descriptions.Kinds) != 2 || cfg.Descriptions.Kinds[0] != domain.ResourceFile || cfg.Descriptions.Kinds[1] != domain.ResourceStruct {
 		t.Fatalf("Descriptions.Kinds = %v, want [file type]", cfg.Descriptions.Kinds)
 	}
 	if cfg.Scan.Mode != ScanModeAll {

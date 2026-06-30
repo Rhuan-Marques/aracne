@@ -1,6 +1,7 @@
 package python
 
 import (
+	"encoding/json"
 	"testing"
 
 	"aracne/internal/topology/domain"
@@ -100,6 +101,55 @@ func TestPythonClassAccessors(t *testing.T) {
 	}
 	if inheritedBy := c.InheritedBy(); len(inheritedBy) != 1 || inheritedBy[0] != "mod.SubClass" {
 		t.Errorf("InheritedBy() = %v", inheritedBy)
+	}
+}
+
+// TestFromGenericRestoresDocLocation locks in that the py_body_line/py_doc_start/
+// py_doc_end doc-location metadata survives a ToGeneric -> DB(JSON) -> FromGeneric
+// round-trip. Dropping these in FromGeneric made an incremental re-resolve diverge
+// from a cold scan (all 0 vs the real line numbers) and misplaced docstrings in
+// `descriptions apply`.
+func TestFromGenericRestoresDocLocation(t *testing.T) {
+	mf := ClassID("mod.MyClass")
+	gt := &PythonTopology{
+		Root: "/r",
+		Functions: map[FunctionID]PythonFunction{
+			"mod.fn":        {ID: "mod.fn", Name: "fn", BodyLine: 8, DocStart: 8, DocEnd: 9},
+			"mod.MyClass.m": {ID: "mod.MyClass.m", Name: "m", MethodFrom: &mf, BodyLine: 15, DocStart: 15, DocEnd: 15},
+		},
+		Classes: map[ClassID]PythonClass{
+			"mod.MyClass": {ID: "mod.MyClass", Name: "MyClass", BodyLine: 27, DocStart: 27, DocEnd: 28},
+		},
+		Modules:      map[ModuleID]PythonModule{},
+		ExternalVars: map[ExternalVarID]PythonExternalVar{},
+	}
+
+	// Simulate the exact path an incremental re-resolve takes: ToGeneric (int
+	// props) -> persisted as JSON -> read back (ints become float64) ->
+	// FromGeneric. This is where the fields used to be silently dropped.
+	generic := ToGeneric(gt)
+	b, err := json.Marshal(generic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var roundtripped domain.Topology
+	if err := json.Unmarshal(b, &roundtripped); err != nil {
+		t.Fatal(err)
+	}
+
+	back := FromGeneric(&roundtripped)
+
+	fn := back.Functions["mod.fn"]
+	if fn.BodyLine != 8 || fn.DocStart != 8 || fn.DocEnd != 9 {
+		t.Errorf("function doc-location lost: BodyLine=%d DocStart=%d DocEnd=%d, want 8/8/9", fn.BodyLine, fn.DocStart, fn.DocEnd)
+	}
+	m := back.Functions["mod.MyClass.m"]
+	if m.BodyLine != 15 || m.DocStart != 15 || m.DocEnd != 15 {
+		t.Errorf("method doc-location lost: BodyLine=%d DocStart=%d DocEnd=%d, want 15/15/15", m.BodyLine, m.DocStart, m.DocEnd)
+	}
+	c := back.Classes["mod.MyClass"]
+	if c.BodyLine != 27 || c.DocStart != 27 || c.DocEnd != 28 {
+		t.Errorf("class doc-location lost: BodyLine=%d DocStart=%d DocEnd=%d, want 27/27/28", c.BodyLine, c.DocStart, c.DocEnd)
 	}
 }
 
@@ -228,7 +278,7 @@ func TestPythonFromGeneric(t *testing.T) {
 			},
 			"mod.MyClass": {
 				ID:       "mod.MyClass",
-				Kind:     domain.ResourceType,
+				Kind:     domain.ResourceStruct,
 				Name:     "MyClass",
 				Location: domain.Location{StartsAt: 10, EndsAt: 20, Path: "mod.py"},
 				Properties: map[string]any{

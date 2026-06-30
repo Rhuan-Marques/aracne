@@ -3,28 +3,36 @@ package chat
 import (
 	"aracne/internal/helper"
 	"aracne/internal/llm/languages/gotools"
+	"aracne/internal/llm/languages/javatools"
 	"aracne/internal/llm/languages/jstools"
 	"aracne/internal/llm/languages/pythontools"
+	"aracne/internal/llm/languages/rusttools"
 	"aracne/internal/llm/languages/universaltools"
 	"aracne/internal/llm/tools"
 	"aracne/internal/topology"
 	"aracne/internal/topology/domain"
 	"aracne/internal/topology/golang"
+	"aracne/internal/topology/java"
 	"aracne/internal/topology/javascript"
 	"aracne/internal/topology/python"
+	"aracne/internal/topology/rust"
 	"aracne/internal/topology/scanner"
 	"aracne/internal/topology/scanner/goscanner"
+	"aracne/internal/topology/scanner/javascanner"
 	"aracne/internal/topology/scanner/jsscanner"
 	"aracne/internal/topology/scanner/pyscanner"
+	"aracne/internal/topology/scanner/rustscanner"
 )
 
-// Registers scanners for Go, Python, JavaScript, and TypeScript into a scanner registry.
+// Registers scanners for Go, Python, JavaScript, TypeScript, Rust, and Java into a scanner registry.
 func NewScannerRegistry() *scanner.Registry {
 	reg := scanner.NewRegistry()
 	reg.Register(goscanner.NewGoScanner())
 	reg.Register(pyscanner.NewPythonScanner())
 	reg.Register(jsscanner.NewJavaScriptScanner())
 	reg.Register(jsscanner.NewTypeScriptScanner())
+	reg.Register(rustscanner.NewRustScanner())
+	reg.Register(javascanner.NewJavaScanner())
 	return reg
 }
 
@@ -143,6 +151,18 @@ func registerLanguageMaintenanceTools(registry *tools.Registry, allowed map[stri
 		jsMgr := javascript.NewJavaScriptManager(manager)
 		add(jstools.NewUpdateDescriptionTool(jsMgr))
 		add(jstools.NewNodeListNoDescription(jsMgr, targets).SetBatchSize(descriptionBatchSize))
+		return
+	}
+	if lang == "rust" {
+		rustMgr := rust.NewRustManager(manager)
+		add(rusttools.NewUpdateDescriptionTool(rustMgr))
+		add(rusttools.NewNodeListNoDescription(rustMgr, targets).SetBatchSize(descriptionBatchSize))
+		return
+	}
+	if lang == "java" {
+		javaMgr := java.NewJavaManager(manager)
+		add(javatools.NewUpdateDescriptionTool(javaMgr))
+		add(javatools.NewNodeListNoDescription(javaMgr, targets).SetBatchSize(descriptionBatchSize))
 		return
 	}
 	goMgr := golang.NewGoManager(manager)

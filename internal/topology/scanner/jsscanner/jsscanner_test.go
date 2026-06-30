@@ -88,7 +88,7 @@ export function compute() {
 			t.Errorf("expected function %q", name)
 		}
 	}
-	if findByName(topo, domain.ResourceType, "Vector") == nil {
+	if findByName(topo, domain.ResourceStruct, "Vector") == nil {
 		t.Fatal("expected class Vector")
 	}
 	if findByName(topo, domain.ResourceMethod, "scale") == nil {
@@ -99,7 +99,7 @@ export function compute() {
 	}
 
 	// Constructor pointer on the class.
-	vec := findByName(topo, domain.ResourceType, "Vector")
+	vec := findByName(topo, domain.ResourceStruct, "Vector")
 	if ctor, ok := vec.Properties["constructor"]; !ok || ctor == "" {
 		t.Errorf("expected Vector.constructor pointer, got %v", vec.Properties["constructor"])
 	}
@@ -140,8 +140,8 @@ export class Child extends Base {
 
 	topo := scanProject(t, dir)
 
-	child := findByName(topo, domain.ResourceType, "Child")
-	base := findByName(topo, domain.ResourceType, "Base")
+	child := findByName(topo, domain.ResourceStruct, "Child")
+	base := findByName(topo, domain.ResourceStruct, "Base")
 	if child == nil || base == nil {
 		t.Fatal("expected Base and Child classes")
 	}
@@ -207,7 +207,7 @@ export class Panel extends React.Component {
 	if findByName(topo, domain.ResourceFunction, "Button") == nil {
 		t.Error("expected JSX function component Button")
 	}
-	if findByName(topo, domain.ResourceType, "Panel") == nil {
+	if findByName(topo, domain.ResourceStruct, "Panel") == nil {
 		t.Error("expected JSX class component Panel")
 	}
 	if findByName(topo, domain.ResourceMethod, "render") == nil {

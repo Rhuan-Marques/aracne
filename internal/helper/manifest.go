@@ -163,10 +163,58 @@ func IsSourceFile(path, language string) bool {
 		return isJavaScriptSourceName(name)
 	case "typescript":
 		return isTypeScriptSourceName(name)
+	case "rust":
+		return isRustSourceName(name) && !inRustIgnoredDir(path)
+	case "java":
+		return isJavaSourceName(name) && !inJavaIgnoredDir(path)
 	default:
 		ext := filepath.Ext(name)
-		return ext == ".go" || ext == ".py" || isJavaScriptSourceName(name) || isTypeScriptSourceName(name)
+		return ext == ".go" || ext == ".py" || isJavaScriptSourceName(name) || isTypeScriptSourceName(name) ||
+			(isRustSourceName(name) && !inRustIgnoredDir(path)) ||
+			(isJavaSourceName(name) && !inJavaIgnoredDir(path))
 	}
+}
+
+// isJavaSourceName reports whether name is a Java source file (a .java file),
+// excluding the common test-file suffixes (*Test.java, *Tests.java, *IT.java).
+func isJavaSourceName(name string) bool {
+	return strings.HasSuffix(name, ".java") &&
+		!strings.HasSuffix(name, "Test.java") && !strings.HasSuffix(name, "Tests.java") && !strings.HasSuffix(name, "IT.java")
+}
+
+// inJavaIgnoredDir reports whether a path lives under a Java directory we skip:
+// build output (target, build, out, bin, .gradle) and the test-source dirs
+// (test, tests), which are not part of the library/application topology.
+func inJavaIgnoredDir(path string) bool {
+	for _, part := range strings.FieldsFunc(filepath.Clean(path), func(r rune) bool {
+		return r == '/' || r == '\\'
+	}) {
+		switch part {
+		case "target", "build", ".gradle", "out", "bin", "test", "tests":
+			return true
+		}
+	}
+	return false
+}
+
+// isRustSourceName reports whether name is a Rust source file (a .rs file).
+func isRustSourceName(name string) bool {
+	return filepath.Ext(name) == ".rs"
+}
+
+// inRustIgnoredDir reports whether a path lives under a Rust directory we skip:
+// build output (target) and the integration-test/bench dirs (tests, benches),
+// which are not part of the library/binary topology. Scoped to Rust so other
+// languages' tests/ dirs are unaffected.
+func inRustIgnoredDir(path string) bool {
+	for _, part := range strings.FieldsFunc(filepath.Clean(path), func(r rune) bool {
+		return r == '/' || r == '\\'
+	}) {
+		if part == "target" || part == "tests" || part == "benches" {
+			return true
+		}
+	}
+	return false
 }
 
 // isTypeScriptSourceName reports whether name is a TypeScript/TSX source file we should

@@ -171,6 +171,64 @@ func copyGoCorpus(t *testing.T) string {
 	return root
 }
 
+// copyJavaCorpus copies only <repo>/testing_ground/javafamily (the Maven layout:
+// pom.xml + src/main/java/**) into <tmp>/aracne/testing_ground/javafamily, so a
+// scan rooted at <tmp>/aracne sees ONLY the Java tree and sidesteps the
+// pre-existing multi-language scan-write abort. Java symbol IDs are FQN-based
+// (derived from each file's `package` decl), so they are PATH-INDEPENDENT and
+// identical regardless of the temp location — the hardcoded FQN IDs in the
+// scenarios stay stable. No go.mod is written: Java needs none, and an empty
+// go.mod would make the Go scanner falsely detect an (empty) project. The
+// edgecase-only fixture dirs (redprobes/arrays — exercised by the in-memory
+// java_edgecases suite) are skipped so the at-scale graph is exactly the stable
+// original corpus. Returns the scan root (<tmp>/aracne).
+func copyJavaCorpus(t *testing.T) string {
+	t.Helper()
+	src := filepath.Join(projectRoot(), "testing_ground", "javafamily")
+	if _, err := os.Stat(src); err != nil {
+		t.Fatalf("java corpus not found at %s: %v", src, err)
+	}
+	root := filepath.Join(t.TempDir(), "aracne")
+	dst := filepath.Join(root, "testing_ground", "javafamily")
+	skip := map[string]bool{
+		".aracne": true, ".git": true, "target": true, "build": true,
+		"redprobes": true, "arrays": true,
+	}
+	err := filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, relErr := filepath.Rel(src, path)
+		if relErr != nil {
+			return relErr
+		}
+		if rel == "." {
+			return os.MkdirAll(dst, 0o755)
+		}
+		for _, seg := range strings.Split(rel, string(os.PathSeparator)) {
+			if skip[seg] {
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+		}
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		return os.WriteFile(target, data, 0o644)
+	})
+	if err != nil {
+		t.Fatalf("copy java corpus: %v", err)
+	}
+	return root
+}
+
 // corpusFile resolves a path relative to the copied testing_ground root.
 func corpusFile(root, rel string) string {
 	return filepath.Join(root, "testing_ground", filepath.FromSlash(rel))
@@ -306,6 +364,13 @@ func runScenario(t *testing.T, sc scenario) {
 // it for Go edge-case scenarios that must run independently of that crash.
 func runGoScenario(t *testing.T, sc scenario) {
 	runScenarioWith(t, sc, copyGoCorpus)
+}
+
+// runJavaScenario is runScenario over a Java-ONLY corpus copy (copyJavaCorpus),
+// so Java scenarios run independently of the pre-existing multi-language
+// scan-write abort, mirroring the python-/go-only isolation trick.
+func runJavaScenario(t *testing.T, sc scenario) {
+	runScenarioWith(t, sc, copyJavaCorpus)
 }
 
 // runScenarioWith is runScenario parameterized by the corpus-copy function, so a

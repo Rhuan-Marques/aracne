@@ -66,7 +66,7 @@
     file: '#60a5fa',
     function: '#34d399',
     method: '#a7f3d0',
-    type: '#c084fc',
+    struct: '#c084fc',
     named_type: '#d8b4fe',
     interface: '#f9a8d4',
     variable: '#facc15',
@@ -354,7 +354,7 @@
     {value: 'resource_kind', label: 'ResourceKind is X', type: 'kind'},
     {value: 'less_equal_lines', label: 'Less than or equal to X Lines', type: 'number'}
   ];
-  var resourceKinds = ['package', 'file', 'function', 'method', 'type', 'named_type', 'interface', 'variable', 'dependency'];
+  var resourceKinds = ['package', 'file', 'function', 'method', 'struct', 'named_type', 'interface', 'variable', 'dependency'];
 
   function operationMeta(kind) {
     return operationKinds.find(function (op) { return op.value === kind; }) || operationKinds[0];
@@ -785,6 +785,8 @@
     state.hoveredID = null;
     updateDepthControls();
     computeClusters();
+    computeClusterStats();
+    state._labelW = new Map();
     seedPositions();
     el('inspector').innerHTML = '<div class="empty">Select a node.</div>';
     el('codePanel').innerHTML = '<div class="empty">No source available.</div>';
@@ -831,6 +833,21 @@
       if (!changed) break;
     }
     nodes.forEach(function (n, i) { n._cluster = label[i]; });
+  }
+
+  // --- per-cluster mean degree, used for group-relative label importance ---
+  function computeClusterStats() {
+    var sum = new Map();
+    var count = new Map();
+    state.nodes.forEach(function (n) {
+      var c = n._cluster;
+      var deg = (n.in_degree || 0) + (n.out_degree || 0);
+      sum.set(c, (sum.get(c) || 0) + deg);
+      count.set(c, (count.get(c) || 0) + 1);
+    });
+    var means = new Map();
+    sum.forEach(function (total, c) { means.set(c, total / (count.get(c) || 1)); });
+    state.clusterMeanDeg = means;
   }
 
   function avgEr() {
@@ -1230,29 +1247,64 @@
     });
 
     // --- labels last so names are always on top of nodes & edges ---
+    // Importance-ordered, collision-free placement: highest-scoring names claim screen
+    // space first; any name whose box would overlap an already-placed one is dropped. This
+    // adapts to zoom and keeps dense centers readable instead of a white blob.
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
     ctx.lineJoin = 'round';
-    var hiLabels = []; // deferred: highlighted names paint in a 2nd pass, above every plain name
+    var cx = rect.width / 2 + state.ox;
+    var cy = rect.height / 2 + state.oy;
+    var CELL = 14;   // screen-space occupancy cell (px)
+    var MARGIN = 60; // cull labels whose node sits well off-screen
+    var occupied = new Set();
+    var cand = [];
     state.nodes.forEach(function (n) {
       var p = state.pos.get(n.id);
       if (!p) return;
-      var r = radius(n);
+      var sx = cx + p.x * s;
+      var sy = cy + p.y * s;
+      if (sx < -MARGIN || sx > rect.width + MARGIN || sy < -MARGIN || sy > rect.height + MARGIN) return;
       var isHover = n.id === hoverId;
       var isNbr = !!(nbrs && nbrs.has(n.id));
-      var isSel = state.selected && state.selected.id === n.id;
-      var hi = isHover || isNbr;
-      if (!(hi || isSel || s > 0.78 || r > 7)) return;
-      var label = n.name || n.id;
-      var y = p.y + r + 4 / s;
-      if (hi) { // defer so highlighted names never get covered by a later plain name
-        hiLabels.push({ label: label, x: p.x, y: y, isHover: isHover });
-        return;
-      }
-      ctx.font = (12 / s) + 'px sans-serif';
-      ctx.fillStyle = '#e8edf6';
-      ctx.fillText(label, p.x, y);
+      var isSel = !!(state.selected && state.selected.id === n.id);
+      var tier = isSel ? 0 : isHover ? 1 : isNbr ? 2 : 3; // lower = always wins space
+      cand.push({ n: n, p: p, sx: sx, sy: sy, tier: tier, isHover: isHover, hi: isHover || isNbr, score: labelScore(n) });
     });
+    cand.sort(function (a, b) { return a.tier - b.tier || b.score - a.score; });
+
+    var hiLabels = [];    // deferred: highlighted names paint in a 2nd pass, above every plain name
+    var plainLabels = [];
+    cand.forEach(function (c) {
+      var n = c.n, p = c.p;
+      var label = n.name || n.id;
+      var px = c.isHover ? 20 : (c.hi ? 17 : 12); // match render sizes below
+      var w = labelScreenWidth(label, px);
+      var top = c.sy + radius(n) * s + 4;
+      var c0 = Math.floor((c.sx - w / 2) / CELL), c1 = Math.floor((c.sx + w / 2) / CELL);
+      var r0 = Math.floor(top / CELL), r1 = Math.floor((top + px) / CELL);
+      var forced = c.tier <= 2; // hover / neighbor / selected always show
+      if (!forced) {
+        var clash = false;
+        for (var gx = c0; gx <= c1 && !clash; gx++) {
+          for (var gy = r0; gy <= r1; gy++) {
+            if (occupied.has(gx + ',' + gy)) { clash = true; break; }
+          }
+        }
+        if (clash) return;
+      }
+      for (var ax = c0; ax <= c1; ax++) {
+        for (var ay = r0; ay <= r1; ay++) occupied.add(ax + ',' + ay);
+      }
+      var gy2 = p.y + radius(n) + 4 / s; // graph-space label top, for drawing
+      if (c.hi) hiLabels.push({ label: label, x: p.x, y: gy2, isHover: c.isHover });
+      else plainLabels.push({ label: label, x: p.x, y: gy2 });
+    });
+
+    ctx.font = (12 / s) + 'px sans-serif';
+    ctx.fillStyle = '#e8edf6';
+    plainLabels.forEach(function (l) { ctx.fillText(l.label, l.x, l.y); });
+
     // highlighted names: even larger + thicker black outline, always on top
     hiLabels.forEach(function (l) {
       var size = l.isHover ? 20 : 17; // hovered node biggest, its neighbors slightly smaller
@@ -1278,6 +1330,27 @@
 
   function radius(n) {
     return Math.max(4, Math.min(MAX_NODE_RADIUS, 4 + Math.sqrt((n.in_degree || 0) + (n.out_degree || 0))));
+  }
+  // Label priority: absolute degree blended with degree relative to the node's cluster mean,
+  // so global hubs AND each cluster's local leader surface even in a dense center.
+  function labelScore(n) {
+    var deg = (n.in_degree || 0) + (n.out_degree || 0);
+    var mean = state.clusterMeanDeg ? state.clusterMeanDeg.get(n._cluster) : undefined;
+    if (mean == null) mean = deg;
+    return radius(n) * Math.sqrt((deg + 1) / (mean + 1));
+  }
+  // On-screen label width (px), independent of zoom, cached per (size, text).
+  // measureText ignores the canvas transform, so font set in absolute px gives screen px.
+  function labelScreenWidth(text, px) {
+    if (!state._labelW) state._labelW = new Map();
+    var key = px + '|' + text;
+    var w = state._labelW.get(key);
+    if (w === undefined) {
+      ctx.font = px + 'px sans-serif';
+      w = ctx.measureText(text).width;
+      state._labelW.set(key, w);
+    }
+    return w;
   }
   function er(n) {
     return radius(n) + SIM.pad; // effective spacing radius used for collision/seeding
@@ -1340,7 +1413,7 @@
     if (mode === 'packages') {
       kinds = ['package', 'file'];
     } else if (mode === 'data_flow') {
-      kinds = ['function', 'method', 'type', 'interface'];
+      kinds = ['function', 'method', 'struct', 'interface'];
     } else {
       kinds = selectedValues(el('kind'));
     }
@@ -1593,7 +1666,7 @@
   }
 
   function defaultNeedDescription() {
-    return ['function', 'method', 'type', 'interface', 'file'];
+    return ['function', 'method', 'struct', 'interface', 'file'];
   }
 
   function loadAppConfig() {

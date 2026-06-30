@@ -54,15 +54,30 @@ func TestDescriptionsExecutorInputRendersPreReadSource(t *testing.T) {
 
 func TestBuildDescriptionExemplars(t *testing.T) {
 	topo := &domain.Topology{Resources: map[string]domain.Resource{
-		"fn:a": {ID: "fn:a", Name: "A", Kind: domain.ResourceFunction, Description: "Does A.", Location: domain.Location{Path: "x.go"}},
-		"fn:b": {ID: "fn:b", Name: "B", Kind: domain.ResourceFunction, Location: domain.Location{Path: "x.go"}},                          // undescribed (the batch member)
-		"fn:c": {ID: "fn:c", Name: "C", Kind: domain.ResourceFunction, Description: "Does C.", Location: domain.Location{Path: "y.go"}}, // other file
+		"fn:a": {ID: "fn:a", Name: "A", Kind: domain.ResourceFunction, Description: "Does A.", Location: domain.Location{Path: "x.go"}}, // same kind + same file -> rank 0
+		"fn:b": {ID: "fn:b", Name: "B", Kind: domain.ResourceFunction, Location: domain.Location{Path: "x.go"}},                         // batch member (undescribed)
+		"fn:c": {ID: "fn:c", Name: "C", Kind: domain.ResourceFunction, Description: "Does C.", Location: domain.Location{Path: "y.go"}}, // same kind, other file -> rank 1
+		"st:d": {ID: "st:d", Name: "D", Kind: domain.ResourceStruct, Description: "Holds D.", Location: domain.Location{Path: "x.go"}},  // other kind, same file -> rank 2
 	}}
 
-	got := BuildDescriptionExemplars(topo, []string{"fn:b"}, 3)
-	if len(got) != 1 || got[0].Name != "A" {
-		t.Fatalf("expected only the described same-file neighbor (A), got %+v", got)
+	// Kind is the dominant signal: with a single slot the same-kind same-file
+	// neighbor wins.
+	if got := BuildDescriptionExemplars(topo, []string{"fn:b"}, 1); len(got) != 1 || got[0].Name != "A" {
+		t.Fatalf("limit 1 should pick same-kind same-file neighbor A, got %+v", got)
 	}
+
+	// With room for all, the order is A (same kind + file), then C (same kind,
+	// other file), then D (other kind, same file): same-kind C outranks
+	// same-file D.
+	got := BuildDescriptionExemplars(topo, []string{"fn:b"}, 3)
+	names := make([]string, 0, len(got))
+	for _, e := range got {
+		names = append(names, e.Name)
+	}
+	if strings.Join(names, ",") != "A,C,D" {
+		t.Fatalf("expected Kind-first ordering [A C D], got %v", names)
+	}
+
 	if ex := BuildDescriptionExemplars(topo, []string{"fn:b"}, 0); ex != nil {
 		t.Fatalf("limit 0 should disable exemplars, got %+v", ex)
 	}

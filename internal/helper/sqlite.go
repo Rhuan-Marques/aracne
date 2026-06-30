@@ -3,6 +3,7 @@ package helper
 import (
 	"database/sql"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -13,8 +14,38 @@ const sqliteBusyTimeoutMillis = 10000
 
 var sqliteDBLocks sync.Map
 
+// Tracks which database paths have had schema migrations applied this process
+// (keyed by canonical path → *sync.Once), so the one-time migration runs at most
+// once per database per process.
+var sqliteMigrated sync.Map
+
+// Runs on-disk schema migrations exactly once per database per process, under the
+// write lock and bypassing the public wrappers to avoid re-entrancy. The actual
+// migration is idempotent and gated by PRAGMA user_version, so even across
+// processes it is a cheap no-op after the first run. Missing databases are skipped
+// (createSchema will produce a current-schema DB on the first write).
+func ensureSQLiteMigrated(dbPath string) {
+	key := sqliteLockKey(dbPath)
+	onceVal, _ := sqliteMigrated.LoadOrStore(key, &sync.Once{})
+	onceVal.(*sync.Once).Do(func() {
+		if _, err := os.Stat(dbPath); err != nil {
+			return
+		}
+		lock := sqliteLock(dbPath)
+		lock.Lock()
+		defer lock.Unlock()
+		db, err := openSQLite(dbPath, true)
+		if err != nil {
+			return
+		}
+		defer db.Close()
+		_ = applyMigrations(db)
+	})
+}
+
 // Acquires a read lock and executes a read-only database operation with automatic retry.
 func withSQLiteRead(dbPath string, fn func(*sql.DB) error) error {
+	ensureSQLiteMigrated(dbPath)
 	lock := sqliteLock(dbPath)
 	lock.RLock()
 	defer lock.RUnlock()
@@ -23,6 +54,7 @@ func withSQLiteRead(dbPath string, fn func(*sql.DB) error) error {
 
 // Acquires a per-database mutex and executes a write operation with retry logic.
 func withSQLiteWrite(dbPath string, fn func(*sql.DB) error) error {
+	ensureSQLiteMigrated(dbPath)
 	lock := sqliteLock(dbPath)
 	lock.Lock()
 	defer lock.Unlock()

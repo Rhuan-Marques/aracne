@@ -38,7 +38,7 @@ func contextTestIndex(t *testing.T) *graphIndex {
 				Description: "small helper", Location: domain.Location{Path: "b.go", StartsAt: 70, EndsAt: 72},
 			},
 			"p.T": {
-				ID: "p.T", Kind: domain.ResourceType, Name: "T",
+				ID: "p.T", Kind: domain.ResourceStruct, Name: "T",
 				Description: "a type", Location: domain.Location{Path: "t.go", StartsAt: 1, EndsAt: 4},
 			},
 			"p.NT": {

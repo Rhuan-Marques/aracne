@@ -21,13 +21,13 @@ var (
 	// kinds the Go and JS/TS scanners emit for interfaces.
 	ConnImplements    ConnectionKind = "implements"
 	ConnImplementedBy ConnectionKind = "implemented_by"
-	ConnConstructor ConnectionKind = "constructor"
-	ConnHasFunc     ConnectionKind = "has_function"
-	ConnHasClass    ConnectionKind = "has_class"
-	ConnHasVar      ConnectionKind = "has_extvar"
-	ConnHasFile     ConnectionKind = "has_file"
-	ConnImportsPkg  ConnectionKind = "imports_package"
-	ConnImportsDep  ConnectionKind = "imports_dependency"
+	ConnConstructor   ConnectionKind = "constructor"
+	ConnHasFunc       ConnectionKind = "has_function"
+	ConnHasClass      ConnectionKind = "has_class"
+	ConnHasVar        ConnectionKind = "has_extvar"
+	ConnHasFile       ConnectionKind = "has_file"
+	ConnImportsPkg    ConnectionKind = "imports_package"
+	ConnImportsDep    ConnectionKind = "imports_dependency"
 	// ConnImportsModule is a module->module import edge: its targets are module
 	// (file) IDs, resolved from a Python import to the specific file it pulls in.
 	// Unlike ConnImportsPkg (a directory-level grouping), this is the real

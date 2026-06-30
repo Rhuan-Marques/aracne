@@ -132,7 +132,8 @@ func RunScan(args []string) {
 	pkgCount := 0
 	fileCount := 0
 	funcCount := 0
-	typeCount := 0
+	structCount := 0
+	namedTypeCount := 0
 	ifaceCount := 0
 	varCount := 0
 	depCount := 0
@@ -145,8 +146,10 @@ func RunScan(args []string) {
 			fileCount++
 		case domain.ResourceFunction, domain.ResourceMethod:
 			funcCount++
-		case domain.ResourceType, domain.ResourceNamedType:
-			typeCount++
+		case domain.ResourceStruct:
+			structCount++
+		case domain.ResourceNamedType:
+			namedTypeCount++
 		case domain.ResourceInterface:
 			ifaceCount++
 		case domain.ResourceVariable:
@@ -158,6 +161,6 @@ func RunScan(args []string) {
 
 	fmt.Printf("Topology written to: %s\n", *output)
 	fmt.Printf("Analyzed in %s\n", elapsed.Round(time.Millisecond))
-	fmt.Printf("-%d packages\n-%d files\n-%d functions\n-%d types\n-%d interfaces\n-%d variables\n-%d dependencies\n-%d errors\n",
-		pkgCount, fileCount, funcCount, typeCount, ifaceCount, varCount, depCount, len(topo.Errors))
+	fmt.Printf("-%d packages\n-%d files\n-%d functions\n-%d structs\n-%d named types\n-%d interfaces\n-%d variables\n-%d dependencies\n-%d errors\n",
+		pkgCount, fileCount, funcCount, structCount, namedTypeCount, ifaceCount, varCount, depCount, len(topo.Errors))
 }

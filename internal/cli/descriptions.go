@@ -46,6 +46,7 @@ func RunGenerateDescriptions(args []string) {
 	batchSize := fs.Int("batch-size", defaultDescriptionBatchSize, "Maximum resources assigned to each description executor")
 	parallel := fs.Int("parallel", defaultDescriptionParallel, "Maximum description executors to run concurrently")
 	maxRetries := fs.Int("max-retries", defaultDescriptionMaxRetries, "Maximum executor attempts per resource")
+	includeNotVisibleFlag := fs.Bool("include-not-visible", false, "Include resources the read context filter would not render as a normal line (small functions / external vars set full or hidden)")
 	fs.Parse(args)
 
 	apiKey := os.Getenv("DEEPSEEK_API_KEY")
@@ -58,9 +59,13 @@ func RunGenerateDescriptions(args []string) {
 	provider := providers.NewDeepSeek()
 	cfg := helper.EnsureConfig(helper.ConfigPath(".aracne/topology.db"))
 	batchSizeProvided := false
+	includeNotVisibleProvided := false
 	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "batch-size" {
+		switch f.Name {
+		case "batch-size":
 			batchSizeProvided = true
+		case "include-not-visible":
+			includeNotVisibleProvided = true
 		}
 	})
 	if cfgBatch := cfg.AgentParam("claude_code", "descriptions-generation-executor", "max-batch-size", 0); !batchSizeProvided && cfgBatch > 0 {
@@ -73,6 +78,12 @@ func RunGenerateDescriptions(args []string) {
 			os.Exit(1)
 		}
 		cfg.Descriptions.Kinds = targets
+	}
+
+	filter := cfg.EffectiveContextFilter()
+	includeNotVisible := cfg.Descriptions.IncludeNotVisible
+	if includeNotVisibleProvided {
+		includeNotVisible = *includeNotVisibleFlag
 	}
 
 	lang := GetLanguage(manager)
@@ -90,7 +101,7 @@ func RunGenerateDescriptions(args []string) {
 		*maxRetries = 1
 	}
 
-	pending, err := undocumentedDescriptionResources(manager, cfg.Descriptions.Kinds)
+	pending, err := undocumentedDescriptionResources(manager, cfg.Descriptions.Kinds, filter, includeNotVisible)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
@@ -104,7 +115,7 @@ func RunGenerateDescriptions(args []string) {
 	toolReg := BuildToolRegistry(manager, reg, cfg, "claude_code", "descriptions-generation-executor")
 	toolMap := registryToolMap(toolReg)
 
-	if err := runDescriptionGeneration(manager, provider, toolMap, lang, cfg.Descriptions.Kinds, *batchSize, *parallel, *maxRetries, cfg.Descriptions.StyleExemplars); err != nil {
+	if err := runDescriptionGeneration(manager, provider, toolMap, lang, cfg.Descriptions.Kinds, *batchSize, *parallel, *maxRetries, cfg.Descriptions.StyleExemplars, filter, includeNotVisible); err != nil {
 		fmt.Fprintf(os.Stderr, "\nError: %v\n", err)
 		os.Exit(1)
 	}
@@ -112,12 +123,12 @@ func RunGenerateDescriptions(args []string) {
 }
 
 // Orchestrates batch-wise LLM description generation with retry logic, splitting undocumented resources into parallel executor waves.
-func runDescriptionGeneration(manager *topology.TopologyManager, provider llm.Provider, toolMap map[string]tools.Tool, lang string, targets []domain.ResourceKind, batchSize, parallel, maxRetries, exemplarLimit int) error {
+func runDescriptionGeneration(manager *topology.TopologyManager, provider llm.Provider, toolMap map[string]tools.Tool, lang string, targets []domain.ResourceKind, batchSize, parallel, maxRetries, exemplarLimit int, filter domain.ContextFilter, includeNotVisible bool) error {
 	attempts := make(map[string]int)
 	failed := make(map[string]string)
 
 	for {
-		pending, err := undocumentedDescriptionResources(manager, targets)
+		pending, err := undocumentedDescriptionResources(manager, targets, filter, includeNotVisible)
 		if err != nil {
 			return err
 		}
@@ -213,7 +224,7 @@ func runDescriptionExecutorBatch(provider llm.Provider, toolMap map[string]tools
 }
 
 // Returns all resources of specified kinds that lack descriptions, sorted by kind, name, and ID.
-func undocumentedDescriptionResources(manager *topology.TopologyManager, targets []domain.ResourceKind) ([]descriptionResource, error) {
+func undocumentedDescriptionResources(manager *topology.TopologyManager, targets []domain.ResourceKind, filter domain.ContextFilter, includeNotVisible bool) ([]descriptionResource, error) {
 	topo, err := manager.ReadAll()
 	if err != nil {
 		return nil, err
@@ -221,7 +232,7 @@ func undocumentedDescriptionResources(manager *topology.TopologyManager, targets
 	targetSet := helper.DescribeTargetSet(targets)
 	resources := make([]descriptionResource, 0)
 	for id, res := range topo.Resources {
-		if strings.TrimSpace(res.Description) != "" || !targetSet[res.Kind] {
+		if !helper.ShouldDescribe(res, targetSet, filter, includeNotVisible) {
 			continue
 		}
 		resources = append(resources, descriptionResource{ID: id, Name: res.Name, Kind: res.Kind})

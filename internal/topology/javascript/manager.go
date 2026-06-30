@@ -52,7 +52,7 @@ func (m *JavaScriptManager) ReadFunction(id string, opts ...topology.TopologyOpt
 	}
 	ctx.Function = &FunctionCut{JavaScriptFunction: fn, Cut: funcCut.Cut}
 
-	if opt.HasResource(domain.ResourceType) && fn.MethodFrom != nil {
+	if opt.HasResource(domain.ResourceStruct) && fn.MethodFrom != nil {
 		if parent, ok := gt.Classes[*fn.MethodFrom]; ok {
 			parentCut, err := m.generic.Cut(parent.Loc)
 			if err != nil {
@@ -72,7 +72,7 @@ func (m *JavaScriptManager) ReadFunction(id string, opts ...topology.TopologyOpt
 		}
 	}
 
-	if opt.HasResource(domain.ResourceType) {
+	if opt.HasResource(domain.ResourceStruct) {
 		for _, classID := range fn.UsesClass() {
 			c, ok := gt.Classes[classID]
 			if !ok {
@@ -290,7 +290,7 @@ func (m *JavaScriptManager) ReadClass(id string, opts ...topology.TopologyOption
 		}
 	}
 
-	if opt.HasResource(domain.ResourceType) && constructorFunc != nil {
+	if opt.HasResource(domain.ResourceStruct) && constructorFunc != nil {
 		for refClassID := range constructorClassRefs {
 			cu, ok := gt.Classes[refClassID]
 			if !ok {
@@ -442,7 +442,7 @@ func (m *JavaScriptManager) ReadModule(id string, opts ...topology.TopologyOptio
 		}
 	}
 
-	if opt.HasResource(domain.ResourceType) {
+	if opt.HasResource(domain.ResourceStruct) {
 		for _, cID := range mod.Classes() {
 			c, ok := gt.Classes[cID]
 			if !ok {
@@ -550,7 +550,7 @@ func (m *JavaScriptManager) ReadDependency(id string, opts ...topology.TopologyO
 			if d == depPath {
 				ctx.UsedBy = append(ctx.UsedBy, ResourceUsage{
 					ID:          string(cID),
-					Kind:        domain.ResourceType,
+					Kind:        domain.ResourceStruct,
 					Name:        c.Name,
 					Description: c.Description,
 					Location:    c.Loc,
@@ -685,7 +685,7 @@ func (m *JavaScriptManager) ReadNamedType(id string, opts ...topology.TopologyOp
 	for cid, c := range gt.Classes {
 		for _, ntid := range c.UsesNamedType() {
 			if ntid == id {
-				addUsage(string(cid), domain.ResourceType, c.Name, c.Description, c.Loc)
+				addUsage(string(cid), domain.ResourceStruct, c.Name, c.Description, c.Loc)
 				break
 			}
 		}
@@ -751,7 +751,7 @@ func (m *JavaScriptManager) ReadResourceAndCut(id string, kind domain.ResourceKi
 				break
 			}
 		}
-	case domain.ResourceType:
+	case domain.ResourceStruct:
 		gt := FromGeneric(topo)
 		for _, c := range gt.Classes {
 			if string(c.ID) == id {

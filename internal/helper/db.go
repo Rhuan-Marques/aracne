@@ -171,6 +171,27 @@ func createSchema(db *sql.DB) error {
 	return nil
 }
 
+// Applies versioned, idempotent on-disk migrations to an existing topology
+// database, gated by PRAGMA user_version so each runs at most once per database.
+//
+// v1: the "type" resource kind (structs/classes) was renamed to "struct"; rewrite
+// any rows persisted under the old value.
+func applyMigrations(db *sql.DB) error {
+	var version int
+	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		return err
+	}
+	if version < 1 {
+		if _, err := db.Exec("UPDATE resources SET kind = 'struct' WHERE kind = 'type'"); err != nil {
+			return err
+		}
+		if _, err := db.Exec("PRAGMA user_version = 1"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Adds a language column to the resources table if it doesn't exist.
 func ensureResourceLanguageColumn(db *sql.DB) error {
 	hasColumn, err := resourceLanguageColumnExists(db)

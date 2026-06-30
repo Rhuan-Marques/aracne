@@ -259,11 +259,13 @@ func (s *GoScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.Top
 // UpdateFile path (unchanged behavior).
 func (s *GoScanner) fullPasses() gtPasses {
 	return gtPasses{
-		getCallers:      s.getCallers,
-		structMethods:   func(gt *golang.GolangTopology, _ *ParseResult) { populateStructMethods(gt) },
-		constructors:    func(gt *golang.GolangTopology, _ *ParseResult) { detectConstructors(gt) },
-		matchInterfaces: func(gt *golang.GolangTopology, _ *ParseResult, _ map[golang.StructID]golang.GolangStruct, _ map[golang.FunctionID]golang.GolangFunction) { matchStructsToInterfaces(gt) },
-		collectDeps:     collectDependencies,
+		getCallers:    s.getCallers,
+		structMethods: func(gt *golang.GolangTopology, _ *ParseResult) { populateStructMethods(gt) },
+		constructors:  func(gt *golang.GolangTopology, _ *ParseResult) { detectConstructors(gt) },
+		matchInterfaces: func(gt *golang.GolangTopology, _ *ParseResult, _ map[golang.StructID]golang.GolangStruct, _ map[golang.FunctionID]golang.GolangFunction) {
+			matchStructsToInterfaces(gt)
+		},
+		collectDeps: collectDependencies,
 	}
 }
 

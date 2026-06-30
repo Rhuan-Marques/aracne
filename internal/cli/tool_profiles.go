@@ -5,25 +5,31 @@ import (
 
 	"aracne/internal/helper"
 	"aracne/internal/llm/languages/gotools"
+	"aracne/internal/llm/languages/javatools"
 	"aracne/internal/llm/languages/jstools"
 	"aracne/internal/llm/languages/pythontools"
+	"aracne/internal/llm/languages/rusttools"
 	"aracne/internal/llm/languages/universaltools"
 	"aracne/internal/llm/tools"
 	"aracne/internal/topology"
 	"aracne/internal/topology/domain"
 	"aracne/internal/topology/golang"
+	"aracne/internal/topology/java"
 	"aracne/internal/topology/javascript"
 	"aracne/internal/topology/python"
+	"aracne/internal/topology/rust"
 	"aracne/internal/topology/scanner"
 )
 
 // toolDeps carries everything an MCP tool constructor may need.
 type toolDeps struct {
-	manager    *topology.TopologyManager
-	scannerReg *scanner.Registry
-	lang       string
-	targets    []domain.ResourceKind
-	batchSize  int
+	manager           *topology.TopologyManager
+	scannerReg        *scanner.Registry
+	lang              string
+	targets           []domain.ResourceKind
+	batchSize         int
+	filter            domain.ContextFilter
+	includeNotVisible bool
 }
 
 // mcpToolConstructors maps each MCP tool name to its constructor. It is the
@@ -61,6 +67,10 @@ func buildUpdateDescriptionTool(d toolDeps) tools.Tool {
 		return pythontools.NewUpdateDescriptionTool(python.NewPythonManager(d.manager))
 	case "javascript", "typescript":
 		return jstools.NewUpdateDescriptionTool(javascript.NewJavaScriptManager(d.manager))
+	case "rust":
+		return rusttools.NewUpdateDescriptionTool(rust.NewRustManager(d.manager))
+	case "java":
+		return javatools.NewUpdateDescriptionTool(java.NewJavaManager(d.manager))
 	default:
 		return gotools.NewUpdateDescriptionTool(golang.NewGoManager(d.manager))
 	}
@@ -70,11 +80,15 @@ func buildUpdateDescriptionTool(d toolDeps) tools.Tool {
 func buildNodeListNoDescriptionTool(d toolDeps) tools.Tool {
 	switch d.lang {
 	case "python":
-		return pythontools.NewNodeListNoDescription(python.NewPythonManager(d.manager), d.targets).SetBatchSize(d.batchSize)
+		return pythontools.NewNodeListNoDescription(python.NewPythonManager(d.manager), d.targets).SetBatchSize(d.batchSize).SetVisibility(d.filter, d.includeNotVisible)
 	case "javascript", "typescript":
-		return jstools.NewNodeListNoDescription(javascript.NewJavaScriptManager(d.manager), d.targets).SetBatchSize(d.batchSize)
+		return jstools.NewNodeListNoDescription(javascript.NewJavaScriptManager(d.manager), d.targets).SetBatchSize(d.batchSize).SetVisibility(d.filter, d.includeNotVisible)
+	case "rust":
+		return rusttools.NewNodeListNoDescription(rust.NewRustManager(d.manager), d.targets).SetBatchSize(d.batchSize).SetVisibility(d.filter, d.includeNotVisible)
+	case "java":
+		return javatools.NewNodeListNoDescription(java.NewJavaManager(d.manager), d.targets).SetBatchSize(d.batchSize).SetVisibility(d.filter, d.includeNotVisible)
 	default:
-		return gotools.NewNodeListNoDescription(golang.NewGoManager(d.manager), d.targets).SetBatchSize(d.batchSize)
+		return gotools.NewNodeListNoDescription(golang.NewGoManager(d.manager), d.targets).SetBatchSize(d.batchSize).SetVisibility(d.filter, d.includeNotVisible)
 	}
 }
 
@@ -130,11 +144,13 @@ func BuildToolRegistry(manager *topology.TopologyManager, scannerReg *scanner.Re
 	registry := tools.NewRegistry()
 	allowed := effectiveMCPToolSet(cfg, harness, agentName)
 	deps := toolDeps{
-		manager:    manager,
-		scannerReg: scannerReg,
-		lang:       GetLanguage(manager),
-		targets:    cfg.Descriptions.Kinds,
-		batchSize:  cfg.AgentParam(harness, agentName, "max-batch-size", helper.DefaultDescriptionBatchSize),
+		manager:           manager,
+		scannerReg:        scannerReg,
+		lang:              GetLanguage(manager),
+		targets:           cfg.Descriptions.Kinds,
+		batchSize:         cfg.AgentParam(harness, agentName, "max-batch-size", helper.DefaultDescriptionBatchSize),
+		filter:            cfg.EffectiveContextFilter(),
+		includeNotVisible: cfg.Descriptions.IncludeNotVisible,
 	}
 	readScan := cfg.EffectiveReadScan()
 	for _, name := range allMCPToolNames() {

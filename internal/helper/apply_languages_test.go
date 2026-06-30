@@ -97,7 +97,7 @@ func TestApply_Python_ReplacesDocstring(t *testing.T) {
 func TestApply_Python_ClassDocstring(t *testing.T) {
 	src := "class Shape:\n    pass\n"
 	out := applyLang(t, "test_pyc.py", src, "python", domain.Resource{
-		ID: "Shape", Kind: domain.ResourceType, Name: "Shape",
+		ID: "Shape", Kind: domain.ResourceStruct, Name: "Shape",
 		Description: "A shape.", Location: domain.Location{StartsAt: 1},
 		Properties: map[string]any{"py_body_line": 2, "py_doc_start": 0, "py_doc_end": 0},
 	})

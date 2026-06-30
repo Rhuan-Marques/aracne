@@ -1,0 +1,13 @@
+Analyzing project at: .
+Hard scan: rebuilding topology from scratch
+Topology written to: .aracne/topology.db
+Analyzed in 1.756s
+-42 packages
+-273 files
+-1999 functions
+-437 structs
+-79 named types
+-31 interfaces
+-376 variables
+-74 dependencies
+-8 errors

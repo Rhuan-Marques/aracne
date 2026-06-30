@@ -1,0 +1,100 @@
+"""Drive headless Claude Code and capture usage metrics.
+
+`claude --print --output-format json` runs one non-interactive agent session and prints
+a single JSON result object that includes the final text, num_turns, duration_ms,
+total_cost_usd and a `usage` block (input/output/cache tokens). Running on a Claude Max
+plan, this costs no API dollars yet still reports tokens — which is exactly what we need
+to answer "did aracne save tokens / make it faster".
+"""
+from __future__ import annotations
+
+import json
+import subprocess
+from dataclasses import dataclass, field
+
+PROMPT_TEMPLATE = """You are an experienced software engineer resolving a real GitHub \
+issue in the repository in your current working directory.
+
+Issue / pull-request description:
+---
+{problem}
+---
+
+Make the minimal source-code changes needed to resolve this issue, working directly in \
+the files of this repository. Do NOT modify, add, or delete any test files — your change \
+will be validated by a separate, hidden test suite. When you are confident the fix is \
+complete, stop.
+"""
+
+
+@dataclass
+class RunResult:
+    result_text: str = ""
+    num_turns: int = 0
+    duration_ms: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_tokens: int = 0
+    cost_usd: float = 0.0
+    is_error: bool = False
+    raw: dict = field(default_factory=dict)
+
+
+def run_raw(prompt: str, cwd, model: str, max_turns: int, timeout_s: int,
+            extra_args: list[str] | None = None) -> RunResult:
+    """Run one headless Claude Code session in `cwd`, feeding `prompt` verbatim on stdin
+    (so it is never subject to argv length limits). `prompt` may be a slash command such
+    as "/descriptions-generate"."""
+    cmd = [
+        "claude", "--print", "--output-format", "json",
+        "--model", model,
+        "--max-turns", str(max_turns),
+        "--dangerously-skip-permissions",
+        *(extra_args or []),
+    ]
+    proc = subprocess.run(
+        cmd, input=prompt, cwd=str(cwd), text=True,
+        capture_output=True, timeout=timeout_s,
+    )
+    return parse_output(proc.stdout, proc.stderr, proc.returncode)
+
+
+def run_claude(problem: str, cwd, model: str, max_turns: int, timeout_s: int,
+               extra_args: list[str] | None = None) -> RunResult:
+    """Run one headless Claude Code session to solve a benchmark task (wraps the issue
+    text in the task-solving template, then delegates to `run_raw`)."""
+    return run_raw(PROMPT_TEMPLATE.format(problem=problem), cwd, model, max_turns,
+                   timeout_s, extra_args)
+
+
+def parse_output(stdout: str, stderr: str, returncode: int) -> RunResult:
+    """Parse the JSON result object emitted by `claude --output-format json`."""
+    data: dict = {}
+    for line in reversed((stdout or "").strip().splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                data = json.loads(line)
+                break
+            except json.JSONDecodeError:
+                continue
+
+    usage = data.get("usage") or {}
+    cache = int(usage.get("cache_creation_input_tokens", 0) or 0) + \
+        int(usage.get("cache_read_input_tokens", 0) or 0)
+
+    return RunResult(
+        result_text=str(data.get("result", "") or ""),
+        num_turns=int(data.get("num_turns", 0) or 0),
+        duration_ms=int(data.get("duration_ms", 0) or 0),
+        input_tokens=int(usage.get("input_tokens", 0) or 0),
+        output_tokens=int(usage.get("output_tokens", 0) or 0),
+        cache_tokens=cache,
+        cost_usd=float(data.get("total_cost_usd", 0.0) or 0.0),
+        is_error=bool(data.get("is_error", False)) or returncode != 0,
+        raw=data or {
+            "stdout_tail": (stdout or "")[-2000:],
+            "stderr_tail": (stderr or "")[-2000:],
+            "returncode": returncode,
+        },
+    )

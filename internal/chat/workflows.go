@@ -2,7 +2,6 @@ package chat
 
 import (
 	"sort"
-	"strings"
 
 	"aracne/internal/helper"
 	"aracne/internal/topology/domain"
@@ -27,12 +26,11 @@ func (m *Manager) undocumentedResources() ([]workflowResource, error) {
 		return nil, err
 	}
 	targets := helper.DescribeTargetSet(m.config.Descriptions.Kinds)
+	filter := m.config.EffectiveContextFilter()
+	includeNotVisible := m.config.Descriptions.IncludeNotVisible
 	var result []workflowResource
 	for _, res := range topo.Resources {
-		if strings.TrimSpace(res.Description) != "" {
-			continue
-		}
-		if !targets[res.Kind] {
+		if !helper.ShouldDescribe(res, targets, filter, includeNotVisible) {
 			continue
 		}
 		result = append(result, workflowResource{ID: res.ID, Name: res.Name, Kind: res.Kind})
@@ -51,7 +49,7 @@ func (m *Manager) inspectableResources() ([]workflowResource, error) {
 	var result []workflowResource
 	for _, res := range topo.Resources {
 		switch res.Kind {
-		case domain.ResourceFunction, domain.ResourceMethod, domain.ResourceType, domain.ResourceInterface:
+		case domain.ResourceFunction, domain.ResourceMethod, domain.ResourceStruct, domain.ResourceInterface:
 			result = append(result, workflowResource{ID: res.ID, Name: res.Name, Kind: res.Kind})
 		}
 	}

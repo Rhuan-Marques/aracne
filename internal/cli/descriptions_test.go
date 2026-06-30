@@ -67,12 +67,12 @@ func TestDescriptionExecutorInputConstrainsAssignedResources(t *testing.T) {
 }
 
 func TestParseClearDescriptionTargetsAcceptsBracketedKinds(t *testing.T) {
-	targets, err := parseClearDescriptionTargets("[Function, Type]")
+	targets, err := parseClearDescriptionTargets("[Function, Struct]")
 	if err != nil {
 		t.Fatalf("parseClearDescriptionTargets: %v", err)
 	}
-	if len(targets) != 2 || targets[0] != domain.ResourceFunction || targets[1] != domain.ResourceType {
-		t.Fatalf("targets = %v, want [function type]", targets)
+	if len(targets) != 2 || targets[0] != domain.ResourceFunction || targets[1] != domain.ResourceStruct {
+		t.Fatalf("targets = %v, want [function struct]", targets)
 	}
 }
 

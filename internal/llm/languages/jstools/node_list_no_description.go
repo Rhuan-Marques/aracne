@@ -13,9 +13,11 @@ import (
 
 // Tool that lists JavaScript resources without descriptions, filtered by resource kind and processed in batches.
 type NodeListNoDescription struct {
-	mgr       *javascript.JavaScriptManager
-	targets   []domain.ResourceKind
-	batchSize int
+	mgr               *javascript.JavaScriptManager
+	targets           []domain.ResourceKind
+	batchSize         int
+	filter            domain.ContextFilter
+	includeNotVisible bool
 }
 
 // Creates a NodeListNoDescription tool for listing JavaScript resources without generating descriptions.
@@ -24,7 +26,7 @@ func NewNodeListNoDescription(mgr *javascript.JavaScriptManager, targets ...[]do
 	if len(targets) > 0 {
 		describeTargets = targets[0]
 	}
-	return &NodeListNoDescription{mgr: mgr, targets: describeTargets, batchSize: helper.DefaultDescriptionBatchSize}
+	return &NodeListNoDescription{mgr: mgr, targets: describeTargets, batchSize: helper.DefaultDescriptionBatchSize, filter: domain.DefaultContextFilter()}
 }
 
 // Sets the batch size for processing node lists, returning the receiver for chaining.
@@ -32,6 +34,14 @@ func (l *NodeListNoDescription) SetBatchSize(batchSize int) *NodeListNoDescripti
 	if batchSize > 0 {
 		l.batchSize = batchSize
 	}
+	return l
+}
+
+// SetVisibility configures the read context filter and include-not-visible flag
+// used to skip resources the read tools would not render as a normal line.
+func (l *NodeListNoDescription) SetVisibility(filter domain.ContextFilter, includeNotVisible bool) *NodeListNoDescription {
+	l.filter = filter
+	l.includeNotVisible = includeNotVisible
 	return l
 }
 
@@ -69,7 +79,7 @@ func (l *NodeListNoDescription) Run(args json.RawMessage) (string, error) {
 		if res.Language != "" && res.Language != "javascript" && res.Language != "typescript" {
 			continue
 		}
-		if res.Description == "" && targetSet[res.Kind] {
+		if helper.ShouldDescribe(res, targetSet, l.filter, l.includeNotVisible) {
 			entries = append(entries, entry{
 				ID:   id,
 				Name: res.Name,

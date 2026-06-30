@@ -74,7 +74,7 @@ func FromGeneric(topo *domain.Topology) *JavaScriptTopology {
 			}
 			gt.Functions[f.ID] = f
 
-		case domain.ResourceType:
+		case domain.ResourceStruct:
 			c := JavaScriptClass{
 				ID:          ClassID(id),
 				Name:        res.Name,
@@ -254,7 +254,7 @@ func ToGeneric(gt *JavaScriptTopology, language string) *domain.Topology {
 		}
 		topo.Resources[string(id)] = domain.Resource{
 			ID:          string(id),
-			Kind:        domain.ResourceType,
+			Kind:        domain.ResourceStruct,
 			Name:        c.Name,
 			Description: c.Description,
 			Location:    c.Loc,

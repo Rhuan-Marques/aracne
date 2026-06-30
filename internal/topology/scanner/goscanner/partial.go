@@ -300,7 +300,7 @@ func typingPackagesOf(resources map[string]domain.Resource, pr *ParseResult) []s
 		case domain.ResourceFunction, domain.ResourceMethod:
 			collectVarDefs(res.Properties["input"])
 			collectVarDefs(res.Properties["output"])
-		case domain.ResourceType:
+		case domain.ResourceStruct:
 			collectVarDefs(res.Properties["params"])
 		case domain.ResourceInterface:
 			for _, m := range decodeMethodDefs(res.Properties["methods"]) {

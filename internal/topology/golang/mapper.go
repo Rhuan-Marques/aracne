@@ -51,7 +51,7 @@ func FromGeneric(topo *domain.Topology) *GolangTopology {
 			}
 			gt.Functions[f.ID] = f
 
-		case domain.ResourceType:
+		case domain.ResourceStruct:
 			s := GolangStruct{
 				ID:          StructID(id),
 				Name:        res.Name,
@@ -195,7 +195,7 @@ func ToGeneric(gt *GolangTopology) *domain.Topology {
 		}
 		topo.Resources[string(id)] = domain.Resource{
 			ID:          string(id),
-			Kind:        domain.ResourceType,
+			Kind:        domain.ResourceStruct,
 			Name:        s.Name,
 			Description: s.Description,
 			Location:    s.Loc,

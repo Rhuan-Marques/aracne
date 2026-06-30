@@ -15,7 +15,7 @@ Usage:
   Aracne descriptions generate [flags]  Generate descriptions for targeted undocumented resources
   Aracne descriptions apply            Write topology descriptions back into source as doc comments
   Aracne descriptions clear [flags]    Clear stored topology descriptions
-  arac read [--kind <kind>] <resource-id>   Read a resource by ID; --kind forces exact kind (function, method, type, named_type, interface, variable, file, package, dependency)
+  arac read [--kind <kind>] <resource-id>   Read a resource by ID; --kind forces exact kind (function, method, struct, named_type, interface, variable, file, package, dependency)
   arac resource list [query] [--kind <kind>]... [--no-description]  List resources, optionally filtered by query, kind, or missing description
   arac grep [flags] <pattern> [path]  Search file contents and annotate topology resource matches
   arac update-file <path>  Re-parse a file and update the topology database (--db to specify db path)
@@ -55,7 +55,7 @@ Flags for "grep":
   --db <path>      Topology database path (default ".aracne/topology.db")
 
 Flags for "descriptions generate":
-  --targets <kinds>       Comma-separated resource kinds overriding config descriptions.kinds (default: function,method,type,interface,file)
+  --targets <kinds>       Comma-separated resource kinds overriding config descriptions.kinds (default: function,method,struct,interface,file)
   --batch-size <n>        Maximum resources assigned to each description executor (default 5)
   --parallel <n>          Maximum description executors to run concurrently (default 4)
   --max-retries <n>       Maximum executor attempts per resource (default 3)
@@ -93,7 +93,7 @@ Flags for "init":
 
 Flags for "analyze dead-code":
   --db <path>           Topology database path (default ".aracne/topology.db")
-  --kind <kind>         Resource kind filter: function, type, interface, named_type, variable
+  --kind <kind>         Resource kind filter: function, struct, interface, named_type, variable
   --package <path>      Package path filter (e.g. aracne/internal/cli)
   --certain-only        Only report unexported dead code (safe to delete)
   --exported-only       Only report exported dead code (may have external users)

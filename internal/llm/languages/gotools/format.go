@@ -317,8 +317,8 @@ func resourceKindLabel(kind domain.ResourceKind) string {
 		return "function"
 	case domain.ResourceMethod:
 		return "method"
-	case domain.ResourceType:
-		return "type"
+	case domain.ResourceStruct:
+		return "struct"
 	case domain.ResourceNamedType:
 		return "named_type"
 	case domain.ResourceInterface:

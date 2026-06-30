@@ -34,7 +34,7 @@ func ApplyDescriptions(topo *domain.Topology) error {
 			continue
 		}
 		switch res.Kind {
-		case domain.ResourceFunction, domain.ResourceMethod, domain.ResourceType, domain.ResourceNamedType, domain.ResourceInterface, domain.ResourceVariable:
+		case domain.ResourceFunction, domain.ResourceMethod, domain.ResourceStruct, domain.ResourceNamedType, domain.ResourceInterface, domain.ResourceVariable:
 		default:
 			continue
 		}
@@ -132,6 +132,10 @@ func styleForFile(entries []resourceEntry, path string) (docStyle, bool) {
 		return docStyle{render: renderJSDoc, isDoc: isJSDocLine}, true
 	case "python":
 		return docStyle{docstring: true}, true
+	case "rust":
+		return docStyle{render: renderRustDoc, isDoc: isRustDocLine}, true
+	case "java":
+		return docStyle{render: renderJSDoc, isDoc: isJSDocLine}, true
 	}
 	return docStyle{}, false
 }
@@ -147,6 +151,10 @@ func languageFromExt(path string) string {
 		return "javascript"
 	case ".ts", ".tsx", ".mts", ".cts":
 		return "typescript"
+	case ".rs":
+		return "rust"
+	case ".java":
+		return "java"
 	}
 	return ""
 }
@@ -331,6 +339,27 @@ func renderLineComment(desc string) []string {
 			out[i] = "//"
 		} else {
 			out[i] = "// " + line
+		}
+	}
+	return out
+}
+
+// isRustDocLine reports whether a line belongs to an existing Rust doc comment: a
+// `///` outer doc comment, a plain `//` line comment, or a `/*`/`/**` block.
+func isRustDocLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	return strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "/*")
+}
+
+// renderRustDoc renders a description as Rust `///` outer doc comments.
+func renderRustDoc(desc string) []string {
+	parts := strings.Split(desc, "\n")
+	out := make([]string, len(parts))
+	for i, line := range parts {
+		if line == "" {
+			out[i] = "///"
+		} else {
+			out[i] = "/// " + line
 		}
 	}
 	return out

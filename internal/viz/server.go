@@ -155,6 +155,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	mux.HandleFunc("/api/bugs", s.handleBugs)
 	mux.ServeHTTP(w, r)
 }
+
 // Loads topology database and bugs, then builds an index with graph edges, degrees, and warning/bug counts for each resource.
 
 func (s *Server) loadIndex() (*graphIndex, error) {
@@ -200,11 +201,13 @@ func (s *Server) loadIndex() (*graphIndex, error) {
 	}
 	return idx, nil
 }
+
 // HTTP handler that upgrades the connection to WebSocket and delegates to the server's WebSocket handler.
 
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	s.ws.ServeHTTP(w, r)
 }
+
 // HTTP handler that returns aggregate statistics about the topology including node count, warnings, bugs, and edge type distributions.
 
 func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
@@ -233,6 +236,7 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, summary)
 }
+
 // HTTP handler that returns a topology graph filtered by query, path, language, and resource kinds with optional optimization rules.
 
 func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
@@ -265,6 +269,7 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, idx.optimizedGraph(graph, rules))
 }
+
 // HTTP handler that returns a graph of nodes and edges around a given resource within a specified depth and direction, with optional optimization rules applied.
 
 func (s *Server) handleNeighborhood(w http.ResponseWriter, r *http.Request) {
@@ -316,6 +321,7 @@ func (s *Server) handleNeighborhood(w http.ResponseWriter, r *http.Request) {
 	graph := GraphResponse{Nodes: nodes, Edges: edges, Truncated: truncated, Limit: limit, TotalMatch: len(nodes)}
 	writeJSON(w, idx.optimizedGraph(graph, rules))
 }
+
 // HTTP handler that searches the topology index by query string, kind, path, and language filters, returning matching nodes.
 
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
@@ -339,6 +345,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, nodes)
 }
+
 // HTTP handler that returns detailed information for a single node including its code, edges, warnings, and known bugs.
 
 func (s *Server) handleNode(w http.ResponseWriter, r *http.Request) {
@@ -380,6 +387,7 @@ func (s *Server) handleNode(w http.ResponseWriter, r *http.Request) {
 		Code:     idx.nodeCodeWithIncludes(id, rules),
 	})
 }
+
 // HTTP handler that gets or updates configuration, including description generation kinds and batch size.
 
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
@@ -431,6 +439,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
 }
+
 // Updates the chat manager's configuration if initialized, respecting lazy initialization synchronization.
 
 func (s *Server) refreshChatConfig(cfg *helper.Config) {
@@ -448,6 +457,7 @@ func (s *Server) refreshChatConfig(cfg *helper.Config) {
 	}
 	mgr.SetConfig(cfg)
 }
+
 // HTTP handler that gets or updates optimization rules for graph visualization via GET or PUT requests.
 
 func (s *Server) handleOptimizationRules(w http.ResponseWriter, r *http.Request) {
@@ -502,6 +512,7 @@ func setExecutorBatchSize(cfg *helper.Config, value int) {
 	llmAg.Params["max-batch-size"] = value
 	cfg.LLM.Any.Agents[name] = llmAg
 }
+
 // Resolves the optimization rules file path from config, using a default or configured absolute/relative path.
 
 func (s *Server) optimizationRulesPath() string {
@@ -517,6 +528,7 @@ func (s *Server) optimizationRulesPath() string {
 	// of the .aracne directory holding the topology db).
 	return filepath.Join(filepath.Dir(filepath.Dir(s.dbPath)), rules)
 }
+
 // Reads optimization rules from JSON file, returning defaults if not found, and normalizes the loaded rules.
 
 func (s *Server) readOptimizationRules() ([]OptimizationRule, error) {
@@ -535,6 +547,7 @@ func (s *Server) readOptimizationRules() ([]OptimizationRule, error) {
 	}
 	return normalizeOptimizationRules(rules), nil
 }
+
 // Serializes and writes optimization rules to a JSON file in the configured directory.
 
 func (s *Server) writeOptimizationRules(rules []OptimizationRule) error {
@@ -548,6 +561,7 @@ func (s *Server) writeOptimizationRules(rules []OptimizationRule) error {
 	}
 	return os.WriteFile(path, append(data, '\n'), 0644)
 }
+
 // Returns default graph optimization rules for filtering non-exported leaf and short functions.
 
 func defaultOptimizationRules() []OptimizationRule {
@@ -573,6 +587,7 @@ func defaultOptimizationRules() []OptimizationRule {
 		},
 	}
 }
+
 // Normalizes optimization rules by assigning auto-generated IDs to unnamed rules and trimming whitespace from operation kinds and values.
 
 func normalizeOptimizationRules(rules []OptimizationRule) []OptimizationRule {
@@ -590,6 +605,7 @@ func normalizeOptimizationRules(rules []OptimizationRule) []OptimizationRule {
 	}
 	return rules
 }
+
 // Unmarshals JSON optimization rules from a string and normalizes them.
 
 func parseOptimizationRules(raw string) ([]OptimizationRule, error) {
@@ -602,6 +618,7 @@ func parseOptimizationRules(raw string) ([]OptimizationRule, error) {
 	}
 	return normalizeOptimizationRules(rules), nil
 }
+
 // Applies optimization rules to collapse nodes and rewire edges, removing collapsed nodes from the graph and reconnecting edges to their visible endpoints.
 
 func (idx *graphIndex) optimizedGraph(graph GraphResponse, rules []OptimizationRule) GraphResponse {
@@ -663,6 +680,7 @@ func (idx *graphIndex) optimizedGraph(graph GraphResponse, rules []OptimizationR
 	graph.Edges = edges
 	return graph
 }
+
 // Computes which selected resources should be hidden and groups them under their terminal incoming parents.
 
 func (idx *graphIndex) collapseAssignments(selected map[string]bool, collapsed map[string]bool) (map[string]bool, map[string][]CollapsedResource, map[string][]string) {
@@ -691,6 +709,7 @@ func (idx *graphIndex) collapseAssignments(selected map[string]bool, collapsed m
 	}
 	return visible, includes, parentsByCollapsed
 }
+
 // Recursively finds terminal (leaf) incoming parents by traversing collapsed nodes and excluding non-selected or visiting nodes.
 
 func (idx *graphIndex) terminalIncomingParents(id string, selected map[string]bool, collapsed map[string]bool, visiting map[string]bool) []string {
@@ -712,6 +731,7 @@ func (idx *graphIndex) terminalIncomingParents(id string, selected map[string]bo
 	}
 	return setIDs(seen)
 }
+
 // Returns collapsed resources that would include a given resource after applying optimization rules.
 
 func (idx *graphIndex) includesFor(id string, rules []OptimizationRule) []CollapsedResource {
@@ -726,6 +746,7 @@ func (idx *graphIndex) includesFor(id string, rules []OptimizationRule) []Collap
 	_, includes, _ := idx.collapseAssignments(selected, collapsed)
 	return includes[id]
 }
+
 // Sorts collapsed resources by kind, then by ID
 
 func sortCollapsedResources(resources []CollapsedResource) {
@@ -736,6 +757,7 @@ func sortCollapsedResources(resources []CollapsedResource) {
 		return resources[i].ID < resources[j].ID
 	})
 }
+
 // Returns source code for a resource plus related included code sections formatted with their names and kinds according to optimization rules.
 
 func (idx *graphIndex) nodeCodeWithIncludes(id string, rules []OptimizationRule) string {
@@ -752,6 +774,7 @@ func (idx *graphIndex) nodeCodeWithIncludes(id string, rules []OptimizationRule)
 	}
 	return strings.Join(parts, "\n\n")
 }
+
 // Identifies resources that match active optimization rules and marks them as collapsed.
 
 func (idx *graphIndex) collapsedByRules(rules []OptimizationRule) map[string]bool {
@@ -772,6 +795,7 @@ func (idx *graphIndex) collapsedByRules(rules []OptimizationRule) map[string]boo
 	}
 	return collapsed
 }
+
 // Checks if a resource matches all operations in an optimization rule.
 
 func (idx *graphIndex) matchesOptimizationRule(id string, res domain.Resource, rule OptimizationRule) bool {
@@ -782,6 +806,7 @@ func (idx *graphIndex) matchesOptimizationRule(id string, res domain.Resource, r
 	}
 	return true
 }
+
 // Checks if a resource matches a single optimization operation condition (degree bounds, export status, kind, or line count).
 
 func (idx *graphIndex) matchesOptimizationOperation(id string, res domain.Resource, op OptimizationOperation) bool {
@@ -803,6 +828,7 @@ func (idx *graphIndex) matchesOptimizationOperation(id string, res domain.Resour
 		return false
 	}
 }
+
 // Parses a string value to a non-negative integer, returning 0 on parse error or negative values.
 
 func operationInt(value string) int {
@@ -812,11 +838,12 @@ func operationInt(value string) int {
 	}
 	return n
 }
+
 // Checks if a resource is non-exported (unexported identifier name)
 
 func nonExportedResource(res domain.Resource) bool {
 	switch res.Kind {
-	case domain.ResourceFunction, domain.ResourceMethod, domain.ResourceType, domain.ResourceNamedType, domain.ResourceInterface, domain.ResourceVariable:
+	case domain.ResourceFunction, domain.ResourceMethod, domain.ResourceStruct, domain.ResourceNamedType, domain.ResourceInterface, domain.ResourceVariable:
 		name := strings.TrimSpace(res.Name)
 		if name == "" {
 			name = res.ID
@@ -828,6 +855,7 @@ func nonExportedResource(res domain.Resource) bool {
 		return false
 	}
 }
+
 // Calculates the line count of a resource based on its start and end locations.
 
 func resourceLines(res domain.Resource) int {
@@ -836,6 +864,7 @@ func resourceLines(res domain.Resource) int {
 	}
 	return res.Location.EndsAt - res.Location.StartsAt + 1
 }
+
 // Returns a CollapsedResource representation of a resource by ID, with name, kind, and description from the topology.
 
 func (idx *graphIndex) collapsedResource(id string) CollapsedResource {
@@ -845,6 +874,7 @@ func (idx *graphIndex) collapsedResource(id string) CollapsedResource {
 	}
 	return CollapsedResource{ID: id, Name: res.Name, Kind: string(res.Kind), Description: res.Description}
 }
+
 // HTTP handler that loads the topology index and returns all warnings sorted by ID as JSON.
 
 func (s *Server) handleWarnings(w http.ResponseWriter, r *http.Request) {
@@ -860,6 +890,7 @@ func (s *Server) handleWarnings(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(warnings, func(i, j int) bool { return warnings[i].ID < warnings[j].ID })
 	writeJSON(w, warnings)
 }
+
 // HTTP handler that retrieves and returns sorted bugs from the topology index.
 
 func (s *Server) handleBugs(w http.ResponseWriter, r *http.Request) {
@@ -871,6 +902,7 @@ func (s *Server) handleBugs(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(idx.bugs, func(i, j int) bool { return idx.bugs[i].ID < idx.bugs[j].ID })
 	writeJSON(w, idx.bugs)
 }
+
 // Retrieves source code for a resource by ID from the topology, returning empty string if the resource is missing or not inspectable.
 
 func (idx *graphIndex) nodeCode(id string) string {
@@ -888,11 +920,12 @@ func (idx *graphIndex) nodeCode(id string) string {
 	}
 	return code
 }
+
 // Returns true if a resource kind is code-inspectable (files, functions, methods, types, interfaces).
 
 func inspectableCodeKind(kind domain.ResourceKind) bool {
 	switch kind {
-	case domain.ResourceFile, domain.ResourceFunction, domain.ResourceMethod, domain.ResourceType, domain.ResourceNamedType, domain.ResourceInterface:
+	case domain.ResourceFile, domain.ResourceFunction, domain.ResourceMethod, domain.ResourceStruct, domain.ResourceNamedType, domain.ResourceInterface:
 		return true
 	case domain.ResourceKind("struct"), domain.ResourceKind("class"):
 		return true
@@ -900,6 +933,7 @@ func inspectableCodeKind(kind domain.ResourceKind) bool {
 		return false
 	}
 }
+
 // Extracts and returns specified line range from a source file
 
 func sourceCut(root string, loc domain.Location) (string, error) {
@@ -935,6 +969,7 @@ func sourceCut(root string, loc domain.Location) (string, error) {
 	}
 	return strings.Join(lines[loc.StartsAt-1:loc.EndsAt], "\n"), nil
 }
+
 // Builds a filtered graph response from query results with optional edge filtering and truncation.
 
 func (idx *graphIndex) resourceGraph(query string, kindSet map[string]bool, path string, language string, edgeSet map[string]bool, limit int, strictEdges bool) GraphResponse {
@@ -1064,15 +1099,14 @@ func (idx *graphIndex) packageGraph(query string, language string, limit int) Gr
 }
 
 // isPackagesAndModulesNode reports whether a resource is a node in the
-// "Packages & Modules" view: a Go package, or a Python/JS/TS module (file).
-// "Packages & Modules" view: a Go package, or a Python/JS/TS module (file).
+// "Packages & Modules" view: a Go package, or a Python/JS/TS/Rust/Java module (file).
 func (idx *graphIndex) isPackagesAndModulesNode(res domain.Resource) bool {
 	if res.Kind == domain.ResourcePackage {
 		return true
 	}
 	if res.Kind == domain.ResourceFile {
 		switch idx.resourceLanguage(res) {
-		case "python", "javascript", "typescript":
+		case "python", "javascript", "typescript", "rust", "java":
 			return true
 		}
 	}
@@ -1083,6 +1117,7 @@ func (idx *graphIndex) isPackagesAndModulesNode(res domain.Resource) bool {
 // across the Python and JavaScript domains).
 // across the Python and JavaScript domains).
 const jsConnImportsModule = "imports_module"
+
 // Maps resource IDs to their owning package, propagating membership through containment edges.
 
 func (idx *graphIndex) packageMembership() map[string]string {
@@ -1116,6 +1151,7 @@ func (idx *graphIndex) packageMembership() map[string]string {
 	}
 	return membership
 }
+
 // Resolves the owning package of a target resource using membership map.
 
 func (idx *graphIndex) targetPackage(targetID string, membership map[string]string) string {
@@ -1127,6 +1163,7 @@ func (idx *graphIndex) targetPackage(targetID string, membership map[string]stri
 	}
 	return ""
 }
+
 // Returns resource IDs matching query, kind, path, and language filters, sorted by path, kind, and ID.
 
 func (idx *graphIndex) filteredIDs(query string, kindSet map[string]bool, path string, language string) []string {
@@ -1161,6 +1198,7 @@ func (idx *graphIndex) filteredIDs(query string, kindSet map[string]bool, path s
 	})
 	return ids
 }
+
 // Returns all unique programming languages in the topology, sorted alphabetically.
 
 func (idx *graphIndex) languages() []string {
@@ -1182,6 +1220,7 @@ func (idx *graphIndex) languages() []string {
 	sort.Strings(languages)
 	return languages
 }
+
 // Resolves the language of a resource, falling back to topology language if unset.
 
 func (idx *graphIndex) resourceLanguage(res domain.Resource) string {
@@ -1193,6 +1232,7 @@ func (idx *graphIndex) resourceLanguage(res domain.Resource) string {
 	}
 	return ""
 }
+
 // Converts a topology resource into a GraphNode DTO with metadata including name, kind, language, location, degree counts, warnings, and bugs.
 
 func (idx *graphIndex) nodeDTO(id string) GraphNode {
@@ -1216,6 +1256,7 @@ func (idx *graphIndex) nodeDTO(id string) GraphNode {
 		BugCount:     idx.bugCounts[id],
 	}
 }
+
 // Returns the kind of a resource by ID, or "missing" if not found.
 
 func (idx *graphIndex) resourceKind(id string) string {
@@ -1224,6 +1265,7 @@ func (idx *graphIndex) resourceKind(id string) string {
 	}
 	return "missing"
 }
+
 // Returns edges between selected resources, optionally filtered by edge type, sorted for consistent output.
 
 func (idx *graphIndex) edgesWithin(selected map[string]bool, edgeSet map[string]bool) []GraphEdge {
@@ -1241,6 +1283,7 @@ func (idx *graphIndex) edgesWithin(selected map[string]bool, edgeSet map[string]
 	sortEdges(edges)
 	return edges
 }
+
 // Explores graph nodes within a given depth and direction, filtering by kind and edge type, stopping at limit.
 
 func (idx *graphIndex) neighborhood(root string, depth int, direction string, kindSet map[string]bool, edgeSet map[string]bool, limit int) (map[string]bool, bool) {
@@ -1264,6 +1307,7 @@ func (idx *graphIndex) neighborhood(root string, depth int, direction string, ki
 	}
 	return selected, false
 }
+
 // Returns adjacent nodes in a given direction, optionally filtered by resource kind and edge type.
 
 func (idx *graphIndex) neighbors(id string, direction string, kindSet map[string]bool, edgeSet map[string]bool) []string {
@@ -1293,6 +1337,7 @@ func (idx *graphIndex) neighbors(id string, direction string, kindSet map[string
 	}
 	return setIDs(seen)
 }
+
 // Collects and returns all topology warnings where the given resource ID is either the source or target, sorted by warning ID.
 
 func (idx *graphIndex) nodeWarnings(id string) []domain.TopologyWarning {
@@ -1305,6 +1350,7 @@ func (idx *graphIndex) nodeWarnings(id string) []domain.TopologyWarning {
 	sort.Slice(warnings, func(i, j int) bool { return warnings[i].ID < warnings[j].ID })
 	return warnings
 }
+
 // Returns all known bugs associated with a resource node, sorted by bug ID.
 
 func (idx *graphIndex) nodeBugs(id string) []domain.KnownBug {
@@ -1317,6 +1363,7 @@ func (idx *graphIndex) nodeBugs(id string) []domain.KnownBug {
 	sort.Slice(bugs, func(i, j int) bool { return bugs[i].ID < bugs[j].ID })
 	return bugs
 }
+
 // Resolves the package ID for a resource, returning its own ID if it is a package or its membership ID otherwise.
 
 func packageFor(id string, res domain.Resource, membership map[string]string) string {
@@ -1325,6 +1372,7 @@ func packageFor(id string, res domain.Resource, membership map[string]string) st
 	}
 	return membership[id]
 }
+
 // Extracts a string value from a property map by key, returning the value and whether the key exists as a string.
 
 func stringProperty(props map[string]any, key string) (string, bool) {
@@ -1338,6 +1386,7 @@ func stringProperty(props map[string]any, key string) (string, bool) {
 	s, ok := value.(string)
 	return s, ok
 }
+
 // Converts an absolute path to relative from a root directory, falling back to the original if not possible.
 
 func relativePath(root, path string) string {
@@ -1353,6 +1402,7 @@ func relativePath(root, path string) string {
 	}
 	return filepath.ToSlash(rel)
 }
+
 // Checks if an edge type represents package imports (imports_package or uses_package)
 
 func isPackageImportEdge(edgeType string) bool {
@@ -1363,11 +1413,13 @@ func isPackageImportEdge(edgeType string) bool {
 		return false
 	}
 }
+
 // Checks if an edge type represents containment (has_* prefix or methods)
 
 func isContainmentEdge(edgeType string) bool {
 	return strings.HasPrefix(edgeType, "has_") || edgeType == "methods"
 }
+
 // Returns a map of resource kinds that can belong to packages: package and file.
 
 func packageKinds() map[string]bool {
@@ -1376,6 +1428,7 @@ func packageKinds() map[string]bool {
 		"file":    true,
 	}
 }
+
 // Returns a map of valid package-level edge types: imports_package, uses_package, and imports_module.
 
 func packageEdges() map[string]bool {
@@ -1385,16 +1438,18 @@ func packageEdges() map[string]bool {
 		"imports_module":  true,
 	}
 }
+
 // Returns set of valid node kinds for data flow graph representation.
 
 func dataFlowKinds() map[string]bool {
 	return map[string]bool{
 		"function":  true,
 		"method":    true,
-		"type":      true,
+		"struct":    true,
 		"interface": true,
 	}
 }
+
 // Returns set of valid edge types for data flow graph representation.
 
 func dataFlowEdges() map[string]bool {
@@ -1412,6 +1467,7 @@ func dataFlowEdges() map[string]bool {
 		"uses_struct":     true,
 	}
 }
+
 // Normalizes a language filter string (lowercases, trims, treats empty/"all" as unfiltered)
 
 func normalizeLanguageFilter(language string) string {
@@ -1421,6 +1477,7 @@ func normalizeLanguageFilter(language string) string {
 	}
 	return language
 }
+
 // Parses comma-separated query parameter values into a set of lowercase strings.
 
 func parseSet(values url.Values, key string) map[string]bool {
@@ -1435,11 +1492,13 @@ func parseSet(values url.Values, key string) map[string]bool {
 	}
 	return set
 }
+
 // Checks whether a boolean set (map) has any entries.
 
 func hasSet(set map[string]bool) bool {
 	return len(set) > 0
 }
+
 // Converts a slice of IDs into a boolean map for O(1) membership testing.
 
 func idSet(ids []string) map[string]bool {
@@ -1449,6 +1508,7 @@ func idSet(ids []string) map[string]bool {
 	}
 	return set
 }
+
 // Converts a map of string keys into a sorted slice of strings
 
 func setIDs(set map[string]bool) []string {
@@ -1459,6 +1519,7 @@ func setIDs(set map[string]bool) []string {
 	sort.Strings(ids)
 	return ids
 }
+
 // Sorts graph edges by source, then target, then type
 
 func sortEdges(edges []GraphEdge) {
@@ -1472,6 +1533,7 @@ func sortEdges(edges []GraphEdge) {
 		return edges[i].Type < edges[j].Type
 	})
 }
+
 // Extracts and clamps an integer from query parameters between min and max bounds.
 
 func queryInt(values url.Values, key string, fallback, min, max int) int {
@@ -1491,6 +1553,7 @@ func queryInt(values url.Values, key string, fallback, min, max int) int {
 	}
 	return parsed
 }
+
 // Encodes and writes a value as indented JSON to the HTTP response.
 
 func writeJSON(w http.ResponseWriter, value any) {
@@ -1501,6 +1564,7 @@ func writeJSON(w http.ResponseWriter, value any) {
 		log.Printf("write json response: %v", err)
 	}
 }
+
 // Writes an HTTP 400 error response as JSON with the error message.
 
 func writeError(w http.ResponseWriter, err error) {

@@ -368,14 +368,14 @@ func TestConfigNeedDescriptionAPI(t *testing.T) {
 
 	var cfg helper.Config
 	getJSON(t, server.URL+"/api/config", &cfg)
-	if len(cfg.Descriptions.Kinds) != 5 || cfg.Descriptions.Kinds[0] != domain.ResourceFunction || cfg.Descriptions.Kinds[1] != domain.ResourceMethod {
+	if len(cfg.Descriptions.Kinds) != 4 || cfg.Descriptions.Kinds[0] != domain.ResourceFunction || cfg.Descriptions.Kinds[1] != domain.ResourceMethod {
 		t.Fatalf("unexpected default descriptions.kinds: %+v", cfg.Descriptions.Kinds)
 	}
 	if got := cfg.AgentParam("claude_code", "descriptions-generation-executor", "max-batch-size", 0); got != helper.DefaultDescriptionBatchSize {
 		t.Fatalf("unexpected default executor batch size: %d", got)
 	}
 
-	body := bytes.NewBufferString(`{"descriptions":{"kinds":["function","type","function"]},"description_batch_size":3}`)
+	body := bytes.NewBufferString(`{"descriptions":{"kinds":["function","struct","function"]},"description_batch_size":3}`)
 	req, err := http.NewRequest(http.MethodPut, server.URL+"/api/config", body)
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
@@ -392,7 +392,7 @@ func TestConfigNeedDescriptionAPI(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&cfg); err != nil {
 		t.Fatalf("decode PUT /api/config: %v", err)
 	}
-	if len(cfg.Descriptions.Kinds) != 2 || cfg.Descriptions.Kinds[0] != domain.ResourceFunction || cfg.Descriptions.Kinds[1] != domain.ResourceType {
+	if len(cfg.Descriptions.Kinds) != 2 || cfg.Descriptions.Kinds[0] != domain.ResourceFunction || cfg.Descriptions.Kinds[1] != domain.ResourceStruct {
 		t.Fatalf("unexpected saved descriptions.kinds: %+v", cfg.Descriptions.Kinds)
 	}
 	if got := cfg.AgentParam("claude_code", "descriptions-generation-executor", "max-batch-size", 0); got != 3 {
@@ -400,7 +400,7 @@ func TestConfigNeedDescriptionAPI(t *testing.T) {
 	}
 
 	saved := helper.LoadConfig(helper.ConfigPath(dbPath))
-	if len(saved.Descriptions.Kinds) != 2 || saved.Descriptions.Kinds[0] != domain.ResourceFunction || saved.Descriptions.Kinds[1] != domain.ResourceType {
+	if len(saved.Descriptions.Kinds) != 2 || saved.Descriptions.Kinds[0] != domain.ResourceFunction || saved.Descriptions.Kinds[1] != domain.ResourceStruct {
 		t.Fatalf("unexpected persisted descriptions.kinds: %+v", saved.Descriptions.Kinds)
 	}
 	if got := saved.AgentParam("claude_code", "descriptions-generation-executor", "max-batch-size", 0); got != 3 {

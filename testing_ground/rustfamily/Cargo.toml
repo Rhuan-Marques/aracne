@@ -1,0 +1,27 @@
+[package]
+name = "rustfamily"
+version = "0.1.0"
+edition = "2021"
+
+# A hand-built Rust corpus for exercising the aracne topology engine. It mirrors
+# the jsfamily/tsfamily corpora: many interconnected resources with a deliberate
+# emphasis on edge cases (every resource kind and as many cross-resource
+# interactions as the Rust scanner tracks).
+
+[lib]
+name = "rustfamily"
+path = "src/lib.rs"
+
+[dependencies]
+# `serde` is declared (optional) purely to exercise the external-dependency
+# (`uses_dependency`) edge from `errors.rs`. It is gated behind the `serde`
+# feature so a default `cargo check` compiles offline without downloading it.
+serde = { version = "1", optional = true }
+
+[features]
+default = []
+serde = ["dep:serde"]
+# Off-by-default: gates the `#[derive(Tagged)]` scanner probe in `traits.rs`
+# (deriving a plain trait needs a proc-macro, so it stays out of a default build
+# while tree-sitter still records the internal `implements` edge).
+derive_probe = []

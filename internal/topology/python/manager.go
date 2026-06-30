@@ -52,7 +52,7 @@ func (m *PythonManager) ReadFunction(id string, opts ...topology.TopologyOption)
 	}
 	ctx.Function = &FunctionCut{PythonFunction: fn, Cut: funcCut.Cut}
 
-	if opt.HasResource(domain.ResourceType) && fn.MethodFrom != nil {
+	if opt.HasResource(domain.ResourceStruct) && fn.MethodFrom != nil {
 		if parent, ok := gt.Classes[*fn.MethodFrom]; ok {
 			parentCut, err := m.generic.Cut(parent.Loc)
 			if err != nil {
@@ -79,7 +79,7 @@ func (m *PythonManager) ReadFunction(id string, opts ...topology.TopologyOption)
 		}
 	}
 
-	if opt.HasResource(domain.ResourceType) {
+	if opt.HasResource(domain.ResourceStruct) {
 		for _, classID := range fn.UsesClass() {
 			c, ok := gt.Classes[classID]
 			if !ok {
@@ -369,7 +369,7 @@ func (m *PythonManager) ReadClass(id string, opts ...topology.TopologyOption) (*
 		}
 	}
 
-	if opt.HasResource(domain.ResourceType) {
+	if opt.HasResource(domain.ResourceStruct) {
 		for refClassID := range constructorClassRefs {
 			cu, ok := gt.Classes[refClassID]
 			if !ok {
@@ -603,7 +603,7 @@ func (m *PythonManager) ReadModule(id string, opts ...topology.TopologyOption) (
 		}
 	}
 
-	if opt.HasResource(domain.ResourceType) {
+	if opt.HasResource(domain.ResourceStruct) {
 		for _, cID := range mod.Classes() {
 			c, ok := gt.Classes[cID]
 			if !ok {
@@ -744,7 +744,7 @@ func (m *PythonManager) ReadDependency(id string, opts ...topology.TopologyOptio
 			if d == depPath {
 				ctx.UsedBy = append(ctx.UsedBy, ResourceUsage{
 					ID:          string(cID),
-					Kind:        domain.ResourceType,
+					Kind:        domain.ResourceStruct,
 					Name:        c.Name,
 					Description: c.Description,
 					Location:    c.Loc,
@@ -798,7 +798,7 @@ func (m *PythonManager) ReadResourceAndCut(id string, kind domain.ResourceKind) 
 				break
 			}
 		}
-	case domain.ResourceType:
+	case domain.ResourceStruct:
 		gt := FromGeneric(topo)
 		for _, c := range gt.Classes {
 			if string(c.ID) == id {

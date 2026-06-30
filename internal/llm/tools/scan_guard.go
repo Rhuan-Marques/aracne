@@ -40,9 +40,11 @@ type scanningTool struct {
 }
 
 // Delegates to wrapped tool's name.
-func (s *scanningTool) Name() string            { return s.inner.Name() }
+func (s *scanningTool) Name() string { return s.inner.Name() }
+
 // Delegates to wrapped tool's description.
-func (s *scanningTool) Description() string     { return s.inner.Description() }
+func (s *scanningTool) Description() string { return s.inner.Description() }
+
 // Delegates to wrapped tool's parameters.
 func (s *scanningTool) Parameters() []Parameter { return s.inner.Parameters() }
 

@@ -2,11 +2,13 @@ package agent
 
 import (
 	"aracne/internal/llm/languages/gotools"
+	"aracne/internal/llm/languages/javatools"
 	"aracne/internal/llm/languages/jstools"
 	"aracne/internal/llm/languages/pythontools"
+	"aracne/internal/llm/languages/rusttools"
 )
 
-// Constructs language-specific system prompts for Go, Python, JavaScript, TypeScript, or multi-language.
+// Constructs language-specific system prompts for Go, Python, JavaScript, TypeScript, Rust, Java, or multi-language.
 func BuildPrompt(language string) string {
 	switch language {
 	case "go":
@@ -17,8 +19,12 @@ func BuildPrompt(language string) string {
 		return jstools.BuildJavaScriptSystemPrompt()
 	case "typescript":
 		return jstools.BuildTypeScriptSystemPrompt()
+	case "rust":
+		return rusttools.BuildRustSystemPrompt()
+	case "java":
+		return javatools.BuildJavaSystemPrompt()
 	case "multi":
-		return gotools.BuildGoSystemPrompt() + "\n\n" + pythontools.BuildPythonSystemPrompt() + "\n\n" + jstools.BuildJavaScriptSystemPrompt() + "\n\n" + jstools.BuildTypeScriptSystemPrompt()
+		return gotools.BuildGoSystemPrompt() + "\n\n" + pythontools.BuildPythonSystemPrompt() + "\n\n" + jstools.BuildJavaScriptSystemPrompt() + "\n\n" + jstools.BuildTypeScriptSystemPrompt() + "\n\n" + rusttools.BuildRustSystemPrompt() + "\n\n" + javatools.BuildJavaSystemPrompt()
 	default:
 		return gotools.BuildGoSystemPrompt()
 	}

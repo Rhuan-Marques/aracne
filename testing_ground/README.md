@@ -40,13 +40,42 @@ testing_ground/
 │   ├── commonjs.cjs require (destructured + external), exports.x = ...
 │   ├── bundle.cjs   module.exports = { ... }, whole-module require + member call
 │   └── components.jsx React function + class components, hook, mixin extends Mixin(Base)
-└── tsfamily/      ONE TS topology (.ts + .tsx + .d.ts), separate from jsfamily
-    ├── models.ts    interfaces (single/multi impl), interface extends, type aliases (union/intersection/generic), enums
-    ├── shapes.ts    abstract class implements interface, access modifiers, param property, generic class
-    ├── factory.ts   cross-module return types, annotation-driven method resolution (param/local)
-    ├── consumer.ts  namespace block, module-var via cross-module call, aliased export, default export
-    ├── ambient.d.ts declare function/interface/const, ambient namespace
-    └── components.tsx typed function/class components, function-typed prop, enum usage
+├── tsfamily/      ONE TS topology (.ts + .tsx + .d.ts), separate from jsfamily
+│   ├── models.ts    interfaces (single/multi impl), interface extends, type aliases (union/intersection/generic), enums
+│   ├── shapes.ts    abstract class implements interface, access modifiers, param property, generic class
+│   ├── factory.ts   cross-module return types, annotation-driven method resolution (param/local)
+│   ├── consumer.ts  namespace block, module-var via cross-module call, aliased export, default export
+│   ├── ambient.d.ts declare function/interface/const, ambient namespace
+│   └── components.tsx typed function/class components, function-typed prop, enum usage
+├── rustfamily/    ONE Rust crate (Cargo.toml + src/**.rs), package name `rustfamily`
+    ├── Cargo.toml    [package] name = "rustfamily"; optional `serde` dep (feature-gated) for the uses_dependency edge
+    ├── src/lib.rs    crate root: `pub mod ...` declarations + `pub use shapes::Circle` re-export (imports_module to shapes)
+    ├── src/shapes.rs  trait Shape (default method + assoc const); named/tuple/unit struct + newtype; inherent + trait impl; ctor; type alias
+    ├── src/geometry.rs enum Geometry (tuple + struct variants) + `match`; same-file `impl Shape for Geometry`
+    ├── src/factory.rs  free fns make_circle (value ctor) / make_shape (Box<dyn Shape>) / make_geometry; fn-pointer type alias
+    ├── src/consumer.rs FLAGSHIP: import sibling module, receive a ctor's return in a local, call methods (cross-module resolution)
+    ├── src/util/mod.rs nested module via mod.rs; pub struct + pub(crate) const + private fn; import cycle with math
+    ├── src/util/math.rs leaf module: pub(crate) const PI, private const, pub static, `use super::`; uses PI + calls double
+    ├── src/traits.rs  supertrait Drawable: Shape (inherits), generic trait + where, &dyn / impl Trait params, #[derive(Tagged)]
+    ├── src/errors.rs  error enum, `?` propagation, sentinel const, `use serde::Serialize` + #[derive(Serialize)] (feature-gated)
+    └── src/redprobes.rs RED PROBES (each `// GAP:`): trait-object, generic, `?`-unwrap, closure/iterator method dispatch
+└── javafamily/    ONE Maven project (pom.xml + src/main/java/com/aracne/**), package `com.aracne.*`
+    ├── pom.xml         Maven build file (the Detect anchor) + the sole external (guava) dependency
+    ├── shapes/         interface Shape + Circle/Rectangle impls; OVERLOAD area(int); constructor; @Override
+    ├── factory/        static factory methods returning the Shape interface, constructing concrete types
+    ├── consumer/       FLAGSHIP cross-file: factory return into a Shape-typed local, then `.area()`
+    ├── inheritance/    abstract base + subclass (class<->class inherits); sealed Expr + permits; multi-iface extends/implements
+    ├── enums/          enum implements interface; CONSTANT BODY (Op$PLUS inherits Op); enum-level + overridden methods
+    ├── records/        record Point(x,y) implements Located; compact constructor; synthesized accessors x()/y()
+    ├── nested/         static-nested, inner, local ($Helper) and anonymous ($anon1) classes; field/class name disjointness
+    ├── config/         static + instance initializer blocks -> <clinit>() / <instance-init>()
+    ├── annotations/    @interface Marker (IsAnnotation) + a class that USES @Marker (uses_interface)
+    ├── generics/       Box<T extends Shape>: bounded type param, generic STATIC method, wildcard List param
+    ├── lambdas/        lambdas + method/constructor references; calls attribute to the ENCLOSING method
+    ├── exceptions/     throws clause, try-with-resources, catch-wrap-rethrow; external supertype (extends Exception)
+    ├── arrays/         varargs int... -> int[] and explicit String[] keep array dims in the method ID
+    ├── external/       JDK (java.util) + the guava dependency; external imports -> NO false internal edge
+    └── redprobes/      RED PROBES (each `// bug _N`): generic-return propagation + erased-overload collision
 ```
 
 ## How the scanners pick this up
@@ -62,12 +91,28 @@ testing_ground/
 - **JS and TS are independent topologies** — cross-language imports do not
   resolve. That is why `.js/.jsx/.cjs` live together and `.ts/.tsx/.d.ts` live
   together, each importing only within its own family.
+- **Rust** is detected via `rustfamily/Cargo.toml` (and the registry's recursive
+  walk also activates the scanner on any `.rs` file). The whole `rustfamily/`
+  tree is one crate = **one topology**; symbol IDs are `::`-rooted at the Cargo
+  `[package].name` (`rustfamily`), so module paths come straight from the file
+  layout (`src/lib.rs`/`src/main.rs` → crate root, `src/util/mod.rs` →
+  `rustfamily::util`, `src/util/math.rs` → `rustfamily::util::math`).
+- **Java** is detected via `javafamily/pom.xml` (any of `pom.xml` /
+  `build.gradle` / `build.gradle.kts` / `settings.gradle`), and the registry's
+  recursive walk also activates the scanner on any `.java` file. Java is
+  **module-first** (like Python/JS/Rust): there is **no package node** — each
+  `.java` file is a module keyed by absolute path, and symbol IDs are **FQNs
+  rooted at the in-file `package …;` declaration** (`com.aracne.shapes.Circle`),
+  independent of the file layout. Method IDs always carry a parenthesized
+  signature (`area(int)`, even no-arg `area()`), so overloads stay distinct.
 
 ### File-name exclusions (do not rename fixtures to these)
 
 The scanners silently skip: Go `*_test.go`; Python `test_*.py`; JS/TS
-`*.test.*`, `*.spec.*`, `*.min.*`; and any dot-directory or `vendor`,
-`node_modules`, `__pycache__`, `venv`, etc.
+`*.test.*`, `*.spec.*`, `*.min.*`; Rust `target/`, `tests/`, `benches/` dirs;
+Java `*Test.java` / `*Tests.java` / `*IT.java` files and
+`target/`/`build/`/`.gradle/`/`out/`/`bin/`/`test/`/`tests/` dirs;
+and any dot-directory or `vendor`, `node_modules`, `__pycache__`, `venv`, etc.
 
 ## Edge cases covered
 
@@ -114,6 +159,43 @@ The scanners silently skip: Go `*_test.go`; Python `test_*.py`; JS/TS
 - **Annotation-driven method resolution** — the headline TS feature — via param type (`render`) and local type (`areaOf`), plus cross-module return types.
 - **Namespace** block, **aliased export**, **default export**, **ambient `.d.ts`** declarations.
 - TSX typed function/class components, **function-typed prop**, enum usage.
+
+### Rust (`rustfamily/`)
+- **Trait** with **multiple** implementers (`shapes.Shape` ← `Circle` / `geometry.Geometry`) and **single** implementer (`traits.Tagged` ← `Label`).
+- **Supertrait** `trait Drawable: Shape` resolves to an **`inherits`** edge (cross-module: `traits.Drawable → shapes.Shape`), with the reverse `inherited_by` on `Shape`.
+- **Generic trait** `Container<T>` with a `where T: Clone` bound; functions taking **`&dyn Shape`** and **`impl Shape`** (trait-object / static-dispatch parameters).
+- Struct kinds: **named** (`Circle`), **tuple** (`Meters(f64)`), **unit** (`Origin`), and a **newtype** over an internal type (`Disk(Circle)`). **Named types** (type aliases): a primitive alias (`shapes.Radius`) and a **function-pointer** alias (`factory.ShapeFactory`).
+- **Enums** model variants as a **property list** (no per-variant node): `geometry.Geometry { Round(Circle), Rect { w, h } }` (tuple + struct variants) and `errors.MyError { Missing, BadRadius(f64) }`. A method `match`es over the variants.
+- **Inherent + trait method coexistence**: `Circle` has both an inherent `area` and a `Shape::area`; they collapse to a single `Circle::area` node (deduped by ID, no write-abort).
+- **Constructors** auto-detected (assoc fn named `new`/`default`/`with_*`/`from_*` returning `Self`/the owning type): `Circle::new`, `Unit::new` get a `constructor` link.
+- **Cross-module return-type inference** (the flagship): `consumer.report` does `let c = Circle::new(2.0); c.area()` and `let s = make_circle(1.0); s.diameter()` → resolves `calls` to `shapes.Circle::{new,area,diameter}` and `factory.make_circle`. Cross-file impl methods attach to the type's ID regardless of which file the `impl` lives in.
+- **`use` resolution**: `use crate::...` → `imports_module`; grouped uses (`use crate::shapes::{Circle, Shape}`); a crate-root **re-export** (`pub use shapes::Circle`) still records `imports_module`; `use super::` / `use self::` (the `util`↔`util::math` **import cycle** resolves both ways).
+- **External dependency** edge: `errors.rs`'s `use serde::Serialize;` (declared optional in `Cargo.toml`, feature-gated in source) yields a `serde` **dependency** node + an `imports_dependency` edge.
+- **`#[derive(Tagged)]`** on an *internal* trait produces an **`implements`** edge (`Label → Tagged`); external derives (`Serialize`, `Clone`) resolve to nothing.
+- **Module-level vars**: `pub(crate) const PI`, a private `const`, a `pub static`, and a sentinel `const NOT_FOUND`; a function-body reference to `PI` records a `uses_variable` edge (`math.circumference → math.PI`).
+- **Visibility** variants exercised throughout: `pub`, `pub(crate)`, and private.
+- **Red probes** (`redprobes.rs`, each `// GAP:`-annotated) — the *free-function / constructor* `calls` still resolve, but the **chained method call drops**: (1) trait-object `let s: Box<dyn Shape> = make_shape(); s.area()` (boxed type unknown); (2) generic `fn render<T: Shape>(t: T) { t.area() }` (type-param method unresolved); (3) `?`-unwrap `let c = load()?; c.area()` (the `?` result type is not tracked, though `load` resolves); (4) closure/iterator `vec![Circle::new(1.0)].iter().map(|x| x.area())` — `x.area()` drops, and the inline `Circle::new` *also* drops because it sits inside a `vec!` macro token-tree (unparsed by tree-sitter).
+
+### Java (`javafamily/`)
+- **Module-first FQN IDs**: no package node; each file is a module keyed by absolute path, every symbol ID is an FQN rooted at the in-file `package …;` (`com.aracne.shapes.Circle`). Method IDs **always** carry a parenthesized signature (`area()`), so overloads are distinct nodes (`Circle.area()` vs `Circle.area(int)`, the overload `calls` the no-arg sibling).
+- **Interface** with **multiple** implementers (`shapes.Shape` ← `Circle` / `Rectangle`) and a class **implementing multiple** interfaces (`Widget` → `Named`, `Sized`), each interface gaining `implemented_by`.
+- **Class extends class** is a **struct↔struct `inherits`** edge (`Derived → Base`, reverse `inherited_by`) — new vs the trait-only Rust model. **Interface extends interfaces** is iface↔iface `inherits` (`Describable → Named` + `Sized`).
+- **Abstract** class + abstract method (`Base.rank`); a **sealed** interface with an explicit `permits` clause (`Expr permits Lit, Neg`); `final` classes (`Factory`, `Neg`).
+- **Enum** (`enums.Op`): `IsEnum` + `Variants=[PLUS,MINUS]`, `implements Operation`, and a **constant body** `PLUS` that becomes its own struct `Op$PLUS` which **`inherits`** the enum and owns the overriding `apply`.
+- **Record** (`records.Point`): `IsRecord` + `Components=[x,y]`, **synthesized accessor** methods `x()` / `y()` (Loc = record header line), a **compact constructor** (`Point.<init>(int,int)`), and `implements Located`.
+- **Nested types**, arbitrarily deep + dotted: **static nested** (`Outer.Nested`), **inner** (`Outer.Inner`), **local** class in a method (`Outer$Helper`), **anonymous** class (`Outer$anon1`; `$anonN` numbered by deterministic source order within the top-level type). The `int` field `Inner` and the inner class `Inner` stay **distinct nodes** (expression vs type context).
+- **Initializer blocks**: a static block → `Settings.<clinit>()` and all instance blocks merged into `Settings.<instance-init>()`, both `IsSynthetic`, each `calls` its helper.
+- **`@interface`** annotation type (`annotations.Marker`) → a `ResourceInterface` with `IsAnnotation`; a class that **uses** `@Marker` (type/field/method) records a `uses_interface` edge (`Marked → Marker`).
+- **Constructors** carry the `<init>(sig)` name; `this(…)` / `super(…)` chaining produces `calls` edges (`Derived.<init>() → Derived.<init>(int) → Base.<init>(String)`); a `new T(…)` records a `calls` edge to the ctor + `uses_struct`.
+- **Signature normalization** (pure parse-time; return type never in the ID): type arguments stripped (`List<String>` → `List`), array dims kept (`int[]`), varargs normalized (`String…` → `String[]`). The erased-overload **collision** `pick(List<String>)` / `pick(List<Integer>)` → both `pick(List)` is a filed **red probe** (`redprobes.Overloaded`).
+- **Cross-module return-type inference** (the flagship): `consumer.Consumer.total()` receives `Factory.makeCircle(…)` into a `Shape`-typed local and calls `.area()` → resolves `calls` to `factory.Factory.makeCircle(double)` + `shapes.Shape.area()`, with `uses_struct Factory` + `uses_interface Shape`. Cross-file `implements` / `extends` resolve regardless of which file owns the relation.
+- **Lambdas + method/constructor references** (`lambdas.Events`): calls inside lambda bodies attribute to the **enclosing** method; `Circle::area` and `Circle::new` (→ `Circle.<init>(double)`) resolve as `calls`.
+- **Exceptions** (`exceptions/`): a `throws` clause on an internal type, **try-with-resources** over a static-nested `Closeable` (`Handle`), and catch-wrap-rethrow → a `calls`/constructor edge to `CustomException.<init>(String,int)`; `extends Exception` is an **external** supertype (no internal node).
+- **Imports**: an `import` of an internal type → **`imports_module`** (file→file); a JDK / guava import → **`imports_dependency`** (`java.util`, `com.google.common`) + a dependency node, with **no false internal edge** (`external.ExternalUser`).
+- **Generics** (`generics.Box<T extends Shape>`): a bounded type parameter (`uses_interface Shape` via the bound), a generic **static** method, and a **wildcard** `List<? extends Shape>` parameter.
+- **Red probes** (`redprobes/`, each `// bug _N`): generic **return-type propagation** drops the chained call (`Box<Rectangle>.get().area()` does not resolve `Rectangle.area()`); the **erased-overload collision** above collapses two methods into one ID. The free-function / constructor `calls` still resolve.
+- **Determinism**: IDs are pure parse-time (no resolver dependency) and structural edges (`inherits`/`implements`) are rebuilt whole-graph from module-owned records, so full / incremental / hard scans yield identical resource sets and edges. Two same-named **local classes** in sibling method scopes are kept distinct (the second is suffixed `$Name#2`) rather than colliding.
+- **Known coverage gaps** (deterministic, no DB-abort): anonymous classes declared in a **field initializer** (rather than a method / initializer-block body) are not extracted; bounded-type-parameter and generic-return chained-call resolution are filed red probes (`bug_1`/`bug_2`); cross-package same-simple-name overloads collapse to one ID (`bug_3`, by the documented signature contract).
 
 ## Edge-case probe suite (JS/TS deep dive)
 
@@ -386,3 +468,5 @@ python3 -m py_compile testing_ground/python/*.py
 | Python | `aracne.testing_ground.python.<Name>` | same | `aracne.testing_ground.python.<Class>.<method>` |
 | JS | `aracne/testing_ground/jsfamily/<file>.<Name>` | same | `<file>.<Class>.<method>` |
 | TS | `aracne/testing_ground/tsfamily/<file>.<Name>` | same | `<file>.<Class>.<method>` |
+| Rust | `rustfamily::<mod>::<Name>` | same | `rustfamily::<mod>::<Type>::<method>` |
+| Java | `com.aracne.<pkg>.<Class>` (nested `Outer.Inner`; synthetic `$anonN`/`$Local`/`Enum$CONST`) | — (no free functions) | `com.aracne.<pkg>.<Owner>.<name>(<sig>)` (ctor `<Owner>.<init>(<sig>)`; init `<Owner>.<clinit>()`/`<instance-init>()`; record accessor `<Rec>.<comp>()`) |

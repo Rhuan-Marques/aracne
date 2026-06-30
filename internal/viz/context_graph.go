@@ -215,7 +215,7 @@ func readToolKinds(tool string) map[string]bool {
 	case "read_function":
 		return map[string]bool{"function": true, "method": true}
 	case "read_struct":
-		return map[string]bool{"type": true}
+		return map[string]bool{"struct": true}
 	case "read_interface":
 		return map[string]bool{"interface": true}
 	case "read_named_type":

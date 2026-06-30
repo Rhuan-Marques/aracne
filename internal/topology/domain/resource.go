@@ -7,7 +7,7 @@ var (
 	ResourceFile       ResourceKind = "file"
 	ResourceFunction   ResourceKind = "function"
 	ResourceMethod     ResourceKind = "method"
-	ResourceType       ResourceKind = "type"
+	ResourceStruct     ResourceKind = "struct"
 	ResourceNamedType  ResourceKind = "named_type"
 	ResourceInterface  ResourceKind = "interface"
 	ResourceVariable   ResourceKind = "variable"

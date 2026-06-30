@@ -11,13 +11,17 @@ import (
 
 	"aracne/internal/helper"
 	"aracne/internal/llm/languages/gotools"
+	"aracne/internal/llm/languages/javatools"
 	"aracne/internal/llm/languages/jstools"
 	"aracne/internal/llm/languages/pythontools"
+	"aracne/internal/llm/languages/rusttools"
 	"aracne/internal/topology"
 	"aracne/internal/topology/domain"
 	"aracne/internal/topology/golang"
+	"aracne/internal/topology/java"
 	"aracne/internal/topology/javascript"
 	"aracne/internal/topology/python"
+	"aracne/internal/topology/rust"
 )
 
 // Reads and displays a topology resource (function, type, interface, file, etc.) with its context and relationships.
@@ -70,7 +74,7 @@ func RunRead() {
 	switch res.Kind {
 	case domain.ResourceFunction, domain.ResourceMethod:
 		readAsFunction(manager, lang, resourceID)
-	case domain.ResourceType:
+	case domain.ResourceStruct:
 		readAsStruct(manager, lang, resourceID)
 	case domain.ResourceInterface:
 		readAsInterface(manager, lang, resourceID)
@@ -715,6 +719,24 @@ func readAsFunction(mgr *topology.TopologyManager, lang string, id string) {
 		fmt.Print(jstools.FormatJavaScriptFunctionContext(ctx))
 		return
 	}
+	if lang == "rust" {
+		ctx, err := rust.NewRustManager(mgr).ReadFunction(id, filter)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Print(rusttools.FormatRustFunctionContext(ctx))
+		return
+	}
+	if lang == "java" {
+		ctx, err := java.NewJavaManager(mgr).ReadFunction(id, filter)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Print(javatools.FormatJavaFunctionContext(ctx))
+		return
+	}
 	goManager := golang.NewGoManager(mgr)
 	ctx, err := goManager.ReadFunction(id, filter)
 	if err != nil {
@@ -747,6 +769,24 @@ func readAsStruct(mgr *topology.TopologyManager, lang string, id string) {
 		fmt.Print(jstools.FormatJavaScriptClassContext(ctx))
 		return
 	}
+	if lang == "rust" {
+		ctx, err := rust.NewRustManager(mgr).ReadStruct(id, filter)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Print(rusttools.FormatRustStructContext(ctx))
+		return
+	}
+	if lang == "java" {
+		ctx, err := java.NewJavaManager(mgr).ReadStruct(id, filter)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Print(javatools.FormatJavaStructContext(ctx))
+		return
+	}
 	goManager := golang.NewGoManager(mgr)
 	ctx, err := goManager.ReadStruct(id, filter)
 	if err != nil {
@@ -769,6 +809,24 @@ func readAsInterface(mgr *topology.TopologyManager, lang string, id string) {
 			os.Exit(1)
 		}
 		fmt.Print(jstools.FormatJavaScriptInterfaceContext(ctx))
+		return
+	}
+	if lang == "rust" {
+		ctx, err := rust.NewRustManager(mgr).ReadInterface(id, cliContextFilter(mgr))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Print(rusttools.FormatRustInterfaceContext(ctx))
+		return
+	}
+	if lang == "java" {
+		ctx, err := java.NewJavaManager(mgr).ReadInterface(id, cliContextFilter(mgr))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Print(javatools.FormatJavaInterfaceContext(ctx))
 		return
 	}
 	goManager := golang.NewGoManager(mgr)
@@ -795,6 +853,15 @@ func readAsNamedType(mgr *topology.TopologyManager, lang string, id string) {
 		fmt.Print(jstools.FormatJavaScriptNamedTypeContext(ctx))
 		return
 	}
+	if lang == "rust" {
+		ctx, err := rust.NewRustManager(mgr).ReadNamedType(id)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Print(rusttools.FormatRustNamedTypeContext(ctx))
+		return
+	}
 	goManager := golang.NewGoManager(mgr)
 	ctx, err := goManager.ReadNamedType(id)
 	if err != nil {
@@ -819,6 +886,14 @@ func readAsVariable(mgr *topology.TopologyManager, topo *domain.Topology, lang s
 	} else if lang == "javascript" || lang == "typescript" {
 		jt := javascript.FromGeneric(topo)
 		v, ok := jt.ExternalVars[javascript.ExternalVarID(id)]
+		if !ok {
+			readAsCut(mgr, lang, id, domain.ResourceVariable)
+			return
+		}
+		loc = v.Location
+	} else if lang == "rust" {
+		rt := rust.FromGeneric(topo)
+		v, ok := rt.Variables[rust.VariableID(id)]
 		if !ok {
 			readAsCut(mgr, lang, id, domain.ResourceVariable)
 			return
@@ -896,6 +971,34 @@ func readAsVariable(mgr *topology.TopologyManager, topo *domain.Topology, lang s
 							d = "(no description)"
 						}
 						usedBy = append(usedBy, fmt.Sprintf("\t%s %s", c.ID, d))
+						break
+					}
+				}
+			}
+		}
+	} else if lang == "rust" {
+		rt := rust.FromGeneric(topo)
+		for _, fn := range rt.Functions {
+			for _, evid := range fn.UsesVar() {
+				if string(evid) == id {
+					d := fn.Description
+					if d == "" {
+						d = "(no description)"
+					}
+					usedBy = append(usedBy, fmt.Sprintf("\t%s %s", fn.ID, d))
+					break
+				}
+			}
+		}
+		for _, s := range rt.Structs {
+			if evids, ok := s.Connections[rust.ConnUsesVar]; ok {
+				for _, evid := range evids {
+					if evid == id {
+						d := s.Description
+						if d == "" {
+							d = "(no description)"
+						}
+						usedBy = append(usedBy, fmt.Sprintf("\t%s %s", s.ID, d))
 						break
 					}
 				}
@@ -998,6 +1101,58 @@ func readAsDependency(mgr *topology.TopologyManager, topo *domain.Topology, lang
 				}
 			}
 		}
+	} else if lang == "rust" {
+		rt := rust.FromGeneric(topo)
+		for _, fn := range rt.Functions {
+			for _, d := range fn.UsesDep() {
+				if string(d) == id {
+					desc := fn.Description
+					if desc == "" {
+						desc = "(no description)"
+					}
+					usedBy = append(usedBy, fmt.Sprintf("\t%s %s", fn.ID, desc))
+					break
+				}
+			}
+		}
+		for _, s := range rt.Structs {
+			for _, d := range s.UsesDep() {
+				if string(d) == id {
+					desc := s.Description
+					if desc == "" {
+						desc = "(no description)"
+					}
+					usedBy = append(usedBy, fmt.Sprintf("\t%s %s", s.ID, desc))
+					break
+				}
+			}
+		}
+	} else if lang == "java" {
+		jt := java.FromGeneric(topo)
+		for _, fn := range jt.Methods {
+			for _, d := range fn.UsesDep() {
+				if string(d) == id {
+					desc := fn.Description
+					if desc == "" {
+						desc = "(no description)"
+					}
+					usedBy = append(usedBy, fmt.Sprintf("\t%s %s", fn.ID, desc))
+					break
+				}
+			}
+		}
+		for _, s := range jt.Classes {
+			for _, d := range s.UsesDep() {
+				if string(d) == id {
+					desc := s.Description
+					if desc == "" {
+						desc = "(no description)"
+					}
+					usedBy = append(usedBy, fmt.Sprintf("\t%s %s", s.ID, desc))
+					break
+				}
+			}
+		}
 	} else {
 		gt := golang.FromGeneric(topo)
 		for _, fn := range gt.Functions {
@@ -1040,6 +1195,24 @@ func readAsCut(mgr *topology.TopologyManager, lang string, id string, kind domai
 	if lang == "python" {
 		pythonManager := python.NewPythonManager(mgr)
 		entry, err := pythonManager.ReadResourceAndCut(id, kind)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Print(entry.Cut)
+		return
+	}
+	if lang == "rust" {
+		entry, err := rust.NewRustManager(mgr).ReadResourceAndCut(id, kind)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Print(entry.Cut)
+		return
+	}
+	if lang == "java" {
+		entry, err := java.NewJavaManager(mgr).ReadResourceAndCut(id, kind)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -1243,5 +1416,3 @@ func formatGoPackageContext(gt *golang.GolangTopology, pkgID string) {
 		}
 	}
 }
-
-

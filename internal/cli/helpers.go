@@ -12,17 +12,21 @@ import (
 	"aracne/internal/topology/domain"
 	"aracne/internal/topology/scanner"
 	"aracne/internal/topology/scanner/goscanner"
+	"aracne/internal/topology/scanner/javascanner"
 	"aracne/internal/topology/scanner/jsscanner"
 	"aracne/internal/topology/scanner/pyscanner"
+	"aracne/internal/topology/scanner/rustscanner"
 )
 
-// Creates a scanner registry with registered Go, Python, JavaScript, and TypeScript scanners.
+// Creates a scanner registry with registered Go, Python, JavaScript, TypeScript, Rust, and Java scanners.
 func NewScannerRegistry() *scanner.Registry {
 	reg := scanner.NewRegistry()
 	reg.Register(goscanner.NewGoScanner())
 	reg.Register(pyscanner.NewPythonScanner())
 	reg.Register(jsscanner.NewJavaScriptScanner())
 	reg.Register(jsscanner.NewTypeScriptScanner())
+	reg.Register(rustscanner.NewRustScanner())
+	reg.Register(javascanner.NewJavaScanner())
 	return reg
 }
 
@@ -90,8 +94,8 @@ func MapResourceKind(name string) domain.ResourceKind {
 		return domain.ResourceFunction
 	case "method":
 		return domain.ResourceMethod
-	case "struct", "type":
-		return domain.ResourceType
+	case "struct":
+		return domain.ResourceStruct
 	case "named_type":
 		return domain.ResourceNamedType
 	case "interface":

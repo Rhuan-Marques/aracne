@@ -236,7 +236,7 @@ func findDeadStructs(gt *GolangTopology, incoming map[string]int, alive map[stri
 		}
 		dead = append(dead, DeadResource{
 			ID:         id,
-			Kind:       domain.ResourceType,
+			Kind:       domain.ResourceStruct,
 			Name:       s.Name,
 			Location:   s.Loc,
 			Confidence: confidence,

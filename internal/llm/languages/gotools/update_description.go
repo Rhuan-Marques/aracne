@@ -54,7 +54,7 @@ func (u *UpdateDescriptionTool) Run(args json.RawMessage) (string, error) {
 	case "Function":
 		kind = domain.ResourceFunction
 	case "Struct", "Type":
-		kind = domain.ResourceType
+		kind = domain.ResourceStruct
 	case "Interface":
 		kind = domain.ResourceInterface
 	case "ExternalVar", "Variable":

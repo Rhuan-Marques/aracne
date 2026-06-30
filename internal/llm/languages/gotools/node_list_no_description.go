@@ -13,9 +13,11 @@ import (
 
 // Tool that lists Go resources without descriptions, filtering by resource kinds with configurable batch size.
 type NodeListNoDescription struct {
-	mgr       *golang.GoManager
-	targets   []domain.ResourceKind
-	batchSize int
+	mgr               *golang.GoManager
+	targets           []domain.ResourceKind
+	batchSize         int
+	filter            domain.ContextFilter
+	includeNotVisible bool
 }
 
 // Creates a NodeListNoDescription instance to list resources without descriptions, with configurable resource kinds and batch size.
@@ -24,7 +26,7 @@ func NewNodeListNoDescription(mgr *golang.GoManager, targets ...[]domain.Resourc
 	if len(targets) > 0 {
 		describeTargets = targets[0]
 	}
-	return &NodeListNoDescription{mgr: mgr, targets: describeTargets, batchSize: helper.DefaultDescriptionBatchSize}
+	return &NodeListNoDescription{mgr: mgr, targets: describeTargets, batchSize: helper.DefaultDescriptionBatchSize, filter: domain.DefaultContextFilter()}
 }
 
 // Sets the batch size for splitting resources across executor subagents
@@ -32,6 +34,14 @@ func (l *NodeListNoDescription) SetBatchSize(batchSize int) *NodeListNoDescripti
 	if batchSize > 0 {
 		l.batchSize = batchSize
 	}
+	return l
+}
+
+// SetVisibility configures the read context filter and include-not-visible flag
+// used to skip resources the read tools would not render as a normal line.
+func (l *NodeListNoDescription) SetVisibility(filter domain.ContextFilter, includeNotVisible bool) *NodeListNoDescription {
+	l.filter = filter
+	l.includeNotVisible = includeNotVisible
 	return l
 }
 
@@ -66,7 +76,7 @@ func (l *NodeListNoDescription) Run(args json.RawMessage) (string, error) {
 
 	targetSet := helper.DescribeTargetSet(l.targets)
 	for id, res := range topo.Resources {
-		if res.Description == "" && targetSet[res.Kind] {
+		if helper.ShouldDescribe(res, targetSet, l.filter, l.includeNotVisible) {
 			entries = append(entries, entry{
 				ID:   id,
 				Name: res.Name,
