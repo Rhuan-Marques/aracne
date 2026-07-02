@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"aracne/internal/helper"
+	"aracne/internal/topology/domain"
 )
 
 // Detects added, modified, and deleted files by comparing current source against the manifest.
@@ -41,6 +42,10 @@ func RunCheckUpdates(args []string) {
 	if projectRoot == "" {
 		projectRoot = "."
 	}
+
+	// Respect the config's hidden paths so they never show up as pending updates.
+	cfg := helper.LoadConfig(helper.ConfigPath(dbPath))
+	domain.SetActivePathVisibility(domain.BuildPathVisibility(projectRoot, cfg.Paths))
 
 	manifestPath := helper.ManifestPath(dbPath)
 

@@ -199,6 +199,11 @@ type Config struct {
 	Descriptions DescriptionsSection `json:"descriptions"`
 	LLM          LLMSection          `json:"llm"`
 	Viz          VizSection          `json:"viz"`
+	// Paths marks directories/files (relative to the topology root) as hidden or
+	// visible. Hidden paths are skipped by the indexing and scan stages in every
+	// mode (default/all/hard). More specific (more internal) rules win, so a
+	// parent can be hidden while a nested child stays visible.
+	Paths []domain.PathRule `json:"paths"`
 }
 
 // Returns the maximum file size for scanning, defaulting to 512KB if not set.
@@ -390,7 +395,8 @@ func DefaultAgentMCPTools(agentName string) []string {
 
 func defaultBlockedTools() []string {
 	// Returns the default set of blocked tools: read, grep, edit, and write.
-	return []string{"read", "grep", "edit", "write"}
+	return []string{}
+	// return []string{"read", "grep", "edit", "write"}
 }
 
 func defaultChatMainAgentTools() []string {
@@ -481,7 +487,8 @@ func DefaultConfig() *Config {
 		return ac
 	}
 	return &Config{
-		Scan: ScanSection{Mode: ScanModeDefault},
+		Scan:  ScanSection{Mode: ScanModeDefault},
+		Paths: []domain.PathRule{},
 		Read: ReadSection{
 			MaxFileSize:     512 * 1024,
 			Scan:            ReadScanNone,
@@ -702,6 +709,9 @@ func normalizeConfig(c *Config) {
 	}
 	if c.Viz.Chat.Agents.Agents == nil {
 		c.Viz.Chat.Agents.Agents = map[string]ChatAgentConfig{}
+	}
+	if c.Paths == nil {
+		c.Paths = []domain.PathRule{}
 	}
 }
 

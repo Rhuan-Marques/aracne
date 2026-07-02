@@ -135,6 +135,9 @@ func CollectSourceFiles(root, language string) ([]string, error) {
 			if isIgnoredSourceDir(d.Name()) {
 				return filepath.SkipDir
 			}
+			if domain.PathPruneDir(path) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if IsSourceFile(path, language) {
@@ -151,6 +154,11 @@ func CollectSourceFiles(root, language string) ([]string, error) {
 // Checks if a file path is a valid source file for a given language, excluding tests and ignored paths.
 func IsSourceFile(path, language string) bool {
 	if path == "" || isIgnoredSourcePath(path) {
+		return false
+	}
+	// Paths marked hidden by config are excluded from both the indexing stage
+	// (this gate feeds manifest diffing / file discovery) and the scan stage.
+	if domain.PathHidden(path) {
 		return false
 	}
 	name := filepath.Base(path)

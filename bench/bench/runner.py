@@ -10,6 +10,7 @@ canonical worktree under the fixtures tree and is never deleted here.
 """
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import subprocess
@@ -77,7 +78,10 @@ def run_one(task: Task, arm: str, seed: int, cfg: dict, out_dir: Path,
             duration_ms=rr.duration_ms, cost_usd=round(rr.cost_usd, 4),
         )
         if rr.is_error:
-            row["error"] = "agent_error"
+            # `claude --print` puts its failure message in `result` when is_error; keep it
+            # (falling back to a slice of the raw JSON) so the cause isn't lost as "agent_error".
+            detail = (rr.result_text or "").strip() or json.dumps(rr.raw)
+            row["error"] = f"agent_error: {detail[:500]}"
     except subprocess.TimeoutExpired:
         row["error"] = "agent timeout"
     except Exception as e:  # noqa: BLE001 - record and continue the matrix

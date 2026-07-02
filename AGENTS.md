@@ -57,10 +57,6 @@ After editing or writing, the context for the topology will be automatically upd
 - If you find a bug that is not relevant to your task, *do not fix it*. Instead, report it using `aracne_bug_report`
 - If you want to check for any topology warnings, you can do it using `aracne_warnings_list`
 
-## Tool Guard
-
-This project's OpenCode permissions deny the read/grep shell commands (`cat`/`head`/`tail`/`less`/`grep`/`rg`) when run directly on a file — use the matching aracne MCP tool instead. Reading piped command output (`cmd | head`, `cmd | grep x`) is still allowed.
-
 ## How to Navigate:
 
 ### 1: Explore Topology, NOT Files

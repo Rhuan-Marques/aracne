@@ -35,9 +35,11 @@ go.work.sum
 .env
 *.db
 
-# Aracne artifacts
-.aracne/
-.ltp/
+# Easier to use in cloud environment claude code
+# Aracne artifacts 
+.aracne/ 
+*.venv/
+*.venva/
 
 # Editor/IDE
 # .idea/
@@ -45,3 +47,5 @@ go.work.sum
 .opencode/
 .claude/
 go.sum
+.rtk/*
+bench/report_*.json

@@ -886,9 +886,15 @@ func collectGoFiles(root string) []string {
 			if name == "vendor" || name == ".git" || name == "node_modules" || strings.HasPrefix(name, ".") {
 				return filepath.SkipDir
 			}
+			if domain.PathPruneDir(path) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if strings.HasSuffix(d.Name(), ".go") && !strings.HasSuffix(d.Name(), "_test.go") {
+			if domain.PathHidden(path) {
+				return nil
+			}
 			files = append(files, path)
 		}
 		return nil

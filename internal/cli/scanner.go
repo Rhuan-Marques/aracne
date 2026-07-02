@@ -10,6 +10,7 @@ import (
 
 	"aracne/internal/helper"
 	"aracne/internal/topology"
+	"aracne/internal/topology/domain"
 )
 
 // Dispatches scanner subcommands; routes to RunScannerRun for the "run" action.
@@ -70,6 +71,10 @@ func RunScannerRun(args []string) {
 	manager.Load(dbPath)
 
 	cfg := helper.EnsureConfig(helper.ConfigPath(dbPath))
+	// Install the path-visibility filter up front so the watch-loop's change
+	// detection (DiffScanFiles below) skips hidden paths from the first tick,
+	// matching what IncrementalScan applies internally.
+	domain.SetActivePathVisibility(domain.BuildPathVisibility(root, cfg.Paths))
 	frequency := cfg.Scanner.UpdateFrequency
 	if frequency <= 0 {
 		frequency = 200

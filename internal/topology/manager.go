@@ -75,8 +75,23 @@ func (m *TopologyManager) RunReadScan(reg *scanner.Registry, mode helper.ReadSca
 	}
 }
 
+// applyPathVisibility installs the path-visibility filter from the config next
+// to the topology DB as the active filter for the upcoming scan, so paths marked
+// hidden are skipped by both file discovery (indexing) and parsing (scan) in
+// every mode. When no DB path is known yet it clears any previously installed
+// filter so nothing is hidden.
+func (m *TopologyManager) applyPathVisibility(root string) {
+	if m.dbPath == "" {
+		domain.SetActivePathVisibility(nil)
+		return
+	}
+	cfg := helper.LoadConfig(helper.ConfigPath(m.dbPath))
+	domain.SetActivePathVisibility(domain.BuildPathVisibility(root, cfg.Paths))
+}
+
 // Scans codebase and writes the complete topology to the database.
 func (m *TopologyManager) FullScan(root string, reg *scanner.Registry) error {
+	m.applyPathVisibility(root)
 	topo, err := scanAllLanguages(root, reg)
 	if err != nil {
 		return err
@@ -90,6 +105,7 @@ func (m *TopologyManager) FullScan(root string, reg *scanner.Registry) error {
 
 // Scans codebase for changes and updates topology incrementally, handling added/modified/deleted files with optional partial-update optimization and cascading re-resolution of affected callers.
 func (m *TopologyManager) IncrementalScan(root string, reg *scanner.Registry) ([]domain.TopologyWarning, error) {
+	m.applyPathVisibility(root)
 	if info, err := os.Stat(root); err != nil {
 		return nil, fmt.Errorf("topology root %s is not accessible: %w", root, err)
 	} else if !info.IsDir() {
@@ -368,6 +384,7 @@ func (m *TopologyManager) tryPartialIncremental(root string, reg *scanner.Regist
 
 // Rescans codebase and preserves existing resource descriptions when re-indexing.
 func (m *TopologyManager) FullReScan(root string, reg *scanner.Registry) ([]domain.TopologyWarning, error) {
+	m.applyPathVisibility(root)
 	newTopo, err := scanAllLanguages(root, reg)
 	if err != nil {
 		return nil, err
@@ -503,6 +520,14 @@ func (m *TopologyManager) UpdateFile(path string, reg *scanner.Registry) ([]doma
 		helper.CleanupOrphanedBugs(m.dbPath, topo)
 		helper.SyncManifest(topo, m.dbPath)
 		return warnings, nil
+	}
+
+	// Hidden paths (config) are excluded from the topology: install the filter
+	// and, when this file is hidden, drop any stale resources and make the update
+	// a no-op so native edits / MCP writes to hidden files never re-index them.
+	m.applyPathVisibility(topo.Root)
+	if domain.PathHidden(absPath) {
+		return finish(helper.RemoveFileResources(topo, absPath))
 	}
 
 	if _, err := os.Stat(absPath); os.IsNotExist(err) {

@@ -364,9 +364,15 @@ func collectPythonFiles(root string) []string {
 				strings.HasPrefix(name, ".") {
 				return filepath.SkipDir
 			}
+			if domain.PathPruneDir(path) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if strings.HasSuffix(d.Name(), ".py") && !strings.HasPrefix(d.Name(), "test_") {
+			if domain.PathHidden(path) {
+				return nil
+			}
 			files = append(files, path)
 		}
 		return nil

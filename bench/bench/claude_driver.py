@@ -9,6 +9,7 @@ to answer "did aracne save tokens / make it faster".
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from dataclasses import dataclass, field
 
@@ -40,11 +41,29 @@ class RunResult:
     raw: dict = field(default_factory=dict)
 
 
+# Friendly benchmark model names ("opus-4.8") aren't valid `claude --model` strings; the CLI
+# wants an alias ("opus"/"sonnet"/"haiku") or a full id ("claude-opus-4-8").
+_FRIENDLY_MODEL_RE = re.compile(r"^(opus|sonnet|haiku|fable)-(\d+)(?:\.(\d+))?$")
+
+
+def normalize_model(model: str) -> str:
+    """Map a friendly model name like 'opus-4.8' to a valid `claude --model` id
+    ('claude-opus-4-8'). Plain aliases ('opus'/'sonnet'/'haiku') and full ids (anything
+    already starting with 'claude-') are returned unchanged."""
+    m = _FRIENDLY_MODEL_RE.match((model or "").strip())
+    if not m:
+        return model
+    family, major, minor = m.group(1), m.group(2), m.group(3)
+    parts = ["claude", family, major] + ([minor] if minor else [])
+    return "-".join(parts)
+
+
 def run_raw(prompt: str, cwd, model: str, max_turns: int, timeout_s: int,
             extra_args: list[str] | None = None) -> RunResult:
     """Run one headless Claude Code session in `cwd`, feeding `prompt` verbatim on stdin
     (so it is never subject to argv length limits). `prompt` may be a slash command such
     as "/descriptions-generate"."""
+    model = normalize_model(model)
     cmd = [
         "claude", "--print", "--output-format", "json",
         "--model", model,

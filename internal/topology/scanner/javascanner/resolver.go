@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"aracne/internal/topology/domain"
 	java "aracne/internal/topology/java"
 )
 
@@ -137,6 +138,9 @@ func collectJavaFiles(root string) []string {
 			if strings.HasPrefix(name, ".") && name != "." {
 				return filepath.SkipDir
 			}
+			if domain.PathPruneDir(path) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		name := d.Name()
@@ -144,6 +148,9 @@ func collectJavaFiles(root string) []string {
 			return nil
 		}
 		if strings.HasSuffix(name, "Test.java") || strings.HasSuffix(name, "Tests.java") || strings.HasSuffix(name, "IT.java") {
+			return nil
+		}
+		if domain.PathHidden(path) {
 			return nil
 		}
 		files = append(files, path)

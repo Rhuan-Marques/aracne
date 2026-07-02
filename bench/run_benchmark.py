@@ -448,6 +448,12 @@ def cmd_generate(cfg: dict) -> int:
 
 
 def cmd_run(cfg: dict) -> int:
+    # OpenCode expects provider/model (e.g. deepseek/deepseek-chat); haiku/sonnet are
+    # Claude Code aliases and would fail at the opencode CLI.
+    if cfg["run_harness"] == "opencode" and "/" not in cfg["model"]:
+        raise SystemExit(
+            f"opencode --run-harness needs a provider/model for --model "
+            f"(e.g. deepseek/deepseek-chat); got {cfg['model']!r}.")
     fixtures_root = Path(cfg["fixtures_dir"])
     tasks = sources.read_manifest(sources.manifest_path(cfg["samples_dir"], cfg["sample_id"]))
     matrix = [(t, arm, seed)

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"aracne/internal/topology/domain"
 	rust "aracne/internal/topology/rust"
 )
 
@@ -260,9 +261,15 @@ func collectRustFiles(root string) []string {
 			if strings.HasPrefix(name, ".") && name != "." {
 				return filepath.SkipDir
 			}
+			if domain.PathPruneDir(path) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if strings.HasSuffix(d.Name(), ".rs") {
+			if domain.PathHidden(path) {
+				return nil
+			}
 			files = append(files, path)
 		}
 		return nil
