@@ -1,0 +1,70 @@
+{
+  "scan": { "mode": "default" },
+  "read": {
+    "max_file_size": 33554432,
+    "scan": "default",
+    "pipe_passthrough": true,
+    "context_filter": {
+      "include_incoming": true,
+      "external_vars_visibility": "full",
+      "small_functions_visibility": "full",
+      "small_function_threshold": 100000,
+      "hide_no_description": false
+    }
+  },
+  "scanner": { "mode": "default", "update_frequency": 200 },
+  "descriptions": {
+    "kinds": ["function", "method", "struct", "interface"],
+    "style_exemplars": 1
+  },
+  "llm": {
+    "<any>": {
+      "main_agent": {
+        "mcp_tools": [
+          "read", "read_function", "read_struct", "read_interface", "read_named_type",
+          "read_file", "read_package", "read_dependency", "grep", "edit", "write",
+          "warnings_list", "bug_report", "bug_list", "bug_acknowledge", "bug_dismiss",
+          "bug_delete", "update_description", "node_list_no_description"
+        ],
+        "blocked_tools": []
+      },
+      "agents": {
+        "bug-hunter": { "model": "<inherits>", "mcp_tools": ["read_file", "read_function", "read_struct", "read_interface", "grep", "bug_report"] },
+        "bug-judge": { "model": "<inherits>", "mcp_tools": ["read_file", "read_function", "read_struct", "read_interface", "grep", "bug_list", "bug_acknowledge", "bug_dismiss", "bug_delete"] },
+        "bug-solver": { "model": "<inherits>", "mcp_tools": ["read_file", "read_function", "read_struct", "read_interface", "grep", "edit", "write", "warnings_list", "bug_delete"] },
+        "descriptions-generation-executor": { "model": "<inherits>", "mcp_tools": ["read", "grep", "update_description"], "params": { "max-batch-size": 5 } }
+      }
+    },
+    "opencode": { "main_agent": {}, "agents": {} },
+    "claude_code": {
+      "main_agent": {
+        "mcp_tools": [
+          "read", "read_function", "read_struct", "read_interface", "read_named_type",
+          "read_file", "read_package", "read_dependency", "grep", "edit", "write",
+          "warnings_list", "bug_report", "bug_list", "bug_acknowledge", "bug_dismiss",
+          "bug_delete", "update_description", "node_list_no_description"
+        ],
+        "blocked_tools": []
+      },
+      "agents": {
+        "descriptions-generation-executor": { "model": "haiku" }
+      }
+    }
+  },
+  "viz": {
+    "graph": { "optimization_rules": ".aracne/optimization_rules.json" },
+    "chat": {
+      "main_agent": {
+        "tools": ["ls", "bash", "glob", "ask_user_question", "CreateTasks", "grep", "read_file", "read_function", "read_struct", "read_interface", "edit", "write", "warnings_list", "bug_report", "bug_list", "bug_acknowledge", "bug_dismiss", "bug_delete", "update_description", "node_list_no_description"]
+      },
+      "agents": {
+        "bug-hunter": { "tools": ["read", "read_function", "read_struct", "read_interface", "read_file", "grep", "bug_report"], "params": { "thinking": 4096 } },
+        "bug-judge": { "tools": ["read", "read_function", "read_struct", "read_interface", "read_file", "grep", "bug_list", "bug_acknowledge", "bug_dismiss", "bug_delete"], "params": { "thinking": 4096 } },
+        "bug-solver": { "tools": ["read", "edit", "write", "read_function", "read_struct", "read_interface", "read_file", "grep", "warnings_list", "bug_delete"], "params": { "thinking": 4096 } },
+        "descriptions-generation-executor": { "tools": ["read", "grep", "update_description"], "params": { "max-batch-size": 5 } },
+        "explorer": { "tools": ["read", "read_function", "read_struct", "read_interface", "read_named_type", "read_file", "read_package", "read_dependency", "grep"] }
+      }
+    }
+  },
+  "paths": []
+}

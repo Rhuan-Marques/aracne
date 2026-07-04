@@ -25,19 +25,25 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
+import shutil
 import subprocess
 import sys
+import uuid
 from collections import defaultdict
 from pathlib import Path
 
 # Allow running as `python bench/run_benchmark.py` from the repo root.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from bench import agents, fixtures, grade, metrics, report, runner, sources  # noqa: E402
+from bench import (agents, analysis, fixtures, grade, htmlreport,  # noqa: E402
+                   metrics, report, runner, sources)
 from bench.sources import ALL_LANGUAGES, load_tasks  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
+CONFIGS_DIR = HERE / "configs"
+ARACNE_CONFIGS_DIR = CONFIGS_DIR / "aracne"   # .aracne/config.json overlays for the aracne arm
 
 DEFAULTS = {
     "samples": 2,                # tasks per language (small by default — scale up deliberately)
@@ -73,6 +79,12 @@ DEFAULTS = {
     "dry_run": False,
     "no_grade": False,
     "resume": False,
+    "continue_run": None,        # continue a prior run by id/name (re-run its errored + unfinished steps)
+    "run_name": None,            # unique id for this run; None -> random; also names results/<id>
+    "aracne_config": None,       # aracne arm's .aracne/config.json overlay (name in configs/aracne/ or path)
+    "no_analysis": False,        # skip the end-of-run LLM results analysis
+    "analysis_model": "haiku",   # model for the one-shot results analysis (claude_code)
+    "analysis_max_turns": 2,     # tiny — it just writes prose from the embedded numbers
     "sources": {
         "multi_swe_bench": {
             "dataset": "ByteDance-Seed/Multi-SWE-bench",
@@ -89,6 +101,44 @@ DEFAULTS = {
         },
     },
 }
+
+
+def _resolve_config_path(value) -> Path | None:
+    """`--config` accepts a PATH or a bare NAME.
+
+    An existing path is used verbatim; a bare name (no separator, no .yaml/.yml) resolves
+    to bench/configs/<name>.yaml (or .yml). Anything unresolved is returned as-is so
+    build_config's `.exists()` check simply skips it (falls back to DEFAULTS)."""
+    if value is None:
+        return None
+    p = Path(value)
+    if p.exists():
+        return p
+    s = str(value)
+    if "/" not in s and "\\" not in s and not s.endswith((".yaml", ".yml")):
+        for cand in (CONFIGS_DIR / f"{s}.yaml", CONFIGS_DIR / f"{s}.yml"):
+            if cand.exists():
+                return cand
+    cand = CONFIGS_DIR / s
+    return cand if cand.exists() else p
+
+
+def _resolve_aracne_config_path(value) -> str | None:
+    """Resolve the aracne-config overlay: a bare NAME -> bench/configs/aracne/<name>.json,
+    or a PATH used verbatim. Returns the path string only if it exists, else None (the caller
+    fails loudly when a value was given but nothing resolved)."""
+    if not value:
+        return None
+    p = Path(value)
+    if p.exists():
+        return str(p)
+    s = str(value)
+    if "/" not in s and "\\" not in s and not s.endswith(".json"):
+        cand = ARACNE_CONFIGS_DIR / f"{s}.json"
+        if cand.exists():
+            return str(cand)
+    cand = ARACNE_CONFIGS_DIR / s
+    return str(cand) if cand.exists() else None
 
 
 def _load_yaml(path: Path) -> dict:
@@ -184,10 +234,19 @@ def parse_args(argv=None) -> argparse.Namespace:
                     help="model for BOTH arms: claude alias (haiku/sonnet) or opencode provider/model")
     sp.add_argument("--max-turns", type=int, dest="max_turns", default=None)
     sp.add_argument("--timeout-s", type=int, dest="timeout_s", default=None)
-    sp.add_argument("--out", default=None, help="results directory")
+    sp.add_argument("--out", default=None, help="results directory (overrides results/<run-name>)")
+    sp.add_argument("--run-name", dest="run_name", default=None,
+                    help="unique name for this run; results go to results/<run-name> (default: random id)")
+    sp.add_argument("--aracne-config", dest="aracne_config", default=None,
+                    help="aracne arm's .aracne/config.json overlay: a name in bench/configs/aracne/ or a path")
     sp.add_argument("--resume", action="store_true", help="skip combos already in runs.jsonl")
+    sp.add_argument("--continue", dest="continue_run", default=None, metavar="RUN",
+                    help="continue a prior run by id/name: re-run its errored + not-yet-run steps "
+                         "using that run's saved config snapshot (config flags are ignored)")
     sp.add_argument("--no-grade", action="store_true", dest="no_grade",
                     help="run agents + capture metrics but skip Docker grading")
+    sp.add_argument("--no-analysis", action="store_true", dest="no_analysis",
+                    help="skip the end-of-run LLM results analysis")
     sp.add_argument("--dry-run", action="store_true", dest="dry_run",
                     help="print the run matrix and exit")
     sp.add_argument("--allow-cold", action="store_true", dest="allow_cold",
@@ -204,9 +263,9 @@ def parse_args(argv=None) -> argparse.Namespace:
 def build_config(args: argparse.Namespace) -> dict:
     cfg = dict(DEFAULTS)
     cfg["sources"] = json.loads(json.dumps(DEFAULTS["sources"]))  # deep copy
-    config_path = getattr(args, "config", None)
-    if config_path and Path(config_path).exists():
-        cfg = _deep_merge(cfg, _load_yaml(Path(config_path)))
+    config_path = _resolve_config_path(getattr(args, "config", None))
+    if config_path and config_path.exists():
+        cfg = _deep_merge(cfg, _load_yaml(config_path))
 
     # Use identity checks: drop unset args (None) and unset store_true flags (False),
     # but KEEP zero-valued numerics — `0 == False` would otherwise swallow --seeds 0,
@@ -217,6 +276,10 @@ def build_config(args: argparse.Namespace) -> dict:
         if isinstance(overrides.get(listkey), str):
             overrides[listkey] = [s.strip() for s in overrides[listkey].split(",") if s.strip()]
     cfg = _deep_merge(cfg, overrides)
+    # Runtime-only: the resolved config file (if any), so cmd_run can copy it into the run dir.
+    cfg["config_path"] = str(config_path) if (config_path and config_path.exists()) else None
+    # Runtime-only: the resolved aracne-config overlay (from the YAML or --aracne-config).
+    cfg["aracne_config_path"] = _resolve_aracne_config_path(cfg.get("aracne_config"))
     return cfg
 
 
@@ -245,6 +308,93 @@ def _rewrite(runs_path: Path, rows: list) -> None:
     with runs_path.open("w", encoding="utf-8") as f:
         for r in rows:
             f.write(json.dumps(r) + "\n")
+
+
+def _default_run_id() -> str:
+    """Sortable + human-readable + unique id when --run-name is not given."""
+    ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    return f"run-{ts}-{uuid.uuid4().hex[:6]}"
+
+
+# --------------------------------------------------------------------------- #
+# Run status + --continue (re-run errored / not-yet-run steps from a snapshot)
+# --------------------------------------------------------------------------- #
+
+# Runtime-only / ephemeral keys excluded from the config snapshot saved in run_meta.json.
+_SNAPSHOT_SKIP = {"config_path", "aracne_config_path", "continue_run", "dry_run", "resume", "out"}
+
+
+def _cfg_snapshot(cfg: dict) -> dict:
+    """JSON-safe copy of the effective config (minus ephemeral keys), embedded in run_meta.json
+    at the start of a run so `--continue` can replay it faithfully."""
+    return {k: v for k, v in cfg.items() if k not in _SNAPSHOT_SKIP}
+
+
+def _update_status(out_dir: Path, status: str) -> None:
+    """Patch run_meta.json's status/updated fields (running -> complete | pending)."""
+    mp = out_dir / "run_meta.json"
+    try:
+        m = json.loads(mp.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        m = {}
+    m["status"] = status
+    m["updated"] = datetime.datetime.now().isoformat(timespec="seconds")
+    mp.write_text(json.dumps(m, indent=2), encoding="utf-8")
+
+
+def _continue_dir(cont: str) -> Path:
+    """Resolve a --continue value (run id/name, or a path to a results dir) to that directory."""
+    p = Path(cont)
+    if (p / "run_meta.json").exists():
+        return p
+    return HERE / "results" / cont
+
+
+def _load_snapshot_cfg(out_dir: Path, live: dict) -> tuple[dict, dict]:
+    """Rebuild cfg from a run's saved snapshot so --continue matches the original run exactly.
+
+    Uses run_meta.json's embedded `config` snapshot plus the config.used.yaml /
+    aracne_config.used.json copies saved at the start of that run. A couple of harmless toggles
+    (dry_run / no_analysis) are carried over from the current invocation. Returns (cfg, meta)."""
+    mp = out_dir / "run_meta.json"
+    if not mp.exists():
+        raise SystemExit(f"cannot continue: {out_dir} has no run_meta.json (is the run id/name correct?)")
+    meta = json.loads(mp.read_text(encoding="utf-8"))
+    snap = meta.get("config")
+    if not snap:
+        raise SystemExit(f"cannot continue: {mp} has no saved 'config' snapshot (run predates --continue).")
+    cfg = _deep_merge(json.loads(json.dumps(DEFAULTS)), snap)   # snapshot over a fresh DEFAULTS copy
+    aracne_snap = out_dir / "aracne_config.used.json"
+    cfg["aracne_config_path"] = str(aracne_snap) if aracne_snap.exists() else None
+    used_yaml = out_dir / "config.used.yaml"
+    cfg["config_path"] = str(used_yaml) if used_yaml.exists() else None
+    for k in ("dry_run", "no_analysis"):
+        if live.get(k):
+            cfg[k] = live[k]
+    cfg["run_name"] = meta.get("run_name") or out_dir.name
+    return cfg, meta
+
+
+def _collect_to_grade(all_rows: list[dict], tasks: list, out_dir: Path) -> list[tuple]:
+    """(row, task, arm, patch) tuples for every patched-but-ungraded, non-errored row.
+
+    Covers both freshly-run rows and rows carried over from a --continue, and never re-grades an
+    already-graded row (success is not None), so grading stays correct across continuations."""
+    by_key = {t.key: t for t in tasks}
+    out: list[tuple] = []
+    for r in all_rows:
+        if r.get("error") or not r.get("has_patch") or r.get("success") is not None:
+            continue
+        task = by_key.get(r.get("instance_id"))
+        pp = r.get("patch_path")
+        if not task or not pp:
+            continue
+        try:
+            patch = Path(pp).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        out.append((r, task, r["arm"], patch))
+    return out
 
 
 def _unique_tasks(tasks: list) -> list:
@@ -448,6 +598,16 @@ def cmd_generate(cfg: dict) -> int:
 
 
 def cmd_run(cfg: dict) -> int:
+    # --continue replays a prior run's saved config snapshot, then re-runs only its errored /
+    # not-yet-run steps. It must rebuild cfg before the matrix is built, so handle it first.
+    continuing = bool(cfg.get("continue_run"))
+    out_dir = None
+    meta = None
+    if continuing:
+        out_dir = _continue_dir(cfg["continue_run"])
+        cfg, meta = _load_snapshot_cfg(out_dir, cfg)
+        print(f"Continuing run '{cfg['run_name']}'  <-  {out_dir}")
+
     # OpenCode expects provider/model (e.g. deepseek/deepseek-chat); haiku/sonnet are
     # Claude Code aliases and would fail at the opencode CLI.
     if cfg["run_harness"] == "opencode" and "/" not in cfg["model"]:
@@ -455,7 +615,12 @@ def cmd_run(cfg: dict) -> int:
             f"opencode --run-harness needs a provider/model for --model "
             f"(e.g. deepseek/deepseek-chat); got {cfg['model']!r}.")
     fixtures_root = Path(cfg["fixtures_dir"])
-    tasks = sources.read_manifest(sources.manifest_path(cfg["samples_dir"], cfg["sample_id"]))
+
+    # Continue reads the run's FROZEN manifest snapshot so the task set is identical to the original.
+    if continuing and (out_dir / "manifest.jsonl").exists():
+        tasks = sources.read_manifest(out_dir / "manifest.jsonl")
+    else:
+        tasks = sources.read_manifest(sources.manifest_path(cfg["samples_dir"], cfg["sample_id"]))
     matrix = [(t, arm, seed)
               for t in tasks
               for arm in cfg["arms"]
@@ -469,35 +634,110 @@ def cmd_run(cfg: dict) -> int:
             print(f"  {t.language:<11} {arm:<8} seed{seed}  {t.key}  @ {t.base_commit[:10]}")
         return 0
 
-    out_dir = Path(cfg["out"] or (HERE / "results" / cfg["sample_id"]))
-    out_dir.mkdir(parents=True, exist_ok=True)
+    if not continuing:
+        # Resume needs an explicit target dir; a fresh random id would resume nothing.
+        if cfg["resume"] and not cfg.get("run_name") and not cfg["out"]:
+            raise SystemExit("--resume needs --run-name <id> (or --out <dir>) to locate an existing run.")
+        run_id = cfg.get("run_name") or _default_run_id()
+        cfg["run_name"] = run_id
+
+        # Validate the aracne-arm config overlay up front so a typo/bad JSON fails before the matrix runs.
+        if cfg.get("aracne_config") and not cfg.get("aracne_config_path"):
+            raise SystemExit(
+                f"aracne config {cfg['aracne_config']!r} not found under {ARACNE_CONFIGS_DIR} "
+                f"(pass a name in bench/configs/aracne/ or a path to a JSON file).")
+        if cfg.get("aracne_config_path"):
+            try:
+                json.loads(Path(cfg["aracne_config_path"]).read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError) as e:
+                raise SystemExit(f"aracne config {cfg['aracne_config_path']} is not valid JSON: {e}")
+
+        out_dir = Path(cfg["out"]) if cfg["out"] else (HERE / "results" / run_id)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        print(f"Run: {run_id}  ->  {out_dir}")
+        if cfg.get("aracne_config_path"):
+            print(f"aracne arm config overlay: {cfg['aracne_config']}  ({cfg['aracne_config_path']})")
+
+        # Make the result dir self-contained: snapshot the run's inputs + config at the START.
+        manifest_src = sources.manifest_path(cfg["samples_dir"], cfg["sample_id"])
+        meta = {
+            "run_name": run_id,
+            "sample_id": cfg["sample_id"],
+            "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
+            "status": "running",
+            "run_harness": cfg["run_harness"],
+            "model": cfg["model"],
+            "arms": cfg["arms"],
+            "seeds": cfg["seeds"],
+            "max_turns": cfg["max_turns"],
+            "languages": cfg["languages"],
+            "manifest": str(manifest_src),
+            "config_path": cfg.get("config_path"),
+            "aracne_config": cfg.get("aracne_config"),
+            "aracne_config_path": cfg.get("aracne_config_path"),
+            "cli_args": sys.argv[1:],
+            "config": _cfg_snapshot(cfg),   # replayed verbatim by --continue
+        }
+        (out_dir / "run_meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        if manifest_src.exists():
+            shutil.copy2(manifest_src, out_dir / "manifest.jsonl")
+        if cfg.get("config_path"):
+            shutil.copy2(cfg["config_path"], out_dir / "config.used.yaml")
+        if cfg.get("aracne_config_path"):
+            shutil.copy2(cfg["aracne_config_path"], out_dir / "aracne_config.used.json")
+
+    run_id = cfg["run_name"]
     runs_path = out_dir / "runs.jsonl"
     repos_dir = fixtures_root / "_repos"   # shared with prepare's cache
     work_dir = out_dir / "work"
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    done, all_rows = (_read_done(runs_path) if cfg["resume"] else (set(), []))
-    pending_grade: list[tuple] = []
+    # Decide which matrix cells are already done (and shouldn't be re-run).
+    if continuing:
+        _, prior = _read_done(runs_path)
+        keep = [r for r in prior if not r.get("error")]    # done-OK stay; errored rows get re-run
+        done = {r["run_key"] for r in keep}
+        all_rows = keep
+        _rewrite(runs_path, keep)                          # drop errored rows so they're replaced cleanly
+        print(f"Continue: {len(done)} step(s) already done, {len(matrix) - len(done)} to (re)run "
+              f"(errored steps restart from scratch).")
+    elif cfg["resume"]:
+        done, all_rows = _read_done(runs_path)
+    else:
+        done, all_rows = set(), []
 
+    # Run the matrix, persisting each step immediately. Stop on the first machinery error and
+    # leave the run PENDING so the user can --continue the remaining steps.
+    stopped_error = None
     for i, (task, arm, seed) in enumerate(matrix, 1):
         run_key = f"{task.key}|{arm}|{seed}"
         if run_key in done:
-            print(f"[{i}/{len(matrix)}] skip (resume) {run_key}")
+            print(f"[{i}/{len(matrix)}] skip (done) {run_key}")
             continue
         print(f"[{i}/{len(matrix)}] {task.language:<11} {arm:<8} seed{seed}  {task.key}")
         try:
-            row, patch = runner.run_one(task, arm, seed, cfg, out_dir, repos_dir, work_dir, fixtures_root)
+            row, _patch = runner.run_one(task, arm, seed, cfg, out_dir, repos_dir, work_dir, fixtures_root)
         except Exception as e:  # noqa: BLE001
             row = runner.error_row(task, arm, seed, f"runner crash: {e}")
-            patch = ""
-        _append(runs_path, row)
+        _append(runs_path, row)          # save each step's result right away (crash-safe)
         all_rows.append(row)
-        if patch and patch.strip():
-            pending_grade.append((row, task, arm, patch))
+        if row.get("error"):
+            stopped_error = (run_key, row["error"])
+            break
 
-    if not cfg["no_grade"] and pending_grade:
-        print(f"\nGrading {len(pending_grade)} patched run(s) in Docker ...")
-        grade.grade_all(pending_grade, cfg, out_dir)
+    if stopped_error is not None:
+        _update_status(out_dir, "pending")
+        rk, err = stopped_error
+        print(f"\n[stop] step {rk} errored: {err}")
+        print(f"Run '{run_id}' saved as PENDING ({runs_path}). Continue the remaining steps with:")
+        print(f"  python bench/run_benchmark.py run --continue {run_id}")
+        return 0
+
+    # Completed the matrix with no errors -> grade every patched-but-ungraded run, then report.
+    to_grade = _collect_to_grade(all_rows, tasks, out_dir)
+    if not cfg["no_grade"] and to_grade:
+        print(f"\nGrading {len(to_grade)} patched run(s) in Docker ...")
+        grade.grade_all(to_grade, cfg, out_dir)
         _rewrite(runs_path, all_rows)  # persist success
     elif cfg["no_grade"]:
         print("\nSkipping grading (--no-grade); success left unknown.")
@@ -506,7 +746,16 @@ def cmd_run(cfg: dict) -> int:
     agg = metrics.aggregate(all_rows, cfg, prep=prep)
     report.write_results(agg, all_rows, out_dir)
     report.print_table(agg)
-    print(f"\nSaved: {out_dir/'results.json'} , {out_dir/'summary.csv'} , {runs_path}")
+
+    analysis_text = ""
+    if not cfg.get("no_analysis"):
+        print("\nGenerating results analysis ...")
+        analysis_text = analysis.generate_analysis(agg, cfg, out_dir, meta)
+    htmlreport.write_html(agg, all_rows, meta, analysis_text, out_dir)
+    _update_status(out_dir, "complete")
+
+    print(f"\nSaved: {out_dir/'report.html'} , {out_dir/'results.json'} , "
+          f"{out_dir/'summary.csv'} , {out_dir/'run_meta.json'} , {runs_path}")
     return 0
 
 

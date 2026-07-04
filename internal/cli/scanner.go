@@ -75,6 +75,7 @@ func RunScannerRun(args []string) {
 	// detection (DiffScanFiles below) skips hidden paths from the first tick,
 	// matching what IncrementalScan applies internally.
 	domain.SetActivePathVisibility(domain.BuildPathVisibility(root, cfg.Paths))
+	domain.SetActiveIgnore(domain.BuildIgnoreMatcher(root, cfg.Scan.Ignore))
 	frequency := cfg.Scanner.UpdateFrequency
 	if frequency <= 0 {
 		frequency = 200

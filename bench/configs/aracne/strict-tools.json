@@ -1,0 +1,15 @@
+{
+  "scan": { "mode": "default" },
+  "read": {
+    "max_file_size": 524288,
+    "pipe_passthrough": false
+  },
+  "llm": {
+    "claude_code": {
+      "main_agent": {
+        "mcp_tools": ["read_file", "read_function", "read_struct", "read_interface", "grep", "edit", "write"],
+        "blocked_tools": ["read", "grep", "edit", "write"]
+      }
+    }
+  }
+}

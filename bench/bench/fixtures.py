@@ -129,6 +129,37 @@ def _gen_kinds(cfg: dict) -> list[str]:
     return cfg.get("gen_kinds") or ["function", "method", "struct", "interface"]
 
 
+def _merge_json(base: dict, override: dict) -> dict:
+    """Deep-merge `override` onto `base`: dicts recurse, lists/scalars replace, None is skipped."""
+    out = dict(base)
+    for k, v in override.items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = _merge_json(out[k], v)
+        elif v is not None:
+            out[k] = v
+    return out
+
+
+def apply_aracne_config(worktree, overlay_path) -> None:
+    """Overlay a benchmark-selected aracne config onto the aracne arm's .aracne/config.json.
+
+    Deep-merges the overlay JSON on top of the fixture's already-valid config and writes it
+    back, so a partial overlay tweaks only the keys it names while the config keeps the
+    'sentinel' fields aracne requires (else `arac` would treat it as legacy and overwrite it
+    with defaults). Runs after restore(), before the agent starts, so `arac serve`/`arac guard`
+    read the merged config live. Tolerant of a missing/unreadable base (starts from {})."""
+    cfg_path = Path(worktree) / ".aracne" / "config.json"
+    overlay = json.loads(Path(overlay_path).read_text(encoding="utf-8"))
+    base: dict = {}
+    if cfg_path.exists():
+        try:
+            base = json.loads(cfg_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            base = {}
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.write_text(json.dumps(_merge_json(base, overlay), indent=2), encoding="utf-8")
+
+
 # --------------------------------------------------------------------------- #
 # Lifecycle
 # --------------------------------------------------------------------------- #

@@ -162,14 +162,16 @@ func activePathVisibility() *PathVisibility {
 	return activePathVis
 }
 
-// PathHidden reports whether p is hidden by the active path-visibility filter.
-// It is false (nothing hidden) when no filter is installed.
+// PathHidden reports whether p is excluded from the topology by either the
+// active path-visibility filter (config "paths") or the active scan.ignore
+// matcher. It is false (nothing excluded) when neither is installed.
 func PathHidden(p string) bool {
-	return activePathVisibility().Hidden(p)
+	return activePathVisibility().Hidden(p) || activeIgnoreMatcher().Match(p)
 }
 
-// PathPruneDir reports whether the active filter allows skipping a directory
-// subtree wholesale during a walk (see PathVisibility.PruneDir).
+// PathPruneDir reports whether the active filters allow skipping a directory
+// subtree wholesale during a walk: either the path-visibility filter prunes it
+// (see PathVisibility.PruneDir) or a scan.ignore pattern matches the directory.
 func PathPruneDir(dir string) bool {
-	return activePathVisibility().PruneDir(dir)
+	return activePathVisibility().PruneDir(dir) || activeIgnoreMatcher().MatchDir(dir)
 }

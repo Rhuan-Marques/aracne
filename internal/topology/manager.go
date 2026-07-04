@@ -83,10 +83,12 @@ func (m *TopologyManager) RunReadScan(reg *scanner.Registry, mode helper.ReadSca
 func (m *TopologyManager) applyPathVisibility(root string) {
 	if m.dbPath == "" {
 		domain.SetActivePathVisibility(nil)
+		domain.SetActiveIgnore(nil)
 		return
 	}
 	cfg := helper.LoadConfig(helper.ConfigPath(m.dbPath))
 	domain.SetActivePathVisibility(domain.BuildPathVisibility(root, cfg.Paths))
+	domain.SetActiveIgnore(domain.BuildIgnoreMatcher(root, cfg.Scan.Ignore))
 }
 
 // Scans codebase and writes the complete topology to the database.

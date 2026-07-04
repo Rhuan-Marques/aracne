@@ -46,6 +46,7 @@ func RunCheckUpdates(args []string) {
 	// Respect the config's hidden paths so they never show up as pending updates.
 	cfg := helper.LoadConfig(helper.ConfigPath(dbPath))
 	domain.SetActivePathVisibility(domain.BuildPathVisibility(projectRoot, cfg.Paths))
+	domain.SetActiveIgnore(domain.BuildIgnoreMatcher(projectRoot, cfg.Scan.Ignore))
 
 	manifestPath := helper.ManifestPath(dbPath)
 

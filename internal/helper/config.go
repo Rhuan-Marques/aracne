@@ -45,6 +45,12 @@ const InheritsModel = "<inherits>"
 type ScanSection struct {
 	// Mode is the default mode for the one-shot `arac scan` command.
 	Mode ScanMode `json:"mode"`
+	// Ignore is a list of .gitignore-style glob patterns. Any path matching a
+	// pattern is skipped by the scanner on every front (file discovery, manifest,
+	// and parsing in every mode), so ignored files never enter the topology.
+	// Patterns support *, **, ?, a trailing "/" (directory-only), and float at any
+	// depth unless they contain a "/". There is no "!" negation.
+	Ignore []string `json:"ignore"`
 }
 
 // Configuration for file read operations, including max file size, scan mode, context filtering, and shell command passthrough behavior.
@@ -487,7 +493,7 @@ func DefaultConfig() *Config {
 		return ac
 	}
 	return &Config{
-		Scan:  ScanSection{Mode: ScanModeDefault},
+		Scan:  ScanSection{Mode: ScanModeDefault, Ignore: []string{}},
 		Paths: []domain.PathRule{},
 		Read: ReadSection{
 			MaxFileSize:     512 * 1024,
@@ -712,6 +718,9 @@ func normalizeConfig(c *Config) {
 	}
 	if c.Paths == nil {
 		c.Paths = []domain.PathRule{}
+	}
+	if c.Scan.Ignore == nil {
+		c.Scan.Ignore = []string{}
 	}
 }
 
