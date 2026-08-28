@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"aracne/internal/llm/languages/renderstate"
+
 	"aracne/internal/topology/python"
 )
 
@@ -72,6 +74,7 @@ func FormatPythonDependencyContext(ctx *python.PythonDependencyContext) string {
 // Formats a Python function with its parent class, imports, and context including called functions and used classes.
 func FormatPythonFunctionContext(ctx *python.PythonFunctionContext) string {
 	var b strings.Builder
+	st := renderstate.New()
 
 	b.WriteString("```python\n")
 
@@ -100,23 +103,23 @@ func FormatPythonFunctionContext(ctx *python.PythonFunctionContext) string {
 		for _, full := range []bool{true, false} {
 			for _, cu := range ctx.ClassesUsed {
 				if wantVis(cu.Visibility, full) {
-					renderClassUsage(&b, cu)
+					renderClassUsage(&b, st, cu)
 				}
 			}
 			for _, cf := range ctx.CalledFunctions {
 				if wantVis(cf.Visibility, full) {
-					renderFunc(&b, "## ", cf)
+					renderFunc(&b, st, "## ", cf)
 				}
 			}
 			for _, ev := range ctx.ExtVarsUsed {
 				if wantVis(ev.Visibility, full) {
-					renderExtVar(&b, ev)
+					renderExtVar(&b, st, ev)
 				}
 			}
 		}
 	}
 
-	writeUsedBy(&b, ctx.Incoming)
+	writeUsedBy(&b, st, ctx.Incoming)
 
 	return b.String()
 }
@@ -124,6 +127,7 @@ func FormatPythonFunctionContext(ctx *python.PythonFunctionContext) string {
 // Formats a Python class with its imports, constructor, methods, base classes, and dependencies for LLM context.
 func FormatPythonClassContext(ctx *python.PythonClassContext) string {
 	var b strings.Builder
+	st := renderstate.New()
 
 	b.WriteString("```python\n")
 
@@ -164,23 +168,23 @@ func FormatPythonClassContext(ctx *python.PythonClassContext) string {
 			}
 			for _, m := range ctx.Methods {
 				if wantVis(m.Visibility, full) {
-					renderFunc(&b, "## ", m)
+					renderFunc(&b, st, "## ", m)
 				}
 			}
 			for _, cu := range ctx.ClassesUsed {
 				if wantVis(cu.Visibility, full) {
-					renderClassUsage(&b, cu)
+					renderClassUsage(&b, st, cu)
 				}
 			}
 			for _, ev := range ctx.ExtVarsUsed {
 				if wantVis(ev.Visibility, full) {
-					renderExtVar(&b, ev)
+					renderExtVar(&b, st, ev)
 				}
 			}
 		}
 	}
 
-	writeUsedBy(&b, ctx.Incoming)
+	writeUsedBy(&b, st, ctx.Incoming)
 
 	return b.String()
 }

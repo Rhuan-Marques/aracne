@@ -251,8 +251,10 @@ func PrintID(id ID) {
 	mustRun(t, dir, "scan", "-root", dir)
 
 	out := mustRun(t, dir, "resource", "list", "ID")
-	if !strings.Contains(out, "namedtest.ID") || !strings.Contains(out, "namedtest.ID") {
-		t.Fatalf("expected %sID in search, got:\n%s", "namedtest.", out)
+	// Was `!Contains(x) || !Contains(x)` with both sides identical, so the second half was
+	// dead. Asserting the one thing this test actually checks.
+	if !strings.Contains(out, "namedtest.ID") {
+		t.Fatalf("expected namedtest.ID in search, got:\n%s", out)
 	}
 }
 

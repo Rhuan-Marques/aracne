@@ -17,6 +17,7 @@ import (
 	"aracne/internal/topology"
 	"aracne/internal/topology/domain"
 	"aracne/internal/topology/golang"
+	"aracne/internal/topology/idresolve"
 	"aracne/internal/topology/java"
 	"aracne/internal/topology/javascript"
 	"aracne/internal/topology/python"
@@ -271,7 +272,7 @@ func (r *UniversalReadFile) Name() string { return "read_file" }
 
 // Returns the help text for read_file tool describing its ability to read file source with topology context and optional line range filtering.
 func (r *UniversalReadFile) Description() string {
-	return "Read a file/module source and language-specific topology context. Optionally pass start_line/end_line to read only a specific line range (raw lines, no context)."
+	return "Read a file's source plus its topology context. Pass start_line/end_line for a raw line range instead."
 }
 
 // Returns the parameter schema for read_file tool: required file path, optional 1-indexed start_line and end_line for line range filtering.
@@ -571,25 +572,37 @@ func resolveReadTargetWith(mgr *topology.TopologyManager, name string, matches f
 	if abs, absErr := filepath.Abs(id); absErr == nil && abs != id && tryID(abs) {
 		return candidates[0], "", nil
 	}
-	for id, res := range topo.Resources {
-		if !matches(res) {
-			continue
+	// Beyond an exact ID, hand the query to the shared resolver: it absorbs a wrong root
+	// prefix and the wrong separator convention (the Python/JS "worktree/src/flask/app.X"
+	// vs "flask.app.X" problem), consults the alias table for IDs minted under a previous
+	// id-scheme, and — on a miss — returns ranked suggestions instead of a dead end. A
+	// wrong guess should cost the model a correction, not a whole extra exploration turn.
+	res := idresolve.Resolve(topo, name, idresolve.Options{
+		Filter: matches,
+		Alias:  func(old string) (string, bool) { return helper.ResolveAlias(mgr.DbPath(), old) },
+	})
+	switch {
+	case res.Found():
+		target := res.Resource
+		if target.Language == "" {
+			target.Language = fallbackLanguage
 		}
-		if res.Name == name || id == name {
-			if res.Language == "" {
-				res.Language = fallbackLanguage
+		return readTarget{id: res.ID, res: target}, "", nil
+	case res.Tier == idresolve.TierAmbiguous:
+		for _, c := range res.Candidates {
+			r := topo.Resources[c.ID]
+			if r.Language == "" {
+				r.Language = fallbackLanguage
 			}
-			candidates = append(candidates, readTarget{id: id, res: res})
+			candidates = append(candidates, readTarget{id: c.ID, res: r})
 		}
-	}
-	if len(candidates) == 0 {
-		return readTarget{}, "", fmt.Errorf("resource %q not found in topology", name)
-	}
-	sort.Slice(candidates, func(i, j int) bool { return candidates[i].id < candidates[j].id })
-	if len(candidates) > 1 {
+		sort.Slice(candidates, func(i, j int) bool { return candidates[i].id < candidates[j].id })
 		return readTarget{}, ambiguousTargets(name, candidates), nil
 	}
-	return candidates[0], "", nil
+	if hint := idresolve.FormatCandidates(name, res.Candidates); hint != "" {
+		return readTarget{}, "", fmt.Errorf("resource %q not found in topology. %s", name, hint)
+	}
+	return readTarget{}, "", fmt.Errorf("resource %q not found in topology", name)
 }
 
 // Formats an error message listing multiple resource candidates matching a name query.

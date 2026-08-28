@@ -24,7 +24,11 @@ func TestCommandKeys(t *testing.T) {
 		{"grep x f", true, []string{"grep"}},
 		{"rg x", true, []string{"grep"}},
 		{"sed -i s/a/b/ f", true, []string{"edit"}},
-		{"awk '{print}' f", true, []string{"edit"}},
+		// Non-mutating sed/awk read and filter; they are classified as reads, so
+		// a DIRECT file read is still gated (like `head -20 f`) but a piped one
+		// is exempt (see the pipe-exemption block below).
+		{"awk '{print}' f", true, []string{"read"}},
+		{"sed -n 1,10p f.go", true, []string{"read"}},
 		{"ls; grep x f", true, []string{"grep"}},
 		{"true && grep x", true, []string{"grep"}},
 		{"FOO=1 grep x", true, []string{"grep"}},
@@ -39,19 +43,39 @@ func TestCommandKeys(t *testing.T) {
 
 		// Pipe exemption (exempt=true): a read/grep command fed by `|` views or
 		// filters command output and is skipped; the producer side and direct
-		// file reads are still classified, and edit (sed/awk) is never exempt.
+		// file reads are still classified.
 		{"git log | head -50", true, nil},
 		{"cmd | tail", true, nil},
 		{"cmd | grep err", true, nil},
 		{"kubectl logs x | grep e | tail", true, nil},
 		{"cat f | grep x", true, []string{"read"}},
 		{"a || cat f", true, []string{"read"}},
-		{"cmd | sed s/a/b/", true, []string{"edit"}},
+		// `git log --oneline | sed -n '30,60p'` is a read of command output with
+		// no file operand and no -i. Refusing it cost the agent a turn to be
+		// told no to a legal request.
+		{"cmd | sed s/a/b/", true, nil},
+		{"git log --oneline | sed -n 30,60p", true, nil},
+		{"cmd | awk '{print $2}'", true, nil},
+		// stderr duplication is not an output redirect
+		{"cmd 2>&1 | sed -n 1p", true, nil},
+
+		// ...but a mutating stream editor is an edit however it is invoked.
+		{"cmd | sed -i s/a/b/ f", true, []string{"edit"}},
+		{"sed --in-place s/a/b/ f", true, []string{"edit"}},
+		{"sed -i.bak s/a/b/ f", true, []string{"edit"}},
+		{"sed -ni s/a/b/ f", true, []string{"edit"}},
+		{"awk -i inplace '{print}' f", true, []string{"edit"}},
+		// writing the output to a file is an edit too
+		{"sed s/a/b/ in.go > out.go", true, []string{"edit"}},
+		{"cmd | sed s/a/b/ >> out.go", true, []string{"edit"}},
+		// a `>` inside quotes is part of the expression, not a redirect
+		{"sed 's/a>b/c/' f", true, []string{"read"}},
 
 		// Exemption off restores strict classification of piped reads.
 		{"git log | head -50", false, []string{"read"}},
 		{"cmd | grep err", false, []string{"grep"}},
 		{"cat f | grep x", false, []string{"read", "grep"}},
+		{"cmd | sed -n 1p", false, []string{"read"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.command, func(t *testing.T) {
@@ -96,6 +120,17 @@ func TestDecideGuard(t *testing.T) {
 		{"piped tail exempt", "Bash", bash("cmd | tail"), set("read"), true, false, ""},
 		{"piped tail strict", "Bash", bash("cmd | tail"), set("read"), false, true, "blocked_tools: read"},
 		{"piped grep exempt", "Bash", bash("cmd | grep x"), set("grep"), true, false, ""},
+
+		// The reported defect: a piped, non-mutating sed is a read of command
+		// output. It must not be denied even when `edit` is blocked outright.
+		{"piped sed not denied as edit", "Bash", bash("git log --oneline | sed -n 30,60p"), set("edit"), true, false, ""},
+		{"piped sed exempt as read", "Bash", bash("git log | sed -n 30,60p"), set("read"), true, false, ""},
+		{"piped awk not denied as edit", "Bash", bash("cmd | awk '{print $2}'"), set("edit"), true, false, ""},
+		// ...but in-place sed is still an edit, and a direct file read is still
+		// gated exactly like `head -20 f`.
+		{"in-place sed still blocked", "Bash", bash("sed -i s/a/b/ f.go"), set("edit"), true, true, "blocked_tools: edit"},
+		{"redirecting sed still blocked", "Bash", bash("sed s/a/b/ in.go > out.go"), set("edit"), true, true, "blocked_tools: edit"},
+		{"direct sed read gated", "Bash", bash("sed -n 1,20p f.go"), set("read"), true, true, "blocked_tools: read"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

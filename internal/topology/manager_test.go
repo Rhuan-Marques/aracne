@@ -282,7 +282,10 @@ func TestPyUpdateFileAddsNewModule(t *testing.T) {
 		t.Fatalf("expected new module %s to be present", newPath)
 	}
 
-	funcID := python.FunctionID(filepath.Base(root) + "/added.added")
+	// id-scheme 2: module paths are repo-relative, so the ID no longer carries the
+	// project-directory base name (it named the directory the checkout sat in, which
+	// appears nowhere in the source and made every ID unguessable).
+	funcID := python.FunctionID("added.added")
 	if _, ok := gt.Functions[funcID]; !ok {
 		t.Fatalf("expected new function %s to be present", funcID)
 	}

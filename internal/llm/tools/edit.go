@@ -28,29 +28,36 @@ func (e *Edit) Name() string {
 
 // Returns the description string for the Edit tool, explaining it replaces exact text in a file with automatic topology updates.
 func (e *Edit) Description() string {
-	return "Edit a file by replacing exact text with new text. Provide the file path, the exact string to find, and the replacement. The project topology is automatically updated."
+	return "Replace exact text in a file, or delete it by passing an empty new_string. " +
+		"old_string must match exactly once unless replace_all is set. The topology is updated automatically."
 }
 
-// Returns the parameter schema for the Edit tool, defining file_path, old_string, and new_string as required string parameters.
+// Returns the parameter schema for the Edit tool. new_string stays required at
+// the schema level even though an empty value is legal: JSON Schema `required`
+// enforces presence, not content, so keeping it prevents an omitted field from
+// silently deleting code.
 func (e *Edit) Parameters() []Parameter {
 	return []Parameter{
 		{Name: "file_path", Type: "string", Description: "The absolute path to the file to edit", Required: true},
-		{Name: "old_string", Type: "string", Description: "The exact text to search for and replace", Required: true},
-		{Name: "new_string", Type: "string", Description: "The replacement text", Required: true},
+		{Name: "old_string", Type: "string", Description: "The exact text to search for and replace. Must appear exactly once unless replace_all is true", Required: true},
+		{Name: "new_string", Type: "string", Description: "The replacement text. Pass an empty string to delete the matched text", Required: true},
+		{Name: "replace_all", Type: "boolean", Description: "Replace every occurrence instead of requiring a unique match (default false)", Required: false},
 	}
 }
 
 // Executes the edit tool: reads a file, replaces the first occurrence of old_string with new_string, writes it back, and if a topology manager is available, triggers an update-file to refresh the topology with any resulting warnings.
 func (e *Edit) Run(args json.RawMessage) (string, error) {
 	var params struct {
-		FilePath  string `json:"file_path"`
-		OldString string `json:"old_string"`
-		NewString string `json:"new_string"`
+		FilePath   string `json:"file_path"`
+		OldString  string `json:"old_string"`
+		NewString  string `json:"new_string"`
+		ReplaceAll bool   `json:"replace_all"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
 
+	// new_string is deliberately not checked: an empty one is a deletion.
 	if params.FilePath == "" || params.OldString == "" {
 		return "", fmt.Errorf("missing required arguments: file_path, old_string")
 	}
@@ -59,10 +66,10 @@ func (e *Edit) Run(args json.RawMessage) (string, error) {
 	// other's changes. When mgr is nil (no topology) there is nothing to lock
 	// or update, so apply directly.
 	if e.mgr == nil {
-		return e.apply(params.FilePath, params.OldString, params.NewString, false)
+		return e.apply(params.FilePath, params.OldString, params.NewString, params.ReplaceAll, false)
 	}
 	return e.mgr.WithFileLock(params.FilePath, func(waited bool) (string, error) {
-		return e.apply(params.FilePath, params.OldString, params.NewString, waited)
+		return e.apply(params.FilePath, params.OldString, params.NewString, params.ReplaceAll, waited)
 	})
 }
 
@@ -70,7 +77,7 @@ func (e *Edit) Run(args json.RawMessage) (string, error) {
 // whether this edit had to queue behind another agent's edit of the same file;
 // if so and the old_string no longer matches, that other agent almost certainly
 // changed the file, so the error tells this agent to re-read and retry.
-func (e *Edit) apply(filePath, oldString, newString string, waited bool) (string, error) {
+func (e *Edit) apply(filePath, oldString, newString string, replaceAll, waited bool) (string, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return "", fmt.Errorf("read file: %w", err)
@@ -90,7 +97,20 @@ func (e *Edit) apply(filePath, oldString, newString string, waited bool) (string
 		content = normalizedContent
 	}
 
+	// Require a unique match unless the caller opted into replacing every one.
+	// Silently taking the first of several matches is a wrong edit that looks
+	// like a successful one, and it is worse for a deletion than a replacement.
+	// The count runs on the same (possibly CRLF-normalized) content used for
+	// the replacement below, and nothing is written when it fails.
+	occurrences := strings.Count(content, oldString)
+	if occurrences > 1 && !replaceAll {
+		return "", fmt.Errorf("old_string matched %d times in %s — include more surrounding context so it matches exactly once, or pass replace_all: true", occurrences, filePath)
+	}
+
 	newContent := strings.Replace(content, oldString, newString, 1)
+	if replaceAll {
+		newContent = strings.ReplaceAll(content, oldString, newString)
+	}
 	if err := os.WriteFile(filePath, []byte(newContent), 0644); err != nil {
 		return "", fmt.Errorf("write file: %w", err)
 	}

@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 
 	"aracne/internal/topology/domain"
@@ -47,6 +49,16 @@ func WriteDb(topo *domain.Topology, path string) error {
 			return err
 		}
 		if _, err := tx.Exec("INSERT INTO info VALUES ('languages', ?)", string(languagesJSON)); err != nil {
+			return err
+		}
+		// Stamp the id-scheme. This is the ONLY write that may do so: WriteDb regenerates
+		// every ID from the source, so the database provably holds the current grammar.
+		// An incremental write must never stamp — it leaves untouched files' IDs alone, so
+		// claiming the current scheme there would mark a half-legacy database as migrated
+		// and suppress the remap that fixes it. Note the DELETE FROM info above drops any
+		// previous stamp, so this insert is what keeps a rescanned database self-describing.
+		if _, err := tx.Exec("INSERT INTO info VALUES (?, ?)",
+			infoIDSchemeKey, strconv.Itoa(IDSchemeVersion)); err != nil {
 			return err
 		}
 
@@ -105,8 +117,29 @@ func WriteDb(topo *domain.Topology, path string) error {
 			}
 		}
 
-		for pat, msg := range topo.Errors {
-			if _, err := tx.Exec("INSERT INTO info VALUES (?, ?)", "error:"+pat, msg); err != nil {
+		// Bounded, and deterministic about WHICH ones survive.
+		//
+		// `info` is a key/value table that also serves as the scan error log, and it was
+		// unbounded: a repo whose JS and TS scanners produce colliding ids wrote one row
+		// per collision. aracne's own self-scan accumulated 23,902 of them, which is why
+		// that database was 7.5 MB of mostly duplicate error text. Nothing reads more than
+		// a handful, so keep a sample and record the true count.
+		pats := make([]string, 0, len(topo.Errors))
+		for pat := range topo.Errors {
+			pats = append(pats, pat)
+		}
+		sort.Strings(pats)
+		for i, pat := range pats {
+			if i >= maxStoredErrors {
+				break
+			}
+			if _, err := tx.Exec("INSERT INTO info VALUES (?, ?)", "error:"+pat, topo.Errors[pat]); err != nil {
+				return err
+			}
+		}
+		if len(pats) > maxStoredErrors {
+			if _, err := tx.Exec("INSERT INTO info VALUES (?, ?)", "error_count",
+				strconv.Itoa(len(pats))); err != nil {
 				return err
 			}
 		}
@@ -160,6 +193,15 @@ func createSchema(db *sql.DB) error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_bugs_node ON bugs(node_id);
 	CREATE INDEX IF NOT EXISTS idx_bugs_state ON bugs(state);
+
+	-- Maps a resource ID from a PREVIOUS id-scheme to its current one, so an agent (or a
+	-- saved note, or a stale transcript) that still uses an old ID keeps resolving after a
+	-- scheme change. Populated by the id-scheme remap; never by a normal scan.
+	CREATE TABLE IF NOT EXISTS resource_alias (
+		old_id TEXT PRIMARY KEY,
+		new_id TEXT NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_alias_new ON resource_alias(new_id);
 	`
 	_, err := db.Exec(ddl)
 	if err != nil {
@@ -176,6 +218,12 @@ func createSchema(db *sql.DB) error {
 //
 // v1: the "type" resource kind (structs/classes) was renamed to "struct"; rewrite
 // any rows persisted under the old value.
+//
+// v2: introduces the resource_alias table and stamps the database with the id-scheme it
+// was built under. This step deliberately does NOT rewrite any ID: recomputing IDs needs
+// the scanners and the source tree, neither of which is available here. It only makes the
+// database say which scheme it holds, so the next `arac scan` can notice it is behind and
+// run the remap (see IDSchemeVersion / ReadIDScheme).
 func applyMigrations(db *sql.DB) error {
 	var version int
 	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
@@ -189,7 +237,215 @@ func applyMigrations(db *sql.DB) error {
 			return err
 		}
 	}
+	if version < 2 {
+		if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS resource_alias (
+			old_id TEXT PRIMARY KEY,
+			new_id TEXT NOT NULL
+		)`); err != nil {
+			return err
+		}
+		if _, err := db.Exec(
+			"CREATE INDEX IF NOT EXISTS idx_alias_new ON resource_alias(new_id)"); err != nil {
+			return err
+		}
+		// An existing database predates the scheme stamp, so by definition it holds
+		// scheme 1. A brand-new database is stamped by the scanner that fills it.
+		var n int
+		if err := db.QueryRow("SELECT COUNT(*) FROM resources").Scan(&n); err == nil && n > 0 {
+			if _, err := db.Exec(
+				"INSERT OR IGNORE INTO info (key, value) VALUES (?, ?)",
+				infoIDSchemeKey, "1"); err != nil {
+				return err
+			}
+		}
+		if _, err := db.Exec(
+			fmt.Sprintf("PRAGMA user_version = %d", latestSchemaVersion)); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// maxStoredErrors bounds the scan-error sample kept in `info`. See WriteDb.
+const maxStoredErrors = 100
+
+// latestSchemaVersion is the user_version applyMigrations brings a database up to. Bump it
+// in the same commit as a new migration step.
+const latestSchemaVersion = 2
+
+// IDSchemeVersion is the resource-ID grammar this binary produces. Bump it in the same
+// commit as any change to how a scanner builds IDs, so existing databases are detected as
+// stale and remapped instead of silently half-matching.
+//
+//	1 — Python/JS/TS module paths rooted at filepath.Base(projectRoot) with "/" separators;
+//	    Rust rooted at the directory basename when no Cargo.toml [package] exists.
+//	2 — Python/JS/TS module paths are repo-relative (the project-directory base name is
+//	    gone); Rust uses the literal "crate" when there is no Cargo [package]. Go and Java
+//	    are unchanged — they were already rooted in something the source states.
+const IDSchemeVersion = 2
+
+// infoIDSchemeKey is the `info` row holding the scheme a database was built under.
+const infoIDSchemeKey = "id_scheme"
+
+// ReadIDScheme reports the id-scheme a database was built under, and whether it was
+// stamped at all. An unstamped database with resources predates the stamp and is scheme 1;
+// an empty database reports the current scheme because the next scan will fill it.
+func ReadIDScheme(dbPath string) (scheme int, stamped bool, err error) {
+	err = withSQLiteRead(dbPath, func(db *sql.DB) error {
+		var val string
+		row := db.QueryRow("SELECT value FROM info WHERE key = ?", infoIDSchemeKey)
+		switch scanErr := row.Scan(&val); {
+		case scanErr == sql.ErrNoRows:
+			var n int
+			if e := db.QueryRow("SELECT COUNT(*) FROM resources").Scan(&n); e != nil {
+				return e
+			}
+			scheme, stamped = IDSchemeVersion, false
+			if n > 0 {
+				scheme = 1
+			}
+			return nil
+		case scanErr != nil:
+			return scanErr
+		}
+		stamped = true
+		v, convErr := strconv.Atoi(strings.TrimSpace(val))
+		if convErr != nil {
+			return fmt.Errorf("unreadable %s value %q: %w", infoIDSchemeKey, val, convErr)
+		}
+		scheme = v
+		return nil
+	})
+	return scheme, stamped, err
+}
+
+// WriteIDScheme stamps the database with an id-scheme version.
+func WriteIDScheme(dbPath string, scheme int) error {
+	return withSQLiteWrite(dbPath, func(db *sql.DB) error {
+		_, err := db.Exec(
+			"INSERT INTO info (key, value) VALUES (?, ?) "+
+				"ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+			infoIDSchemeKey, strconv.Itoa(scheme))
+		return err
+	})
+}
+
+// WriteResourceAliases records old-ID -> new-ID mappings from an id-scheme remap.
+// Existing rows for the same old ID are replaced, and aliases that would point at
+// themselves are skipped.
+func WriteResourceAliases(dbPath string, aliases map[string]string) (int64, error) {
+	if len(aliases) == 0 {
+		return 0, nil
+	}
+	var count int64
+	err := withSQLiteWrite(dbPath, func(db *sql.DB) error {
+		tx, err := db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		stmt, err := tx.Prepare(
+			"INSERT INTO resource_alias (old_id, new_id) VALUES (?, ?) " +
+				"ON CONFLICT(old_id) DO UPDATE SET new_id = excluded.new_id")
+		if err != nil {
+			return err
+		}
+		defer stmt.Close()
+		olds := make([]string, 0, len(aliases))
+		for old := range aliases {
+			olds = append(olds, old)
+		}
+		sort.Strings(olds)
+		for _, old := range olds {
+			if old == "" || aliases[old] == "" || old == aliases[old] {
+				continue
+			}
+			if _, err := stmt.Exec(old, aliases[old]); err != nil {
+				return err
+			}
+			count++
+		}
+		return tx.Commit()
+	})
+	return count, err
+}
+
+// RemapBugNodes rewrites bugs.node_id through an old -> new ID mapping.
+//
+// Bugs reference resources by ID with no foreign key, and CleanupOrphanedBugs deletes any
+// bug whose node is absent from the topology. Across an id-scheme change EVERY node id is
+// absent under its old spelling, so without this every open bug would be silently deleted
+// by the very rescan that migrated the database.
+func RemapBugNodes(dbPath string, aliases map[string]string) (int64, error) {
+	if len(aliases) == 0 {
+		return 0, nil
+	}
+	var count int64
+	err := withSQLiteWrite(dbPath, func(db *sql.DB) error {
+		tx, err := db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		stmt, err := tx.Prepare("UPDATE bugs SET node_id = ? WHERE node_id = ?")
+		if err != nil {
+			return err
+		}
+		defer stmt.Close()
+		olds := make([]string, 0, len(aliases))
+		for old := range aliases {
+			olds = append(olds, old)
+		}
+		sort.Strings(olds)
+		for _, old := range olds {
+			if old == aliases[old] {
+				continue
+			}
+			res, err := stmt.Exec(aliases[old], old)
+			if err != nil {
+				return err
+			}
+			n, err := res.RowsAffected()
+			if err != nil {
+				return err
+			}
+			count += n
+		}
+		return tx.Commit()
+	})
+	return count, err
+}
+
+// ResolveAlias maps a legacy resource ID to its current one. Returns ("", false) when the
+// ID has no alias. Aliases are followed transitively (bounded) so a database migrated
+// twice still resolves IDs from before the first migration.
+func ResolveAlias(dbPath, oldID string) (string, bool) {
+	if oldID == "" {
+		return "", false
+	}
+	var out string
+	err := withSQLiteRead(dbPath, func(db *sql.DB) error {
+		cur := oldID
+		for hops := 0; hops < 8; hops++ {
+			var next string
+			row := db.QueryRow("SELECT new_id FROM resource_alias WHERE old_id = ?", cur)
+			if scanErr := row.Scan(&next); scanErr != nil {
+				break
+			}
+			if next == "" || next == cur {
+				break
+			}
+			cur = next
+		}
+		if cur != oldID {
+			out = cur
+		}
+		return nil
+	})
+	if err != nil || out == "" {
+		return "", false
+	}
+	return out, true
 }
 
 // Adds a language column to the resources table if it doesn't exist.
@@ -270,9 +526,17 @@ func ReadDb(path string) (*domain.Topology, error) {
 		if err != nil {
 			return err
 		}
-		resourceQuery := "SELECT id, kind, name, description, properties_json, starts_at, ends_at, loc_path FROM resources"
+		// COALESCE the nullable text columns: `description` and `properties_json` are
+		// declared without NOT NULL, and scanning a NULL into a Go string fails with
+		// "converting NULL to string is unsupported" — which would make a database
+		// written by anything other than our own writers unreadable rather than merely
+		// incomplete.
+		resourceQuery := "SELECT id, kind, name, COALESCE(description, ''), " +
+			"COALESCE(properties_json, ''), starts_at, ends_at, COALESCE(loc_path, '') FROM resources"
 		if hasResourceLanguage {
-			resourceQuery = "SELECT id, kind, name, language, description, properties_json, starts_at, ends_at, loc_path FROM resources"
+			resourceQuery = "SELECT id, kind, name, COALESCE(language, ''), " +
+				"COALESCE(description, ''), COALESCE(properties_json, ''), " +
+				"starts_at, ends_at, COALESCE(loc_path, '') FROM resources"
 		}
 		resRows, err := db.Query(resourceQuery)
 		if err != nil {
@@ -382,11 +646,79 @@ func ReadDb(path string) (*domain.Topology, error) {
 }
 
 // Updates a resource's description in the database.
+//
+// `kind`, when non-empty, is enforced rather than ignored: an update aimed at the wrong
+// kind is a caller bug and must not silently land on a same-named resource. A write that
+// matches no row returns an error too — previously this call succeeded silently against a
+// nonexistent ID, so a description generator working from stale or mis-formatted IDs
+// would report success while storing nothing.
 func UpdateDescription(dbPath string, kind domain.ResourceKind, id string, description string) error {
 	return withSQLiteWrite(dbPath, func(db *sql.DB) error {
-		_, err := db.Exec("UPDATE resources SET description = ? WHERE id = ?", description, id)
-		return err
+		query := "UPDATE resources SET description = ? WHERE id = ?"
+		args := []interface{}{description, id}
+		if kind != "" {
+			query += " AND kind = ?"
+			args = append(args, string(kind))
+		}
+		result, err := db.Exec(query, args...)
+		if err != nil {
+			return err
+		}
+		n, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			if kind != "" {
+				return fmt.Errorf("no %s resource with id %q", kind, id)
+			}
+			return fmt.Errorf("no resource with id %q", id)
+		}
+		return nil
 	})
+}
+
+// UpdateDescriptions applies many description writes in ONE transaction and returns the
+// number of rows changed. Restoring a sidecar can touch tens of thousands of rows, and one
+// transaction per row makes that minutes rather than seconds.
+//
+// Unlike UpdateDescription this does not fail on a miss: the caller (a sidecar import) has
+// already resolved every id against the topology and reports its own per-tier accounting.
+func UpdateDescriptions(dbPath string, descriptions map[string]string) (int64, error) {
+	var count int64
+	if len(descriptions) == 0 {
+		return 0, nil
+	}
+	err := withSQLiteWrite(dbPath, func(db *sql.DB) error {
+		tx, err := db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		stmt, err := tx.Prepare("UPDATE resources SET description = ? WHERE id = ?")
+		if err != nil {
+			return err
+		}
+		defer stmt.Close()
+		ids := make([]string, 0, len(descriptions))
+		for id := range descriptions {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids) // deterministic write order
+		for _, id := range ids {
+			res, err := stmt.Exec(descriptions[id], id)
+			if err != nil {
+				return err
+			}
+			n, err := res.RowsAffected()
+			if err != nil {
+				return err
+			}
+			count += n
+		}
+		return tx.Commit()
+	})
+	return count, err
 }
 
 // Clears descriptions from resources in the database, optionally filtered by resource kind.

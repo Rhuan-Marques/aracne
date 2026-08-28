@@ -340,8 +340,19 @@ func (ba *bodyAnalyzer) resolveCallExpr(call *ast.CallExpr) {
 			return
 		}
 
+		// A package-level variable of function type is a legitimate call target
+		// (var Format = func(s string) string { ... }). resolveIdentRef records
+		// the same uses_extvar edge when it walks the identifier, and records no
+		// uses_package edge, so mirror it exactly here. What is load-bearing is
+		// the return: without it a node that exists is reported as missing.
+		pkgVarID := golang.ExternalVarID(string(ba.pr.PkgPath) + "." + fun.Name)
+		if _, exists := ba.gt.ExternalVars[pkgVarID]; exists {
+			ba.add(golang.ConnUsesExtVar, string(pkgVarID))
+			return
+		}
+
 		ba.addWarning(domain.WarnUseMissingNode, string(pkgFuncID),
-			fmt.Sprintf("function %s calls %s which does not exist in package %s", ba.callerID, fun.Name, ba.pr.PkgPath))
+			fmt.Sprintf("function %s calls %s which does not exist in package %s", ba.callerID, pkgFuncID, ba.pr.PkgPath))
 
 	case *ast.SelectorExpr:
 		switch x := fun.X.(type) {
@@ -367,6 +378,33 @@ func (ba *bodyAnalyzer) resolveQualifiedCall(xName, selName string) {
 		if _, exists := ba.gt.NamedTypes[namedTargetID]; exists {
 			ba.add(golang.ConnUsesNamedType, string(namedTargetID))
 			ba.add(golang.ConnUsesPkg, string(internalPkg))
+			return
+		}
+
+		// pkg.T(x) is a conversion, not a call. resolveCompositeLit already
+		// resolves the pkg.T{...} form to the same pair of edges; match it.
+		structTargetID := golang.StructID(string(internalPkg) + "." + selName)
+		if _, exists := ba.gt.Structs[structTargetID]; exists {
+			ba.add(golang.ConnUsesStruct, string(structTargetID))
+			ba.add(golang.ConnUsesPkg, string(internalPkg))
+			return
+		}
+
+		ifaceTargetID := golang.InterfaceID(string(internalPkg) + "." + selName)
+		if _, exists := ba.gt.Interfaces[ifaceTargetID]; exists {
+			ba.add(golang.ConnUsesIface, string(ifaceTargetID))
+			ba.add(golang.ConnUsesPkg, string(internalPkg))
+			return
+		}
+
+		// A func-typed package-level var in another package (var PrepareCmd =
+		// func(*exec.Cmd) Runnable) is called as run.PrepareCmd(cmd). Unlike the
+		// branches above this deliberately adds NO uses_package edge, mirroring
+		// resolveUseMissingWarning's extvar case, which is the incremental path
+		// this cold path has to stay byte-identical to.
+		extVarTargetID := golang.ExternalVarID(string(internalPkg) + "." + selName)
+		if _, exists := ba.gt.ExternalVars[extVarTargetID]; exists {
+			ba.add(golang.ConnUsesExtVar, string(extVarTargetID))
 			return
 		}
 

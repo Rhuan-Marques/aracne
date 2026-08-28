@@ -103,6 +103,17 @@ func FromGeneric(topo *domain.Topology) *JavaScriptTopology {
 			if ex, ok := res.Properties["exported"]; ok && ex != nil {
 				c.Exported, _ = ex.(bool)
 			}
+			// Restore members folded in from a same-name interface (TypeScript
+			// declaration merging). ToGeneric writes these into the "methods"/
+			// "properties" props; without reading them back the FromGeneric ->
+			// ToGeneric round-trip in an incremental UpdateFile would silently drop
+			// them from every unchanged merged class.
+			if methods, ok := res.Properties["methods"]; ok {
+				jsonConvert(methods, &c.MergedInterfaceMethods)
+			}
+			if props, ok := res.Properties["properties"]; ok {
+				jsonConvert(props, &c.MergedInterfaceProperties)
+			}
 			gt.Classes[c.ID] = c
 
 		case domain.ResourceInterface:

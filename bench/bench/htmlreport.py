@@ -47,6 +47,30 @@ def _rate_cell(st: dict) -> str:
     return f"<strong>{sr:.0%}</strong> <span class='muted'>({solved}/{graded})</span>{ci_s}"
 
 
+def _timeout_cell(st: dict) -> str:
+    """Timeouts are their own outcome — shown next to, never inside, the success rate."""
+    n = st.get("n_timeout") or 0
+    if not n:
+        return "<span class='muted'>0</span>"
+    parts = []
+    if st.get("n_timeout_agent"):
+        parts.append(f"{st['n_timeout_agent']} agent")
+    if st.get("n_timeout_turns"):
+        parts.append(f"{st['n_timeout_turns']} turns")
+    if st.get("n_timeout_grading"):
+        parts.append(f"{st['n_timeout_grading']} grading")
+    detail = f" <span class='muted'>({', '.join(parts)})</span>" if parts else ""
+    return f"<strong>{n}</strong>{detail}"
+
+
+def _delta_timeout_td(delta: dict | None) -> str:
+    v = (delta or {}).get("timeout_abs")
+    if not v:
+        return "<td class='delta neutral'>&ndash;</td>"
+    # Fewer timeouts is better.
+    return f"<td class='delta {'good' if v < 0 else 'bad'}'>{v:+d}</td>"
+
+
 def _delta_class(v, good_when_negative: bool) -> str:
     if v is None or v == 0:
         return "neutral"
@@ -89,8 +113,8 @@ def _arms_table(arms: dict, delta: dict | None) -> str:
 
     add("Success rate", lambda st: f"<td>{_rate_cell(st)}</td>",
         _delta_success_td(delta), emph=True)
-    add("Mean input tokens", lambda st: f"<td>{_k(st.get('mean_input_tokens'))}</td>",
-        _delta_pct_td(delta.get("input_tokens_pct") if delta else None, True))
+    add("Mean context tokens", lambda st: f"<td>{_k(st.get('mean_context_tokens'))}</td>",
+        _delta_pct_td(delta.get("context_tokens_pct") if delta else None, True), emph=True)
     add("Mean output tokens", lambda st: f"<td>{_k(st.get('mean_output_tokens'))}</td>",
         _delta_pct_td(delta.get("output_tokens_pct") if delta else None, True))
     add("Mean total tokens", lambda st: f"<td>{_k(st.get('mean_total_tokens'))}</td>",
@@ -99,6 +123,8 @@ def _arms_table(arms: dict, delta: dict | None) -> str:
         _delta_pct_td(delta.get("turns_pct") if delta else None, True))
     add("Mean wall (s)", lambda st: f"<td>{_num(st.get('mean_wall_s'))}</td>",
         _delta_pct_td(delta.get("wall_pct") if delta else None, True))
+    add("Timeouts", lambda st: f"<td>{_timeout_cell(st)}</td>",
+        _delta_timeout_td(delta))
     add("Runs (graded)", lambda st: f"<td class='muted'>{st.get('n_runs')} ({st.get('n_graded')})</td>",
         "<td class='delta neutral'>&ndash;</td>")
 
@@ -157,7 +183,7 @@ def _tiles(overall: dict) -> str:
     else:
         tiles.append(tile("Success rate Δ", "&ndash;", "neutral", "need both arms graded"))
 
-    for label, key in (("Total tokens Δ", "total_tokens_pct"),
+    for label, key in (("Context tokens Δ", "context_tokens_pct"),
                        ("Turns Δ", "turns_pct"),
                        ("Wall time Δ", "wall_pct")):
         v = d.get(key) if d else None
@@ -267,6 +293,8 @@ def _chips(meta: dict) -> str:
         ("seeds", meta.get("seeds")),
         ("arms", ", ".join(meta.get("arms", []) or [])),
         ("max_turns", meta.get("max_turns")),
+        # Shown because >1 means wall-clock was measured under contention.
+        ("parallel", meta.get("run_parallel") if (meta.get("run_parallel") or 1) > 1 else None),
         ("time", meta.get("timestamp")),
     ]
     return "".join(f"<span class='chip'><b>{_esc(k)}</b> {_esc(v)}</span>"
@@ -286,9 +314,112 @@ def _lang_sections(agg: dict) -> str:
     return f"<div class='langgrid'>{''.join(blocks)}</div>"
 
 
+def _sig_td(significant: bool) -> str:
+    cls = "good" if significant else "neutral"
+    label = "yes" if significant else "no"
+    return f"<td class='delta {cls}'>{label}</td>"
+
+
+def _ratio_rows(eff: dict) -> str:
+    """One row per efficiency endpoint: ratio, % change, CI, significance."""
+    rows = []
+    for name, e in (eff or {}).items():
+        if not e:
+            continue
+        ci = e.get("pct_change_ci")
+        ci_s = f"[{ci[0]:+.0f}%, {ci[1]:+.0f}%]" if ci else "&ndash;"
+        pct = e.get("pct_change")
+        rows.append(
+            f"<tr><td class='metric'>{_esc(name.replace('_', ' '))}</td>"
+            f"<td>{e.get('ratio')}&times;</td>"
+            f"{_delta_pct_td(pct, True)}"
+            f"<td class='muted'>{ci_s}</td>"
+            f"{_sig_td(bool(e.get('significant')))}"
+            f"<td class='muted'>{e.get('n_pairs')} / {e.get('n_clusters')}</td></tr>")
+    return "".join(rows)
+
+
+def _paired_table(pr: dict | None, title: str) -> str:
+    """The within-task analysis — the block that actually supports a claim.
+
+    It lived only in console output and results.json before; the HTML report showed the
+    pooled means and the prose and nothing else, which is how a reader could come away
+    with the pooled number and never see that it was two opposite effects cancelling.
+    """
+    if not pr or not pr.get("n_pairs"):
+        return f"<div class='card'><b>{_esc(title)}</b>" \
+               "<p class='muted'>No matched task pairs.</p></div>"
+    s_ = pr["solve"]
+    head = (f"<p class='muted'>{pr['n_pairs']} matched pairs over "
+            f"<b>{pr['effective_n']}</b> distinct repositories "
+            f"(effective N; unpaired dropped {pr['n_unpaired']}). "
+            f"A ratio is a result only when its 95% CI excludes 1.0.</p>")
+    solve = (f"<p class='muted'>solve: both {s_['both_solved']}, aracne-only "
+             f"{s_['aracne_only']}, baseline-only {s_['baseline_only']}, neither "
+             f"{s_['neither_solved']} &mdash; McNemar exact p = {s_['mcnemar_p']}; "
+             f"non-inferior at {s_['margin']} margin: <b>{s_['noninferior']}</b></p>")
+    return (f"<div class='card'><b>{_esc(title)}</b>{head}"
+            "<table class='arms'><tr><th>metric</th><th>ratio</th><th>change</th>"
+            "<th>95% CI</th><th>sig</th><th>pairs / repos</th></tr>"
+            f"{_ratio_rows(pr.get('efficiency'))}</table>{solve}</div>")
+
+
+def _size_table(bs: dict | None) -> str:
+    """Context-token ratio by repo size — the direct test of aracne's core premise that
+    the navigation edge WIDENS with codebase size."""
+    if not bs or not bs.get("available"):
+        reason = (bs or {}).get("reason", "no repo_nodes recorded")
+        return f"<div class='card'><b>Context tokens by repo size</b>" \
+               f"<p class='muted'>Unavailable ({_esc(reason)}).</p></div>"
+    rows = []
+    for label, b in (bs.get("buckets") or {}).items():
+        if not b or not b.get("n_pairs"):
+            rows.append(f"<tr><td class='metric'>{_esc(label)}</td>"
+                        "<td class='muted' colspan='5'>no pairs</td></tr>")
+            continue
+        lo, hi = b.get("range", [None, None])
+        ci = b.get("pct_change_ci")
+        ci_s = f"[{ci[0]:+.0f}%, {ci[1]:+.0f}%]" if ci else "&ndash;"
+        rows.append(
+            f"<tr><td class='metric'>{_esc(label)}</td>"
+            f"<td class='muted'>{lo}&ndash;{hi if hi else '&infin;'}</td>"
+            f"<td>{b.get('ratio')}&times;</td>"
+            f"{_delta_pct_td(b.get('pct_change'), True)}"
+            f"<td class='muted'>{ci_s}</td>"
+            f"{_sig_td(bool(b.get('significant')))}</tr>")
+    slope = (f"<p class='muted'>slope of log(size) vs log(ratio): r = "
+             f"{bs.get('slope_r')} CI {bs.get('slope_ci')} &mdash; "
+             f"grows_with_size = <b>{bs.get('grows_with_size')}</b> "
+             f"(true only when the interval stays entirely below zero)</p>")
+    return ("<div class='card'><b>Context tokens by repo size</b>"
+            "<table class='arms'><tr><th>bucket</th><th>nodes</th><th>ratio</th>"
+            "<th>change</th><th>95% CI</th><th>sig</th></tr>"
+            f"{''.join(rows)}</table>{slope}</div>")
+
+
+def _paired_sections(agg: dict) -> str:
+    """Overall paired block, the size split, then a paired block per language.
+
+    Per-language is rendered because a pooled null can be two large opposite significant
+    effects cancelling — which is exactly what run-20260824-125118 turned out to be.
+    """
+    parts = [_paired_table(agg.get("paired"), "Overall (paired, authoritative)"),
+             _size_table((agg.get("paired") or {}).get("by_size"))]
+    langs = []
+    for lang, block in agg.get("per_language", {}).items():
+        pr = block.get("paired")
+        if pr and pr.get("n_pairs"):
+            langs.append(_paired_table(pr, lang))
+    if langs:
+        parts.append(f"<div class='langgrid'>{''.join(langs)}</div>")
+    return "".join(parts)
+
+
 def _footnotes(overall: dict) -> str:
     notes = [
         "Success rate is over graded runs only; small samples carry wide confidence intervals.",
+        "Timeouts (agent or grading wall-clock) are a separate outcome — excluded from the "
+        "success-rate denominator, and never counted as failures.",
         "Δ is aracne − baseline. For tokens / turns / wall, negative (green) means aracne used less.",
         "Dollar cost is ~0 on the Max plan and is excluded from the headline metrics.",
     ]
@@ -306,7 +437,7 @@ def _render(agg: dict, rows: list[dict], meta: dict, analysis_text: str | None) 
 
     bars = "".join([
         _bar_pair("Success rate", b.get("success_rate"), a.get("success_rate"), "%", False),
-        _bar_pair("Mean total tokens", b.get("mean_total_tokens"), a.get("mean_total_tokens"), "k", True),
+        _bar_pair("Mean context tokens", b.get("mean_context_tokens"), a.get("mean_context_tokens"), "k", True),
         _bar_pair("Mean turns", b.get("mean_turns"), a.get("mean_turns"), "", True),
         _bar_pair("Mean wall (s)", b.get("mean_wall_s"), a.get("mean_wall_s"), "s", True),
     ])
@@ -328,6 +459,9 @@ def _render(agg: dict, rows: list[dict], meta: dict, analysis_text: str | None) 
 
   <h2>Overall</h2>
   {_arms_table(arms, overall.get('delta'))}
+
+  <h2>Paired analysis &mdash; within-task, the claim-bearing numbers</h2>
+  {_paired_sections(agg)}
 
   <h2>Visual comparison</h2>
   <div class="card"><div class="bars">{bars}</div>{legend}</div>

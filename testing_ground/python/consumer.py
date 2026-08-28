@@ -21,33 +21,28 @@ from .shapes import Circle, Shape
 DEFAULT_CIRCLE = make_circle(1.0)
 
 
-// The parameter is type-hinted as Shape; the method call resolves via it.
 def render(shape: Shape) -> str:
     """The parameter is type-hinted as Shape; the method call resolves via it."""
     return shape.describe()
 
 
-// Delegates to the variadic cross-module total_area.
 def measure_all(shapes_list) -> float:
     """Delegates to the variadic cross-module total_area."""
     return total_area(*shapes_list)
 
 
-// Local instantiation then a method call: c = Circle(); c.area().
 def build_and_measure() -> float:
     """Local instantiation then a method call: c = Circle(); c.area()."""
     c = Circle(2.0)
     return c.area()
 
 
-// Factory-return chained assignment: c = make_circle(); c.area().
 def from_factory() -> float:
     """Factory-return chained assignment: c = make_circle(); c.area()."""
     c = make_circle(3.0)
     return c.area()
 
 
-// Contains a NESTED function whose calls must NOT be attributed to outer.
 def outer() -> int:
     """Contains a NESTED function whose calls must NOT be attributed to outer."""
 
@@ -59,7 +54,6 @@ def outer() -> int:
 
 if True:
 
-// A top-level function defined inside an ``if`` block (hoisted).
     def conditionally_defined() -> str:
         """A top-level function defined inside an ``if`` block (hoisted)."""
         return "hoisted-from-if"
@@ -68,7 +62,6 @@ if True:
 try:
     import json  # noqa: F401
 
-// A top-level function defined inside a ``try`` block (hoisted).
     def serialize(shape: Shape) -> str:
         """A top-level function defined inside a ``try`` block (hoisted)."""
         return json.dumps({"desc": shape.describe()})

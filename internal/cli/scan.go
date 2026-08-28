@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"aracne/internal/helper"
 	"aracne/internal/topology"
 	"aracne/internal/topology/domain"
+	"aracne/internal/topology/scanner"
 )
 
 // Analyzes a project and builds/updates the topology database with configurable scan modes (hard, full, or incremental).
@@ -21,6 +24,10 @@ func RunScan(args []string) {
 	hardFlag := fs.Bool("hard", false, "Force full rebuild from scratch (clears descriptions and bugs)")
 	defaultFlag := fs.Bool("default", false, "Force default incremental scan (overrides config)")
 	debug := fs.Bool("debug", false, "Compare warnings before and after scan, print differences")
+	verbose := fs.Bool("verbose", false, "Print the changed files detected during an incremental scan")
+	fs.BoolVar(verbose, "v", false, "Shorthand for --verbose")
+	workers := fs.Int("workers", 0, "Max files parsed concurrently during a full scan (0 = auto, one per CPU). Lower it to cap peak RAM.")
+	progressFlag := fs.String("progress", "auto", "Scan progress bar: auto (on a terminal above 15 files), always, or never")
 	fs.Parse(args)
 
 	manager := topology.New()
@@ -59,6 +66,32 @@ func RunScan(args []string) {
 		resolvedMode = helper.ScanModeDefault
 	}
 
+	// Resolve parallelism: config baseline, overridden by an explicit --workers.
+	// <= 0 means auto (one worker per CPU), applied inside scanner.Workers().
+	resolvedWorkers := cfg.Scan.Workers
+	if explicitFlags["workers"] {
+		resolvedWorkers = *workers
+	}
+	scanner.SetWorkers(resolvedWorkers)
+
+	// Resolve the progress bar: config baseline, overridden by an explicit
+	// --progress. "auto" turns it on only on a terminal and only when the project
+	// is large enough to be worth a bar.
+	progressMode := cfg.Scan.Progress
+	if explicitFlags["progress"] {
+		progressMode = strings.ToLower(strings.TrimSpace(*progressFlag))
+	}
+	showProgress := false
+	switch progressMode {
+	case helper.ProgressAlways:
+		showProgress = true
+	case helper.ProgressNever:
+		showProgress = false
+	default: // auto (also the fallback for an unset/legacy config value)
+		showProgress = stderrIsTerminal() && countSourceFiles(*root, reg) > helper.ProgressFileThreshold
+	}
+	scanner.SetProgressEnabled(showProgress)
+
 	switch resolvedMode {
 	case helper.ScanModeHard:
 		fmt.Println("Hard scan: rebuilding topology from scratch")
@@ -75,6 +108,13 @@ func RunScan(args []string) {
 		}
 	default:
 		fmt.Println("Incremental scan: processing only changed files")
+		if *verbose {
+			var langs []string
+			for _, ls := range reg.DetectAll(*root) {
+				langs = append(langs, ls.Name())
+			}
+			reportChangedFiles(*root, *output, cfg, langs)
+		}
 		warnings, err := manager.IncrementalScan(*root, reg)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -163,4 +203,141 @@ func RunScan(args []string) {
 	fmt.Printf("Analyzed in %s\n", elapsed.Round(time.Millisecond))
 	fmt.Printf("-%d packages\n-%d files\n-%d functions\n-%d structs\n-%d named types\n-%d interfaces\n-%d variables\n-%d dependencies\n-%d errors\n",
 		pkgCount, fileCount, funcCount, structCount, namedTypeCount, ifaceCount, varCount, depCount, len(topo.Errors))
+
+	warnEmptyScan(*root, fileCount, reg)
+}
+
+// warnEmptyScan reports a scan that detected a project but indexed nothing.
+//
+// "-0 files -0 functions -0 errors" and exit 0 is indistinguishable from
+// success, and it was the visible symptom of a real bug for every repo living
+// under a hidden directory. A scanner that claimed the root and then produced
+// nothing is always worth saying out loud.
+func warnEmptyScan(root string, fileCount int, reg *scanner.Registry) {
+	if fileCount > 0 {
+		return
+	}
+	var langs []string
+	for _, ls := range reg.DetectAll(root) {
+		langs = append(langs, ls.Name())
+	}
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		abs = root
+	}
+	if len(langs) == 0 {
+		fmt.Fprintf(os.Stderr, "Warning: no source files indexed under %s and no language was detected.\n", abs)
+		return
+	}
+	fmt.Fprintf(os.Stderr,
+		"Warning: detected %s under %s but indexed 0 files. Check that the sources are not excluded by scan.ignore.\n",
+		strings.Join(langs, ", "), abs)
+}
+
+// reportChangedFiles prints, for a verbose incremental scan, the source files
+// that changed since the last scan — the set the incremental pass re-processes.
+// It runs the same DiffScanFiles change detection IncrementalScan performs
+// internally, under the same path-visibility and scan.ignore filters, so the
+// list matches exactly what the scan will update.
+func reportChangedFiles(root, dbPath string, cfg *helper.Config, languages []string) {
+	// Install the active filters so change detection skips hidden/ignored paths,
+	// matching IncrementalScan. This is idempotent: the scan re-installs them.
+	domain.SetActivePathVisibility(domain.BuildPathVisibility(root, cfg.Paths))
+	domain.SetActiveIgnore(domain.BuildIgnoreMatcher(root, cfg.Scan.Ignore))
+
+	manifestPath := helper.ManifestPath(dbPath)
+	if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
+		fmt.Println("No manifest yet: all source files will be processed.")
+		return
+	}
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		fmt.Println("No topology database yet: all source files will be processed.")
+		return
+	}
+
+	var added, modified, deleted []string
+	for _, lang := range languages {
+		a, m, d, err := helper.DiffScanFiles(root, lang, manifestPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: change detection for %s failed: %v\n", lang, err)
+			return
+		}
+		added = append(added, a...)
+		modified = append(modified, m...)
+		deleted = append(deleted, d...)
+	}
+
+	total := len(added) + len(modified) + len(deleted)
+	fmt.Printf("Changed files found: %d (%d added, %d modified, %d deleted)\n",
+		total, len(added), len(modified), len(deleted))
+	if total == 0 {
+		return
+	}
+	fmt.Println("Files needing update:")
+	printChangedList(root, "+", added)
+	printChangedList(root, "~", modified)
+	printChangedList(root, "-", deleted)
+}
+
+// printChangedList prints files under a change marker, sorted, relative to root.
+func printChangedList(root, marker string, files []string) {
+	sort.Strings(files)
+	for _, f := range files {
+		fmt.Printf("  %s %s\n", marker, relForDisplay(root, f))
+	}
+}
+
+// relForDisplay expresses p relative to root in forward-slash form for readable
+// output, falling back to p unchanged when it lies outside root.
+func relForDisplay(root, p string) string {
+	if absRoot, err := filepath.Abs(root); err == nil {
+		if rel, relErr := filepath.Rel(absRoot, p); relErr == nil && !strings.HasPrefix(rel, "..") {
+			return filepath.ToSlash(rel)
+		}
+	}
+	return p
+}
+
+// stderrIsTerminal reports whether stderr is an interactive terminal, so the
+// "auto" progress bar (which draws with carriage returns) stays off when output
+// is piped or redirected.
+func stderrIsTerminal() bool {
+	fi, err := os.Stderr.Stat()
+	return err == nil && (fi.Mode()&os.ModeCharDevice) != 0
+}
+
+// countSourceFiles returns an approximate count of the source files the scanners
+// would parse under root. It is used only to decide whether the "auto" progress
+// bar is worth showing, so it need not exactly match each scanner's own file
+// discovery: it walks once, counting files a registered scanner claims by
+// extension that are real (non-test) source files.
+func countSourceFiles(root string, reg *scanner.Registry) int {
+	count := 0
+	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			// path != root so a dot-named root is not pruned by its own basename
+			name := d.Name()
+			if path != root {
+				if name == ".git" || name == ".aracne" || name == "node_modules" || name == "vendor" || name == "__pycache__" {
+					return filepath.SkipDir
+				}
+				if strings.HasPrefix(name, ".") {
+					return filepath.SkipDir
+				}
+			}
+			return nil
+		}
+		ls := reg.DetectFile(path)
+		if ls == nil {
+			return nil
+		}
+		if helper.IsSourceFile(root, path, ls.Name()) {
+			count++
+		}
+		return nil
+	})
+	return count
 }

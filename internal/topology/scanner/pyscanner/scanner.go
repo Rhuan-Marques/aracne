@@ -8,6 +8,7 @@ import (
 
 	"aracne/internal/topology/domain"
 	"aracne/internal/topology/python"
+	"aracne/internal/topology/scanner"
 )
 
 // Empty scanner marker struct for Python topology scanning.
@@ -41,6 +42,11 @@ func (s *PythonScanner) Detect(root string) bool {
 
 // Parses all Python files in a directory tree and builds a topology of modules, classes, functions, and their dependencies through multi-pass resolution.
 func (s *PythonScanner) Scan(root string) (*domain.Topology, error) {
+	// Re-discover import roots for this scan. The cache exists to avoid walking the tree
+	// once per parsed FILE, not to persist across scans: `arac serve` is long-lived, so a
+	// package added after startup would otherwise be classified against a stale sys.path
+	// for the life of the process.
+	ResetImportRootsCache()
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve path: %w", err)
@@ -72,26 +78,41 @@ func (s *PythonScanner) Scan(root string) (*domain.Topology, error) {
 
 	var parseResults []fileParseRecord
 
-	// Pass 1: parse every file and register its module (so cross-file import and
-	// reference resolution in later passes can see all modules).
-	for _, filePath := range pyFiles {
+	// Pass 1: parse every file concurrently (bounded by scanner.Workers()), then
+	// register its module sequentially in input order so cross-file import and
+	// reference resolution in later passes can see all modules (and the graph
+	// stays deterministic). Parsing dominates Python's cost — ParseFile shells out
+	// to an interpreter subprocess per file — so bounded parallelism is a large
+	// speedup here, and the Workers() cap keeps the number of concurrent
+	// subprocesses in check.
+	type parseRec struct {
+		filePath string
+		result   *ParseResult
+		err      error
+	}
+	recs := scanner.ParallelParse(pyFiles, "parsing python", func(filePath string) parseRec {
 		pkgPath := getPythonPackagePath(absRoot, filepath.Dir(filePath))
-
 		pr, err := ParseFile(filePath, pkgPath, absRoot)
-		if err != nil {
-			gt.Errors[filePath] = err.Error()
+		return parseRec{filePath: filePath, result: pr, err: err}
+	})
+	for _, rec := range recs {
+		if rec.err != nil || rec.result == nil {
+			if rec.err != nil {
+				gt.Errors[rec.filePath] = rec.err.Error()
+			}
 			continue
 		}
+		pr := rec.result
+		parseResults = append(parseResults, fileParseRecord{filePath: rec.filePath, result: pr})
 
-		parseResults = append(parseResults, fileParseRecord{filePath: filePath, result: pr})
-
+		pkgPath := getPythonPackagePath(absRoot, filepath.Dir(rec.filePath))
 		modConns := make(map[python.ConnectionKind][]string)
 		for _, dep := range pr.ExternalImports {
 			modConns[python.ConnImportsDep] = append(modConns[python.ConnImportsDep], string(dep.PackagePath))
 		}
-		gt.Modules[python.ModuleID(filePath)] = python.PythonModule{
-			ID:          python.ModuleID(filePath),
-			Name:        filepath.Base(filePath),
+		gt.Modules[python.ModuleID(rec.filePath)] = python.PythonModule{
+			ID:          python.ModuleID(rec.filePath),
+			Name:        filepath.Base(rec.filePath),
 			Description: pr.FileDescription,
 			FromPackage: pkgPath,
 			Connections: modConns,
@@ -179,6 +200,14 @@ func (s *PythonScanner) UpdateFile(topo *domain.Topology, path string) ([]domain
 		return warnings, nil
 	}
 
+	// Only an __init__.py can change which directories are packages, and therefore which
+	// import roots exist. Invalidating on every edit would re-walk the tree per keystroke;
+	// invalidating on none would leave a long-lived `arac serve` classifying against a
+	// stale sys.path after a package is added or removed.
+	if filepath.Base(path) == "__init__.py" {
+		ResetImportRootsCache()
+	}
+
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return warnings, nil
@@ -238,23 +267,21 @@ func (s *PythonScanner) UpdateFile(topo *domain.Topology, path string) ([]domain
 			pr.FileDescription = oldMod.Description
 		}
 
+		// A function that disappeared produces no warning here: see the note in
+		// jsscanner.diffFuncWarnings. The manager's referrer pass attributes it
+		// to the surviving callers, which is what persists and what an agent can
+		// act on. Only a surviving function whose signature changed is reported.
 		for fid, oldFunc := range oldFunctions {
-			found := false
 			for _, fi := range pr.Functions {
-				if fi.Function.ID == fid {
-					found = true
-					if !signaturesEqualPy(oldFunc, fi.Function) {
-						warnings = append(warnings, domain.TopologyWarning{
-							ID: string(fid) + "@sig_change@", SourceID: string(fid), Kind: domain.WarnSignatureChanged, TargetID: "", Message: fmt.Sprintf("function %s changed signature, verify callers", oldFunc.Name),
-						})
-					}
-					break
+				if fi.Function.ID != fid {
+					continue
 				}
-			}
-			if !found {
-				warnings = append(warnings, domain.TopologyWarning{
-					ID: string(fid) + "@node_removed@", SourceID: string(fid), Kind: domain.WarnNodeRemoved, TargetID: "", Message: fmt.Sprintf("function %s was removed", oldFunc.Name),
-				})
+				if !signaturesEqualPy(oldFunc, fi.Function) {
+					warnings = append(warnings, domain.TopologyWarning{
+						ID: string(fid) + "@sig_change@", SourceID: string(fid), Kind: domain.WarnSignatureChanged, TargetID: "", Message: fmt.Sprintf("function %s changed signature, verify callers", oldFunc.Name),
+					})
+				}
+				break
 			}
 		}
 
@@ -336,9 +363,11 @@ func (s *PythonScanner) UpdateFile(topo *domain.Topology, path string) ([]domain
 }
 
 // Converts a directory path to a dotted Python package path relative to the project root.
+// The project-root base name is deliberately absent (id-scheme 2): it names the directory
+// a checkout happens to sit in, not anything in the source. The root package reads ".".
 func getPythonPackagePath(root, dir string) python.PackagePath {
 	if dir == root {
-		return python.PackagePath(filepath.Base(root))
+		return python.PackagePath(".")
 	}
 	rel, err := filepath.Rel(root, dir)
 	if err != nil {
@@ -346,7 +375,7 @@ func getPythonPackagePath(root, dir string) python.PackagePath {
 	}
 	rel = strings.ReplaceAll(rel, "\\", "/")
 	rel = strings.ReplaceAll(rel, "/", ".")
-	return python.PackagePath(filepath.Base(root) + "." + rel)
+	return python.PackagePath(rel)
 }
 
 // Recursively collects all .py files from a directory, excluding common cache and test directories.
@@ -357,6 +386,12 @@ func collectPythonFiles(root string) []string {
 			return nil
 		}
 		if d.IsDir() {
+			// path != root so a dot- or vendor-named ROOT is not pruned by its own
+			// basename; WalkDir never visits the root's ancestors, so only the root
+			// itself can match on a name it did not choose.
+			if path == root {
+				return nil
+			}
 			name := d.Name()
 			if name == "vendor" || name == ".git" || name == "node_modules" ||
 				name == "__pycache__" || name == ".pytest_cache" ||

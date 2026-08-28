@@ -8,6 +8,7 @@ import (
 
 	"aracne/internal/helper"
 	"aracne/internal/topology"
+	"aracne/internal/topology/idresolve"
 )
 
 // Struct that holds a topology manager for reading resources by ID.
@@ -85,6 +86,30 @@ func (r *Read) Run(args json.RawMessage) (string, error) {
 	for _, cand := range candidates {
 		if info, err := os.Stat(cand); err == nil && !info.IsDir() {
 			return helper.ReadRawFile(cand, maxSize)
+		}
+	}
+
+	// Neither an exact resource nor a file on disk. Before giving up, let the shared
+	// resolver try: it tolerates a wrong root prefix and the wrong separator convention,
+	// and follows the alias table for IDs minted under a previous id-scheme. This tier is
+	// LAST here (unlike in the read_* tools) because this tool's raw-file fallback is a
+	// legitimate answer that must not be pre-empted by a fuzzy resource match.
+	if topoErr == nil {
+		res := idresolve.Resolve(topo, params.ResourceID, idresolve.Options{
+			Alias: func(old string) (string, bool) {
+				return helper.ResolveAlias(r.mgr.DbPath(), old)
+			},
+		})
+		if res.Found() {
+			entry, err := r.mgr.Cut(res.Resource.Location)
+			if err != nil {
+				return "", fmt.Errorf("read resource: %w", err)
+			}
+			return fmt.Sprintf("%s\n%s", filepath.Base(res.Resource.Location.Path), entry.Cut), nil
+		}
+		if hint := idresolve.FormatCandidates(params.ResourceID, res.Candidates); hint != "" {
+			return "", fmt.Errorf("resource %q not found in topology. %s",
+				params.ResourceID, hint)
 		}
 	}
 

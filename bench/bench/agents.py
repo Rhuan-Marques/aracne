@@ -16,10 +16,22 @@ HARNESSES = ("claude_code", "opencode")
 
 
 def run_agent(harness: str, prompt: str, cwd, model: str, max_turns: int, timeout_s: int, *,
-              agent: str | None = None, extra_args: list[str] | None = None):
-    """Run `prompt` (verbatim — already templated by the caller) in `cwd` and return a RunResult."""
+              agent: str | None = None, extra_args: list[str] | None = None,
+              stream: bool = False, effort: str | None = None):
+    """Run `prompt` (verbatim — already templated by the caller) in `cwd` and return a RunResult.
+
+    `stream` asks the backend for a per-event transcript on `RunResult.transcript`, which
+    bench/toolstats.py folds into per-tool telemetry. Only claude_code honours it today;
+    OpenCode already walks its own NDJSON but discards the bodies (opencode_driver:96-99),
+    so it returns an empty transcript and toolstats records the zero row.
+
+    `effort` is claude_code-only (the CLI's `--effort`). OpenCode exposes no equivalent, so
+    it is dropped there rather than faked: a silently-ignored cost lever would make two runs
+    look comparable when they are not.
+    """
     if harness == "claude_code":
-        return claude_driver.run_raw(prompt, cwd, model, max_turns, timeout_s, extra_args)
+        return claude_driver.run_raw(prompt, cwd, model, max_turns, timeout_s, extra_args,
+                                     stream=stream, effort=effort)
     if harness == "opencode":
         return opencode_driver.run_raw(prompt, cwd, model, max_turns, timeout_s,
                                        agent=agent, extra_args=extra_args)

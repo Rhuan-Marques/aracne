@@ -119,9 +119,26 @@ func navigationModelSection(eff helper.AgentConfig) string {
 	}
 
 	fmt.Fprintf(b, "2. Use lookup MCP tools to get a resource's full context with interconnected relationships\n")
-	fmt.Fprintf(b, "\n**Note: Never try to use `read` native tool, use MCP lookups instead**\n\n")
+	if nativeAllowed(eff, "read") {
+		fmt.Fprintf(b, "\n**Which to use:** an aracne lookup for a *symbol* (returns its "+
+			"code plus neighbours and their descriptions — usually cheaper than the whole "+
+			"file); your native read for a *file* as a whole, a config, or a line range.\n\n")
+	} else {
+		fmt.Fprintf(b, "\n**The native read tool is blocked in this project** — use the "+
+			"aracne lookups below. `read_file` covers whole files and line ranges.\n\n")
+	}
 
 	return b.String()
+}
+
+// nativeGrepNote says whether the native grep remains available. Getting this wrong is
+// expensive in both directions: claiming it works when the guard denies it costs a wasted
+// turn per attempt, and forbidding it when it is allowed is what drove redundant reads.
+func nativeGrepNote(eff helper.AgentConfig) string {
+	if nativeAllowed(eff, "grep") {
+		return " Your native grep also works; use whichever fits."
+	}
+	return " **The native grep tool is blocked in this project** — use this one."
 }
 
 // Generates documentation for available MCP lookup tools based on agent config and read modes.
@@ -141,7 +158,8 @@ func lookupToolsSection(eff helper.AgentConfig, mcpToolPrefix string) string {
 		b.WriteString("\n")
 	}
 
-	b.WriteString("Note: Do *not* use \"cat\", \"Get-Content\" or any other OS command to read files")
+	b.WriteString("Note: prefer these over shelling out to `cat`/`Get-Content` — a shell " +
+		"read gives you bytes with no topology context, and the result is not tracked.")
 
 	return b.String()
 }
@@ -171,7 +189,13 @@ func splitReadDescription(name string) string {
 // Builds markdown section documenting grep/search tools based on agent config capabilities
 func grepSection(eff helper.AgentConfig, mcpToolPrefix string) string {
 	if hasMCPTool(eff, "grep") {
-		return fmt.Sprintf("## Grep/Search\n\nUse the MCP tool %s for content search. It returns `path:line:match` plus `ResourceID` and `Description` when a match maps to a topology resource.\n\nDo *not* use your native `grep` tool.\nDo not use `grep`, `Select-String` or `rg` in the terminal", bt(mcpToolPrefix+"grep"))
+		return fmt.Sprintf("## Grep/Search\n\nUse the MCP tool %s for content search. It "+
+			"returns `path:line:match`, and for a focused result set it also names the "+
+			"enclosing topology resource and what it does — which often answers the "+
+			"question without a follow-up read.\n\nIt takes the usual narrowing options "+
+			"(glob, type, output_mode, head_limit, context lines) — narrow rather than "+
+			"reading a large result. Output is capped and says what was withheld.%s\n\n",
+			bt(mcpToolPrefix+"grep"), nativeGrepNote(eff))
 	}
 	if nativeAllowed(eff, "grep") {
 		return "## Grep/Search\n\nUse your native `grep`/`Grep` search tool for content search. When you need topology metadata in results, use `arac grep <pattern> [path]`; it returns `path:line:match` plus `ResourceID` and `Description` when a match maps to a topology resource.\n\n"
@@ -208,7 +232,17 @@ func resourceContextSection(eff helper.AgentConfig) string {
 // Builds markdown section documenting available edit/write tools based on agent config capabilities
 func editWriteSection(eff helper.AgentConfig, mcpToolPrefix string) string {
 	if hasMCPTool(eff, "edit") || hasMCPTool(eff, "write") {
-		return fmt.Sprintf("## Edit and Write:\n\nYou can edit files using the MCP tool %s.\nYou can write files using the MCP tool %s.\nAfter editing or writing, the context for the topology will be automatically updated to reflect your actions.\n\n**Note: NEVER try to edit or write using your native tools**\n\n", bt(mcpToolPrefix+"edit"), bt(mcpToolPrefix+"write"))
+		note := "Your native edit/write also work — an `arac update-file` hook re-syncs " +
+			"the topology afterwards — so the graph stays correct either way."
+		if !nativeAllowed(eff, "edit") || !nativeAllowed(eff, "write") {
+			note = "**The native edit/write tools are blocked in this project** — use these."
+		}
+		return fmt.Sprintf("## Edit and Write:\n\nYou can edit files using the MCP tool %s "+
+			"and write them using %s; both update the topology inline.\n\n"+
+			"`old_string` must match exactly once — include surrounding context, or pass `replace_all: true` to "+
+			"change every occurrence. An empty `new_string` deletes the matched text, so you never need to rewrite "+
+			"a whole file just to remove a block.\n\n%s\n\n",
+			bt(mcpToolPrefix+"edit"), bt(mcpToolPrefix+"write"), note)
 	}
 	if nativeAllowed(eff, "edit") {
 		return "## Edit and Write:\n\nYou can edit files using your native `edit` tool.\nYou can write files using your native `write` tool.\nAfter editing or writing, the context for the topology will be automatically updated to reflect your actions.\n\n"
@@ -241,7 +275,9 @@ func guardNoteSection() string {
 	return "## Tool Guard\n\n" +
 		"An `arac guard` hook watches your tool calls. Whenever you use a native tool " +
 		"(`Read`/`Grep`/`Edit`/`Write`) or a shell equivalent (`cat`/`head`/`tail`/`less`/`grep`/`rg`/`sed`/`awk`, " +
-		"or PowerShell `Get-Content`/`Select-String`), you are reminded to use the matching aracne MCP tool instead.\n\n" +
+		"or PowerShell `Get-Content`/`Select-String`), you are reminded to use the matching aracne MCP tool instead. " +
+		"`sed`/`awk` count as an edit only when they write (an `-i` flag or a `>` redirect); otherwise they count " +
+		"as a read, so filtering command output through them is fine.\n\n" +
 		"Any tool listed in `blocked_tools` for the `claude_code` harness is blocked outright. Blocking `grep` also " +
 		"blocks `grep`/`rg`/`Select-String` run through the Bash tool; blocking `bash` blocks the Bash tool entirely. " +
 		"A read/grep command that consumes piped output (e.g. `git log | tail`, `cmd | grep x`) is exempt — only " +
@@ -275,11 +311,12 @@ func blocksShellReadOrGrep(eff helper.AgentConfig) bool {
 func howToNavigateSection() string {
 	return `## How to Navigate:
 
-### 1: Explore Topology, NOT Files
-Use the topology manager to your advantage, only read entire files when:
-    - They are NOT supported language files (.go and .py)
-    - Your tasks requires you to know all the information from the entire file
-    - You don't know the other resources IDs yet
+### 1: Prefer symbols over files
+Read a whole file when you want the file itself — unsupported language, config, or you
+genuinely need all of it.
+
+Resource IDs are forgiving: a unique trailing part is enough (Flask.register_blueprint),
+and a miss returns the nearest candidates rather than an error.
 
 ### 2: Let Descriptions Guide You
 - A resource's description can tell you whether it is relevant to your task

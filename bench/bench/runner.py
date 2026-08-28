@@ -7,6 +7,10 @@ Docker grading).
 
 Baseline runs use ephemeral clones under <out>/work; the aracne arm reuses its path-pinned
 canonical worktree under the fixtures tree and is never deleted here.
+
+Cells may run concurrently (`run_parallel`), so the two SHARED resources are taken under a
+keyed lock: an aracne cell owns its fixture's canonical worktree for its whole run, and any
+cell owns its repo's `_repos` cache entry while cloning. See bench/bench/locks.py.
 """
 from __future__ import annotations
 
@@ -17,7 +21,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from . import agents, arms, fixtures
+from . import agents, arms, fixtures, locks, outcome, toolstats
 from .gitutil import run_git
 from .sources import Task
 
@@ -43,14 +47,52 @@ def error_row(task: Task, arm: str, seed: int, error: str) -> dict:
         "input_tokens": 0, "output_tokens": 0, "cache_tokens": 0,
         "num_turns": 0, "duration_ms": 0, "cost_usd": 0.0,
         "has_patch": False, "patch_path": None, "success": None, "error": error,
+        # Terminal outcome of the row; `timeout_stage` says WHERE the clock ran out
+        # ("agent" | "grading" | None). See bench/bench/outcome.py.
+        "outcome": outcome.UNKNOWN, "timeout_stage": None, "grade_error": None,
         "org": task.raw.get("org"), "repo": task.raw.get("repo"),
         "number": task.raw.get("number"),
+        # Describable-node count of this repo's topology, from its fixture meta. Recorded on
+        # the ROW (not looked up later) so size-stratified analysis works from runs.jsonl
+        # alone — including in `rescore`, which never touches the fixtures dir.
+        "repo_nodes": None,
+        # Per-tool telemetry folded from the agent transcript (bench/toolstats.py). Always
+        # present, so a backend that reports nothing is distinguishable from a real zero
+        # via `has_transcript`/`transcript_path`.
+        "transcript_path": None,
+        **toolstats.row_fields(toolstats.empty_stats()),
     }
+
+
+def _hit_turn_cap(rr, cfg: dict) -> bool:
+    """Did this errored run die because it exhausted `max_turns` rather than breaking?
+
+    Only Claude Code enforces the cap (OpenCode ignores `max_turns` — see opencode_driver),
+    so the turn count is evidence of exhaustion for that harness alone; anywhere else an
+    error is an error and stays fatal to the matrix.
+    """
+    return (cfg.get("run_harness") == "claude_code"
+            and (rr.num_turns or 0) >= int(cfg["max_turns"]))
 
 
 def run_one(task: Task, arm: str, seed: int, cfg: dict, out_dir: Path,
             repos_dir: Path, work_dir: Path, fixtures_root: Path):
-    """Execute one matrix cell. Returns (row, patch_text)."""
+    """Execute one matrix cell. Returns (row, patch_text).
+
+    Thread-safe: an aracne cell holds its fixture's lock for the WHOLE run, because the
+    canonical worktree is reset in place and reused — two concurrent aracne runs of one
+    fixture would clobber each other's checkout. Baseline cells work in their own ephemeral
+    clone and need no such lock. With `run_parallel: 1` the locks are uncontended no-ops.
+    """
+    if arm == "aracne":
+        with locks.fixture(fixtures.fixture_key(task)):
+            return _run_cell(task, arm, seed, cfg, out_dir, repos_dir, work_dir, fixtures_root)
+    return _run_cell(task, arm, seed, cfg, out_dir, repos_dir, work_dir, fixtures_root)
+
+
+def _run_cell(task: Task, arm: str, seed: int, cfg: dict, out_dir: Path,
+              repos_dir: Path, work_dir: Path, fixtures_root: Path):
+    """The body of one matrix cell, already holding whatever lock the arm requires."""
     row = error_row(task, arm, seed, None)
     patch = ""
 
@@ -58,7 +100,10 @@ def run_one(task: Task, arm: str, seed: int, cfg: dict, out_dir: Path,
 
     t0 = time.monotonic()
     try:
-        workdir = arms.prepare_workdir(arm, task, cfg, repos_dir, ephem, fixtures_root)
+        # The repo lock covers the shared `_repos` clone cache: concurrent cells drawn from
+        # the same repository must not race to create or fetch its cache entry.
+        with locks.repo_cache(task.repo_slug()):
+            workdir = arms.prepare_workdir(arm, task, cfg, repos_dir, ephem, fixtures_root)
     except RuntimeError as e:  # guardrail / setup failure — record and skip
         row["error"] = str(e)
         return row, ""
@@ -66,24 +111,50 @@ def run_one(task: Task, arm: str, seed: int, cfg: dict, out_dir: Path,
         row["error"] = f"arm setup failed: {(e.stderr or str(e))[-400:]}"
         return row, ""
     row["scan_time_s"] = round(time.monotonic() - t0, 2)  # reuse field as setup time
+    # Both arms share one fixture per task, so this is a property of the TASK and is
+    # identical across the pair — exactly what a size stratification needs.
+    meta = fixtures.read_meta(task, fixtures_root) or {}
+    row["repo_nodes"] = meta.get("total")
 
     try:
         rr = agents.run_agent(
             cfg["run_harness"], agents.task_prompt(task.problem_statement),
             workdir, cfg["model"], cfg["max_turns"], cfg["timeout_s"],
+            stream=True, effort=cfg.get("effort"),
         )
         row.update(
             input_tokens=rr.input_tokens, output_tokens=rr.output_tokens,
             cache_tokens=rr.cache_tokens, num_turns=rr.num_turns,
             duration_ms=rr.duration_ms, cost_usd=round(rr.cost_usd, 4),
         )
-        if rr.is_error:
+        # Fold the transcript into counters and persist the size-reduced form. Written
+        # under out_dir (NEVER inside the worktree: restore() git-cleans it before the
+        # next run, which would delete the telemetry we just wrote).
+        stats, reduced = toolstats.summarize(rr.transcript)
+        row.update(toolstats.row_fields(stats))
+        if reduced:
+            tpath = out_dir / "transcripts" / f"{_short(task.key)}__{arm}__s{seed}.jsonl"
+            tpath.parent.mkdir(parents=True, exist_ok=True)
+            tpath.write_text(reduced)
+            row["transcript_path"] = str(tpath)
+        if rr.is_error and _hit_turn_cap(rr, cfg):
+            # Turn exhaustion is a BUDGET outcome, not a broken step: the agent was still
+            # working when the cap cut it off. The CLI reports it as a bare is_error with no
+            # `result` text, so it is recognised by the turn count rather than a message.
+            # Recorded like a wall-clock timeout so one capped task cannot strand the matrix.
+            row["timeout_stage"] = outcome.TURNS
+            row["error"] = (f"agent turn limit: hit max_turns={cfg['max_turns']} "
+                            f"after {rr.num_turns} turns")
+        elif rr.is_error:
             # `claude --print` puts its failure message in `result` when is_error; keep it
             # (falling back to a slice of the raw JSON) so the cause isn't lost as "agent_error".
             detail = (rr.result_text or "").strip() or json.dumps(rr.raw)
             row["error"] = f"agent_error: {detail[:500]}"
     except subprocess.TimeoutExpired:
-        row["error"] = "agent timeout"
+        # A wall-clock timeout is its OWN outcome: the agent never got to finish, so the
+        # run is neither a fail nor a pass. Recorded, never graded, never fatal to the matrix.
+        row["timeout_stage"] = outcome.AGENT
+        row["error"] = f"agent timeout after {cfg['timeout_s']}s"
     except Exception as e:  # noqa: BLE001 - record and continue the matrix
         row["error"] = f"agent error: {e}"
 
@@ -100,4 +171,5 @@ def run_one(task: Task, arm: str, seed: int, cfg: dict, out_dir: Path,
     if arm == "baseline" and not cfg.get("keep_workdir"):
         shutil.rmtree(ephem, ignore_errors=True)
 
+    outcome.stamp(row)
     return row, patch

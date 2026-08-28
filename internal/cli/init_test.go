@@ -207,10 +207,13 @@ func TestClaudeToolsForAgent_DefaultMainAgent(t *testing.T) {
 			t.Fatalf("expected %q in tools: %v", name, tools)
 		}
 	}
-	// Native read/edit/write/grep are blocked by default.
+	// The shipped default is WARN-ONLY: the guard names the matching aracne tool but
+	// denies nothing, so the native tools stay available. Denying them cost a wasted turn
+	// per denial and pushed the agent off a more capable native grep; the `arac update-file`
+	// PostToolUse hook keeps the topology in sync after a native edit either way.
 	for _, native := range []string{"Read", "Edit", "Write", "Grep"} {
-		if got[native] {
-			t.Fatalf("native %q should be blocked by default: %v", native, tools)
+		if !got[native] {
+			t.Fatalf("native %q should be available under the warn-only default: %v", native, tools)
 		}
 	}
 }
@@ -219,27 +222,23 @@ func TestOpenCodePermissionsForAgent_DefaultMainAgent(t *testing.T) {
 	eff := helper.DefaultConfig().EffectiveAgent("opencode", "main")
 	perms := openCodePermissionsForAgent(eff)
 
-	if !strings.Contains(perms, "read: deny") {
-		t.Fatalf("expected read: deny (blocked by default):\n%s", perms)
+	// Warn-only default: no NATIVE tool is denied and bash needs no glob-pattern map.
+	// Projects opt into denial via llm.<harness>.main_agent.blocked_tools.
+	for _, allowed := range []string{"read: allow", "edit: allow", "bash: allow"} {
+		if !strings.Contains(perms, allowed) {
+			t.Fatalf("expected %q under the warn-only default:\n%s", allowed, perms)
+		}
 	}
-	if !strings.Contains(perms, "edit: deny") {
-		t.Fatalf("expected edit: deny (blocked by default):\n%s", perms)
+	if strings.Contains(perms, `"head *": deny`) || strings.Contains(perms, `"grep *": deny`) {
+		t.Fatalf("warn-only default must not deny shell read/grep forms:\n%s", perms)
 	}
-	// read/grep are blocked by default, so bash becomes a glob-pattern map that
-	// denies the direct read/grep shell forms while leaving everything else
-	// (including piped uses) allowed.
-	if !strings.Contains(perms, `"*": allow`) {
-		t.Fatalf("expected bash default allow:\n%s", perms)
-	}
-	if !strings.Contains(perms, `"head *": deny`) || !strings.Contains(perms, `"grep *": deny`) {
-		t.Fatalf("expected read/grep deny patterns:\n%s", perms)
-	}
-	if strings.Contains(perms, "bash: allow") {
-		t.Fatalf("bash should be a pattern map, not a scalar allow:\n%s", perms)
-	}
+	// The aracne_* wildcard deny stays: it withholds MCP tools the profile does not grant
+	// (the v2 bug_* set), which is unrelated to native-tool blocking.
 	if !strings.Contains(perms, `"aracne_*": deny`) {
-		t.Fatalf("missing deny all:\n%s", perms)
+		t.Fatalf("expected ungranted aracne tools to stay denied:\n%s", perms)
 	}
+	// Under warn-only, bash is a plain scalar allow: the glob-pattern map existed only to
+	// deny the direct shell read/grep forms, and nothing is denied any more.
 	if !strings.Contains(perms, `"aracne_read_file": allow`) {
 		t.Fatalf("expected aracne_read_file: allow:\n%s", perms)
 	}

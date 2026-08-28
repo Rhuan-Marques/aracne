@@ -15,6 +15,7 @@ KEY FACTS:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import sqlite3
@@ -170,7 +171,8 @@ def scaffold(task, cfg: dict, fixtures_root) -> dict:
     Idempotent: if the worktree's topology DB already exists and force_prepare is off,
     the existing fixture is reported as-is (re-applying the kind scope). Otherwise the repo
     is cloned at base_commit, `arac init` injects BOTH the --claude and --opencode
-    integrations, `arac scan --hard` builds the structure-only topology, and the description
+    integrations, `arac scan --all` builds the structure-only topology (preserving any
+    descriptions already present, and remapping them across an id-scheme change), and the description
     kind scope is written. Descriptions are NOT generated here (that's `generate`).
     """
     fixtures_root = Path(fixtures_root)
@@ -198,7 +200,8 @@ def scaffold(task, cfg: dict, fixtures_root) -> dict:
     if fresh:
         t0 = time.monotonic()
         subprocess.run(
-            [arac_bin, "scan", f"--{cfg.get('scan_mode', 'hard')}", "--root", ".",
+            # Default "all" (FullReScan), never "hard": hard drops every description.
+            [arac_bin, "scan", f"--{cfg.get('scan_mode', 'all')}", "--root", ".",
              "--output", ".aracne/topology.db"],
             cwd=str(wt), check=True, capture_output=True, text=True,
         )
@@ -216,6 +219,33 @@ def scaffold(task, cfg: dict, fixtures_root) -> dict:
         "coverage": round(cov, 3),
         "describable": total,
     }
+
+
+def arac_version(cfg: dict) -> str:
+    """`arac --version`, trimmed to one line. "" when the binary cannot be run."""
+    try:
+        res = subprocess.run([cfg.get("arac_bin", "arac"), "--version"],
+                             capture_output=True, text=True, timeout=30)
+        return (res.stdout or res.stderr or "").strip().splitlines()[0][:120]
+    except Exception:  # noqa: BLE001 — provenance is best-effort, never fatal
+        return ""
+
+
+def config_fingerprint(wt) -> str:
+    """SHA-256 (first 12 hex) of the fixture's `.aracne/config.json`.
+
+    WHY. `scaffold` only re-runs `arac init` when .mcp.json/.opencode/opencode.json is
+    missing, so every fixture stays frozen at whatever arac build first touched it. In the
+    scale40 pool that produced FOUR distinct configs across 36 fixtures — including a
+    6-fixture group with `blocked_tools: []`, `include_incoming: true` and
+    `small_functions_visibility: full`. Those fixtures were not running the shipped
+    contract, so the "aracne arm" was silently a mixture of two different products.
+    Recording the fingerprint lets `run` refuse a mixed pool instead of averaging over it.
+    """
+    cfgp = Path(wt) / ".aracne" / "config.json"
+    if not cfgp.exists():
+        return ""
+    return hashlib.sha256(cfgp.read_bytes()).hexdigest()[:12]
 
 
 def freeze(task, cfg: dict, fixtures_root) -> dict:
@@ -257,6 +287,9 @@ def freeze(task, cfg: dict, fixtures_root) -> dict:
         "coverage": round(cov, 3),
         "frozen": True,
         "scan_time_s": prior.get("scan_time_s"),
+        # Provenance: which arac produced this fixture, and which config it will run under.
+        "arac_version": arac_version(cfg),
+        "config_fingerprint": config_fingerprint(wt),
     }
     meta_path(fixtures_root, task).write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return meta

@@ -5,23 +5,37 @@ import (
 	"fmt"
 	"os"
 
+	"aracne/internal/helper"
 	"aracne/internal/topogrep"
+	"aracne/internal/topology/domain"
 )
 
-// Searches file contents with a regex pattern against the topology database, returning path:line:match output with resource metadata when applicable.
+// Searches file contents with a regex pattern against the topology database, returning
+// path:line:match output with the enclosing resource named once above its matches.
 func RunGrep(args []string) {
 	fs := flag.NewFlagSet("grep", flag.ExitOnError)
 	dbPath := fs.String("db", ".aracne/topology.db", "Topology database path")
+	glob := fs.String("glob", "", "Filename glob, e.g. '*.go' or '**/*_test.ts'")
+	typ := fs.String("type", "", "Language shorthand: go, py, js, ts, rust, java, ...")
+	ignoreCase := fs.Bool("i", false, "Case-insensitive match")
+	mode := fs.String("output-mode", "content", "content | files_with_matches | count")
+	headLimit := fs.Int("head-limit", 0, "Max matching lines (default 200; -1 for no limit)")
+	before := fs.Int("B", 0, "Lines of context before each match")
+	after := fs.Int("A", 0, "Lines of context after each match")
+	context := fs.Int("C", 0, "Lines of context on both sides of each match")
 	fs.Parse(args)
 	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "Usage: arac grep [--db <path>] <pattern> [path]")
+		fmt.Fprintln(os.Stderr, "Usage: arac grep [flags] <pattern> [path]")
+		fs.PrintDefaults()
 		os.Exit(1)
 	}
 
-	pattern := fs.Arg(0)
 	path := "."
 	if fs.NArg() > 1 {
 		path = fs.Arg(1)
+	}
+	if *context > 0 {
+		*before, *after = *context, *context
 	}
 
 	manager, reg := InitRegistry(*dbPath)
@@ -30,13 +44,32 @@ func RunGrep(args []string) {
 	if err != nil {
 		topo = nil
 	}
-	matches, err := topogrep.Search(pattern, path, topo)
+
+	// Honour the project's own scan.ignore rules, so a search does not descend into build
+	// output the scanner has been told to skip.
+	var ignore *domain.IgnoreMatcher
+	if topo != nil && topo.Root != "" {
+		if cfg := helper.LoadConfig(helper.ConfigPath(*dbPath)); cfg != nil {
+			ignore = domain.BuildIgnoreMatcher(topo.Root, cfg.Scan.Ignore)
+		}
+	}
+
+	opt := topogrep.Options{
+		Pattern:    fs.Arg(0),
+		Root:       path,
+		Glob:       *glob,
+		Type:       *typ,
+		IgnoreCase: *ignoreCase,
+		Mode:       topogrep.OutputMode(*mode),
+		HeadLimit:  *headLimit,
+		Before:     *before,
+		After:      *after,
+		Ignore:     ignore,
+	}
+	res, err := topogrep.SearchWith(opt, topo)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-	output := topogrep.Format(matches)
-	if output != "" {
-		fmt.Println(output)
-	}
+	fmt.Println(topogrep.FormatResult(res, opt))
 }

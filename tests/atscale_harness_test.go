@@ -70,11 +70,21 @@ func copyCorpus(t *testing.T) string {
 	if _, err := os.Stat(src); err != nil {
 		t.Fatalf("testing_ground corpus not found at %s: %v", src, err)
 	}
-	// Root the copy in a dir literally named "aracne" so language scanners that
-	// derive package prefixes from the scan-root leaf (Python: aracne.*; JS/TS:
-	// aracne/*) reproduce the same resource IDs as the real repo, keeping the
-	// hardcoded IDs in the scenarios stable.
-	root := filepath.Join(t.TempDir(), "aracne")
+	// The copy is rooted in a dir named "aracne" because the synthetic go.mod written
+	// below declares `module aracne`, which is what pins the GO resource IDs.
+	//
+	// It used to be named that for a second reason — Python and JS/TS derived their ID
+	// prefix from the scan-root leaf, so the directory name had to match the real repo's.
+	// id-scheme 2 makes those module paths repo-relative, so that reason is gone; only the
+	// Go module path still depends on this name.
+	// The corpus is deliberately rooted UNDER A HIDDEN DIRECTORY. The ignore
+	// rules used to be applied to the absolute path, so any checkout living
+	// beneath a dot-named ancestor (~/.claude/scratch/app, a CI checkout under
+	// /home/runner/.cache/...) indexed zero files, silently, and every later
+	// edit treated its files as non-source and deleted their resources. Running
+	// the whole at-scale matrix from here means all six languages and all three
+	// scan modes stand guard against that.
+	root := filepath.Join(t.TempDir(), ".dotroot", "aracne")
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatalf("mkdir corpus root: %v", err)
 	}

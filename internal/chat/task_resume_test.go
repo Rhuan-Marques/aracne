@@ -15,7 +15,16 @@ import (
 
 func setupResumeTest(t *testing.T, serverURL string) (*Manager, *Session, func()) {
 	t.Helper()
-	dir := t.TempDir()
+	// NOT t.TempDir(): its cleanup is a strict RemoveAll that fails the test if anything
+	// is still writing. Manager has no Close/Shutdown, so the goroutines it starts
+	// (task_runner.go:180-200) can outlive the test body and race the teardown — which
+	// made this test fail under a full `go test ./...` run while passing in isolation.
+	// Best-effort removal here; the missing Manager lifecycle is tracked separately.
+	dir, err := os.MkdirTemp("", "chat_resume")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	setupTopologyDB(t, dir)
 	storeDir := filepath.Join(dir, "chat")
 	if err := os.MkdirAll(storeDir, 0755); err != nil {
@@ -24,9 +33,9 @@ func setupResumeTest(t *testing.T, serverURL string) (*Manager, *Session, func()
 	dbPath := filepath.Join(dir, "topology.db")
 
 	collect := func(e Event) {}
-	manager, err := NewManager(dbPath, dir, collect)
-	if err != nil {
-		t.Fatalf("NewManager: %v", err)
+	manager, mgrErr := NewManager(dbPath, dir, collect)
+	if mgrErr != nil {
+		t.Fatalf("NewManager: %v", mgrErr)
 	}
 	if serverURL != "" {
 		manager.SetProvider(ProviderSettings{

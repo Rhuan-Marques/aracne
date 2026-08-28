@@ -5,15 +5,21 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
+
+	"aracne/internal/llm/tools"
 )
 
-// Reads JSON from stdin containing file path and old/new strings, replaces the old string in the file once, and updates the topology database.
+// Reads JSON from stdin containing file path and old/new strings, applies the
+// replacement and updates the topology database.
+//
+// This delegates to the MCP edit tool rather than reimplementing it. The two
+// had drifted: this path had no file lock and no CRLF fallback, and it rejected
+// an empty new_string outright, so deleting a block of code meant rewriting the
+// whole file or escaping to a shell the guard exists to discourage.
 func RunEdit() {
 	var input struct {
 		FilePath  string `json:"file_path"`
 		OldString string `json:"old_string"`
-		NewString string `json:"new_string"`
 	}
 	data, err := io.ReadAll(os.Stdin)
 	if err != nil {
@@ -24,35 +30,21 @@ func RunEdit() {
 		fmt.Fprintf(os.Stderr, "Error parsing JSON: %v\n", err)
 		os.Exit(1)
 	}
-	if input.FilePath == "" || input.OldString == "" || input.NewString == "" {
-		fmt.Fprintln(os.Stderr, "Usage: echo '{\"file_path\":\"...\",\"old_string\":\"...\",\"new_string\":\"...\"}' | arac edit")
+	// new_string is not checked: an empty one deletes the matched text.
+	if input.FilePath == "" || input.OldString == "" {
+		fmt.Fprintln(os.Stderr, `Usage: echo '{"file_path":"...","old_string":"...","new_string":"...","replace_all":false}' | arac edit`)
+		fmt.Fprintln(os.Stderr, "       an empty new_string deletes the matched text; old_string must match exactly once unless replace_all is true")
 		os.Exit(1)
 	}
 
-	content, err := os.ReadFile(input.FilePath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading %s: %v\n", input.FilePath, err)
-		os.Exit(1)
-	}
-
-	s := string(content)
-	if !strings.Contains(s, input.OldString) {
-		fmt.Fprintf(os.Stderr, "old_string not found in %s\n", input.FilePath)
-		os.Exit(1)
-	}
-
-	newContent := strings.Replace(s, input.OldString, input.NewString, 1)
-	if err := os.WriteFile(input.FilePath, []byte(newContent), 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "Error writing %s: %v\n", input.FilePath, err)
-		os.Exit(1)
-	}
-
+	// InitRegistry now runs before the write rather than after it. It builds the
+	// topology when none exists; UpdateFile re-reads the edited file straight
+	// afterwards, so the pre-edit snapshot it sees does not survive.
 	manager, reg := InitRegistry(".aracne/topology.db")
-	warnings, err := manager.UpdateFile(input.FilePath, reg)
-	if err == nil && len(warnings) > 0 {
-		for _, w := range warnings {
-			fmt.Printf("Warning: [%s] %s (source: %s, target: %s)\n", w.Kind, w.Message, w.SourceID, w.TargetID)
-		}
+	out, err := tools.NewEdit(manager, reg).Run(data)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
 	}
-	fmt.Println("edit succeeded")
+	fmt.Println(out)
 }

@@ -27,7 +27,7 @@ func (w *WarningsList) Name() string {
 
 // Returns the description of the warnings_list tool explaining its purpose and supported filters.
 func (w *WarningsList) Description() string {
-	return "List all outstanding topology warnings. Warnings track missing references (UseMissingNode), removed resources (NodeRemoved), and signature changes (SignatureChanged). Use optional filters to narrow by source ID, target ID, or warning kind."
+	return "List outstanding topology warnings: missing references, removed resources, changed signatures. Filter by source_id, target_id or kind."
 }
 
 // Returns optional filter parameters for warnings_list: source_id, target_id, and kind.

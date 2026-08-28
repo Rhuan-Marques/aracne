@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"aracne/internal/topology/domain"
@@ -1389,5 +1390,230 @@ func IWasEdited() {
 	if !found {
 		t.Errorf("expected ConnCalls to include %q (transitive cross-package method), got %v",
 			methodID, conns[golang.ConnCalls])
+	}
+}
+
+// --- package-level func-typed vars are call targets, not missing nodes -------
+//
+// Regression cover for the defect that produced 83 false `use_missing_node`
+// warnings on the cli/cli fixture: every one of them was a call through a
+// package-level variable of function type (var Yellow = makeColorFunc(...),
+// var PrepareCmd = func(*exec.Cmd) Runnable). The body analyzer checked
+// Functions/NamedTypes/Structs but never ExternalVars, so a node that was
+// sitting in the database was reported as nonexistent.
+
+// TestAnalyzeFunctionBody_packageFuncVarCallDoesNotWarn
+// Verifies: Format("x") where Format is a same-package func-typed var resolves
+// to ConnUsesExtVar and produces no warning.
+func TestAnalyzeFunctionBody_packageFuncVarCallDoesNotWarn(t *testing.T) {
+	modulePath := "example.com/test"
+	pkgPath := golang.PackagePath(modulePath)
+	pr := &ParseResult{PkgPath: pkgPath, ModulePath: modulePath}
+	gt := buildTestTopology(t, modulePath, string(pkgPath))
+
+	varID := golang.ExternalVarID(string(pkgPath) + ".Format")
+	gt.ExternalVars[varID] = golang.GolangExternalVar{
+		ID: varID, Name: "Format", Typing: "func(string) string",
+	}
+
+	body := parseGoExpr(t, `Format("x")`).(*ast.BlockStmt)
+	conns := analyzeFunctionBody(body, pr, gt, nil, "", nil, "example.com/test.caller", nil)
+
+	if len(gt.Warnings) != 0 {
+		for _, w := range gt.Warnings {
+			t.Logf("unexpected warning: [%s] %s", w.Kind, w.Message)
+		}
+		t.Fatalf("expected no warnings for a package-level func var call, got %d", len(gt.Warnings))
+	}
+	if got := conns[golang.ConnUsesExtVar]; len(got) != 1 || got[0] != string(varID) {
+		t.Errorf("expected ConnUsesExtVar to %q, got %v", varID, got)
+	}
+}
+
+// TestAnalyzeFunctionBody_qualifiedFuncVarCallDoesNotWarn
+// Verifies the cli/cli shape: run.PrepareCmd(cmd) where PrepareCmd is a
+// func-typed var in an internal package. Also pins that NO uses_package edge is
+// emitted — resolveUseMissingWarning's extvar case deliberately skips
+// addCrossPkg(), and the cold and incremental paths must agree byte for byte or
+// the at-scale three-mode equality suite fails.
+func TestAnalyzeFunctionBody_qualifiedFuncVarCallDoesNotWarn(t *testing.T) {
+	modulePath := "example.com/test"
+	pkgPath := golang.PackagePath(modulePath)
+	pr := &ParseResult{
+		PkgPath:    pkgPath,
+		ModulePath: modulePath,
+		ImportMap:  map[string]string{"run": "example.com/test/internal/run"},
+	}
+	gt := buildTestTopology(t, modulePath, string(pkgPath))
+
+	varID := golang.ExternalVarID("example.com/test/internal/run.PrepareCmd")
+	gt.ExternalVars[varID] = golang.GolangExternalVar{
+		ID: varID, Name: "PrepareCmd", Typing: "func(*exec.Cmd) Runnable",
+	}
+
+	body := parseGoExpr(t, `run.PrepareCmd(cmd)`).(*ast.BlockStmt)
+	conns := analyzeFunctionBody(body, pr, gt, nil, "", nil, "example.com/test.caller", nil)
+
+	if len(gt.Warnings) != 0 {
+		for _, w := range gt.Warnings {
+			t.Logf("unexpected warning: [%s] %s", w.Kind, w.Message)
+		}
+		t.Fatalf("expected no warnings for a qualified func var call, got %d", len(gt.Warnings))
+	}
+	if got := conns[golang.ConnUsesExtVar]; len(got) != 1 || got[0] != string(varID) {
+		t.Errorf("expected ConnUsesExtVar to %q, got %v", varID, got)
+	}
+	if got := conns[golang.ConnUsesPkg]; len(got) != 0 {
+		t.Errorf("extvar resolution must not emit uses_package (mirrors resolveUseMissingWarning), got %v", got)
+	}
+}
+
+// TestAnalyzeFunctionBody_qualifiedStructConversionDoesNotWarn
+// Verifies: pkg.T(x) is a conversion, not a missing function. resolveCompositeLit
+// already resolves the pkg.T{...} form; the call form must match it.
+func TestAnalyzeFunctionBody_qualifiedStructConversionDoesNotWarn(t *testing.T) {
+	modulePath := "example.com/test"
+	pkgPath := golang.PackagePath(modulePath)
+	pr := &ParseResult{
+		PkgPath:    pkgPath,
+		ModulePath: modulePath,
+		ImportMap:  map[string]string{"other": "example.com/test/other"},
+	}
+	gt := buildTestTopology(t, modulePath, string(pkgPath))
+
+	structID := golang.StructID("example.com/test/other.Point")
+	gt.Structs[structID] = golang.GolangStruct{ID: structID, Name: "Point"}
+
+	body := parseGoExpr(t, `other.Point(v)`).(*ast.BlockStmt)
+	conns := analyzeFunctionBody(body, pr, gt, nil, "", nil, "example.com/test.caller", nil)
+
+	if len(gt.Warnings) != 0 {
+		for _, w := range gt.Warnings {
+			t.Logf("unexpected warning: [%s] %s", w.Kind, w.Message)
+		}
+		t.Fatalf("expected no warnings for a qualified struct conversion, got %d", len(gt.Warnings))
+	}
+	if got := conns[golang.ConnUsesStruct]; len(got) != 1 || got[0] != string(structID) {
+		t.Errorf("expected ConnUsesStruct to %q, got %v", structID, got)
+	}
+	if got := conns[golang.ConnUsesPkg]; len(got) != 1 || got[0] != "example.com/test/other" {
+		t.Errorf("expected uses_package to the target package, got %v", got)
+	}
+}
+
+// TestAnalyzeFunctionBody_qualifiedInterfaceConversionDoesNotWarn
+// Verifies the interface arm of the same conversion form, mirroring
+// resolveUseMissingWarning's existsInInterfaces case.
+func TestAnalyzeFunctionBody_qualifiedInterfaceConversionDoesNotWarn(t *testing.T) {
+	modulePath := "example.com/test"
+	pkgPath := golang.PackagePath(modulePath)
+	pr := &ParseResult{
+		PkgPath:    pkgPath,
+		ModulePath: modulePath,
+		ImportMap:  map[string]string{"other": "example.com/test/other"},
+	}
+	gt := buildTestTopology(t, modulePath, string(pkgPath))
+
+	ifaceID := golang.InterfaceID("example.com/test/other.Shape")
+	gt.Interfaces[ifaceID] = golang.GolangInterface{ID: ifaceID, Name: "Shape"}
+
+	body := parseGoExpr(t, `other.Shape(v)`).(*ast.BlockStmt)
+	conns := analyzeFunctionBody(body, pr, gt, nil, "", nil, "example.com/test.caller", nil)
+
+	if len(gt.Warnings) != 0 {
+		t.Fatalf("expected no warnings for a qualified interface conversion, got %d", len(gt.Warnings))
+	}
+	if got := conns[golang.ConnUsesIface]; len(got) != 1 || got[0] != string(ifaceID) {
+		t.Errorf("expected ConnUsesIface to %q, got %v", ifaceID, got)
+	}
+}
+
+// TestUseMissingWarningUsesQualifiedTargetInMessage
+// The same-package branch put the fully-qualified id in TargetID but the bare
+// name in the message, unlike the qualified branch. An agent reading
+// `warnings list` saw "calls GitCommand" and could not tell which package.
+func TestUseMissingWarningUsesQualifiedTargetInMessage(t *testing.T) {
+	modulePath := "example.com/test"
+	pkgPath := golang.PackagePath(modulePath)
+	pr := &ParseResult{PkgPath: pkgPath, ModulePath: modulePath}
+	gt := buildTestTopology(t, modulePath, string(pkgPath))
+
+	body := parseGoExpr(t, `NonExistent()`).(*ast.BlockStmt)
+	analyzeFunctionBody(body, pr, gt, nil, "", nil, "example.com/test.caller", nil)
+
+	if len(gt.Warnings) != 1 {
+		t.Fatalf("expected exactly one warning, got %d", len(gt.Warnings))
+	}
+	want := "example.com/test.NonExistent"
+	for _, w := range gt.Warnings {
+		if w.TargetID != want {
+			t.Errorf("TargetID = %q, want %q", w.TargetID, want)
+		}
+		if !strings.Contains(w.Message, want) {
+			t.Errorf("message should name the qualified target %q, got %q", want, w.Message)
+		}
+	}
+}
+
+// TestFullScan_CrossPackageFuncVarProducesNoUseMissingWarning
+// The cold-path counterpart of the unit tests above, and the test that would
+// have caught this in production: a real two-package module scanned end to end
+// must produce a uses_extvar edge and zero use_missing_node warnings.
+func TestFullScan_CrossPackageFuncVarProducesNoUseMissingWarning(t *testing.T) {
+	dir := t.TempDir()
+	write := func(rel, content string) {
+		t.Helper()
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	write("go.mod", "module example.com/test\n\ngo 1.22\n")
+	write("hooks/hooks.go", `package hooks
+
+// Format is a package-level func-typed var: the cli/cli "var Yellow =
+// makeColorFunc(...)" shape.
+var Format = func(s string) string { return s }
+`)
+	write("consumer/consumer.go", `package consumer
+
+import "example.com/test/hooks"
+
+func Report() string {
+	return hooks.Format("x")
+}
+`)
+
+	topo, err := NewGoScanner().Scan(dir)
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
+
+	for _, w := range topo.Warnings {
+		if w.Kind == domain.WarnUseMissingNode {
+			t.Errorf("unexpected use_missing_node warning: %s", w.Message)
+		}
+	}
+
+	report, ok := topo.Resources["example.com/test/consumer.Report"]
+	if !ok {
+		t.Fatalf("consumer.Report not in topology; have %d resources", len(topo.Resources))
+	}
+	want := "example.com/test/hooks.Format"
+	found := false
+	for _, target := range report.Connections[string(golang.ConnUsesExtVar)] {
+		if target == want {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected consumer.Report to have uses_extvar -> %q, got %v", want, report.Connections)
+	}
+	if got := report.Connections[string(golang.ConnUsesPkg)]; len(got) != 0 {
+		t.Errorf("extvar resolution must not emit uses_package, got %v", got)
 	}
 }

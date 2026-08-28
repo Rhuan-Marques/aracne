@@ -130,6 +130,12 @@ func collectJavaFiles(root string) []string {
 			return nil
 		}
 		if d.IsDir() {
+			// path != root so a dot- or vendor-named ROOT is not pruned by its own
+			// basename; WalkDir never visits the root's ancestors, so only the root
+			// itself can match on a name it did not choose.
+			if path == root {
+				return nil
+			}
 			name := d.Name()
 			switch name {
 			case "target", "build", ".gradle", "out", "bin", "node_modules", ".git", "test", "tests":

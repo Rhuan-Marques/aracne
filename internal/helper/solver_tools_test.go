@@ -28,10 +28,14 @@ func TestBugSolverToolsIncludeWarningsList(t *testing.T) {
 	}
 }
 
-// TestMainAgentMCPToolsIncludeBugList guards that the main (orchestrator) agent
-// can enumerate bugs, which the bug-hunter/judge/solver slash-command recipes
-// rely on to fan out and to drive the hunter dedup loop.
-func TestMainAgentMCPToolsIncludeBugList(t *testing.T) {
+// TestMainAgentMCPToolsExcludeBugTools pins that the bug pipeline is NOT part of the
+// default surface.
+//
+// The main agent used to carry bug_report/bug_list so it could orchestrate the
+// hunter/judge/solver recipes. Those are a v2 feature (RELEASE_PLAN §1.3) that the shipped
+// binary does not run, and their schemas cost ~260 tokens on every request. A project that
+// uses the bug agents grants them explicitly via llm.<harness>.main_agent.mcp_tools.
+func TestMainAgentMCPToolsExcludeBugTools(t *testing.T) {
 	has := func(xs []string, want string) bool {
 		for _, x := range xs {
 			if x == want {
@@ -41,8 +45,16 @@ func TestMainAgentMCPToolsIncludeBugList(t *testing.T) {
 		return false
 	}
 	for _, name := range []string{"", "main", "default"} {
-		if !has(DefaultAgentMCPTools(name), "bug_list") {
-			t.Errorf("DefaultAgentMCPTools(%q) missing bug_list — orchestrator cannot enumerate bugs", name)
+		tools := DefaultAgentMCPTools(name)
+		for _, bug := range []string{"bug_list", "bug_report"} {
+			if has(tools, bug) {
+				t.Errorf("DefaultAgentMCPTools(%q) still grants %s — v2 surface in the v1 default profile",
+					name, bug)
+			}
+		}
+		// The bug agents themselves keep their tools.
+		if !has(DefaultAgentMCPTools("bug-hunter"), "bug_report") {
+			t.Error("bug-hunter must keep bug_report")
 		}
 	}
 }

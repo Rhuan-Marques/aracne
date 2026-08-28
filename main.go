@@ -7,6 +7,15 @@ import (
 	"aracne/internal/cli"
 )
 
+// Version is the build version, injected at link time:
+//
+//	go build -ldflags "-X main.Version=$(git describe --tags --always --dirty)"
+//
+// An un-stamped build reports "dev". `arac --version` previously printed the usage banner,
+// so nothing — including the benchmark harness's fixture provenance — could record which
+// binary produced a topology. RELEASE_PLAN §6 lists this as a v1 prerequisite.
+var Version = "dev"
+
 // main dispatches Aracne subcommands
 func main() {
 	if len(os.Args) < 2 {
@@ -15,6 +24,8 @@ func main() {
 	}
 
 	switch os.Args[1] {
+	case "--version", "-v", "version":
+		fmt.Printf("arac %s\n", Version)
 	case "scan":
 		cli.RunScan(os.Args[2:])
 	case "agent":
@@ -39,6 +50,10 @@ func main() {
 			cli.RunDescriptionApply(os.Args[3:])
 		case "clear":
 			cli.RunClearDescriptions(os.Args[3:])
+		case "export":
+			cli.RunDescriptionsExport(os.Args[3:])
+		case "import":
+			cli.RunDescriptionsImport(os.Args[3:])
 		default:
 			cli.PrintUsage()
 		}

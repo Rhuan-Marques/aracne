@@ -14,6 +14,7 @@ import (
 
 	"aracne/internal/topology/domain"
 	java "aracne/internal/topology/java"
+	"aracne/internal/topology/scanner"
 )
 
 // JavaScanner implements scanner.LanguageScanner for Java source trees.
@@ -79,15 +80,30 @@ func (s *JavaScanner) Scan(root string) (*domain.Topology, error) {
 	files := collectJavaFiles(absRoot)
 
 	gt := newTopology(absRoot)
-	var results []*ParseResult
-	for _, f := range files {
+
+	// Parse files concurrently (bounded by scanner.Workers()); each ParseFile owns
+	// its tree-sitter parser and frees the tree before returning, so only the
+	// compact digested results are retained. Registration stays sequential and in
+	// input order so the graph is deterministic.
+	type parseRec struct {
+		file string
+		pr   *ParseResult
+		err  error
+	}
+	recs := scanner.ParallelParse(files, "parsing "+s.Name(), func(f string) parseRec {
 		pr, err := ParseFile(f, "")
-		if err != nil {
-			gt.Errors[f] = err.Error()
+		return parseRec{file: f, pr: pr, err: err}
+	})
+	var results []*ParseResult
+	for _, rec := range recs {
+		if rec.err != nil || rec.pr == nil {
+			if rec.err != nil {
+				gt.Errors[rec.file] = rec.err.Error()
+			}
 			continue
 		}
-		results = append(results, pr)
-		applyParsedFile(gt, pr)
+		results = append(results, rec.pr)
+		applyParsedFile(gt, rec.pr)
 	}
 
 	ctx.indexDeclarations(gt)
@@ -293,11 +309,16 @@ func preserveMethodDescriptions(gt *java.JavaTopology, oldMethods map[string]jav
 // still exists.
 func diffMethodWarnings(oldMethods map[string]java.JavaMethod, pr *ParseResult) []domain.TopologyWarning {
 	newByID := map[string]bool{}
-	newByOwnerName := map[string]bool{}
+	// owner+"."+name -> the method's NEW id. A Java method id encodes its
+	// signature, so a signature change shows up as a removed id whose owner and
+	// name still exist under a different id. The warning has to be attributed to
+	// that NEW id: attributing it to the old one made CleanupOrphanedWarnings
+	// drop every Java sig_change warning before it reached the database.
+	newIDByOwnerName := map[string]string{}
 	for _, mp := range pr.Methods {
 		newByID[mp.Method.ID] = true
 		if mp.Method.MethodFrom != nil {
-			newByOwnerName[*mp.Method.MethodFrom+"."+mp.Method.Name] = true
+			newIDByOwnerName[*mp.Method.MethodFrom+"."+mp.Method.Name] = mp.Method.ID
 		}
 	}
 
@@ -310,21 +331,17 @@ func diffMethodWarnings(oldMethods map[string]java.JavaMethod, pr *ParseResult) 
 		if old.MethodFrom != nil {
 			owner = *old.MethodFrom
 		}
-		if newByOwnerName[owner+"."+old.Name] {
+		if newID, ok := newIDByOwnerName[owner+"."+old.Name]; ok {
 			warnings = append(warnings, domain.TopologyWarning{
-				ID:       id + "@sig_change@",
-				SourceID: id,
+				ID:       newID + "@sig_change@",
+				SourceID: newID,
 				Kind:     domain.WarnSignatureChanged,
 				Message:  fmt.Sprintf("method %s changed signature, verify callers", old.Name),
 			})
 			continue
 		}
-		warnings = append(warnings, domain.TopologyWarning{
-			ID:       id + "@node_removed@",
-			SourceID: id,
-			Kind:     domain.WarnNodeRemoved,
-			Message:  fmt.Sprintf("method %s was removed", old.Name),
-		})
+		// A removed method is reported by the manager's referrer pass against
+		// its surviving callers; see the note in jsscanner.diffFuncWarnings.
 	}
 	return warnings
 }

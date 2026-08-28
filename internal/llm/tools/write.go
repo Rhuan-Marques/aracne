@@ -29,7 +29,7 @@ func (w *Write) Name() string {
 
 // Returns the tool description: "Write a new file, creating parent directories if needed."
 func (w *Write) Description() string {
-	return "Write a new file, creating parent directories if needed. Provide the file path and the content. The project topology is automatically updated. Overwrites file if it already existed"
+	return "Write a file, creating parent directories and overwriting if present. The topology is updated automatically."
 }
 
 // Returns required parameters: file_path (string) and content (string)

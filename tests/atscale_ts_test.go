@@ -4,7 +4,7 @@ package tests_test
 // testing_ground/tsfamily corpus, asserted under incremental / full / hard with
 // strict cross-mode equality (see atscale_harness_test.go).
 //
-// TS resource IDs are path-based: "aracne/testing_ground/tsfamily/<file>.<Name>".
+// TS resource IDs are path-based: "testing_ground/tsfamily/<file>.<Name>".
 // TS-only edges: implements/implemented_by, uses_interface, uses_named_type.
 //
 // Core scenarios setup-drop the react components (dropReactComponents); the TSX
@@ -22,25 +22,25 @@ import (
 )
 
 const (
-	tsAreaOf         = "aracne/testing_ground/tsfamily/factory.areaOf"
-	tsRender         = "aracne/testing_ground/tsfamily/factory.render"
-	tsFactMakeCirc   = "aracne/testing_ground/tsfamily/factory.makeCircle"
-	tsFactMakeRect   = "aracne/testing_ground/tsfamily/factory.makeRectangle"
-	tsShapesCircArea = "aracne/testing_ground/tsfamily/shapes.Circle.area"
-	tsShapesRectArea = "aracne/testing_ground/tsfamily/shapes.Rectangle.area"
-	tsShapesBase     = "aracne/testing_ground/tsfamily/shapes.Base"
-	tsShapesRect     = "aracne/testing_ground/tsfamily/shapes.Rectangle"
+	tsAreaOf         = "testing_ground/tsfamily/factory.areaOf"
+	tsRender         = "testing_ground/tsfamily/factory.render"
+	tsFactMakeCirc   = "testing_ground/tsfamily/factory.makeCircle"
+	tsFactMakeRect   = "testing_ground/tsfamily/factory.makeRectangle"
+	tsShapesCircArea = "testing_ground/tsfamily/shapes.Circle.area"
+	tsShapesRectArea = "testing_ground/tsfamily/shapes.Rectangle.area"
+	tsShapesBase     = "testing_ground/tsfamily/shapes.Base"
+	tsShapesRect     = "testing_ground/tsfamily/shapes.Rectangle"
 
-	tsModelsShape  = "aracne/testing_ground/tsfamily/models.Shape"
-	tsModelsForm   = "aracne/testing_ground/tsfamily/models.Form"
-	tsModelsSolid  = "aracne/testing_ground/tsfamily/models.Solid"
-	tsModelsPoly   = "aracne/testing_ground/tsfamily/models.Polyhedron"
-	tsModelsColor  = "aracne/testing_ground/tsfamily/models.Color"
-	tsModelsTagged = "aracne/testing_ground/tsfamily/models.Tagged"
+	tsModelsShape  = "testing_ground/tsfamily/models.Shape"
+	tsModelsForm   = "testing_ground/tsfamily/models.Form"
+	tsModelsSolid  = "testing_ground/tsfamily/models.Solid"
+	tsModelsPoly   = "testing_ground/tsfamily/models.Polyhedron"
+	tsModelsColor  = "testing_ground/tsfamily/models.Color"
+	tsModelsTagged = "testing_ground/tsfamily/models.Tagged"
 
-	tsExtraPentagon = "aracne/testing_ground/tsfamily/extra.Pentagon"
-	tsConsumerUnit  = "aracne/testing_ground/tsfamily/consumer.Geometry.unit"
-	tsCompRender    = "aracne/testing_ground/tsfamily/components.CircleView.render"
+	tsExtraPentagon = "testing_ground/tsfamily/extra.Pentagon"
+	tsConsumerUnit  = "testing_ground/tsfamily/consumer.Geometry.unit"
+	tsCompRender    = "testing_ground/tsfamily/components.CircleView.render"
 )
 
 const pentagonTs = `import { Shape } from "./models";

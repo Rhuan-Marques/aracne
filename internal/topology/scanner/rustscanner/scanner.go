@@ -21,6 +21,7 @@ import (
 
 	"aracne/internal/topology/domain"
 	rust "aracne/internal/topology/rust"
+	"aracne/internal/topology/scanner"
 )
 
 // RustScanner implements scanner.LanguageScanner for Rust source trees.
@@ -83,15 +84,30 @@ func (s *RustScanner) Scan(root string) (*domain.Topology, error) {
 	ctx.buildModuleIndex(files)
 
 	gt := newTopology(absRoot)
-	var results []*ParseResult
-	for _, f := range files {
+
+	// Parse files concurrently (bounded by scanner.Workers()); each ParseFile owns
+	// its tree-sitter parser and frees the tree before returning. ctx.moduleOfFile
+	// is read-only here (built above), so the concurrent lookups are safe.
+	// Registration stays sequential and in input order for a deterministic graph.
+	type parseRec struct {
+		file string
+		pr   *ParseResult
+		err  error
+	}
+	recs := scanner.ParallelParse(files, "parsing "+s.Name(), func(f string) parseRec {
 		pr, err := ParseFile(f, ctx.moduleOfFile[f])
-		if err != nil {
-			gt.Errors[f] = err.Error()
+		return parseRec{file: f, pr: pr, err: err}
+	})
+	var results []*ParseResult
+	for _, rec := range recs {
+		if rec.err != nil || rec.pr == nil {
+			if rec.err != nil {
+				gt.Errors[rec.file] = rec.err.Error()
+			}
 			continue
 		}
-		results = append(results, pr)
-		applyParsedFile(gt, pr)
+		results = append(results, rec.pr)
+		applyParsedFile(gt, rec.pr)
 	}
 
 	resolveTopology(gt, results, ctx)
@@ -403,12 +419,8 @@ func diffFuncWarnings(oldFuncs map[string]rust.RustFunction, pr *ParseResult, st
 	for id, old := range oldFuncs {
 		nf, ok := newFuncs[id]
 		if !ok {
-			warnings = append(warnings, domain.TopologyWarning{
-				ID:       id + "@node_removed@",
-				SourceID: id,
-				Kind:     domain.WarnNodeRemoved,
-				Message:  fmt.Sprintf("function %s was removed", old.Name),
-			})
+			// Emitted by the manager's referrer pass against the surviving
+			// callers; see the note in jsscanner.diffFuncWarnings.
 			continue
 		}
 		if !signaturesEqual(old, nf) {

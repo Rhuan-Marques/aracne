@@ -49,7 +49,9 @@ func (l *Ls) Run(args json.RawMessage) (string, error) {
 			}
 			if info.IsDir() {
 				base := filepath.Base(p)
-				if strings.HasPrefix(base, ".") && p != "." {
+				// p != params.Path so listing inside a dot-named directory works;
+				// `p != "."` only covered the relative-cwd case.
+				if strings.HasPrefix(base, ".") && p != params.Path {
 					return filepath.SkipDir
 				}
 				rel, _ := filepath.Rel(params.Path, p)

@@ -143,7 +143,12 @@ func loadGuardConfig() (blocked map[string]bool, exemptPiped bool) {
 // When exemptPiped is set, a read/grep command that consumes piped stdin
 // (`cmd | tail`, `cmd | grep x`) is skipped: it views/filters command output,
 // which the MCP file/grep tools cannot serve. Direct file reads (`cat foo.go`)
-// are still classified, and `edit` (sed/awk) is never exempt.
+// are still classified.
+//
+// sed/awk are classified by what they DO, not by their name: they map to `edit`
+// only when they write in place (-i) or redirect output to a file, and count as
+// reads otherwise. That is what makes `git log | sed -n '30,60p'` exempt under
+// the ordinary read rule instead of being refused as an edit.
 func commandKeys(command string, exemptPiped bool) []string {
 	if strings.TrimSpace(command) == "" {
 		return nil
@@ -151,11 +156,12 @@ func commandKeys(command string, exemptPiped bool) []string {
 	var keys []string
 	seen := make(map[string]bool)
 	for _, seg := range splitCommandSegments(command) {
-		word := commandWord(seg.text)
-		if word == "" {
+		fields := commandFields(seg.text)
+		if len(fields) == 0 {
 			continue
 		}
-		key, ok := toolspec.ShellCommandKey(word)
+		word := fields[0]
+		key, ok := toolspec.ShellCommandKeyForArgs(word, fields[1:], seg.redirectsOut)
 		if !ok {
 			continue
 		}
@@ -176,6 +182,11 @@ func commandKeys(command string, exemptPiped bool) []string {
 type commandSegment struct {
 	text      string
 	pipedInto bool
+	// redirectsOut records an unquoted `>` or `>>` in this segment. It is
+	// captured here, during the scan, because quoting is still known: by the
+	// time the segment text is re-split into fields the quotes are gone and a
+	// `sed 's/a>b/c/'` expression is indistinguishable from a real redirect.
+	redirectsOut bool
 }
 
 // splitCommandSegments splits a shell command into simple-command candidates on
@@ -189,11 +200,13 @@ func splitCommandSegments(command string) []commandSegment {
 	var segs []commandSegment
 	var cur strings.Builder
 	var quote rune
-	curPiped := false // is the segment currently accumulating downstream of a `|`?
+	curPiped := false    // is the segment currently accumulating downstream of a `|`?
+	curRedirect := false // has this segment redirected stdout to a file?
 	flush := func(nextPiped bool) {
-		segs = append(segs, commandSegment{text: cur.String(), pipedInto: curPiped})
+		segs = append(segs, commandSegment{text: cur.String(), pipedInto: curPiped, redirectsOut: curRedirect})
 		cur.Reset()
 		curPiped = nextPiped
+		curRedirect = false
 	}
 	for i := 0; i < len(runes); i++ {
 		r := runes[i]
@@ -217,6 +230,12 @@ func splitCommandSegments(command string) []commandSegment {
 			}
 		case ';', '&', '\n', '(', ')', '`', '{', '}':
 			flush(false)
+		case '>':
+			// `2>&1` duplicates a descriptor, it does not write a file.
+			if i+1 >= len(runes) || runes[i+1] != '&' {
+				curRedirect = true
+			}
+			cur.WriteRune(r)
 		default:
 			cur.WriteRune(r)
 		}
@@ -225,19 +244,36 @@ func splitCommandSegments(command string) []commandSegment {
 	return segs
 }
 
-// commandWord returns the base command name of a single segment, skipping
-// leading environment assignments (FOO=bar) and wrapper commands
-// (sudo/env/...). Returns "" when the segment has no command word.
-func commandWord(segment string) string {
+// commandFields returns a segment's command word followed by its arguments,
+// skipping leading environment assignments (FOO=bar) and wrapper commands
+// (sudo/env/...). The word is base-named so /usr/bin/grep, \grep and grep.exe
+// all resolve to grep. Returns nil when the segment has no command word.
+//
+// Arguments are kept because classification needs them: without them the guard
+// cannot tell `sed -i` (an edit) from `sed -n '1,10p'` (a read).
+func commandFields(segment string) []string {
 	fields := strings.Fields(segment)
 	i := 0
 	for i < len(fields) && (isEnvAssignment(fields[i]) || isCommandWrapper(fields[i])) {
 		i++
 	}
 	if i >= len(fields) {
+		return nil
+	}
+	out := make([]string, 0, len(fields)-i)
+	out = append(out, baseName(fields[i]))
+	out = append(out, fields[i+1:]...)
+	return out
+}
+
+// commandWord returns just the base command name of a segment, or "" when it
+// has none.
+func commandWord(segment string) string {
+	fields := commandFields(segment)
+	if len(fields) == 0 {
 		return ""
 	}
-	return baseName(fields[i])
+	return fields[0]
 }
 
 // Returns true if a token is a valid environment variable assignment (VAR=value format).

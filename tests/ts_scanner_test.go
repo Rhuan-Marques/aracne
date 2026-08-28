@@ -97,7 +97,8 @@ export enum Color { Red, Green, Blue }
 
 	// read the interface via the CLI dispatch (by full file-scoped ID) and confirm its
 	// implementor shows up.
-	ifaceID := filepath.Base(dir) + "/models.Service"
+	// id-scheme 2: module paths are repo-relative, so no project-directory prefix.
+	ifaceID := "models.Service"
 	ifaceOut := mustRun(t, dir, "read", "--kind", "interface", ifaceID)
 	if !strings.Contains(ifaceOut, "RealService") {
 		t.Fatalf("expected Service interface read to list RealService implementor, got:\n%s", ifaceOut)
@@ -112,7 +113,7 @@ export type ID = string | number;
 `)
 
 	mustRun(t, dir, "scan", "-root", dir)
-	id := filepath.Base(dir) + "/types.ID"
+	id := "types.ID"
 	out := mustRun(t, dir, "read", "--kind", "named_type", id)
 	if !strings.Contains(out, "ID") {
 		t.Fatalf("expected named type ID read, got:\n%s", out)

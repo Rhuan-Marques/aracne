@@ -19,22 +19,31 @@
 
 samples: 2                                   # FINAL tasks per language (small; scale up deliberately)
 oversample: 3                                 # sample samples x this, prune oversized repos in `prepare`
+max_per_repo: 1                               # max tasks drawn from ONE repository. The paired analysis
+                                              #   clusters on repo, so effective N is the REPO count:
+                                              #   >1 buys task count without buying statistical power.
 languages: [go, javascript, typescript, rust, python]
 seeds: 1                                      # repetitions per task per arm (consistency)
 sample_seed: 0                                # RNG seed selecting WHICH tasks are drawn
 sample_id: default                            # manifest filename stem (all phases share it)
 samples_dir: null                             # null -> bench/samples
 fixtures_dir: null                            # null -> bench/fixtures (warm worktrees + snapshots live here)
-max_describable_nodes: 600                    # `prepare` drops candidate repos bigger than this
+max_describable_nodes: 600                    # `prepare` drops candidate repos bigger than this.
+                                              #   NOTE: a low cap drops the LARGE repos where aracne
+                                              #   should win most, biasing the study against it and
+                                              #   flattening the by-size breakdown. See configs/run/scale40.yaml.
 
 arms: [baseline, aracne]
 run_harness: claude_code                      # claude_code | opencode  (SAME for both arms)
 model: haiku                                  # run model for BOTH arms (cheap default; opencode -> provider/model)
 max_turns: 30                                 # hard cap per run (cost guardrail)
 timeout_s: 1800                               # per-run wall-clock cap (seconds)
+run_parallel: 1                               # matrix cells run at once. 1 = sequential (contention-free
+                                              # wall-clock). 2-4 is the useful range: throughput up, but
+                                              # `duration_ms` inflates and plan rate limits arrive sooner.
 arac_bin: arac                                # path to the aracne binary (PATH or absolute)
 scan_mode: hard                               # `arac scan` mode used when preparing fixtures
-coverage_min: 0.5                             # min description coverage for the aracne arm
+coverage_min: 0.95                             # min description coverage for the aracne arm
 allow_cold: false                             # bypass the coverage guardrail (structure-only topology)
 
 # Description generation (`generate` subcommand):
@@ -55,6 +64,9 @@ aracne_config: null                           # aracne arm's .aracne/config.json
                                               #   Deep-merged onto the fixture config at run time (tools, guard
                                               #   blocking, context_filter, read.scan take effect; scan.mode /
                                               #   described-content / paths are frozen at prepare). null -> fixture default.
+ni_margin: 0.10                               # PAIRED solve-rate non-inferiority margin: aracne passes
+                                              #   when the paired rate-difference CI clears -0.10. The
+                                              #   efficiency claim is the headline; this guards correctness.
 no_analysis: false                            # skip the end-of-run LLM analysis (Claude Code, Max plan)
 analysis_model: haiku                         # model for the one-shot results analysis (claude_code)
 analysis_max_turns: 2                         # tiny — it just writes prose from the embedded numbers
@@ -69,7 +81,8 @@ sources:
     local_dir: null                           # optional: dir of <lang>/*.jsonl (skips HF)
     eval_config: {}                           # template for the Docker grading config.json
   swe_bench:                                  # Python
-    dataset: princeton-nlp/SWE-bench_Lite
+    dataset: SWE-bench/SWE-bench_Lite         # NOT princeton-nlp/*: that mirror
+                                              # lacks the eval columns swebench>=5 needs
     split: test
     model_name: aracne-bench
     max_workers: 4

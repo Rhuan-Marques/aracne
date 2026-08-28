@@ -56,7 +56,12 @@ func buildCrateModel(absRoot string) *crateCtx {
 		}
 	}
 	if len(ctx.Crates) == 0 {
-		ctx.Crates = append(ctx.Crates, crateInfo{Dir: absRoot, Name: filepath.Base(absRoot)})
+		// No Cargo.toml with a [package] section (a bare .rs tree, or a pure [workspace]
+		// root with no member package). The crate has no declared name, so use Rust's own
+		// word for "this crate" rather than the directory the checkout happens to live in:
+		// `crate::shapes::Circle` is what `use crate::shapes::Circle;` in the source says,
+		// while `myproj::shapes::Circle` appears nowhere and is unguessable (id-scheme 2).
+		ctx.Crates = append(ctx.Crates, crateInfo{Dir: absRoot, Name: "crate"})
 	}
 	return ctx
 }
@@ -253,6 +258,12 @@ func collectRustFiles(root string) []string {
 			return nil
 		}
 		if d.IsDir() {
+			// path != root so a dot- or vendor-named ROOT is not pruned by its own
+			// basename; WalkDir never visits the root's ancestors, so only the root
+			// itself can match on a name it did not choose.
+			if path == root {
+				return nil
+			}
 			name := d.Name()
 			switch name {
 			case "target", "tests", "benches", "node_modules", "vendor", ".git":

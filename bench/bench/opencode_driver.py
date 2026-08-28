@@ -28,6 +28,7 @@ import subprocess
 import tempfile
 import time
 
+from . import claude_driver
 from .claude_driver import RunResult
 
 
@@ -46,7 +47,9 @@ def run_raw(prompt: str, cwd, model: str, max_turns: int, timeout_s: int, *,
     cmd.append(prompt)  # opencode run takes the prompt as a positional arg
 
     t0 = time.monotonic()
-    proc = subprocess.run(cmd, text=True, capture_output=True, timeout=timeout_s)
+    # Same host-Python protection as the Claude driver — see claude_driver.isolated_env.
+    proc = subprocess.run(cmd, text=True, capture_output=True, timeout=timeout_s,
+                          env=claude_driver.isolated_env())
     dur_ms = int((time.monotonic() - t0) * 1000)
     _maybe_dump_raw(proc.stdout)
     return parse_events(proc.stdout, proc.stderr, proc.returncode, dur_ms)

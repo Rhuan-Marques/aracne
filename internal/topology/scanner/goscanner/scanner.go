@@ -9,6 +9,7 @@ import (
 
 	"aracne/internal/topology/domain"
 	"aracne/internal/topology/golang"
+	"aracne/internal/topology/scanner"
 )
 
 // Go AST scanner that parses Go source files to extract function, struct, interface, and variable definitions plus their call relationships.
@@ -66,56 +67,69 @@ func (s *GoScanner) Scan(root string) (*domain.Topology, error) {
 
 	goFiles := collectGoFiles(absRoot)
 
-	dirFiles := make(map[string][]string)
-	for _, f := range goFiles {
-		dir := filepath.Dir(f)
-		dirFiles[dir] = append(dirFiles[dir], f)
-	}
-
 	type fileParseRecord struct {
 		filePath string
 		result   *ParseResult
 		err      error
 	}
 
-	var parseResults []fileParseRecord
+	// Pass 1: parse every file concurrently (bounded by scanner.Workers()). Each
+	// worker drops the AST bodies before returning — they are recovered by a
+	// re-parse in pass 2 — so at most ~Workers() files' ASTs are ever live at
+	// once. That bound is what keeps peak RAM from ballooning to the whole tree
+	// (the previous behavior, which pinned every function body for the entire
+	// project simultaneously).
+	records := scanner.ParallelParse(goFiles, "parsing go", func(filePath string) fileParseRecord {
+		pkgPath := getPackagePath(absRoot, filepath.Dir(filePath), modulePath)
+		pr, err := ParseFile(filePath, pkgPath, modulePath, absRoot)
+		if err == nil && pr != nil {
+			for i := range pr.Functions {
+				pr.Functions[i].Body = nil
+			}
+		}
+		return fileParseRecord{filePath: filePath, result: pr, err: err}
+	})
 
-	for dir, files := range dirFiles {
-		pkgPath := getPackagePath(absRoot, dir, modulePath)
+	// Register each file's package/file nodes sequentially, in input order, so the
+	// resulting graph is deterministic and identical to the old single-threaded
+	// loop. parseResults keeps the body-less results for the structural passes
+	// below (populateNamedTypeUsage reads signatures/imports, never bodies).
+	var parseResults []fileParseRecord
+	for _, rec := range records {
+		if rec.err != nil || rec.result == nil {
+			if rec.err != nil {
+				gt.Errors[rec.filePath] = rec.err.Error()
+			}
+			continue
+		}
+		pr := rec.result
+		filePath := rec.filePath
+		pkgPath := getPackagePath(absRoot, filepath.Dir(filePath), modulePath)
 
 		pkg, ok := gt.Packages[pkgPath]
 		if !ok {
 			pkg = golang.GolangPackage{Path: pkgPath, Connections: make(map[golang.ConnectionKind][]string)}
 		}
 
-		for _, filePath := range files {
-			pr, err := ParseFile(filePath, pkgPath, modulePath, absRoot)
-			if err != nil {
-				gt.Errors[filePath] = err.Error()
-				continue
-			}
-
-			parseResults = append(parseResults, fileParseRecord{filePath: filePath, result: pr})
-
-			fileConns := make(map[golang.ConnectionKind][]string)
-			for _, ip := range pr.InternalImports {
-				fileConns[golang.ConnImportsPkg] = append(fileConns[golang.ConnImportsPkg], string(ip))
-			}
-			for _, dep := range pr.ExternalImports {
-				fileConns[golang.ConnImportsDep] = append(fileConns[golang.ConnImportsDep], string(dep.PackagePath))
-			}
-			file := golang.GolangFile{
-				ID:          golang.FileID(filePath),
-				Name:        filepath.Base(filePath),
-				Description: pr.FileDescription,
-				FromPackage: pkgPath,
-				Connections: fileConns,
-			}
-			gt.Files[golang.FileID(filePath)] = file
-			pkg.Connections[golang.ConnHasFile] = append(pkg.Connections[golang.ConnHasFile], filePath)
+		fileConns := make(map[golang.ConnectionKind][]string)
+		for _, ip := range pr.InternalImports {
+			fileConns[golang.ConnImportsPkg] = append(fileConns[golang.ConnImportsPkg], string(ip))
 		}
-
+		for _, dep := range pr.ExternalImports {
+			fileConns[golang.ConnImportsDep] = append(fileConns[golang.ConnImportsDep], string(dep.PackagePath))
+		}
+		file := golang.GolangFile{
+			ID:          golang.FileID(filePath),
+			Name:        filepath.Base(filePath),
+			Description: pr.FileDescription,
+			FromPackage: pkgPath,
+			Connections: fileConns,
+		}
+		gt.Files[golang.FileID(filePath)] = file
+		pkg.Connections[golang.ConnHasFile] = append(pkg.Connections[golang.ConnHasFile], filePath)
 		gt.Packages[pkgPath] = pkg
+
+		parseResults = append(parseResults, rec)
 	}
 
 	for _, fp := range parseResults {
@@ -178,22 +192,55 @@ func (s *GoScanner) Scan(root string) (*domain.Topology, error) {
 	}
 	populateNamedTypeUsage(gt, namedTypeParseResults)
 
-	for _, fp := range parseResults {
-		if fp.err != nil || fp.result == nil {
-			continue
+	// Pass 2: recover each file's bodies (dropped in pass 1) by re-parsing, then
+	// resolve every function's body edges against the now-complete gt. Parse +
+	// analysis run concurrently; gt is only READ here (existence checks). The one
+	// thing analyzeFunctionBody writes — gt.Warnings, via a captured pointer — is
+	// redirected to a per-worker private map by handing it a shallow gt copy, so
+	// there is no concurrent map write. The per-function deltas are merged
+	// sequentially in input order afterward, making the result identical to the
+	// old single-threaded body loop.
+	type funcConns struct {
+		id    golang.FunctionID
+		conns map[golang.ConnectionKind][]string
+	}
+	type bodyDelta struct {
+		conns    []funcConns
+		warnings map[string]domain.TopologyWarning
+	}
+	deltas := scanner.ParallelParse(goFiles, "analyzing go", func(filePath string) bodyDelta {
+		d := bodyDelta{warnings: make(map[string]domain.TopologyWarning)}
+		pkgPath := getPackagePath(absRoot, filepath.Dir(filePath), modulePath)
+		pr, err := ParseFile(filePath, pkgPath, modulePath, absRoot)
+		if err != nil || pr == nil {
+			return d
 		}
-		for _, fi := range fp.result.Functions {
+		gtLocal := *gt
+		gtLocal.Warnings = d.warnings
+		for _, fi := range pr.Functions {
 			if fi.Body != nil {
-				conns := analyzeFunctionBody(fi.Body, fp.result, gt, fi.Function.Input, fi.ReceiverName, fi.Function.MethodFrom, fi.Function.ID, fi.TypeParamNames)
-				f := gt.Functions[fi.Function.ID]
-				if f.Connections == nil {
-					f.Connections = make(map[golang.ConnectionKind][]string)
-				}
-				for k, v := range conns {
-					f.Connections[k] = append(f.Connections[k], v...)
-				}
-				f.Connections = uniqueConns(f.Connections)
-				gt.Functions[f.ID] = f
+				conns := analyzeFunctionBody(fi.Body, pr, &gtLocal, fi.Function.Input, fi.ReceiverName, fi.Function.MethodFrom, fi.Function.ID, fi.TypeParamNames)
+				d.conns = append(d.conns, funcConns{id: fi.Function.ID, conns: conns})
+			}
+		}
+		return d
+	})
+
+	for _, d := range deltas {
+		for _, fc := range d.conns {
+			f := gt.Functions[fc.id]
+			if f.Connections == nil {
+				f.Connections = make(map[golang.ConnectionKind][]string)
+			}
+			for k, v := range fc.conns {
+				f.Connections[k] = append(f.Connections[k], v...)
+			}
+			f.Connections = uniqueConns(f.Connections)
+			gt.Functions[f.ID] = f
+		}
+		for id, w := range d.warnings {
+			if _, ok := gt.Warnings[id]; !ok {
+				gt.Warnings[id] = w
 			}
 		}
 	}
@@ -882,6 +929,12 @@ func collectGoFiles(root string) []string {
 			return nil
 		}
 		if d.IsDir() {
+			// path != root so a dot- or vendor-named ROOT is not pruned by its own
+			// basename; WalkDir never visits the root's ancestors, so only the root
+			// itself can match on a name it did not choose.
+			if path == root {
+				return nil
+			}
 			name := d.Name()
 			if name == "vendor" || name == ".git" || name == "node_modules" || strings.HasPrefix(name, ".") {
 				return filepath.SkipDir

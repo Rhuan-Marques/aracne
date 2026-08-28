@@ -21,12 +21,12 @@ func TestEditApplyStaleEditError(t *testing.T) {
 	}
 	e := NewEdit(topology.New(), nil)
 
-	_, err := e.apply(path, "MISSING", "x", true)
+	_, err := e.apply(path, "MISSING", "x", false, true)
 	if err == nil || !strings.Contains(err.Error(), "another agent changed this file") {
 		t.Fatalf("waited stale edit: got err %v, want re-read guidance", err)
 	}
 
-	_, err = e.apply(path, "MISSING", "x", false)
+	_, err = e.apply(path, "MISSING", "x", false, false)
 	if err == nil || strings.Contains(err.Error(), "another agent changed this file") {
 		t.Fatalf("uncontended miss: got err %v, want plain not-found", err)
 	}

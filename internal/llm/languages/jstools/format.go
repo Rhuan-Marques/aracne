@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"aracne/internal/llm/languages/renderstate"
+
 	"aracne/internal/topology/javascript"
 )
 
@@ -72,6 +74,7 @@ func FormatJavaScriptDependencyContext(ctx *javascript.JavaScriptDependencyConte
 // Formats a JavaScript function context as markdown with imports, function definition, parent class, and CONTEXT section listing called functions and dependencies.
 func FormatJavaScriptFunctionContext(ctx *javascript.JavaScriptFunctionContext) string {
 	var b strings.Builder
+	st := renderstate.New()
 
 	b.WriteString("```javascript\n")
 
@@ -100,7 +103,7 @@ func FormatJavaScriptFunctionContext(ctx *javascript.JavaScriptFunctionContext) 
 		for _, full := range []bool{true, false} {
 			for _, cu := range ctx.ClassesUsed {
 				if wantVis(cu.Visibility, full) {
-					renderClassUsage(&b, cu)
+					renderClassUsage(&b, st, cu)
 				}
 			}
 			if !full {
@@ -113,18 +116,18 @@ func FormatJavaScriptFunctionContext(ctx *javascript.JavaScriptFunctionContext) 
 			}
 			for _, cf := range ctx.CalledFunctions {
 				if wantVis(cf.Visibility, full) {
-					renderFunc(&b, "## ", cf)
+					renderFunc(&b, st, "## ", cf)
 				}
 			}
 			for _, ev := range ctx.ExtVarsUsed {
 				if wantVis(ev.Visibility, full) {
-					renderExtVar(&b, ev)
+					renderExtVar(&b, st, ev)
 				}
 			}
 		}
 	}
 
-	writeUsedBy(&b, ctx.Incoming)
+	writeUsedBy(&b, st, ctx.Incoming)
 
 	return b.String()
 }
@@ -132,6 +135,7 @@ func FormatJavaScriptFunctionContext(ctx *javascript.JavaScriptFunctionContext) 
 // Formats a TypeScript interface with its base interfaces and implementations as a context block for LLM consumption.
 func FormatJavaScriptInterfaceContext(ctx *javascript.JavaScriptInterfaceContext) string {
 	var b strings.Builder
+	st := renderstate.New()
 
 	b.WriteString("```typescript\n")
 	b.WriteString(ctx.Interface.Cut)
@@ -153,7 +157,7 @@ func FormatJavaScriptInterfaceContext(ctx *javascript.JavaScriptInterfaceContext
 		}
 	}
 
-	writeUsedBy(&b, ctx.Incoming)
+	writeUsedBy(&b, st, ctx.Incoming)
 
 	return b.String()
 }
@@ -185,6 +189,7 @@ func FormatJavaScriptNamedTypeContext(ctx *javascript.JavaScriptNamedTypeContext
 // Formats a JavaScript class context as markdown with imports, class definition, and CONTEXT section listing base classes, methods, and dependencies.
 func FormatJavaScriptClassContext(ctx *javascript.JavaScriptClassContext) string {
 	var b strings.Builder
+	st := renderstate.New()
 
 	b.WriteString("```javascript\n")
 
@@ -215,23 +220,23 @@ func FormatJavaScriptClassContext(ctx *javascript.JavaScriptClassContext) string
 			}
 			for _, m := range ctx.Methods {
 				if wantVis(m.Visibility, full) {
-					renderFunc(&b, "## ", m)
+					renderFunc(&b, st, "## ", m)
 				}
 			}
 			for _, cu := range ctx.ClassesUsed {
 				if wantVis(cu.Visibility, full) {
-					renderClassUsage(&b, cu)
+					renderClassUsage(&b, st, cu)
 				}
 			}
 			for _, ev := range ctx.ExtVarsUsed {
 				if wantVis(ev.Visibility, full) {
-					renderExtVar(&b, ev)
+					renderExtVar(&b, st, ev)
 				}
 			}
 		}
 	}
 
-	writeUsedBy(&b, ctx.Incoming)
+	writeUsedBy(&b, st, ctx.Incoming)
 
 	return b.String()
 }

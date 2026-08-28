@@ -200,22 +200,51 @@ func TestDiffScanFilesNormalizesWindowsManifestPaths(t *testing.T) {
 
 func TestIsSourceFileMatchesScanRules(t *testing.T) {
 	tests := []struct {
+		name     string
+		root     string
 		path     string
 		language string
 		want     bool
 	}{
-		{path: "main.go", language: "go", want: true},
-		{path: "main_test.go", language: "go", want: false},
-		{path: "pkg/test_main.py", language: "python", want: false},
-		{path: "pkg/main.py", language: "python", want: true},
-		{path: ".opencode/plugins/hook.js", language: "go", want: false},
-		{path: "node_modules/pkg/file.go", language: "go", want: false},
+		// No root: every component is examined, which is what the relative-path
+		// callers have always relied on.
+		{name: "go source", path: "main.go", language: "go", want: true},
+		{name: "go test file", path: "main_test.go", language: "go", want: false},
+		{name: "python test file", path: "pkg/test_main.py", language: "python", want: false},
+		{name: "python source", path: "pkg/main.py", language: "python", want: true},
+		{name: "dot dir inside the repo", path: ".opencode/plugins/hook.js", language: "go", want: false},
+		{name: "node_modules", path: "node_modules/pkg/file.go", language: "go", want: false},
+
+		// With a root, only the components INSIDE it are examined. Every path in
+		// this table used to be relative, which is exactly why the absolute-path
+		// bug went unnoticed: a repo under a hidden ancestor scanned to zero
+		// files, silently, for every language.
+		{name: "repo under a hidden ancestor", root: "/home/u/.claude/scratch/app", path: "/home/u/.claude/scratch/app/src/a.js", language: "javascript", want: true},
+		{name: "repo under a CI cache", root: "/home/runner/.cache/x", path: "/home/runner/.cache/x/main.go", language: "go", want: true},
+		{name: "repo in a dot-named dir", root: "/home/u/.dotfiles", path: "/home/u/.dotfiles/main.go", language: "go", want: true},
+		{name: "repo under a vendor-named ancestor", root: "/srv/vendor/app", path: "/srv/vendor/app/main.go", language: "go", want: true},
+		{name: "repo under an env-named ancestor", root: "/opt/env/app", path: "/opt/env/app/main.py", language: "python", want: true},
+		// ...and a dot dir INSIDE the repo is still ignored. This is the
+		// distinction the fix has to preserve.
+		{name: "dot dir inside a hidden-rooted repo", root: "/home/u/.claude/app", path: "/home/u/.claude/app/.opencode/hook.js", language: "javascript", want: false},
+		{name: "node_modules inside a hidden-rooted repo", root: "/home/u/.claude/app", path: "/home/u/.claude/app/node_modules/p/i.js", language: "javascript", want: false},
+
+		// The Rust and Java directory rules had the identical shape and need no
+		// dot at all to misfire.
+		{name: "rust repo under a tests-named ancestor", root: "/home/u/tests/proj", path: "/home/u/tests/proj/src/lib.rs", language: "rust", want: true},
+		{name: "rust tests dir inside the repo", root: "/home/u/proj", path: "/home/u/proj/tests/it.rs", language: "rust", want: false},
+		{name: "rust target dir inside the repo", root: "/home/u/proj", path: "/home/u/proj/target/debug/b.rs", language: "rust", want: false},
+		{name: "java repo under a build-named ancestor", root: "/srv/build/app", path: "/srv/build/app/src/main/java/com/d/A.java", language: "java", want: true},
+		{name: "java repo under a bin-named ancestor", root: "/usr/bin/app", path: "/usr/bin/app/src/main/java/com/d/A.java", language: "java", want: true},
+		{name: "java build dir inside the repo", root: "/srv/app", path: "/srv/app/build/com/d/A.java", language: "java", want: false},
 	}
 
 	for _, tt := range tests {
-		if got := IsSourceFile(tt.path, tt.language); got != tt.want {
-			t.Fatalf("IsSourceFile(%q, %q) = %v, want %v", tt.path, tt.language, got, tt.want)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsSourceFile(tt.root, tt.path, tt.language); got != tt.want {
+				t.Fatalf("IsSourceFile(%q, %q, %q) = %v, want %v", tt.root, tt.path, tt.language, got, tt.want)
+			}
+		})
 	}
 }
 

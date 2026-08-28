@@ -51,7 +51,26 @@ type ScanSection struct {
 	// Patterns support *, **, ?, a trailing "/" (directory-only), and float at any
 	// depth unless they contain a "/". There is no "!" negation.
 	Ignore []string `json:"ignore"`
+	// Workers is the maximum number of files parsed concurrently during a full
+	// scan. 0 (the default) means auto = runtime.NumCPU(). Lower it to cap peak
+	// RAM on large projects; the `--workers` flag overrides this per run.
+	Workers int `json:"workers"`
+	// Progress controls the scan progress bar: "auto" (default; shown on a
+	// terminal when the project has more than ProgressFileThreshold files),
+	// "always", or "never". The `--progress` flag overrides this per run.
+	Progress string `json:"progress"`
 }
+
+// ProgressFileThreshold is the file count above which an "auto" scan progress
+// bar is shown.
+const ProgressFileThreshold = 15
+
+// Scan progress modes for ScanSection.Progress / the `--progress` flag.
+const (
+	ProgressAuto   = "auto"
+	ProgressAlways = "always"
+	ProgressNever  = "never"
+)
 
 // Configuration for file read operations, including max file size, scan mode, context filtering, and shell command passthrough behavior.
 type ReadSection struct {
@@ -392,17 +411,28 @@ func DefaultAgentMCPTools(agentName string) []string {
 	case "bug-solver":
 		return []string{"read_file", "read_function", "read_struct", "read_interface", "grep", "edit", "write", "warnings_list", "bug_delete"}
 	default:
-		// The main agent orchestrates the bug workflows, so it needs read-only
-		// bug_list to enumerate pending/acknowledged/dismissed bugs and drive the
-		// per-bug fan-out and the hunter dedup loop.
-		return []string{"read_file", "read_function", "read_struct", "read_interface", "grep", "edit", "write", "warnings_list", "bug_report", "bug_list"}
+		// The bug pipeline is a v2 feature and is not part of the default surface, so
+		// `bug_report`/`bug_list` are NOT here: their schemas cost roughly 260 tokens on
+		// every single request for a workflow the shipped binary does not run. Projects
+		// using the bug agents add them back via llm.<harness>.main_agent.mcp_tools.
+		return []string{"read_file", "read_function", "read_struct", "read_interface", "grep", "edit", "write", "warnings_list"}
 	}
 }
 
 func defaultBlockedTools() []string {
-	// Returns the default set of blocked tools: read, grep, edit, and write.
+	// Ship WARN-ONLY: the guard tells the agent which aracne tool matches the native one
+	// it just used, and does not deny anything. Hard-blocking is opt-in per project by
+	// listing tools here.
+	//
+	// Blocking used to be the default, on the theory that it forced agents onto the
+	// topology-aware tools. In practice it forced them off a capable native grep onto a
+	// less capable one, and every denial cost a wasted turn — which is a large part of why
+	// the aracne arm spent MORE context than the baseline. Denial is also unnecessary for
+	// graph consistency: the `arac update-file` PostToolUse hook re-syncs the topology
+	// after a native edit (see internal/cli/native_hooks.go).
+	//
+	// A tool has to earn its use by being better, not by being the only one allowed.
 	return []string{}
-	// return []string{"read", "grep", "edit", "write"}
 }
 
 func defaultChatMainAgentTools() []string {
@@ -493,7 +523,7 @@ func DefaultConfig() *Config {
 		return ac
 	}
 	return &Config{
-		Scan:  ScanSection{Mode: ScanModeDefault, Ignore: []string{}},
+		Scan:  ScanSection{Mode: ScanModeDefault, Ignore: []string{}, Workers: 0, Progress: ProgressAuto},
 		Paths: []domain.PathRule{},
 		Read: ReadSection{
 			MaxFileSize:     512 * 1024,
@@ -721,6 +751,14 @@ func normalizeConfig(c *Config) {
 	}
 	if c.Scan.Ignore == nil {
 		c.Scan.Ignore = []string{}
+	}
+	if c.Scan.Workers < 0 {
+		c.Scan.Workers = 0
+	}
+	switch c.Scan.Progress {
+	case ProgressAuto, ProgressAlways, ProgressNever:
+	default:
+		c.Scan.Progress = ProgressAuto
 	}
 }
 

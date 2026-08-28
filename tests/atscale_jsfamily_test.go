@@ -4,7 +4,7 @@ package tests_test
 // testing_ground/jsfamily corpus, asserted under incremental / full / hard with
 // strict cross-mode equality (see atscale_harness_test.go).
 //
-// JS resource IDs are path-based: "aracne/testing_ground/jsfamily/<file>.<Name>".
+// JS resource IDs are path-based: "testing_ground/jsfamily/<file>.<Name>".
 //
 // Core scenarios setup-drop the react component files (dropReactComponents) so
 // the cross-language react-dependency bug (..._4) does not mask the mechanic;
@@ -22,24 +22,24 @@ import (
 )
 
 const (
-	jsShape      = "aracne/testing_ground/jsfamily/shapes.Shape"
-	jsCircle     = "aracne/testing_ground/jsfamily/shapes.Circle"
-	jsCircleArea = "aracne/testing_ground/jsfamily/shapes.Circle.area"
-	jsRectangle  = "aracne/testing_ground/jsfamily/shapes.Rectangle"
-	jsRectArea   = "aracne/testing_ground/jsfamily/shapes.Rectangle.area"
-	jsArc        = "aracne/testing_ground/jsfamily/shapes.Arc"
-	jsArcArea    = "aracne/testing_ground/jsfamily/shapes.Arc.area"
+	jsShape      = "testing_ground/jsfamily/shapes.Shape"
+	jsCircle     = "testing_ground/jsfamily/shapes.Circle"
+	jsCircleArea = "testing_ground/jsfamily/shapes.Circle.area"
+	jsRectangle  = "testing_ground/jsfamily/shapes.Rectangle"
+	jsRectArea   = "testing_ground/jsfamily/shapes.Rectangle.area"
+	jsArc        = "testing_ground/jsfamily/shapes.Arc"
+	jsArcArea    = "testing_ground/jsfamily/shapes.Arc.area"
 
-	jsCircleAreaFn = "aracne/testing_ground/jsfamily/factory.circleArea"
-	jsReport       = "aracne/testing_ground/jsfamily/consumer.report"
-	jsFactMakeCirc = "aracne/testing_ground/jsfamily/factory.makeCircle"
-	jsFactMakeRect = "aracne/testing_ground/jsfamily/factory.makeRect"
+	jsCircleAreaFn = "testing_ground/jsfamily/factory.circleArea"
+	jsReport       = "testing_ground/jsfamily/consumer.report"
+	jsFactMakeCirc = "testing_ground/jsfamily/factory.makeCircle"
+	jsFactMakeRect = "testing_ground/jsfamily/factory.makeRect"
 
-	jsPentagon    = "aracne/testing_ground/jsfamily/extra.Pentagon"
-	jsBundleSumm  = "aracne/testing_ground/jsfamily/bundle.summary"
-	jsCjsBuild    = "aracne/testing_ground/jsfamily/commonjs.buildCircle"
-	jsCjsRectInfo = "aracne/testing_ground/jsfamily/commonjs.rectInfo"
-	jsCompRender  = "aracne/testing_ground/jsfamily/components.CircleView.render"
+	jsPentagon    = "testing_ground/jsfamily/extra.Pentagon"
+	jsBundleSumm  = "testing_ground/jsfamily/bundle.summary"
+	jsCjsBuild    = "testing_ground/jsfamily/commonjs.buildCircle"
+	jsCjsRectInfo = "testing_ground/jsfamily/commonjs.rectInfo"
+	jsCompRender  = "testing_ground/jsfamily/components.CircleView.render"
 )
 
 const pentagonJs = `import { Shape } from "./shapes.js";

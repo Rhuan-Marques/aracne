@@ -15,6 +15,8 @@ Usage:
   Aracne descriptions generate [flags]  Generate descriptions for targeted undocumented resources
   Aracne descriptions apply            Write topology descriptions back into source as doc comments
   Aracne descriptions clear [flags]    Clear stored topology descriptions
+  Aracne descriptions export [flags]   Back up descriptions to an ID-independent JSONL sidecar
+  Aracne descriptions import [flags]   Restore descriptions from a sidecar after a re-scan
   arac read [--kind <kind>] <resource-id>   Read a resource by ID; --kind forces exact kind (function, method, struct, named_type, interface, variable, file, package, dependency)
   arac resource list [query] [--kind <kind>]... [--no-description]  List resources, optionally filtered by query, kind, or missing description
   arac grep [flags] <pattern> [path]  Search file contents and annotate topology resource matches
@@ -41,6 +43,9 @@ Flags for "scan":
   --hard          Force full rebuild from scratch (clears descriptions and bugs)
   --default       Force default incremental scan (overrides .aracne/config.json scan.mode)
   --debug         Compare warnings before and after scan, print differences
+  --verbose, -v   List the changed files detected during an incremental scan
+  --workers <n>   Max files parsed concurrently during a full scan (0 = auto, one per CPU); lower to cap peak RAM
+  --progress <m>  Progress bar: auto (default; on a terminal above 15 files), always, or never
 
 Flags for "serve":
   --tool-profile <agent>    Agent whose tools to serve: main, all, or a configured agent name
@@ -59,6 +64,17 @@ Flags for "descriptions generate":
   --batch-size <n>        Maximum resources assigned to each description executor (default 5)
   --parallel <n>          Maximum description executors to run concurrently (default 4)
   --max-retries <n>       Maximum executor attempts per resource (default 3)
+
+Flags for "descriptions export":
+  --out <path>            Sidecar to write (default .aracne/descriptions.jsonl)
+  --db <path>             Topology database (default .aracne/topology.db)
+
+Flags for "descriptions import":
+  --in <path>             Sidecar to restore (default .aracne/descriptions.jsonl)
+  --db <path>             Topology database (default .aracne/topology.db)
+  --dry-run               Report what would be restored without writing
+  --min-rate <0..1>       Exit 2 when the match rate falls below this
+  --report <path>         Write unmatched records to this JSONL path
 
 Flags for "descriptions clear":
   --target <kinds>        Comma-separated resource kinds to clear; omit to clear every description

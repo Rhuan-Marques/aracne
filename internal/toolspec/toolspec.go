@@ -31,7 +31,7 @@ var specs = []Spec{
 	{"read_package", "inspect a package and its members", true, true},
 	{"read_dependency", "inspect a dependency and its usages", true, true},
 	{"grep", "search code contents, returning topology resource metadata", true, true},
-	{"edit", "apply exact string replacements to a file", true, true},
+	{"edit", "apply exact string replacements to a file, or delete text with an empty new_string", true, true},
 	{"write", "create or overwrite a file", true, true},
 	{"warnings_list", "list topology warnings", true, true},
 	{"bug_report", "report a confirmed bug on a node", true, true},
@@ -79,19 +79,34 @@ var shellCmdToKey = map[string]string{
 // powershellCmdToKey maps PowerShell cmdlets to aracne tool keys (lowercased).
 // Only unambiguous full cmdlet names are listed; the short aliases gc/sls are
 // intentionally omitted to avoid colliding with unrelated user aliases.
+// streamEditors are the commands that mutate a file only under some flags. They
+// map to `edit` in shellCmdToKey, but that is the pessimistic reading: `sed` and
+// `awk` are stream editors, and unless they are told to write in place they only
+// read and filter, exactly like `head`. ShellCommandKeyForArgs decides which.
+var streamEditors = map[string]bool{"sed": true, "awk": true}
+
 var powershellCmdToKey = map[string]string{
 	"get-content":   "read",
 	"select-string": "grep",
 }
 
-// nativeWarnings is the model-facing guidance shown when a native tool or its
-// shell equivalent is used. Keyed by aracne tool key; bash has no MCP
-// equivalent and so has no warning.
+// nativeWarnings is the model-facing guidance shown when a native tool or its shell
+// equivalent is used. Keyed by aracne tool key; bash has no MCP equivalent and so has no
+// warning.
+//
+// These are deliberately SHORT. The hook fires on every matching call and its text is
+// injected into the transcript each time, so a 200-character nag repeated across eighty
+// native calls costs ~16 KB — spent telling the model something the CLAUDE.md contract
+// already explains once, for free, in the cached prompt.
+//
+// They are also phrased as an offer rather than a correction, which is what the shipped
+// warn-only default actually means: the native tools are allowed, and aracne's equivalents
+// have to win on merit. Forbidding them is what produced redundant read turns.
 var nativeWarnings = map[string]string{
-	"read":  "aracne: use the `mcp__aracne__read_file`/`mcp__aracne__read_function` MCP tools to read code instead of the native Read tool or shell `cat`/`head`/`tail`/`less`/`Get-Content`.",
-	"grep":  "aracne: use the `mcp__aracne__grep` MCP tool for content search instead of the native Grep tool or shell `grep`/`rg`/`Select-String`.",
-	"edit":  "aracne: use the `mcp__aracne__edit` MCP tool to modify files instead of the native Edit tool or shell `sed`/`awk`.",
-	"write": "aracne: use the `mcp__aracne__write` MCP tool to create files instead of the native Write tool.",
+	"read":  "aracne: `mcp__aracne__read_function` also returns the symbol's neighbours and descriptions.",
+	"grep":  "aracne: `mcp__aracne__grep` also names the enclosing resource; it takes glob/type/output_mode.",
+	"edit":  "aracne: `mcp__aracne__edit` updates the topology inline (the update-file hook covers this one too).",
+	"write": "aracne: `mcp__aracne__write` updates the topology inline.",
 }
 
 // Lookup returns the spec for a tool name.
@@ -159,6 +174,86 @@ func ShellCommandKey(cmd string) (string, bool) {
 		return key, true
 	}
 	return "", false
+}
+
+// ShellCommandKeyForArgs classifies a whole simple-command — the command word
+// plus its arguments and whether the segment redirects stdout to a file —
+// rather than the name alone.
+//
+// It exists for `sed` and `awk`. Classifying them as `edit` on the name meant
+// `git log | sed -n '30,60p'` was refused: unambiguously a read of command
+// output, no file operand, no -i, and nothing an MCP tool can serve instead.
+// Reclassifying the non-mutating forms as `read` lets the ordinary pipe
+// exemption cover them, so the policy stays in one place.
+//
+// A stream editor counts as `edit` when it writes in place (-i / --in-place,
+// gawk's -i inplace) or redirects its output to a file. Everything else reads.
+func ShellCommandKeyForArgs(word string, args []string, redirectsOut bool) (string, bool) {
+	// Callers may pass a path-qualified word (/usr/bin/sed, sed.exe). The guard
+	// normalizes before calling, but do not depend on that.
+	name := baseCommandName(word)
+	key, ok := ShellCommandKey(name)
+	if !ok {
+		return "", false
+	}
+	if key != "edit" || !streamEditors[strings.ToLower(name)] {
+		return key, true
+	}
+	if redirectsOut || streamEditorMutates(word, args) {
+		return "edit", true
+	}
+	return "read", true
+}
+
+// streamEditorMutates reports whether a sed/awk invocation writes to a file.
+func streamEditorMutates(word string, args []string) bool {
+	switch strings.ToLower(baseCommandName(word)) {
+	case "sed":
+		for _, a := range args {
+			if a == "--in-place" || strings.HasPrefix(a, "--in-place=") {
+				return true
+			}
+			// A short-flag cluster: -i, -i.bak, -ni, -Ei all edit in place.
+			// Long options (--expression) are excluded by the -- check.
+			if len(a) > 1 && a[0] == '-' && !strings.HasPrefix(a, "--") && strings.ContainsRune(shortFlagLetters(a), 'i') {
+				return true
+			}
+		}
+	case "awk":
+		// gawk edits in place only via the inplace extension: -i inplace, or
+		// --include=inplace.
+		for _, a := range args {
+			if strings.Contains(a, "inplace") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// shortFlagLetters returns the leading letters of a short-flag cluster, stopping
+// at the first non-letter so `-i.bak` yields "i" and `-n5` yields "n".
+func shortFlagLetters(tok string) string {
+	var b strings.Builder
+	for _, r := range tok[1:] {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+			b.WriteRune(r)
+			continue
+		}
+		break
+	}
+	return b.String()
+}
+
+// baseCommandName strips a directory prefix and a trailing .exe so
+// /usr/bin/sed and sed.exe both resolve to sed. It mirrors the guard's own
+// normalization, which has already run by the time we are called; doing it
+// again keeps this function correct when called directly.
+func baseCommandName(tok string) string {
+	if i := strings.LastIndexAny(tok, "/\\"); i >= 0 {
+		tok = tok[i+1:]
+	}
+	return strings.TrimSuffix(tok, ".exe")
 }
 
 // WarningFor returns the model-facing guidance for an aracne tool key, or ""

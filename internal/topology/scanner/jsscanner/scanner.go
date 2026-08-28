@@ -9,6 +9,7 @@ import (
 	"aracne/internal/helper"
 	"aracne/internal/topology/domain"
 	js "aracne/internal/topology/javascript"
+	"aracne/internal/topology/scanner"
 )
 
 // JavaScriptScanner is the shared ECMAScript scanner; it drives both JavaScript and
@@ -81,16 +82,29 @@ func (s *JavaScriptScanner) Scan(root string) (*domain.Topology, error) {
 		return nil, err
 	}
 
-	var parseResults []*ParseResult
-	for _, f := range files {
+	// Parse files concurrently (bounded by scanner.Workers()); each ParseFile owns
+	// its tree-sitter parser and frees the tree before returning. Registration
+	// stays sequential and in input order so the graph is deterministic.
+	type parseRec struct {
+		file string
+		pr   *ParseResult
+		err  error
+	}
+	recs := scanner.ParallelParse(files, "parsing "+s.Name(), func(f string) parseRec {
 		pkgPath := getJSPackagePath(absRoot, filepath.Dir(f))
 		pr, err := ParseFile(f, pkgPath, absRoot)
-		if err != nil {
-			gt.Errors[f] = err.Error()
+		return parseRec{file: f, pr: pr, err: err}
+	})
+	var parseResults []*ParseResult
+	for _, rec := range recs {
+		if rec.err != nil || rec.pr == nil {
+			if rec.err != nil {
+				gt.Errors[rec.file] = rec.err.Error()
+			}
 			continue
 		}
-		parseResults = append(parseResults, pr)
-		applyParsedFile(gt, pr)
+		parseResults = append(parseResults, rec.pr)
+		applyParsedFile(gt, rec.pr)
 	}
 
 	resolveTopology(gt, parseResults)
@@ -409,12 +423,11 @@ func diffFuncWarnings(oldFuncs map[js.FunctionID]js.JavaScriptFunction, pr *Pars
 	for id, old := range oldFuncs {
 		nf, ok := newFuncs[id]
 		if !ok {
-			warnings = append(warnings, domain.TopologyWarning{
-				ID:       string(id) + "@node_removed@",
-				SourceID: string(id),
-				Kind:     domain.WarnNodeRemoved,
-				Message:  fmt.Sprintf("function %s was removed", old.Name),
-			})
+			// No node_removed warning here. Attributing it to the symbol that
+			// just disappeared made CleanupOrphanedWarnings delete it before it
+			// could reach the database, and told the agent nothing actionable.
+			// The manager's referrer pass emits it against the surviving
+			// callers instead, for every language.
 			continue
 		}
 		if !signaturesEqualJS(old, nf) {
@@ -443,9 +456,11 @@ func signaturesEqualJS(a, b js.JavaScriptFunction) bool {
 }
 
 // Derives a dot-separated package path from a directory relative to the project root.
+// The project-root base name is deliberately absent (id-scheme 2); the root package
+// reads ".". See getPythonPackagePath.
 func getJSPackagePath(root, dir string) js.PackagePath {
 	if dir == root {
-		return js.PackagePath(filepath.Base(root))
+		return js.PackagePath(".")
 	}
 	rel, err := filepath.Rel(root, dir)
 	if err != nil {
@@ -453,7 +468,7 @@ func getJSPackagePath(root, dir string) js.PackagePath {
 	}
 	rel = strings.ReplaceAll(rel, "\\", "/")
 	rel = strings.ReplaceAll(rel, "/", ".")
-	return js.PackagePath(filepath.Base(root) + "." + rel)
+	return js.PackagePath(rel)
 }
 
 // Generic helper that converts a slice of string-like types to a string slice.

@@ -259,9 +259,26 @@ func (m *TopologyManager) IncrementalScan(root string, reg *scanner.Registry) ([
 		allWarnings = append(allWarnings, warnings...)
 	}
 
+	// Files that were re-parsed are authoritative about what they reference.
+	for path := range resolveSet {
+		helper.ClearReferrerWarningsForFile(topo, path)
+	}
+
+	// Symbols removed from files that still exist: RemoveFileResources above
+	// only covers whole-file deletion, and only goscanner did the reverse
+	// lookup for the symbol case. This does it from the graph, so it works for
+	// every language.
+	referrerWarnings := referrerPass(topo, removedSince(beforeSigs, topo.Resources), "", resolveSet)
+
 	for _, w := range allWarnings {
 		topo.Warnings[w.ID] = w
 	}
+	// Merged after, insert-if-absent, so a scanner's more specific message for
+	// the same src@kind@tgt id keeps precedence over the generic one.
+	mergeNewWarnings(topo, referrerWarnings)
+	allWarnings = append(allWarnings, referrerWarnings...)
+
+	helper.ResolveReferrerWarnings(topo)
 
 	helper.CleanupOrphanedWarnings(topo)
 	normalizeTopologyLanguages(topo)
@@ -280,7 +297,7 @@ func (m *TopologyManager) IncrementalScan(root string, reg *scanner.Registry) ([
 // partialUpdaterFor returns the scanner for path if and only if it implements
 // the scoped PartialUpdater interface; otherwise it returns nil so the caller
 // falls back to the full path.
-func partialUpdaterFor(reg *scanner.Registry, path string) scanner.PartialUpdater {
+func partialUpdaterFor(reg *scanner.Registry, root, path string) scanner.PartialUpdater {
 	if os.Getenv("ARAC_NO_PARTIAL") != "" {
 		return nil
 	}
@@ -292,7 +309,7 @@ func partialUpdaterFor(reg *scanner.Registry, path string) scanner.PartialUpdate
 	if !ok {
 		return nil
 	}
-	if !helper.IsSourceFile(path, ls.Name()) {
+	if !helper.IsSourceFile(root, path, ls.Name()) {
 		return nil
 	}
 	return pu
@@ -322,7 +339,7 @@ func (m *TopologyManager) tryPartialIncremental(root string, reg *scanner.Regist
 	}
 	updaters := make([]scanner.PartialUpdater, len(changed))
 	for i, path := range changed {
-		pu := partialUpdaterFor(reg, path)
+		pu := partialUpdaterFor(reg, root, path)
 		if pu == nil {
 			return false, nil, nil
 		}
@@ -335,6 +352,16 @@ func (m *TopologyManager) tryPartialIncremental(root string, reg *scanner.Regist
 	}
 
 	var allWarnings []domain.TopologyWarning
+	// UpdateFilePartial returns the scanner's whole warnings map, not a delta:
+	// the partial working set is seeded with every row of the warnings table
+	// (they are cheap to load and resolution needs them). Reporting that
+	// verbatim hands the agent the entire backlog on every scan, so snapshot
+	// what was already there and subtract it below.
+	preexisting, err := helper.ReadAllWarnings(m.dbPath)
+	if err != nil {
+		return false, nil, nil
+	}
+
 	// Process each changed file in turn, persisting its scoped delta before the
 	// next so cross-file dependencies (and warnings) see prior changes. For the
 	// dominant single-file edit this is exactly one DB write.
@@ -369,7 +396,11 @@ func (m *TopologyManager) tryPartialIncremental(root string, reg *scanner.Regist
 		// Surface only newly-added "changed/removed" warnings to the caller, the
 		// same subset the full path reports.
 		for _, w := range warnings {
+			if _, wasThere := preexisting[w.ID]; wasThere {
+				continue
+			}
 			if w.Kind == domain.WarnSignatureChanged || w.Kind == domain.WarnNodeRemoved {
+				preexisting[w.ID] = w // do not repeat it for the next file in the batch
 				allWarnings = append(allWarnings, w)
 			}
 		}
@@ -385,6 +416,13 @@ func (m *TopologyManager) tryPartialIncremental(root string, reg *scanner.Regist
 }
 
 // Rescans codebase and preserves existing resource descriptions when re-indexing.
+//
+// Descriptions are matched by resource ID first. When the stored database was built under
+// an OLDER id-scheme, that alone would discard every description — the IDs on both sides
+// describe the same code but no longer spell the same string. So a scheme change also runs
+// the identity-based remap (same tiers as the descriptions sidecar: path+kind+name+parent,
+// then source hash), carries bugs across, and records old -> new in `resource_alias` so
+// IDs an agent already knows keep resolving.
 func (m *TopologyManager) FullReScan(root string, reg *scanner.Registry) ([]domain.TopologyWarning, error) {
 	m.applyPathVisibility(root)
 	newTopo, err := scanAllLanguages(root, reg)
@@ -393,6 +431,7 @@ func (m *TopologyManager) FullReScan(root string, reg *scanner.Registry) ([]doma
 	}
 
 	oldTopo, readErr := helper.ReadDb(m.dbPath)
+	var aliases map[string]string
 	if readErr == nil && oldTopo != nil {
 		for id, oldRes := range oldTopo.Resources {
 			newRes, exists := newTopo.Resources[id]
@@ -404,15 +443,73 @@ func (m *TopologyManager) FullReScan(root string, reg *scanner.Registry) ([]doma
 				newTopo.Resources[id] = newRes
 			}
 		}
+		// The identity fallback runs ALWAYS, not only across an id-scheme change.
+		//
+		// IDs drift for reasons besides a scheme bump — a renamed file, a workspace member
+		// resolving differently, a scanner improvement — and ID-only matching silently
+		// dropped a description every time. The tracing fixture lost a handful on every
+		// single rescan for exactly this reason, while its sidecar could still match 10 of
+		// 11 by identity. Matching costs one pass over the described resources; losing
+		// LLM-authored text costs a regeneration.
+		aliases = m.remapByIdentity(oldTopo, newTopo)
 	}
 
 	if err := helper.WriteDb(newTopo, m.dbPath); err != nil {
 		return nil, err
 	}
 
+	if len(aliases) > 0 {
+		// Written AFTER WriteDb: it clears `info` and rewrites resources, but leaves
+		// resource_alias alone, so the mapping survives and old IDs resolve immediately.
+		if _, err := helper.WriteResourceAliases(m.dbPath, aliases); err != nil {
+			return nil, err
+		}
+		if _, err := helper.RemapBugNodes(m.dbPath, aliases); err != nil {
+			return nil, err
+		}
+	}
+
 	helper.CleanupOrphanedBugs(m.dbPath, newTopo)
 	helper.SyncManifest(newTopo, m.dbPath)
 	return nil, nil
+}
+
+// remapByIdentity matches old resources to new ones by IDENTITY rather than by ID, and
+// copies descriptions across. Returns the old -> new ID mapping for the alias table, which
+// keeps IDs an agent already knows resolvable after any drift.
+//
+// It reuses the sidecar's matcher so there is exactly one definition of "the same resource
+// under a different name" in the codebase — the alternative is two rules that drift.
+func (m *TopologyManager) remapByIdentity(oldTopo, newTopo *domain.Topology) map[string]string {
+	// Each side is made relative to ITS OWN root. Passing the scan-root argument to both
+	// silently weakens the match whenever it is not the absolute path the database stores
+	// (e.g. `arac scan --all --root .`), which is the common invocation.
+	oldRoot, newRoot := oldTopo.Root, newTopo.Root
+	if newRoot == "" {
+		newRoot = oldRoot
+	}
+	// Only described resources need carrying; everything else is regenerated verbatim.
+	recs := helper.BuildDescriptionRecords(oldTopo, oldRoot)
+	if len(recs) == 0 {
+		return nil
+	}
+	result := helper.MatchDescriptions(recs, newTopo, newRoot)
+	aliases := make(map[string]string, len(result.Matched)+len(result.Skipped))
+	for _, match := range append(append([]helper.DescriptionMatch{}, result.Matched...),
+		result.Skipped...) {
+		if match.Record.ID != "" && match.ResourceID != "" {
+			aliases[match.Record.ID] = match.ResourceID
+		}
+	}
+	for _, match := range result.Matched {
+		res, ok := newTopo.Resources[match.ResourceID]
+		if !ok || res.Description != "" {
+			continue
+		}
+		res.Description = match.Record.Description
+		newTopo.Resources[match.ResourceID] = res
+	}
+	return aliases
 }
 
 // Sets the database path for the topology manager.
@@ -542,19 +639,94 @@ func (m *TopologyManager) UpdateFile(path string, reg *scanner.Registry) ([]doma
 	if langScanner == nil {
 		return finish(helper.RemoveFileResources(topo, absPath))
 	}
-	if !helper.IsSourceFile(absPath, langScanner.Name()) {
+	if !helper.IsSourceFile(topo.Root, absPath, langScanner.Name()) {
 		return finish(helper.RemoveFileResources(topo, absPath))
 	}
 
 	beforeWarnings := cloneWarnings(topo.Warnings)
 
-	_, err = updateFileWithScanner(topo, langScanner, absPath)
+	// Only goscanner writes into topo.Warnings directly; every other scanner
+	// RETURNS its warnings. Dropping this return value is why an edit to a JS,
+	// TS, Python, Rust or Java file reported "edit succeeded" and nothing else,
+	// no matter what it broke.
+	scannerWarnings, err := updateFileWithScanner(topo, langScanner, absPath)
 	if err != nil {
 		return nil, err
 	}
+	mergeNewWarnings(topo, scannerWarnings)
+
+	// This file was just re-parsed from source, so what it references now is
+	// authoritative: drop node_removed warnings attributed to its own
+	// resources. Anything still broken is re-emitted by the pass below.
+	helper.ClearReferrerWarningsForFile(topo, absPath)
+
+	// Symbols that disappeared in this update get caller-attributed warnings,
+	// for every language. beforeSigs' keys are the pre-update id set.
+	removed := removedSince(beforeSigs, topo.Resources)
+	mergeNewWarnings(topo, referrerPass(topo, removed, absPath, map[string]bool{absPath: true}))
+
+	// A symbol that came back clears the warning about its removal.
+	helper.ResolveReferrerWarnings(topo)
 
 	warnings := addedWarnings(beforeWarnings, topo.Warnings)
 	return finish(warnings)
+}
+
+// mergeNewWarnings inserts warnings that are not already present. Insert-if-
+// absent rather than overwrite: goscanner emits the same src@kind@tgt id with a
+// more specific message ("function X calls Y which was removed from <file>"),
+// and it should win over the generic one.
+func mergeNewWarnings(topo *domain.Topology, ws []domain.TopologyWarning) {
+	for _, w := range ws {
+		if _, exists := topo.Warnings[w.ID]; !exists {
+			topo.Warnings[w.ID] = w
+		}
+	}
+}
+
+// removedSince returns the ids that were in the graph before this update and
+// are not in it now. beforeSigs is captured before any mutation, so its keys
+// are exactly the pre-update id set and no extra snapshot is needed.
+func removedSince(beforeSigs map[string]string, after map[string]domain.Resource) map[string]bool {
+	removed := make(map[string]bool)
+	for id := range beforeSigs {
+		if _, stillThere := after[id]; !stillThere {
+			removed[id] = true
+		}
+	}
+	return removed
+}
+
+// referrerPass emits caller-attributed node_removed warnings for symbols that
+// disappeared in this update.
+//
+// Referrers living in skipPaths are skipped: those files were re-parsed from
+// source in this same update, so goscanner has already emitted use_missing_node
+// for them and the other scanners simply dropped the edge. Warning about them
+// here would duplicate that.
+func referrerPass(topo *domain.Topology, removed map[string]bool, origin string, skipPaths map[string]bool) []domain.TopologyWarning {
+	if len(removed) == 0 {
+		return nil
+	}
+	skip := func(id string) bool {
+		if len(skipPaths) == 0 {
+			return false
+		}
+		res, ok := topo.Resources[id]
+		return ok && skipPaths[res.Location.Path]
+	}
+	return helper.ScanReferrers(topo, helper.ReferrerScan{
+		Removed:    removed,
+		Origin:     origin,
+		ConnTypes:  helper.ReferenceConnTypes,
+		SkipSource: skip,
+		// Safe to strip here because ResolveReferrerWarnings runs in the same
+		// update and puts the edge back if the target reappears. Without the
+		// strip the graph keeps an edge to a node that no longer exists, and
+		// the readers silently drop that neighbour from the CONTEXT block —
+		// the agent sees an incomplete context with no signal anything is wrong.
+		Strip: true,
+	})
 }
 
 // Detects and scans all language parsers in a root directory, merges their topologies, and normalizes the result.
@@ -574,11 +746,29 @@ func scanAllLanguages(root string, reg *scanner.Registry) (*domain.Topology, err
 		if err != nil {
 			return nil, fmt.Errorf("scan %s: %w", langScanner.Name(), err)
 		}
+		// A scanner that claimed this root and then produced no file at all is
+		// always a bug, and it used to surface as a perfectly clean
+		// "0 files, 0 errors". Record it so it shows in the error count.
+		if countFileResources(topo) == 0 {
+			merged.Errors[root+" ("+langScanner.Name()+")"] = fmt.Sprintf(
+				"%s was detected for this project but indexed 0 files", langScanner.Name())
+		}
 		tagTopologyLanguage(topo, langScanner.Name())
 		mergeTopology(merged, topo)
 	}
 	normalizeTopologyLanguages(merged)
 	return merged, nil
+}
+
+// countFileResources returns how many file nodes a topology holds.
+func countFileResources(topo *domain.Topology) int {
+	n := 0
+	for _, res := range topo.Resources {
+		if res.Kind == domain.ResourceFile {
+			n++
+		}
+	}
+	return n
 }
 
 // Updates topology for a single file using a language-specific scanner, merges results back, and returns warnings.
@@ -779,7 +969,7 @@ func languageSubTopology(topo *domain.Topology, language string) *domain.Topolog
 		sub.Warnings[id] = warning
 	}
 	for path, msg := range topo.Errors {
-		if helper.IsSourceFile(path, language) {
+		if helper.IsSourceFile(topo.Root, path, language) {
 			sub.Errors[path] = msg
 		}
 	}
@@ -885,7 +1075,7 @@ func removeLanguageResources(topo *domain.Topology, language string) {
 		topo.Resources[id] = res
 	}
 	for path := range topo.Errors {
-		if helper.IsSourceFile(path, language) {
+		if helper.IsSourceFile(topo.Root, path, language) {
 			delete(topo.Errors, path)
 		}
 	}

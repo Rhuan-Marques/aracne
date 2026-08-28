@@ -34,7 +34,7 @@ type pyImportTarget struct {
 // resolveInternalImport maps one internal import to its target module using pure
 // path math. ok is false when the import cannot be placed in the internal tree.
 func resolveInternalImport(imp pyImport, importerFile, moduleRoot string) (pyImportTarget, bool) {
-	rootBase := filepath.Base(moduleRoot)
+	roots := rootsFor(moduleRoot)
 	isFrom := imp.Module != "" || imp.Level > 0
 
 	if isFrom {
@@ -51,12 +51,19 @@ func resolveInternalImport(imp pyImport, importerFile, moduleRoot string) (pyImp
 				modSegs = strings.Split(imp.Module, ".")
 			}
 		} else {
-			// Absolute from-import: the module starts with the root package name.
-			parts := strings.Split(imp.Module, ".")
-			if len(parts) == 0 || !strings.EqualFold(parts[0], rootBase) {
+			// Absolute from-import: resolve the dotted module against the import roots
+			// (what would be on sys.path) rather than assuming its first segment is the
+			// project directory's name.
+			stem, ok := roots.bestStem(imp.Module)
+			if !ok {
 				return pyImportTarget{}, false
 			}
-			modSegs = parts[1:]
+			symbol := strings.TrimPrefix(imp.Name, imp.Module+".")
+			return pyImportTarget{
+				ModulePath: pyModulePath(moduleRoot, stem+".py"),
+				FilePath:   stem + ".py",
+				Symbol:     symbol,
+			}, true
 		}
 
 		if imp.Module == "" {
@@ -81,11 +88,10 @@ func resolveInternalImport(imp pyImport, importerFile, moduleRoot string) (pyImp
 	}
 
 	// Plain `import a.b.c`: Name is the dotted module; the alias binds the module.
-	parts := strings.Split(imp.Name, ".")
-	if len(parts) == 0 || !strings.EqualFold(parts[0], rootBase) {
+	stem, ok := roots.bestStem(imp.Name)
+	if !ok {
 		return pyImportTarget{}, false
 	}
-	stem := filepath.Join(append([]string{moduleRoot}, parts[1:]...)...)
 	return pyImportTarget{ModulePath: pyModulePath(moduleRoot, stem+".py"), FilePath: stem + ".py"}, true
 }
 

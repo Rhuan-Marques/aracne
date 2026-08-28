@@ -469,22 +469,29 @@ func convertFunction(fn pyFunc, filePath string, modulePath string, classID *pyt
 	}
 }
 
-// Checks whether an import path is internal to the module by comparing its first component to the module root name.
+// isInternal reports whether an import names first-party code.
+//
+// It used to compare the import's first segment to filepath.Base(moduleRoot) — i.e. to
+// assume the checkout directory IS the top-level package. That is false for src layouts
+// and for any checkout not named after its package, so first-party imports were recorded
+// as third-party dependencies and their edges never drawn. See importroots.go.
 func isInternal(importPath, moduleRoot string) bool {
-	parts := strings.Split(importPath, ".")
-	if len(parts) == 0 {
-		return false
-	}
-	return strings.EqualFold(parts[0], filepath.Base(moduleRoot))
+	return rootsFor(moduleRoot).isInternalImport(importPath)
 }
 
-// pyModulePath returns the module-qualified ID namespace for a source file: the
-// project-root base name joined with the file's path relative to root, extension
-// stripped, "/"-separated. Mirrors jsModulePath so Python and JS share one
-// file-first ID scheme (e.g. root "/x/proj", file "/x/proj/pkg/shapes.py" ->
-// "proj/pkg/shapes").
+// pyModulePath returns the module-qualified ID namespace for a source file: the file's
+// path relative to the project root, extension stripped, "/"-separated. Mirrors
+// jsModulePath so Python and JS share one file-first ID scheme (e.g. root "/x/proj",
+// file "/x/proj/pkg/shapes.py" -> "pkg/shapes").
+//
+// The project-root BASE NAME used to be prefixed here ("proj/pkg/shapes"). It was removed
+// in id-scheme 2: the directory a checkout happens to live in appears nowhere in the
+// source, so no reader — human or model — could construct an ID, and every lookup in
+// Python/JS fell through to an ambiguous name scan. Dropping it makes the ID a repo-
+// relative path, which is exactly what an import statement or a traceback shows.
+// The importable dotted form ("pkg.shapes.Class.method") still resolves: see
+// internal/topology/idresolve, whose suffix tier is separator- and prefix-insensitive.
 func pyModulePath(root, file string) string {
-	base := filepath.Base(root)
 	rel, err := filepath.Rel(root, file)
 	if err != nil {
 		rel = filepath.Base(file)
@@ -492,9 +499,9 @@ func pyModulePath(root, file string) string {
 	rel = strings.ReplaceAll(rel, "\\", "/")
 	rel = strings.TrimSuffix(rel, filepath.Ext(rel))
 	if rel == "." || rel == "" {
-		return base
+		return ""
 	}
-	return base + "/" + rel
+	return rel
 }
 
 // pyRefValueRE matches a bare identifier or dotted path that could name a

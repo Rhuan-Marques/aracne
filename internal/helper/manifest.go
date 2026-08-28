@@ -63,7 +63,7 @@ func SyncManifest(topo *domain.Topology, dbPath string) {
 		if language == "" {
 			language = topo.Language
 		}
-		if res.Kind == domain.ResourceFile && IsSourceFile(res.ID, language) {
+		if res.Kind == domain.ResourceFile && IsSourceFile(topo.Root, res.ID, language) {
 			currentFiles[res.ID] = true
 		}
 	}
@@ -132,6 +132,12 @@ func CollectSourceFiles(root, language string) ([]string, error) {
 			return err
 		}
 		if d.IsDir() {
+			// The root itself is never pruned by its own basename: WalkDir does
+			// not visit ancestors, so a repo that simply lives at ~/.dotfiles
+			// must still scan.
+			if path == absRoot {
+				return nil
+			}
 			if isIgnoredSourceDir(d.Name()) {
 				return filepath.SkipDir
 			}
@@ -140,7 +146,7 @@ func CollectSourceFiles(root, language string) ([]string, error) {
 			}
 			return nil
 		}
-		if IsSourceFile(path, language) {
+		if IsSourceFile(absRoot, path, language) {
 			files = append(files, path)
 		}
 		return nil
@@ -151,9 +157,15 @@ func CollectSourceFiles(root, language string) ([]string, error) {
 	return files, nil
 }
 
-// Checks if a file path is a valid source file for a given language, excluding tests and ignored paths.
-func IsSourceFile(path, language string) bool {
-	if path == "" || isIgnoredSourcePath(path) {
+// Checks if a file path is a valid source file for a given language, excluding
+// tests and ignored paths.
+//
+// root is the topology root. Ignore rules are applied to the path RELATIVE to
+// it: a checkout that happens to live under a hidden or vendor-named ancestor
+// (~/.claude/scratch/app, /home/runner/.cache/x, /srv/build/app) must scan
+// normally. An empty root falls back to examining the whole path.
+func IsSourceFile(root, path, language string) bool {
+	if path == "" || isIgnoredSourcePath(root, path) {
 		return false
 	}
 	// Paths marked hidden by config are excluded from both the indexing stage
@@ -172,14 +184,14 @@ func IsSourceFile(path, language string) bool {
 	case "typescript":
 		return isTypeScriptSourceName(name)
 	case "rust":
-		return isRustSourceName(name) && !inRustIgnoredDir(path)
+		return isRustSourceName(name) && !inRustIgnoredDir(root, path)
 	case "java":
-		return isJavaSourceName(name) && !inJavaIgnoredDir(path)
+		return isJavaSourceName(name) && !inJavaIgnoredDir(root, path)
 	default:
 		ext := filepath.Ext(name)
 		return ext == ".go" || ext == ".py" || isJavaScriptSourceName(name) || isTypeScriptSourceName(name) ||
-			(isRustSourceName(name) && !inRustIgnoredDir(path)) ||
-			(isJavaSourceName(name) && !inJavaIgnoredDir(path))
+			(isRustSourceName(name) && !inRustIgnoredDir(root, path)) ||
+			(isJavaSourceName(name) && !inJavaIgnoredDir(root, path))
 	}
 }
 
@@ -193,10 +205,8 @@ func isJavaSourceName(name string) bool {
 // inJavaIgnoredDir reports whether a path lives under a Java directory we skip:
 // build output (target, build, out, bin, .gradle) and the test-source dirs
 // (test, tests), which are not part of the library/application topology.
-func inJavaIgnoredDir(path string) bool {
-	for _, part := range strings.FieldsFunc(filepath.Clean(path), func(r rune) bool {
-		return r == '/' || r == '\\'
-	}) {
+func inJavaIgnoredDir(root, path string) bool {
+	for _, part := range pathComponents(relPath(root, path)) {
 		switch part {
 		case "target", "build", ".gradle", "out", "bin", "test", "tests":
 			return true
@@ -214,10 +224,8 @@ func isRustSourceName(name string) bool {
 // build output (target) and the integration-test/bench dirs (tests, benches),
 // which are not part of the library/binary topology. Scoped to Rust so other
 // languages' tests/ dirs are unaffected.
-func inRustIgnoredDir(path string) bool {
-	for _, part := range strings.FieldsFunc(filepath.Clean(path), func(r rune) bool {
-		return r == '/' || r == '\\'
-	}) {
+func inRustIgnoredDir(root, path string) bool {
+	for _, part := range pathComponents(relPath(root, path)) {
 		if part == "target" || part == "tests" || part == "benches" {
 			return true
 		}
@@ -259,11 +267,24 @@ func isJavaScriptSourceName(name string) bool {
 	return true
 }
 
-// Checks if a file path should be skipped by testing all path components against ignored directories.
-func isIgnoredSourcePath(path string) bool {
-	for _, part := range strings.FieldsFunc(filepath.Clean(path), func(r rune) bool {
+// pathComponents splits a path on both separators.
+func pathComponents(path string) []string {
+	return strings.FieldsFunc(filepath.Clean(path), func(r rune) bool {
 		return r == '/' || r == '\\'
-	}) {
+	})
+}
+
+// isIgnoredSourcePath reports whether a path lies under a directory we never
+// index. Only the components INSIDE root are examined.
+//
+// This used to split the absolute path, so a repo under a hidden or
+// vendor-named ancestor matched on its own ancestry: a project at
+// ~/.claude/scratch/app scanned to zero files, silently, and every later edit
+// treated its files as non-source and deleted their resources from the graph.
+// relPath returns the cleaned input when the path is already relative or lies
+// outside root, which preserves the old behaviour for callers with no root.
+func isIgnoredSourcePath(root, path string) bool {
+	for _, part := range pathComponents(relPath(root, path)) {
 		if isIgnoredSourceDir(part) {
 			return true
 		}
@@ -285,7 +306,7 @@ func DiffScanFiles(root, language, manifestPath string) (added, modified, delete
 
 	manifestTimes := make(map[string]time.Time)
 	for path, ts := range manifest {
-		if !IsSourceFile(path, language) {
+		if !IsSourceFile(root, path, language) {
 			continue
 		}
 		normalizedPath := normalizeManifestPath(root, path)
@@ -368,8 +389,6 @@ func RemoveFileResources(topo *domain.Topology, fileID string) []domain.Topology
 		return nil
 	}
 
-	var warnings []domain.TopologyWarning
-
 	toRemove := map[string]bool{fileID: true}
 	for connType, targets := range fileRes.Connections {
 		if ownedConnTypes[connType] {
@@ -379,25 +398,9 @@ func RemoveFileResources(topo *domain.Topology, fileID string) []domain.Topology
 		}
 	}
 
-	for _, res := range topo.Resources {
-		if toRemove[res.ID] {
-			continue
-		}
-		for connType, targets := range res.Connections {
-			for _, target := range targets {
-				if toRemove[target] {
-					warnID := res.ID + "@" + string(domain.WarnNodeRemoved) + "@" + target
-					warnings = append(warnings, domain.TopologyWarning{
-						ID:       warnID,
-						SourceID: res.ID,
-						Kind:     domain.WarnNodeRemoved,
-						TargetID: target,
-						Message:  fmt.Sprintf("%s was removed from %s, verify %s which references it via %s", target, fileID, res.ID, connType),
-					})
-				}
-			}
-		}
-	}
+	// Whole-file removal counts every edge kind as a reference, and skips no
+	// referrer: nothing in this update was re-parsed from source.
+	warnings := ScanReferrers(topo, ReferrerScan{Removed: toRemove, Origin: fileID})
 
 	for resID := range toRemove {
 		delete(topo.Resources, resID)

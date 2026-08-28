@@ -46,8 +46,10 @@ func TestApplyMigrationsRenamesTypeToStruct(t *testing.T) {
 	if kind != "struct" {
 		t.Fatalf("kind = %q, want %q", kind, "struct")
 	}
-	if version != 1 {
-		t.Fatalf("user_version = %d, want 1", version)
+	// Assert the chain reached the LATEST version rather than a hardcoded one, so adding
+	// a migration does not require editing this test.
+	if version != latestSchemaVersion {
+		t.Fatalf("user_version = %d, want %d", version, latestSchemaVersion)
 	}
 }
 

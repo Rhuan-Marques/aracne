@@ -2,18 +2,28 @@
 baseline deltas.
 
 Conventions (from the benchmark methodology):
-  - success_rate is over GRADED runs only (success is not None); a Wilson 95% interval
-    is reported because samples are small.
+  - success_rate is over GRADED runs only (success is not None, and never a timeout); a
+    Wilson 95% interval is reported because samples are small.
+  - TIMEOUTS are a third outcome, not a failure: a run whose agent or grading harness ran
+    out of wall-clock is counted in n_timeout (split by stage) and kept OUT of the
+    success-rate denominator entirely. See bench/bench/outcome.py.
   - token/turn/wall means are over runs that produced metrics (no hard error), so a
     crashed run doesn't poison the averages. `n_metric` reports that denominator.
-  - tokens are split input/output; turns is the robust speed proxy, wall-clock secondary.
+  - CONTEXT tokens (uncached input + cache creation + cache reads, see rowmetrics.py) are
+    the primary token endpoint. `mean_input_tokens` is retained only for continuity with
+    older reports and must not be read as "how much the agent consumed": Claude Code puts
+    >99% of consumed context in the cache fields, so it is nearly always a two-digit number.
+  - turns is the robust speed proxy, wall-clock secondary.
+  - the POOLED numbers here are descriptive only. Because both arms run the same task, the
+    defensible comparison is the PAIRED one in paired.py, which is attached to the
+    aggregate under "paired" — read that for any claim about aracne vs. baseline.
 """
 from __future__ import annotations
 
 import math
 from collections import defaultdict
 
-from . import fixtures
+from . import fixtures, outcome, paired, rowmetrics, toolstats
 
 
 def _wilson(k: int, n: int) -> tuple[float, float]:
@@ -32,31 +42,67 @@ def _mean(xs: list[float]) -> float:
 
 
 def _arm_stats(rows: list[dict]) -> dict:
-    graded = [r for r in rows if r.get("success") is not None]
+    counts = outcome.tally(rows)
+    timeouts = [r for r in rows if outcome.is_timeout(r)]
+    # A timeout is never graded, so excluding it here is belt-and-braces: it keeps the
+    # success rate honest even if some future path sets both success and timeout_stage.
+    graded = [r for r in rows if r.get("success") is not None and not outcome.is_timeout(r)]
+    # Timed-out AGENT runs report no usable tokens/turns; a grading timeout leaves the
+    # agent's own metrics intact, so `error` (not the outcome) stays the right filter.
     metric = [r for r in rows if not r.get("error")]
     # Token means only over runs that actually reported tokens — the OpenCode backend may
     # not, and a 0 would otherwise poison the average. turns/wall come from all metric runs.
-    tok = [r for r in metric if r.get("input_tokens", 0) > 0]
+    tok = [r for r in metric if rowmetrics.has_tokens(r)]
+    # Tool telemetry is present only for rows whose agent transcript was captured
+    # (claude_code + stream=True). Averaging over ALL metric rows would silently dilute the
+    # means with structural zeros from backends that report nothing.
+    tooled = [r for r in metric if r.get("transcript_path")]
     solved = sum(1 for r in graded if r["success"])
     lo, hi = _wilson(solved, len(graded))
+    ctx_tok = [rowmetrics.context_tokens(r) for r in tok]
     in_tok = [r["input_tokens"] for r in tok]
-    out_tok = [r["output_tokens"] for r in tok]
+    cache_tok = [r.get("cache_tokens", 0) or 0 for r in tok]
+    out_tok = [rowmetrics.output_tokens(r) for r in tok]
     return {
         "n_runs": len(rows),
         "n_graded": len(graded),
+        "n_timeout": len(timeouts),
+        "n_timeout_agent": sum(1 for r in timeouts if r.get("timeout_stage") == outcome.AGENT),
+        "n_timeout_turns": sum(1 for r in timeouts if r.get("timeout_stage") == outcome.TURNS),
+        "n_timeout_grading": sum(1 for r in timeouts if r.get("timeout_stage") == outcome.GRADING),
+        "timeout_rate": (len(timeouts) / len(rows)) if rows else None,
+        "outcomes": counts,
         "n_metric": len(metric),
         "n_tokens": len(tok),
         "solved": solved,
         "success_rate": (solved / len(graded)) if graded else None,
         "success_ci": [round(lo, 3), round(hi, 3)] if graded else None,
+        "mean_context_tokens": round(_mean(ctx_tok)) if tok else None,
+        "mean_cache_tokens": round(_mean(cache_tok)) if tok else None,
         "mean_input_tokens": round(_mean(in_tok)) if tok else None,
         "mean_output_tokens": round(_mean(out_tok)) if tok else None,
-        "mean_total_tokens": round(_mean([a + b for a, b in zip(in_tok, out_tok)])) if tok else None,
+        "mean_total_tokens": round(_mean([c + o for c, o in zip(ctx_tok, out_tok)])) if tok else None,
         "mean_turns": round(_mean([r["num_turns"] for r in metric]), 1),
         "mean_wall_s": round(_mean([r["duration_ms"] / 1000 for r in metric]), 1),
         "mean_cost_usd": round(_mean([r["cost_usd"] for r in metric]), 4),
         "mean_scan_s": round(_mean([r["scan_time_s"] for r in metric]), 1),
+        **_tool_stats(tooled),
     }
+
+
+def _tool_stats(tooled: list[dict]) -> dict:
+    """Per-tool telemetry means over runs that actually captured a transcript.
+
+    `n_tool_runs` is the denominator and is reported alongside, so a zero mean caused by
+    "no transcripts" is never mistaken for "the agent made no calls".
+    """
+    out = {"n_tool_runs": len(tooled)}
+    for field in toolstats.ROW_FIELDS:
+        # n_tool_calls -> mean_tool_calls ; mcp_result_bytes -> mean_mcp_result_bytes
+        key = "mean_" + (field[2:] if field.startswith("n_") else field)
+        vals = [rowmetrics.telemetry(r, field) for r in tooled]
+        out[key] = round(_mean(vals), 1) if tooled else None
+    return out
 
 
 def _pct_delta(aracne, baseline):
@@ -71,6 +117,8 @@ def _delta(a: dict | None, b: dict | None) -> dict | None:
         return None
     d = {
         "solved_abs": a["solved"] - b["solved"],
+        "timeout_abs": a["n_timeout"] - b["n_timeout"],
+        "context_tokens_pct": _pct_delta(a["mean_context_tokens"], b["mean_context_tokens"]),
         "input_tokens_pct": _pct_delta(a["mean_input_tokens"], b["mean_input_tokens"]),
         "output_tokens_pct": _pct_delta(a["mean_output_tokens"], b["mean_output_tokens"]),
         "total_tokens_pct": _pct_delta(a["mean_total_tokens"], b["mean_total_tokens"]),
@@ -109,7 +157,13 @@ def prep_summary(tasks: list, fixtures_root) -> list[dict]:
 
 
 def aggregate(rows: list[dict], cfg: dict, prep: list[dict] | None = None) -> dict:
-    arms = cfg["arms"]
+    # Arms present in the ROWS win over the config's arm list, which records only the arms
+    # this run MEASURED. `--arms aracne --baseline-from <prior>` produces a complete A/B
+    # whose config lists one arm; keying the pooled tables off the config alone silently
+    # drops the imported arm from every table and reports `delta: null`, making a finished
+    # comparison read as a single-arm run. (Same rule cmd_rescore applies to languages.)
+    seen = dict.fromkeys(r["arm"] for r in rows)
+    arms = list(cfg["arms"]) + [a for a in seen if a not in cfg["arms"]]
     languages = cfg["languages"]
 
     per_lang: dict[str, dict] = {}
@@ -128,14 +182,24 @@ def aggregate(rows: list[dict], cfg: dict, prep: list[dict] | None = None) -> di
 
     overall_arms = {arm: _arm_stats(by_arm.get(arm, [])) for arm in arms}
     agg = {
-        "config": {k: cfg[k] for k in ("samples", "languages", "seeds", "sample_seed",
-                                       "arms", "run_harness", "model", "max_turns")},
+        # `run_parallel` rides along because it qualifies the wall-clock column: >1 means
+        # the runs contended for one machine. Tolerated as missing on older configs.
+        "config": {k: cfg.get(k) for k in ("samples", "languages", "seeds", "sample_seed",
+                                          "arms", "run_harness", "model", "max_turns",
+                                          "run_parallel")},
         "per_language": per_lang,
         "overall": {
             "arms": overall_arms,
             "delta": _delta(overall_arms.get("aracne"), overall_arms.get("baseline")),
         },
     }
+    # The paired analysis is the one that supports a claim; attach it alongside the pooled
+    # descriptives so every consumer (console, HTML, LLM analysis) can reach it.
+    margin = cfg.get("ni_margin", paired.DEFAULT_MARGIN)
+    agg["paired"] = paired.analyse(rows, margin)
+    agg["paired_by_language"] = paired.analyse_by_language(rows, languages, margin)
+    for lang, block in per_lang.items():
+        block["paired"] = agg["paired_by_language"].get(lang)
     if prep is not None:
         agg["preparation"] = prep
     return agg

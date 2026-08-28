@@ -116,3 +116,72 @@ func TestToolsSection(t *testing.T) {
 		t.Fatal("empty input should yield empty section")
 	}
 }
+
+// TestShellCommandKeyForArgs pins the sed/awk classification.
+//
+// Mapping them to `edit` on the name alone meant the guard refused
+// `git log --oneline | sed -n '30,60p'` — a read of command output with no file
+// operand and no -i — and billed the agent a turn to be told no. They are
+// stream editors: they stand in for `edit` only when they write.
+func TestShellCommandKeyForArgs(t *testing.T) {
+	tests := []struct {
+		name     string
+		word     string
+		args     []string
+		redirect bool
+		want     string
+		wantOK   bool
+	}{
+		// unaffected commands keep their static mapping
+		{"cat is still a read", "cat", []string{"f"}, false, "read", true},
+		{"grep is still grep", "grep", []string{"x", "f"}, false, "grep", true},
+		{"unknown command", "npm", []string{"test"}, false, "", false},
+		{"redirect does not promote a reader", "cat", []string{"f"}, true, "read", true},
+
+		// sed: reading forms
+		{"sed print range", "sed", []string{"-n", "1,10p"}, false, "read", true},
+		{"sed substitute to stdout", "sed", []string{"s/a/b/"}, false, "read", true},
+		{"sed extended regexp", "sed", []string{"-E", "s/a/b/"}, false, "read", true},
+		{"sed expression flag", "sed", []string{"-e", "s/i/x/"}, false, "read", true},
+		{"sed no args", "sed", nil, false, "read", true},
+
+		// sed: writing forms
+		{"sed in place", "sed", []string{"-i", "s/a/b/", "f"}, false, "edit", true},
+		{"sed in place long", "sed", []string{"--in-place", "s/a/b/", "f"}, false, "edit", true},
+		{"sed in place long with suffix", "sed", []string{"--in-place=.bak", "s/a/b/", "f"}, false, "edit", true},
+		{"sed in place with backup suffix", "sed", []string{"-i.bak", "s/a/b/", "f"}, false, "edit", true},
+		{"sed in place in a cluster", "sed", []string{"-ni", "s/a/b/", "f"}, false, "edit", true},
+		{"sed in place in a cluster after E", "sed", []string{"-Ei", "s/a/b/", "f"}, false, "edit", true},
+		{"sed redirecting output", "sed", []string{"s/a/b/", "in"}, true, "edit", true},
+
+		// awk
+		{"awk filtering", "awk", []string{"{print $2}"}, false, "read", true},
+		{"awk field flag", "awk", []string{"-F,", "{print $1}"}, false, "read", true},
+		{"awk gawk inplace", "awk", []string{"-i", "inplace", "{print}"}, false, "edit", true},
+		{"awk include inplace", "awk", []string{"--include=inplace", "{print}"}, false, "edit", true},
+		{"awk redirecting output", "awk", []string{"{print}"}, true, "edit", true},
+
+		// path- and extension-qualified names still resolve
+		{"absolute path sed", "/usr/bin/sed", []string{"-n", "1p"}, false, "read", true},
+		{"windows sed", "sed.exe", []string{"-i", "s/a/b/", "f"}, false, "edit", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := ShellCommandKeyForArgs(tt.word, tt.args, tt.redirect)
+			if ok != tt.wantOK || got != tt.want {
+				t.Fatalf("ShellCommandKeyForArgs(%q, %v, redirect=%v) = (%q, %v), want (%q, %v)",
+					tt.word, tt.args, tt.redirect, got, ok, tt.want, tt.wantOK)
+			}
+		})
+	}
+}
+
+// The name-only mapping is unchanged: it is the pessimistic default, and other
+// callers still rely on it.
+func TestShellCommandKeyUnchangedForStreamEditors(t *testing.T) {
+	for _, word := range []string{"sed", "awk"} {
+		if got, ok := ShellCommandKey(word); !ok || got != "edit" {
+			t.Errorf("ShellCommandKey(%q) = (%q, %v), want (edit, true)", word, got, ok)
+		}
+	}
+}

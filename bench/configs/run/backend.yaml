@@ -1,10 +1,10 @@
 # Multi-language run against the `multi` manifest (Go / JS / TS / Rust via Multi-SWE-bench).
 #   python bench/run_benchmark.py run --config multi
-sample_id: multi
-languages: [go, javascript, typescript, rust]
-samples: 2
+sample_id: default
+languages: [go]
+samples: 1
 seeds: 1
 arms: [baseline, aracne]
 run_harness: claude_code
-model: haiku
-max_turns: 40
+model: opus
+max_turns: 50

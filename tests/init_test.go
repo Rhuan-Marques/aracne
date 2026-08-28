@@ -155,34 +155,32 @@ func TestInitOpenCodeConfig_Structure(t *testing.T) {
 	if cfg.Permission == nil {
 		t.Fatal("opencode.json missing 'permission' section")
 	}
-	if cfg.Permission["read"] != "deny" {
-		t.Fatalf("permission.read = %q, want deny (native read blocked by default)", cfg.Permission["read"])
+	// WARN-ONLY is the shipped default: the guard names the matching aracne tool but
+	// denies nothing, so native read/edit stay allowed and bash needs no glob map. Denying
+	// them cost a wasted turn per denial and pushed the agent off a more capable native
+	// grep; the `arac update-file` PostToolUse hook keeps the topology in sync after a
+	// native edit either way. Projects opt into denial via blocked_tools.
+	if cfg.Permission["read"] != "allow" {
+		t.Fatalf("permission.read = %q, want allow (warn-only default)", cfg.Permission["read"])
 	}
-	if cfg.Permission["edit"] != "deny" {
-		t.Fatalf("permission.edit = %q, want deny (native edit blocked by default, MCP edit used)", cfg.Permission["edit"])
+	if cfg.Permission["edit"] != "allow" {
+		t.Fatalf("permission.edit = %q, want allow (warn-only default)", cfg.Permission["edit"])
 	}
-	// bash is not fully blocked, but native read/grep are, so the bash permission
-	// is a glob map that allows everything except the shell forms of read/grep.
-	bash, ok := cfg.Permission["bash"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("permission.bash should be a glob-pattern object, got %T: %v", cfg.Permission["bash"], cfg.Permission["bash"])
+	if cfg.Permission["bash"] != "allow" {
+		t.Fatalf("permission.bash = %v, want a scalar allow (nothing is denied)", cfg.Permission["bash"])
 	}
-	if bash["*"] != "allow" {
-		t.Fatalf("permission.bash[\"*\"] = %v, want allow", bash["*"])
-	}
-	for _, denied := range []string{"grep *", "cat *"} {
-		if bash[denied] != "deny" {
-			t.Fatalf("permission.bash[%q] = %v, want deny (shell bypass of blocked read/grep)", denied, bash[denied])
-		}
-	}
+	// The aracne_* wildcard deny stays: it withholds MCP tools the profile does not grant,
+	// which is unrelated to native-tool blocking.
 	if cfg.Permission["aracne_*"] != "deny" {
 		t.Fatalf("permission.aracne_* = %q, want deny", cfg.Permission["aracne_*"])
 	}
 	if cfg.Permission["aracne_warnings_list"] != "allow" {
 		t.Fatalf("permission.aracne_warnings_list = %q, want allow", cfg.Permission["aracne_warnings_list"])
 	}
-	if cfg.Permission["aracne_bug_report"] != "allow" {
-		t.Fatalf("permission.aracne_bug_report = %q, want allow", cfg.Permission["aracne_bug_report"])
+	// The bug pipeline is a v2 feature and is not in the default profile, so it is left
+	// to the aracne_* wildcard deny rather than granted.
+	if cfg.Permission["aracne_bug_report"] == "allow" {
+		t.Fatalf("aracne_bug_report should not be granted by the v1 default profile")
 	}
 }
 

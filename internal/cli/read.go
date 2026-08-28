@@ -18,6 +18,7 @@ import (
 	"aracne/internal/topology"
 	"aracne/internal/topology/domain"
 	"aracne/internal/topology/golang"
+	"aracne/internal/topology/idresolve"
 	"aracne/internal/topology/java"
 	"aracne/internal/topology/javascript"
 	"aracne/internal/topology/python"
@@ -54,7 +55,7 @@ func RunRead() {
 		return
 	}
 
-	res, resourceID, ok := findReadResource(topo, id)
+	res, resourceID, ok := findReadResource(topo, id, forcedKind, manager.DbPath())
 	if !ok {
 		if forcedKind != "" {
 			fmt.Fprintf(os.Stderr, "Error: The %s %s does not exist\n", forcedKind, id)
@@ -69,7 +70,18 @@ func RunRead() {
 		os.Exit(1)
 	}
 
-	lang := GetLanguage(manager)
+	// Dispatch on the RESOURCE's language, not the topology's. A multi-language repo
+	// (every JS+TS project, and most Python ones with a bundled JS asset) reports
+	// topo.Language == "multi", which matches no per-language manager and fell through to
+	// the Go one — so every `arac read` on such a repo failed even for an exact, valid ID.
+	// The MCP read tools already resolve per resource; this brings the CLI in line.
+	lang := res.Language
+	if lang == "" || lang == "multi" {
+		lang = GetLanguage(manager)
+	}
+	if lang == "multi" {
+		lang = "go" // last resort: GetLanguage's own default
+	}
 
 	switch res.Kind {
 	case domain.ResourceFunction, domain.ResourceMethod:
@@ -209,7 +221,13 @@ func printReadUsage() {
 }
 
 // Looks up a resource by ID or absolute file path in the topology.
-func findReadResource(topo *domain.Topology, id string) (domain.Resource, string, bool) {
+//
+// Beyond those two exact forms it defers to idresolve, which tolerates a wrong root prefix
+// and the wrong separator convention and consults the alias table for IDs minted under a
+// previous id-scheme. `forcedKind` (from --kind) narrows the search when given.
+// The returned string is the CANONICAL id; every caller reads through that, so a tolerated
+// guess still drives the exact-ID machinery downstream.
+func findReadResource(topo *domain.Topology, id string, forcedKind domain.ResourceKind, dbPath string) (domain.Resource, string, bool) {
 	res, ok := topo.Resources[id]
 	if ok {
 		return res, id, true
@@ -222,6 +240,25 @@ func findReadResource(topo *domain.Topology, id string) (domain.Resource, string
 		}
 	}
 
+	var kinds []domain.ResourceKind
+	if forcedKind != "" {
+		kinds = []domain.ResourceKind{forcedKind}
+	}
+	r := idresolve.Resolve(topo, id, idresolve.Options{
+		Kinds: kinds,
+		// The alias table is the AUTHORITATIVE mapping for IDs minted under a previous
+		// id-scheme, and it is the only tier that can help when the legacy ID is LONGER
+		// than the current one (an old "<projectdir>/src/..." prefix that the new scheme
+		// dropped) — no suffix match can recover that.
+		Alias: func(old string) (string, bool) { return helper.ResolveAlias(dbPath, old) },
+	})
+	if r.Found() {
+		return r.Resource, r.ID, true
+	}
+	// A miss must not be a dead end: print what the caller probably meant.
+	if hint := idresolve.FormatCandidates(id, r.Candidates); hint != "" {
+		fmt.Fprint(os.Stderr, hint)
+	}
 	return domain.Resource{}, "", false
 }
 
@@ -231,7 +268,7 @@ func findReadResource(topo *domain.Topology, id string) (domain.Resource, string
 func readFileRange(mgr *topology.TopologyManager, id string, start, end int) {
 	path := id
 	if topo, err := mgr.ReadAll(); err == nil {
-		if res, resourceID, ok := findReadResource(topo, id); ok && res.Kind == domain.ResourceFile {
+		if res, resourceID, ok := findReadResource(topo, id, domain.ResourceFile, mgr.DbPath()); ok && res.Kind == domain.ResourceFile {
 			path = resourceID
 		}
 	}

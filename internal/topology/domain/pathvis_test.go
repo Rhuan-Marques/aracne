@@ -76,8 +76,8 @@ func TestPathVisibilityNilAndEmpty(t *testing.T) {
 func TestPathVisibilityNormalization(t *testing.T) {
 	root := "/proj"
 	pv := BuildPathVisibility(root, []PathRule{
-		{Path: "./gen/", Hidden: true}, // leading ./ and trailing slash
-		{Path: "", Hidden: true},       // dropped
+		{Path: "./gen/", Hidden: true},  // leading ./ and trailing slash
+		{Path: "", Hidden: true},        // dropped
 		{Path: "../oops", Hidden: true}, // escaping, dropped
 	})
 	if !pv.Hidden(filepath.Join(root, "gen", "out.go")) {

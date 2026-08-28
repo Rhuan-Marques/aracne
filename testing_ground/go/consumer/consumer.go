@@ -11,6 +11,7 @@ package consumer
 import (
 	"fmt"
 
+	"aracne/testing_ground/go/edge"
 	"aracne/testing_ground/go/geometry"
 	"aracne/testing_ground/go/shapes"
 )
@@ -38,4 +39,13 @@ func Total() float64 {
 	a := geometry.MakeCircle(1)                  // shapes.Circle (value)
 	b := shapes.Triangle{Base: 3, Height: 4}     // shapes.Triangle (value)
 	return geometry.SumAreas(a, b)               // both passed as shapes.Shape
+}
+
+// Decorated calls a package-level func-typed VAR in another package
+// (edge.Colorize) — the cli/cli "utils.Yellow(s)" shape. EXPECTED: a
+// uses_extvar edge to aracne/testing_ground/go/edge.Colorize, no uses_package
+// edge for it (the extvar arm deliberately omits that, matching the
+// incremental resolution path), and NO use_missing_node warning.
+func Decorated(s string) string {
+	return edge.Colorize(s)
 }

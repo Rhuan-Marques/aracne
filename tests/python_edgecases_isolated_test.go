@@ -20,7 +20,10 @@ import (
 )
 
 // Q is the resource-ID prefix for the isolated mini-corpora (root leaf "proj").
-const Q = "proj/"
+// Under id-scheme 2 a module path is repo-relative, so there is no project-root leaf
+// in an ID any more. Kept as an empty constant rather than deleted so the Q+"..."
+// call sites stay readable as "the ID of <that module>".
+const Q = ""
 
 // isolatedRoot writes the given rel-path -> content files under <tmp>/proj and
 // returns that root.

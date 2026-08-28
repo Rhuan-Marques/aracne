@@ -1,6 +1,7 @@
 package topogrep
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,8 +39,11 @@ func TestSearchAnnotatesResourceMatch(t *testing.T) {
 		t.Fatalf("unexpected annotation: %+v", matches[0])
 	}
 
+	// The annotation is now a single header ABOVE the resource's matches rather than two
+	// extra lines under every matching line — a resource with forty hits used to repeat
+	// its description forty times.
 	formatted := Format(matches)
-	for _, want := range []string{"sample.go:4:", "ResourceID: example.Target", "Description: prints a test needle"} {
+	for _, want := range []string{"sample.go:4:", "# example.Target", "prints a test needle"} {
 		if !strings.Contains(formatted, want) {
 			t.Fatalf("formatted output missing %q:\n%s", want, formatted)
 		}
@@ -107,5 +111,248 @@ func TestSearchReturnsAllMatchesWithoutTopology(t *testing.T) {
 	}
 	if matches[0].ResourceID != "" {
 		t.Fatalf("expected no annotation without topology, got ResourceID=%q", matches[0].ResourceID)
+	}
+}
+
+// --------------------------------------------------------------------------- //
+// id-scheme-2-era additions: the capability gap that made this tool cost more
+// than the native grep it replaces.
+// --------------------------------------------------------------------------- //
+
+func writeTree(t *testing.T, dir string, files map[string]string) {
+	t.Helper()
+	for rel, content := range files {
+		full := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestAnnotationIsEmittedOncePerResourceNotPerLine(t *testing.T) {
+	// This is the whole point of the format change.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "s.go")
+	writeTree(t, dir, map[string]string{"s.go": "package p\n\nfunc T() {\n\tneedle\n\tneedle\n\tneedle\n}\n"})
+	topo := &domain.Topology{Resources: map[string]domain.Resource{
+		"p.T": {ID: "p.T", Kind: domain.ResourceFunction, Name: "T",
+			Description: "has needles", Location: domain.Location{Path: path, StartsAt: 3, EndsAt: 7}},
+	}}
+	res, err := SearchWith(Options{Pattern: "needle", Root: dir}, topo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Matches) != 3 {
+		t.Fatalf("want 3 matches, got %d", len(res.Matches))
+	}
+	out := FormatResult(res, Options{Mode: OutputContent})
+	if n := strings.Count(out, "has needles"); n != 1 {
+		t.Fatalf("description rendered %d times, want exactly 1:\n%s", n, out)
+	}
+}
+
+func TestHeadLimitCapsOutputAndSaysSo(t *testing.T) {
+	dir := t.TempDir()
+	var body strings.Builder
+	for i := 0; i < 50; i++ {
+		body.WriteString("needle\n")
+	}
+	writeTree(t, dir, map[string]string{"a.txt": body.String()})
+
+	res, err := SearchWith(Options{Pattern: "needle", Root: dir, HeadLimit: 10}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Matches) != 10 || res.Total != 50 || !res.Truncated {
+		t.Fatalf("want 10 of 50 truncated, got %d of %d truncated=%v",
+			len(res.Matches), res.Total, res.Truncated)
+	}
+	out := FormatResult(res, Options{Mode: OutputContent, Pattern: "needle"})
+	if !strings.Contains(out, "40 more match(es) not shown") {
+		t.Fatalf("truncation trailer missing:\n%s", out)
+	}
+}
+
+func TestDefaultLimitApplies(t *testing.T) {
+	// An uncapped search is how a single call returned 3.1 MB.
+	dir := t.TempDir()
+	var body strings.Builder
+	for i := 0; i < DefaultHeadLimit+25; i++ {
+		body.WriteString("needle\n")
+	}
+	writeTree(t, dir, map[string]string{"a.txt": body.String()})
+	res, err := SearchWith(Options{Pattern: "needle", Root: dir}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Matches) != DefaultHeadLimit || !res.Truncated {
+		t.Fatalf("want the default cap applied, got %d truncated=%v", len(res.Matches), res.Truncated)
+	}
+}
+
+func TestGlobAndTypeFilters(t *testing.T) {
+	dir := t.TempDir()
+	writeTree(t, dir, map[string]string{
+		"a.go":          "needle\n",
+		"b.ts":          "needle\n",
+		"sub/c.go":      "needle\n",
+		"sub/d_test.go": "needle\n",
+	})
+	check := func(opt Options, want int, label string) {
+		t.Helper()
+		res, err := SearchWith(opt, nil)
+		if err != nil {
+			t.Fatalf("%s: %v", label, err)
+		}
+		if len(res.Matches) != want {
+			t.Fatalf("%s: want %d matches, got %d (%v)", label, want, len(res.Matches), res.Files)
+		}
+	}
+	check(Options{Pattern: "needle", Root: dir}, 4, "no filter")
+	check(Options{Pattern: "needle", Root: dir, Type: "go"}, 3, "type=go")
+	check(Options{Pattern: "needle", Root: dir, Type: "ts"}, 1, "type=ts")
+	check(Options{Pattern: "needle", Root: dir, Glob: "*.go"}, 3, "glob=*.go")
+	check(Options{Pattern: "needle", Root: dir, Glob: "**/*_test.go"}, 1, "glob=**/*_test.go")
+}
+
+func TestUnknownTypeIsAnError(t *testing.T) {
+	if _, err := SearchWith(Options{Pattern: "x", Root: t.TempDir(), Type: "cobol"}, nil); err == nil {
+		t.Fatal("want an error for an unknown type")
+	}
+}
+
+func TestIgnoreCase(t *testing.T) {
+	dir := t.TempDir()
+	writeTree(t, dir, map[string]string{"a.txt": "Needle\nNEEDLE\nneedle\n"})
+	res, err := SearchWith(Options{Pattern: "needle", Root: dir, IgnoreCase: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Matches) != 3 {
+		t.Fatalf("want 3 case-insensitive matches, got %d", len(res.Matches))
+	}
+}
+
+func TestOutputModes(t *testing.T) {
+	dir := t.TempDir()
+	writeTree(t, dir, map[string]string{"a.txt": "needle\nneedle\n", "b.txt": "needle\n"})
+	res, err := SearchWith(Options{Pattern: "needle", Root: dir, Mode: OutputFiles}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := FormatResult(res, Options{Mode: OutputFiles})
+	if strings.Count(files, "\n") != 1 || !strings.Contains(files, "a.txt") {
+		t.Fatalf("files_with_matches should list 2 paths, got:\n%s", files)
+	}
+	counts := FormatResult(res, Options{Mode: OutputCount})
+	if !strings.Contains(counts, ":2") || !strings.Contains(counts, ":1") {
+		t.Fatalf("count mode wrong:\n%s", counts)
+	}
+}
+
+func TestContextLines(t *testing.T) {
+	dir := t.TempDir()
+	writeTree(t, dir, map[string]string{"a.txt": "one\ntwo\nneedle\nfour\nfive\n"})
+	res, err := SearchWith(Options{Pattern: "needle", Root: dir, Before: 2, After: 2}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := res.Matches[0]
+	if len(m.Before) != 2 || m.Before[0] != "one" || m.Before[1] != "two" {
+		t.Fatalf("before context wrong: %v", m.Before)
+	}
+	if len(m.After) != 2 || m.After[0] != "four" || m.After[1] != "five" {
+		t.Fatalf("after context wrong: %v", m.After)
+	}
+}
+
+func TestLongLineDoesNotDiscardEarlierMatches(t *testing.T) {
+	// The old 64 KB scanner returned nil,nil on error, erasing every hit already found in
+	// the file — a search that looked successful and silently lied. Minified JS and
+	// generated tables hit this routinely.
+	dir := t.TempDir()
+	long := strings.Repeat("x", 200*1024)
+	writeTree(t, dir, map[string]string{"a.js": "needle\n" + long + "\nneedle\n"})
+	res, err := SearchWith(Options{Pattern: "needle", Root: dir}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Matches) != 2 {
+		t.Fatalf("want both matches around the long line, got %d", len(res.Matches))
+	}
+}
+
+func TestZeroMatchesSaysSoInsteadOfReturningEmpty(t *testing.T) {
+	// An empty tool result reads to a model as a broken tool, not as "no hits".
+	dir := t.TempDir()
+	writeTree(t, dir, map[string]string{"a.txt": "nothing here\n"})
+	res, err := SearchWith(Options{Pattern: "needle", Root: dir}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := FormatResult(res, Options{Mode: OutputContent, Pattern: "needle"})
+	if !strings.Contains(out, "no matches for") {
+		t.Fatalf("want an explicit no-match message, got %q", out)
+	}
+}
+
+func TestLeadingIndentationIsTrimmed(t *testing.T) {
+	dir := t.TempDir()
+	writeTree(t, dir, map[string]string{"a.go": "func f() {\n\t\t\tneedle\n}\n"})
+	res, err := SearchWith(Options{Pattern: "needle", Root: dir}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Matches[0].Text != "needle" {
+		t.Fatalf("want trimmed text, got %q", res.Matches[0].Text)
+	}
+}
+
+func TestAnnotationIsDroppedWhenTooManyDistinctResources(t *testing.T) {
+	// Annotation earns its bytes only at triage scale. A sweep spanning hundreds of
+	// functions gets one header per match, which is the per-line overhead that made this
+	// tool 2.1x `grep -rn`. Above the limit it degrades to plain grep and says so.
+	dir := t.TempDir()
+	var body strings.Builder
+	resources := map[string]domain.Resource{}
+	path := filepath.Join(dir, "big.go")
+	for i := 0; i < AnnotateLimit+5; i++ {
+		body.WriteString("needle\n")
+		id := fmt.Sprintf("pkg.Fn%d", i)
+		resources[id] = domain.Resource{
+			ID: id, Kind: domain.ResourceFunction, Name: fmt.Sprintf("Fn%d", i),
+			Description: "a description long enough to matter for byte accounting",
+			Location:    domain.Location{Path: path, StartsAt: i + 1, EndsAt: i + 1},
+		}
+	}
+	writeTree(t, dir, map[string]string{"big.go": body.String()})
+
+	res, err := SearchWith(Options{Pattern: "needle", Root: dir, HeadLimit: -1},
+		&domain.Topology{Resources: resources})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.DistinctResources <= AnnotateLimit {
+		t.Fatalf("test setup: want > %d distinct resources, got %d",
+			AnnotateLimit, res.DistinctResources)
+	}
+	out := FormatResult(res, Options{Mode: OutputContent, Pattern: "needle"})
+	if strings.Contains(out, "a description long enough") {
+		t.Fatalf("annotation should be suppressed above the limit:\n%s", out)
+	}
+	if !strings.Contains(out, "annotation is omitted") {
+		t.Fatalf("suppression must be explained:\n%s", out)
+	}
+
+	// Below the limit it is fully annotated.
+	small := &Result{
+		Matches: res.Matches[:3], Total: 3,
+		DistinctResources: 3,
+	}
+	if !strings.Contains(FormatResult(small, Options{Mode: OutputContent}), "# pkg.Fn0") {
+		t.Fatal("small result sets must keep their annotation")
 	}
 }

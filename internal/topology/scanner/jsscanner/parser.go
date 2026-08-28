@@ -1502,10 +1502,14 @@ func valuePtr(s string) *any {
 	return &v
 }
 
-// jsModulePath returns the file-scoped ID namespace for a source file: the project-root base
-// name joined with the file's path relative to root, extension stripped, separators "/".
+// jsModulePath returns the file-scoped ID namespace for a source file: the file's path
+// relative to the project root, extension stripped, separators "/".
+//
+// The project-root BASE NAME used to be prefixed here. It was removed in id-scheme 2 — the
+// directory a checkout happens to live in appears nowhere in the source, so an ID built
+// from it is unguessable. What remains is the repo-relative path, which is what an import
+// specifier already looks like. See pyModulePath for the full rationale.
 func jsModulePath(root, file string) string {
-	base := filepath.Base(root)
 	rel, err := filepath.Rel(root, file)
 	if err != nil {
 		rel = filepath.Base(file)
@@ -1513,7 +1517,7 @@ func jsModulePath(root, file string) string {
 	rel = strings.ReplaceAll(rel, "\\", "/")
 	rel = strings.TrimSuffix(rel, filepath.Ext(rel))
 	if rel == "." || rel == "" {
-		return base
+		return ""
 	}
-	return base + "/" + rel
+	return rel
 }

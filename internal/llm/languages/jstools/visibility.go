@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"aracne/internal/llm/languages/renderstate"
 	"aracne/internal/topology/domain"
 	"aracne/internal/topology/javascript"
 )
@@ -48,17 +49,25 @@ func writeJSImports(b *strings.Builder, modules []javascript.PackagePath, deps [
 
 // writeFullBlock renders a neighbor's full source cut (imports, optional parent
 // class, then the resource's own cut) as a fenced code block.
-func writeFullBlock(b *strings.Builder, full *javascript.FullBlock) {
+// Imports and the enclosing type are emitted only the FIRST time they appear in a
+// response; a repeat becomes a one-line back-reference. See renderstate.
+func writeFullBlock(b *strings.Builder, st *renderstate.State, full *javascript.FullBlock) {
 	if full == nil {
 		return
 	}
 	b.WriteString("```javascript\n")
-	writeJSImports(b, dedupStr(full.Imports), dedupStr(full.Deps))
+	writeJSImports(b, st.NewImports(dedupStr(full.Imports)), st.NewImports(dedupStr(full.Deps)))
 	if full.ParentCut != "" {
-		b.WriteString(full.ParentCut)
-		b.WriteString("\n\n")
+		if st.ParentSeen(full.ParentCut) {
+			renderstate.BackRef(b, "// enclosing type")
+		} else {
+			b.WriteString(full.ParentCut)
+			b.WriteString("\n\n")
+		}
 	}
 	b.WriteString(full.Cut)
+	// Register the cut so a later entry enclosing this type back-references it.
+	st.MarkRendered(full.Cut)
 	if !strings.HasSuffix(full.Cut, "\n") {
 		b.WriteString("\n")
 	}
@@ -66,31 +75,31 @@ func writeFullBlock(b *strings.Builder, full *javascript.FullBlock) {
 }
 
 // Renders a JavaScript function entry with ID, description, and full source block if visibility is full.
-func renderFunc(b *strings.Builder, prefix string, fn javascript.SimplifiedFunction) {
+func renderFunc(b *strings.Builder, st *renderstate.State, prefix string, fn javascript.SimplifiedFunction) {
 	if fn.Visibility == domain.VisibilityFull && fn.Full != nil {
 		b.WriteString(fmt.Sprintf("## %s: %s\n", fn.ID, desc(fn.Description)))
-		writeFullBlock(b, fn.Full)
+		writeFullBlock(b, st, fn.Full)
 		return
 	}
 	b.WriteString(fmt.Sprintf("%s%s: %s\n", prefix, fn.ID, desc(fn.Description)))
 }
 
 // Renders a JavaScript class usage entry with description, full source block if visibility is full, and all methods.
-func renderClassUsage(b *strings.Builder, cu javascript.ClassUsage) {
+func renderClassUsage(b *strings.Builder, st *renderstate.State, cu javascript.ClassUsage) {
 	b.WriteString(fmt.Sprintf("## %s: %s\n", cu.ID, desc(cu.Description)))
 	if cu.Visibility == domain.VisibilityFull && cu.Full != nil {
-		writeFullBlock(b, cu.Full)
+		writeFullBlock(b, st, cu.Full)
 	}
 	for _, m := range cu.Methods {
-		renderFunc(b, "\t", m)
+		renderFunc(b, st, "\t", m)
 	}
 }
 
 // Renders an external variable entry showing ID, optional value, description, and full source block if visibility is full.
-func renderExtVar(b *strings.Builder, ev javascript.SimplifiedExtVar) {
+func renderExtVar(b *strings.Builder, st *renderstate.State, ev javascript.SimplifiedExtVar) {
 	if ev.Visibility == domain.VisibilityFull && ev.Full != nil {
 		b.WriteString(fmt.Sprintf("## %s: %s\n", ev.ID, desc(ev.Description)))
-		writeFullBlock(b, ev.Full)
+		writeFullBlock(b, st, ev.Full)
 		return
 	}
 	valStr := ""
@@ -101,12 +110,23 @@ func renderExtVar(b *strings.Builder, ev javascript.SimplifiedExtVar) {
 }
 
 // Formats incoming resource references into a "USED BY" section for display.
-func writeUsedBy(b *strings.Builder, incoming []domain.ResourceRef) {
+// Capped: built by scanning every function/class in the topology and previously
+// rendered in full with no limit.
+func writeUsedBy(b *strings.Builder, st *renderstate.State, incoming []domain.ResourceRef) {
 	if len(incoming) == 0 {
 		return
 	}
+	used := renderstate.New()
+	if st != nil {
+		used.MaxEntries, used.MaxBytes = st.MaxEntries, st.MaxBytes
+	}
 	b.WriteString("# USED BY:\n")
 	for _, ref := range incoming {
-		b.WriteString(fmt.Sprintf("## %s (%s): %s\n", ref.ID, string(ref.Kind), desc(ref.Description)))
+		line := fmt.Sprintf("## %s (%s): %s\n", ref.ID, string(ref.Kind), desc(ref.Description))
+		if !used.Allow(len(line)) {
+			continue
+		}
+		b.WriteString(line)
 	}
+	b.WriteString(used.Trailer())
 }

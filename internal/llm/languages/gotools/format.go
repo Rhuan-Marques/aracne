@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"aracne/internal/llm/languages/renderstate"
+
 	"aracne/internal/topology/domain"
 	"aracne/internal/topology/golang"
 )
@@ -19,22 +21,17 @@ func desc(s string) string {
 // Formats a GoFunctionContext into a human-readable string with code blocks, import statements, parent struct, function cut, and a hierarchical CONTEXT section listing interfaces, structs, called functions, and external variables.
 func FormatGoFunctionContext(ctx *golang.GoFunctionContext) string {
 	var b strings.Builder
+	st := renderstate.New()
 
 	b.WriteString("```go\n")
 
-	if len(ctx.PackagesUsed) > 0 || len(ctx.Dependencies) > 0 {
-		b.WriteString("import (\n")
-		for _, p := range ctx.PackagesUsed {
-			b.WriteString(fmt.Sprintf("\t%q\n", p))
-		}
-		for _, d := range ctx.Dependencies {
-			b.WriteString(fmt.Sprintf("\t%q\n", d))
-		}
-		b.WriteString(")\n\n")
-	}
+	// Registered with the state, so the CONTEXT blocks below do not repeat what this
+	// header already showed.
+	writeImports(&b, st.NewImports(ctx.PackagesUsed), st.NewImports(ctx.Dependencies))
 
 	if ctx.ParentStruct != nil {
 		b.WriteString(ctx.ParentStruct.Cut)
+		st.MarkRendered(ctx.ParentStruct.Cut)
 		b.WriteString("\n\n")
 	}
 
@@ -45,31 +42,35 @@ func FormatGoFunctionContext(ctx *golang.GoFunctionContext) string {
 		len(ctx.CalledFunctions) > 0 || len(ctx.ExtVarsUsed) > 0
 	if hasContext {
 		b.WriteString("# CONTEXT:\n")
+		// Bounded: CONTEXT had no cap of any kind, so a resource with a large neighbourhood
+		// returned a subgraph dump rather than an answer.
+		g := st.Guard(&b)
 		for _, full := range []bool{true, false} {
 			for _, iu := range ctx.InterfacesUsed {
-				if wantVis(iu.Visibility, full) {
-					renderInterfaceUsage(&b, iu)
+				if wantVis(iu.Visibility, full) && g.More() {
+					renderInterfaceUsage(&b, st, iu)
 				}
 			}
 			for _, su := range ctx.StructsUsed {
-				if wantVis(su.Visibility, full) {
-					renderStructUsage(&b, su)
+				if wantVis(su.Visibility, full) && g.More() {
+					renderStructUsage(&b, st, su)
 				}
 			}
 			for _, cf := range ctx.CalledFunctions {
-				if wantVis(cf.Visibility, full) {
-					renderFunc(&b, "## ", cf)
+				if wantVis(cf.Visibility, full) && g.More() {
+					renderFunc(&b, st, "## ", cf)
 				}
 			}
 			for _, ev := range ctx.ExtVarsUsed {
-				if wantVis(ev.Visibility, full) {
-					renderExtVar(&b, ev)
+				if wantVis(ev.Visibility, full) && g.More() {
+					renderExtVar(&b, st, ev)
 				}
 			}
 		}
 	}
 
-	writeUsedBy(&b, ctx.Incoming)
+	b.WriteString(st.Trailer())
+	writeUsedBy(&b, st, ctx.Incoming)
 
 	return b.String()
 }
@@ -77,19 +78,13 @@ func FormatGoFunctionContext(ctx *golang.GoFunctionContext) string {
 // Formats a GoStructContext into a human-readable string with a code block (imports, struct cut, constructor) and a CONTEXT section listing interfaces, methods, structs used, and external variables with their descriptions.
 func FormatGoStructContext(ctx *golang.GoStructContext) string {
 	var b strings.Builder
+	st := renderstate.New()
 
 	b.WriteString("```go\n")
 
-	if len(ctx.PackagesUsed) > 0 || len(ctx.Dependencies) > 0 {
-		b.WriteString("import (\n")
-		for _, p := range ctx.PackagesUsed {
-			b.WriteString(fmt.Sprintf("\t%q\n", p))
-		}
-		for _, d := range ctx.Dependencies {
-			b.WriteString(fmt.Sprintf("\t%q\n", d))
-		}
-		b.WriteString(")\n\n")
-	}
+	// Registered with the state, so the CONTEXT blocks below do not repeat what this
+	// header already showed.
+	writeImports(&b, st.NewImports(ctx.PackagesUsed), st.NewImports(ctx.Dependencies))
 
 	b.WriteString(ctx.Struct.Cut)
 	b.WriteString("\n\n")
@@ -105,6 +100,9 @@ func FormatGoStructContext(ctx *golang.GoStructContext) string {
 		len(ctx.StructsUsed) > 0 || len(ctx.InterfacesUsed) > 0 || len(ctx.ExtVarsUsed) > 0
 	if hasContext {
 		b.WriteString("# CONTEXT:\n")
+		// Bounded: CONTEXT had no cap of any kind, so a resource with a large neighbourhood
+		// returned a subgraph dump rather than an answer.
+		g := st.Guard(&b)
 		for _, full := range []bool{true, false} {
 			if !full {
 				for _, iface := range ctx.Interfaces {
@@ -116,29 +114,30 @@ func FormatGoStructContext(ctx *golang.GoStructContext) string {
 				}
 			}
 			for _, m := range ctx.Methods {
-				if wantVis(m.Visibility, full) {
-					renderFunc(&b, "## ", m)
+				if wantVis(m.Visibility, full) && g.More() {
+					renderFunc(&b, st, "## ", m)
 				}
 			}
 			for _, su := range ctx.StructsUsed {
-				if wantVis(su.Visibility, full) {
-					renderStructUsage(&b, su)
+				if wantVis(su.Visibility, full) && g.More() {
+					renderStructUsage(&b, st, su)
 				}
 			}
 			for _, iu := range ctx.InterfacesUsed {
-				if wantVis(iu.Visibility, full) {
-					renderInterfaceUsage(&b, iu)
+				if wantVis(iu.Visibility, full) && g.More() {
+					renderInterfaceUsage(&b, st, iu)
 				}
 			}
 			for _, ev := range ctx.ExtVarsUsed {
-				if wantVis(ev.Visibility, full) {
-					renderExtVar(&b, ev)
+				if wantVis(ev.Visibility, full) && g.More() {
+					renderExtVar(&b, st, ev)
 				}
 			}
 		}
 	}
 
-	writeUsedBy(&b, ctx.Incoming)
+	b.WriteString(st.Trailer())
+	writeUsedBy(&b, st, ctx.Incoming)
 
 	return b.String()
 }
@@ -146,6 +145,7 @@ func FormatGoStructContext(ctx *golang.GoStructContext) string {
 // Formats a GoInterfaceContext into a human-readable string with interface source and implementing structs/methods.
 func FormatGoInterfaceContext(ctx *golang.GoInterfaceContext) string {
 	var b strings.Builder
+	st := renderstate.New()
 
 	b.WriteString("```go\n")
 	writeImports(&b, ctx.PackagesUsed, ctx.Dependencies)
@@ -155,16 +155,18 @@ func FormatGoInterfaceContext(ctx *golang.GoInterfaceContext) string {
 	if len(ctx.Implementations) > 0 {
 		b.WriteString("# CONTEXT:\n")
 		b.WriteString("## Implemented By\n")
+		g := st.Guard(&b)
 		for _, full := range []bool{true, false} {
 			for _, impl := range ctx.Implementations {
-				if wantVis(impl.Visibility, full) {
-					renderImpl(&b, "\t", impl)
+				if wantVis(impl.Visibility, full) && g.More() {
+					renderImpl(&b, st, "\t", impl)
 				}
 			}
 		}
 	}
 
-	writeUsedBy(&b, ctx.Incoming)
+	b.WriteString(st.Trailer())
+	writeUsedBy(&b, st, ctx.Incoming)
 
 	return b.String()
 }

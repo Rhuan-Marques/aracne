@@ -1,6 +1,7 @@
 package tests_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -197,5 +198,109 @@ func Hello() {}
 
 	if !strings.Contains(out, "Full re-scan") {
 		t.Fatalf("expected 'Full re-scan' from config scan.mode=all, got:\n%s", out)
+	}
+}
+
+// TestScanUnderHiddenRootIndexesFiles is the CLI-level regression for the
+// dot-directory blackout.
+//
+// Ignore rules used to be applied to the ABSOLUTE path, so a checkout under a
+// hidden ancestor matched on its own ancestry and produced "-0 files, -0
+// functions, -0 errors" and exit 0 — indistinguishable from success. Beyond the
+// empty graph it also wrote an empty file manifest, froze incremental scanning
+// at 0/0/0, and made every subsequent edit delete that file's resources.
+func TestScanUnderHiddenRootIndexesFiles(t *testing.T) {
+	seed := func(dir string) {
+		writeFile(t, filepath.Join(dir, "package.json"), `{ "name": "mini", "version": "1.0.0", "type": "module" }`+"\n")
+		writeFile(t, filepath.Join(dir, "index.js"),
+			"export function alpha(a) { return a + 1; }\nexport function beta(b) { return alpha(b); }\n")
+	}
+
+	hidden := filepath.Join(t.TempDir(), ".claude", "scratch", "mini")
+	visible := filepath.Join(t.TempDir(), "repos", "mini")
+	for _, d := range []string{hidden, visible} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		seed(d)
+	}
+
+	hiddenOut := mustRun(t, hidden, "scan", "-all", "-root", hidden, "-output", filepath.Join(hidden, "t.db"), "-progress", "never")
+	visibleOut := mustRun(t, visible, "scan", "-all", "-root", visible, "-output", filepath.Join(visible, "t.db"), "-progress", "never")
+
+	if strings.Contains(hiddenOut, "-0 files") {
+		t.Fatalf("a repo under a hidden directory scanned to zero files:\n%s", hiddenOut)
+	}
+	for _, want := range []string{"-1 files", "-2 functions"} {
+		if !strings.Contains(hiddenOut, want) {
+			t.Errorf("expected %q under a hidden root, got:\n%s", want, hiddenOut)
+		}
+		if !strings.Contains(visibleOut, want) {
+			t.Errorf("expected %q under a visible root, got:\n%s", want, visibleOut)
+		}
+	}
+}
+
+// A dot-NAMED root (the repo directory itself is hidden, e.g. ~/.dotfiles) must
+// also scan: WalkDir's first callback is the root, and pruning by basename
+// there killed the whole walk.
+func TestScanWithDotNamedRootIndexesFiles(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), ".dotfiles")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(dir, "go.mod"), "module dotfiles\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "main.go"), "package main\n\nfunc Alpha() int { return 1 }\n")
+
+	out := mustRun(t, dir, "scan", "-all", "-root", dir, "-output", filepath.Join(dir, "t.db"), "-progress", "never")
+	if !strings.Contains(out, "-1 files") {
+		t.Fatalf("a repo in a dot-named directory scanned to zero:\n%s", out)
+	}
+}
+
+// TestScanWarnsWhenNothingIndexed: "0 files, 0 errors, exit 0" reads as
+// success. A detected project that indexes nothing has to say so — that silence
+// is what turned this bug into an hour of false leads.
+func TestScanWarnsWhenNothingIndexed(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "package.json"), `{ "name": "empty", "version": "1.0.0" }`+"\n")
+
+	out := mustRun(t, dir, "scan", "-all", "-root", dir, "-output", filepath.Join(dir, "t.db"), "-progress", "never")
+	if !strings.Contains(out, "-0 files") {
+		t.Fatalf("expected an empty scan, got:\n%s", out)
+	}
+	if !strings.Contains(out, "indexed 0 files") {
+		t.Errorf("an empty scan of a detected project must warn, got:\n%s", out)
+	}
+	if strings.Contains(out, "-0 errors") {
+		t.Errorf("a detected-but-empty scanner should be recorded as an error, got:\n%s", out)
+	}
+}
+
+// TestManifestNotEmptiedUnderHiddenRoot pins the half of the bug that was
+// invisible in the scan output: SyncManifest filtered the topology through the
+// same predicate, so it wrote an empty manifest and incremental scanning went
+// permanently quiet.
+func TestManifestNotEmptiedUnderHiddenRoot(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), ".cache", "proj")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(dir, "go.mod"), "module proj\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "main.go"), "package main\n\nfunc Alpha() int { return 1 }\n")
+
+	dbPath := filepath.Join(dir, ".aracne", "topology.db")
+	mustRun(t, dir, "scan", "-all", "-root", dir, "-output", dbPath, "-progress", "never")
+
+	data, err := os.ReadFile(filepath.Join(dir, ".aracne", "file_manifest.json"))
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	var manifest map[string]string
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatalf("parse manifest: %v", err)
+	}
+	if len(manifest) == 0 {
+		t.Fatal("the manifest was emptied under a hidden root; incremental scans would go permanently quiet")
 	}
 }

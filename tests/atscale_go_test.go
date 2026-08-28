@@ -124,6 +124,14 @@ const (
 	idGenContainer = "aracne/testing_ground/go/generics.Container"
 	idGenBox       = "aracne/testing_ground/go/generics.Box"
 
+	// edge (funcvars.go: package-level func-typed vars called through the var)
+	idEdgeColorize        = "aracne/testing_ground/go/edge.Colorize"
+	idEdgeShout           = "aracne/testing_ground/go/edge.Shout"
+	idEdgeHandleVar       = "aracne/testing_ground/go/edge.Handle"
+	idEdgeDecorate        = "aracne/testing_ground/go/edge.Decorate"
+	idEdgeDecorateChecked = "aracne/testing_ground/go/edge.DecorateChecked"
+	idConsumerDecorated   = "aracne/testing_ground/go/consumer.Decorated"
+
 	// edge (more.go: iota expr / typed consts / struct tags)
 	idEdgeKB       = "aracne/testing_ground/go/edge.KB"
 	idEdgePriority = "aracne/testing_ground/go/edge.Priority"
@@ -551,6 +559,50 @@ func TestAtScaleGo_G19_DotImport(t *testing.T) {
 			assertResPresent(t, topo, mode, idDotShout)
 			assertHasConn(t, topo, mode, idDotLoud, connCalls, idDotShout)
 			assertNoConn(t, topo, mode, idDotShout, connCalls, idDotToUpper)
+		},
+	})
+}
+
+// G20: package-level func-typed vars are call targets, not missing nodes.
+//
+// Regression cover for the defect that shipped 145 false `use_missing_node`
+// warnings in the cli/cli fixture: calls through a package var of function type
+// (`var Yellow = makeColorFunc(...)`, called as `utils.Yellow(s)`) resolved
+// against functions/structs/named types only, so a node that existed in the
+// database was reported as nonexistent and the caller lost the edge.
+//
+// Pinning the edge in all three scan modes is what makes the false warning
+// impossible: the warning was only ever emitted on the path that failed to
+// produce this edge.
+func TestAtScaleGo_G20_PackageFuncVars(t *testing.T) {
+	runGoScenario(t, scenario{
+		name:   "G20_package_func_vars",
+		mutate: func(t *testing.T, root string) { touchCorpusFile(t, root, "go/edge/funcvars.go") },
+		assert: func(t *testing.T, topo *domain.Topology, mode string) {
+			assertResPresent(t, topo, mode, idEdgeColorize)
+			assertResPresent(t, topo, mode, idEdgeShout)
+			assertResPresent(t, topo, mode, idEdgeHandleVar)
+
+			// same-package calls through the vars
+			assertHasConn(t, topo, mode, idEdgeDecorate, connUsesExtvar, idEdgeColorize)
+			assertHasConn(t, topo, mode, idEdgeDecorate, connUsesExtvar, idEdgeShout)
+			assertHasConn(t, topo, mode, idEdgeDecorateChecked, connUsesExtvar, idEdgeHandleVar)
+
+			// cross-package call through the var: the cli/cli shape
+			assertHasConn(t, topo, mode, idConsumerDecorated, connUsesExtvar, idEdgeColorize)
+
+			// The extvar arm deliberately emits no uses_package edge, mirroring
+			// resolveUseMissingWarning's extvar case. Cold and incremental must
+			// agree here or assertSameGraph3 fails.
+			assertNoConn(t, topo, mode, idConsumerDecorated, connUsesPkg, "aracne/testing_ground/go/edge")
+
+			// and none of it is reported as missing
+			for _, w := range topo.Warnings {
+				if w.Kind == domain.WarnUseMissingNode &&
+					(w.TargetID == idEdgeColorize || w.TargetID == idEdgeShout || w.TargetID == idEdgeHandleVar) {
+					t.Errorf("[%s] func-typed package var reported missing: %s", mode, w.Message)
+				}
+			}
 		},
 	})
 }
