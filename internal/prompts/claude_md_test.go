@@ -52,13 +52,13 @@ func TestAgentInstructionsDefaultMainAgentUsesMCP(t *testing.T) {
 	got := ClaudeMdContentForAgent(eff)
 
 	for _, required := range []string{
-		"## MCP Lookup tools:",
+		"## MCP Lookup tool:",
 		"## Navigation Model",
 		"## Resource Context",
 		"## How to Navigate:",
 		"## Behavioral Rules",
-		"`mcp__aracne__read_function`",
-		"`mcp__aracne__read_file`",
+		// The default agent keeps its native read, so the aracne tool takes the longer name.
+		"`mcp__aracne__read_resource`",
 		"`mcp__aracne__edit`",
 		"`mcp__aracne__write`",
 		"`mcp__aracne__warnings_list`",
@@ -82,28 +82,22 @@ func TestAgentInstructionsDefaultMainAgentUsesMCP(t *testing.T) {
 	}
 }
 
-func TestAgentInstructionsWithMCPReadSplits(t *testing.T) {
+func TestAgentInstructionsNamesReadWhenNativeReadBlocked(t *testing.T) {
+	// Blocking the harness's own read frees the short name, and the contract must use the name
+	// the tool actually registers under -- naming the wrong one costs a failed call per turn.
 	eff := helper.AgentConfig{
-		MCPTools: []string{
-			"read_function", "read_struct", "read_interface", "read_file",
-			"read_package", "read_dependency", "warnings_list", "bug_report",
-		},
+		MCPTools:     []string{"read", "grep", "warnings_list", "bug_report"},
 		BlockedTools: []string{"read", "grep", "edit", "write"},
 	}
 
 	got := ClaudeMdContentForAgent(eff)
 
-	if strings.Contains(got, "`mcp__aracne__read`:") {
-		t.Fatalf("generated CLAUDE.md contains unsplit read when splits active:\n%s", got)
+	if strings.Contains(got, "`mcp__aracne__read_resource`") {
+		t.Fatalf("read tool should take the short name when native read is blocked:\n%s", got)
 	}
 	for _, required := range []string{
-		"## MCP Lookup tools:",
-		"`mcp__aracne__read_function`",
-		"`mcp__aracne__read_struct`",
-		"`mcp__aracne__read_interface`",
-		"`mcp__aracne__read_file`",
-		"`mcp__aracne__read_package`",
-		"`mcp__aracne__read_dependency`",
+		"## MCP Lookup tool:",
+		"`mcp__aracne__read`",
 		"`mcp__aracne__warnings_list`",
 		"`mcp__aracne__bug_report`",
 		"## Navigation Model",
@@ -112,33 +106,28 @@ func TestAgentInstructionsWithMCPReadSplits(t *testing.T) {
 		"## Behavioral Rules",
 	} {
 		if !strings.Contains(got, required) {
-			t.Fatalf("generated CLAUDE.md missing %q with splits:\n%s", required, got)
+			t.Fatalf("generated CLAUDE.md missing %q:\n%s", required, got)
+		}
+	}
+	// Line ranges no longer exist on either surface, so the contract must not suggest one.
+	for _, gone := range []string{"start_line", "end_line", "line ranges"} {
+		if strings.Contains(got, gone) {
+			t.Fatalf("contract still mentions line ranges (%q):\n%s", gone, got)
 		}
 	}
 }
 
-func TestAgentInstructionsWithPartialMCPReadSplits(t *testing.T) {
-	eff := helper.AgentConfig{
-		MCPTools:     []string{"read_function", "read_file", "warnings_list"},
-		BlockedTools: []string{"read", "grep", "edit", "write"},
-	}
+func TestAgentInstructionsOmitsReadWhenNotGranted(t *testing.T) {
+	// An agent without the read tool must not be told about a lookup it cannot call.
+	eff := helper.AgentConfig{MCPTools: []string{"grep", "warnings_list"}}
 
 	got := ClaudeMdContentForAgent(eff)
 
-	if strings.Contains(got, "`mcp__aracne__read_struct`") {
-		t.Fatalf("generated CLAUDE.md contains read_struct when not in splits:\n%s", got)
+	if strings.Contains(got, "## MCP Lookup tool:") {
+		t.Fatalf("CLAUDE.md advertises a lookup tool the agent lacks:\n%s", got)
 	}
-	if strings.Contains(got, "`mcp__aracne__read_interface`") {
-		t.Fatalf("generated CLAUDE.md contains read_interface when not in splits:\n%s", got)
-	}
-	for _, required := range []string{
-		"`mcp__aracne__read_function`",
-		"`mcp__aracne__read_file`",
-		"`mcp__aracne__warnings_list`",
-	} {
-		if !strings.Contains(got, required) {
-			t.Fatalf("generated CLAUDE.md missing %q:\n%s", required, got)
-		}
+	if !strings.Contains(got, "`mcp__aracne__grep`") {
+		t.Fatalf("CLAUDE.md missing the grep tool it does have:\n%s", got)
 	}
 }
 

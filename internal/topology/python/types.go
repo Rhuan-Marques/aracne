@@ -80,8 +80,12 @@ type ContextBlock struct {
 
 // Provides complete context for a Python function including called functions, classes, dependencies, and incoming references.
 type PythonFunctionContext struct {
-	Function        *FunctionCut
-	ParentClass     *ClassCut
+	Function    *FunctionCut
+	ParentClass *ClassCut
+	// OversizedParent is the enclosing type when it was too large to inline above the member
+	// (read.context_filter.max_inline_parent_lines). It renders as an ordinary named+described
+	// neighbour instead of as source.
+	OversizedParent *ClassCut
 	CalledFunctions []SimplifiedFunction
 	ClassesUsed     []ClassUsage
 	ExtVarsUsed     []SimplifiedExtVar

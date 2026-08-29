@@ -86,8 +86,12 @@ type SimplifiedNamedType struct {
 
 // Full context for a function including parent class, called functions, used types/classes/interfaces, external vars, dependencies, and incoming references.
 type JavaScriptFunctionContext struct {
-	Function        *FunctionCut
-	ParentClass     *ClassCut
+	Function    *FunctionCut
+	ParentClass *ClassCut
+	// OversizedParent is the enclosing type when it was too large to inline above the member
+	// (read.context_filter.max_inline_parent_lines). It renders as an ordinary named+described
+	// neighbour instead of as source.
+	OversizedParent *ClassCut
 	CalledFunctions []SimplifiedFunction
 	ClassesUsed     []ClassUsage
 	InterfacesUsed  []SimplifiedInterface

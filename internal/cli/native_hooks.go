@@ -5,7 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
+
+	"aracne/internal/toolspec"
 )
 
 // Holds OS-specific hook script metadata: name, content, command, and shell type
@@ -143,15 +146,21 @@ func writeClaudePermissions(settingsPath string) {
 }
 
 // claudeMCPPermissionRules returns the Claude Code permission rules that allow
-// every aracne MCP tool, e.g. "mcp__aracne__read_function". The full universe is
+// every aracne MCP tool, e.g. "mcp__aracne__grep". The full universe is
 // listed (not just the main agent's profile) so sub-agents — already restricted
 // by their own tools: frontmatter — never trigger a permission prompt either.
+//
+// Both runtime names of the read tool are listed. Which one an agent registers depends on its
+// blocked_tools, and agents in one project can differ; allowing only the resolved name would
+// leave the other prompting.
 func claudeMCPPermissionRules() []string {
 	names := allMCPToolNames()
-	rules := make([]string, 0, len(names))
+	rules := make([]string, 0, len(names)+1)
 	for _, name := range names {
 		rules = append(rules, "mcp__aracne__"+name)
 	}
+	rules = append(rules, "mcp__aracne__"+toolspec.ReadResourceToolName)
+	sort.Strings(rules)
 	return rules
 }
 

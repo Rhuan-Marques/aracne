@@ -57,7 +57,15 @@ func (m *JavaManager) ReadFunction(id string, opts ...topology.TopologyOption) (
 			if err != nil {
 				return nil, err
 			}
-			ctx.ParentStruct = &StructCut{JavaClass: parent, Cut: parentCut.Cut}
+			// Past the ceiling the enclosing type stops riding along with the member and
+			// becomes an ordinary neighbour instead. For Python/JS/Java the cut IS the whole
+			// class, so inlining it unconditionally meant reading one method returned the
+			// entire class.
+			if opt.ContextFilter().InlineParent(parent.Loc.EndsAt - parent.Loc.StartsAt + 1) {
+				ctx.ParentStruct = &StructCut{JavaClass: parent, Cut: parentCut.Cut}
+			} else {
+				ctx.OversizedParent = &StructCut{JavaClass: parent, Cut: parentCut.Cut}
+			}
 		}
 	}
 

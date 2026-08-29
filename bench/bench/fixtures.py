@@ -20,6 +20,7 @@ import json
 import shutil
 import sqlite3
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -162,6 +163,106 @@ def apply_aracne_config(worktree, overlay_path) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Base-commit hygiene
+# --------------------------------------------------------------------------- #
+
+def source_drift(worktree) -> list[str]:
+    """Repo paths that differ from HEAD, EXCLUDING aracne's own artifacts.
+
+    A benchmark run leaves its agent's edits in the canonical worktree — it is path-pinned and
+    reused, so nothing cleans up until the next `restore`. Any fixture operation that reads the
+    worktree between runs is therefore reading SOLVED source unless it checks. That is not
+    hypothetical: the pallets__flask fixture was frozen from a worktree still carrying the
+    agent's fix, so its snapshot DB indexed `Config` at lines 29-347 of a file that is 338 lines
+    at base_commit. Every read of any symbol in that class then failed with a range error that
+    looked to the model exactly like a bad ID — and the description the DB carried for
+    `Config.from_file` documented the `mode` parameter the task exists to add.
+    """
+    wt = Path(worktree)
+    res = run_git(["status", "--porcelain", "--untracked-files=all"], wt, check=False)
+    if res.returncode != 0:
+        return []
+    drift = []
+    for line in res.stdout.splitlines():
+        path = line[3:].strip().strip('"')
+        # Rename/copy entries read "old -> new"; the destination is what matters.
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        if not path or path.split("/", 1)[0] in ARACNE_ARTIFACTS:
+            continue
+        drift.append(path)
+    return sorted(drift)
+
+
+def reset_sources(task, worktree) -> None:
+    """Hard-reset the worktree to `base_commit`, keeping the aracne artifacts in place.
+
+    `git reset --hard` DELETES a path that is in the index but not in the target commit, and
+    the fixture's artifacts are staged that way — so they are moved aside for the reset and
+    moved back, which is the same dance `restore` does with the snapshot.
+    """
+    wt = Path(worktree)
+    holding = Path(tempfile.mkdtemp(prefix="aracne-fixture-"))
+    moved = []
+    try:
+        for name in ARACNE_ARTIFACTS:
+            src = wt / name
+            if src.exists():
+                shutil.move(str(src), str(holding / name))
+                moved.append(name)
+        run_git(["reset", "--hard", task.base_commit], wt)
+        run_git(["clean", "-ffdxq"], wt, check=False)
+    finally:
+        for name in moved:
+            dest = wt / name
+            if dest.exists():
+                shutil.rmtree(dest, ignore_errors=True) if dest.is_dir() else dest.unlink()
+            shutil.move(str(holding / name), str(dest))
+        shutil.rmtree(holding, ignore_errors=True)
+
+
+def reindex(worktree, cfg: dict) -> None:
+    """Re-index whatever has drifted from the topology, incrementally.
+
+    Best-effort and never fatal: a fixture that cannot be re-indexed is still usable, just
+    stale, and `arac check-updates` will say so. The default (incremental) mode is deliberate —
+    it re-parses only the files whose mtime moved, so this costs a manifest diff on the common
+    path where nothing changed.
+    """
+    try:
+        subprocess.run(
+            [cfg.get("arac_bin", "arac"), "scan", "--default", "--root", ".",
+             "--output", ".aracne/topology.db"],
+            cwd=str(worktree), check=True, capture_output=True, text=True, timeout=900,
+        )
+    except (OSError, subprocess.SubprocessError) as e:  # noqa: BLE001
+        print(f"[fixtures] warning: could not re-index {worktree}: {e}")
+
+
+def ensure_base_commit(task, cfg: dict, worktree, label: str) -> list[str]:
+    """Put the worktree back on base_commit and re-index if it had drifted. Returns the drift.
+
+    Every fixture operation that inspects or captures the worktree calls this first, so no
+    aracne artifact can ever be built from — or frozen against — source the benchmark does not
+    hand the agent.
+    """
+    drift = source_drift(worktree)
+    head = run_git(["rev-parse", "HEAD"], Path(worktree), check=False).stdout.strip()
+    # A worktree left on the wrong commit is drift too, and `git status` cannot see it.
+    if head and not head.startswith(task.base_commit[:12]):
+        drift = drift + [f"HEAD is {head[:12]}, not {task.base_commit[:12]}"]
+    if not drift:
+        return []
+    shown = ", ".join(drift[:5]) + (f" … and {len(drift) - 5} more" if len(drift) > 5 else "")
+    print(f"[fixtures] {label}: worktree for {fixture_key(task)} was NOT at base_commit "
+          f"({len(drift)} path(s) changed: {shown}). Resetting and re-indexing — a fixture "
+          f"captured in this state leaks the solution and indexes lines that do not exist.")
+    reset_sources(task, worktree)
+    reindex(worktree, cfg)
+    return drift
+
+
+# --------------------------------------------------------------------------- #
 # Lifecycle
 # --------------------------------------------------------------------------- #
 
@@ -185,6 +286,12 @@ def scaffold(task, cfg: dict, fixtures_root) -> dict:
     if fresh:
         cache = ensure_repo_cache(task, Path(fixtures_root) / "_repos")
         clone_at(task, cache, wt, task.base_commit)
+
+    # A reused fixture may still be carrying the last run's agent edits. Everything below —
+    # `arac init`, the scan, the description kind scope, and the coverage count this returns —
+    # reads the worktree, so put it back on base_commit first.
+    if not fresh:
+        ensure_base_commit(task, cfg, wt, "scaffold")
 
     # Always ensure BOTH harness integrations exist (cheap + idempotent) — this also repairs
     # fixtures created before a harness was wired in. Only the expensive clone+scan is skipped
@@ -260,6 +367,10 @@ def freeze(task, cfg: dict, fixtures_root) -> dict:
     if not wt.exists():
         raise RuntimeError(f"no worktree for {fixture_key(task)}; run prepare first")
 
+    # THE fix for poisoned fixtures. What gets frozen here is what every run of this instance
+    # will be handed, so it must describe base_commit and nothing else. See source_drift.
+    drift = ensure_base_commit(task, cfg, wt, "freeze")
+
     described, total, cov = description_coverage(wt / ".aracne" / "topology.db", _gen_kinds(cfg))
 
     snap = snapshot_path(fixtures_root, task)
@@ -290,16 +401,28 @@ def freeze(task, cfg: dict, fixtures_root) -> dict:
         # Provenance: which arac produced this fixture, and which config it will run under.
         "arac_version": arac_version(cfg),
         "config_fingerprint": config_fingerprint(wt),
+        # Whether this freeze had to undo a previous run's edits. A non-empty list means the
+        # DESCRIPTIONS in the snapshot may still have been generated against solved source —
+        # locations are repaired by the re-index, prose is not — so the fixture is worth
+        # regenerating before it is trusted for a correctness claim.
+        "reset_from_drift": drift,
     }
     meta_path(fixtures_root, task).write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return meta
 
 
-def restore(task, fixtures_root) -> Path:
+def restore(task, cfg: dict, fixtures_root) -> Path:
     """Reset the canonical worktree to base_commit and restore the warm aracne artifacts.
 
     Returns the worktree path. Raises if no snapshot exists (freeze first). The worktree
     is reused in place (path-pinned), never relocated.
+
+    Finishes with an incremental re-index, because restoring a DB next to source is exactly the
+    operation that can produce a topology describing the wrong bytes: the reset rewrites every
+    file the last run edited, giving them new mtimes, and the copied manifest still claims they
+    were indexed. That is a manifest diff plus a re-parse of only the drifted files, so an
+    already-consistent fixture pays a tree walk and nothing more — and it is what makes an
+    older, poisoned snapshot usable instead of silently wrong for a whole run.
     """
     fixtures_root = Path(fixtures_root)
     wt = worktree_path(fixtures_root, task)
@@ -324,6 +447,8 @@ def restore(task, fixtures_root) -> Path:
         else:
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dest)
+
+    reindex(wt, cfg)
     return wt
 
 

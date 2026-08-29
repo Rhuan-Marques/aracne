@@ -122,8 +122,12 @@ type ResourceUsage struct {
 
 // GoFunctionContext is the enriched context returned by ReadFunction. It bundles the function cut, parent struct (for methods), called functions, struct/interface usage, external variables, dependencies, packages, and sorted context blocks for proximity rendering in LLM prompts.
 type GoFunctionContext struct {
-	Function        *FunctionCut
-	ParentStruct    *StructCut
+	Function     *FunctionCut
+	ParentStruct *StructCut
+	// OversizedParent is the enclosing type when it was too large to inline above the member
+	// (read.context_filter.max_inline_parent_lines). It renders as an ordinary named+described
+	// neighbour instead of as source.
+	OversizedParent *StructCut
 	CalledFunctions []SimplifiedFunction
 	StructsUsed     []StructUsage
 	InterfacesUsed  []InterfaceUsage

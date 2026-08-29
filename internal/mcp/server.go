@@ -91,7 +91,11 @@ func (s *Server) handleListTools(id *int) *Response {
 		props := make(map[string]Property)
 		var required []string
 		for _, p := range t.Parameters() {
-			props[p.Name] = Property{Type: p.Type, Description: p.Description}
+			prop := Property{Type: p.Type, Description: p.Description}
+			if p.Items != "" {
+				prop.Items = &Items{Type: p.Items}
+			}
+			props[p.Name] = prop
 			if p.Required {
 				required = append(required, p.Name)
 			}

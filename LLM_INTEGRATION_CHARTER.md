@@ -54,14 +54,14 @@ The topology is a **directed graph**. Resources have:
 ### Navigation Flow
 
 1. Use `ls` to understand the project file layout
-2. Use **named lookups** (`read_function`, `read_struct`) to get a resource's full context
-3. Use `read` for raw file contents when you need to see surrounding code
+2. Use **`read`** with the resource IDs you care about to get their full context
+3. Pass a file path to `read` only when you need the whole file
 
-**Critical: Prefer `read_function` / `read_struct` over `read`.** These tools return not just the source code but also the interconnected context: called functions, related structs, interfaces, external variables, and dependencies. This rich context is more valuable than raw file contents.
+**Critical: prefer symbol IDs over file paths, and batch them.** `read` returns not just source code but the interconnected context: called functions, related structs, interfaces, external variables, and dependencies. That is more valuable than raw file contents. It takes a LIST, and results are grouped by file under one context section, so passing three IDs in one call costs far less than three calls.
 
 ## 4. Resource Context Hierarchy
 
-When you call `read_function` or `read_struct`, the output has two sections:
+When you call `read`, the output has two sections:
 
 ### Code Block
 The resource's full source code, plus relevant imports and enclosing type (for methods).
@@ -85,12 +85,12 @@ Use the CONTEXT section to understand relationships **without making additional 
 ## 5. Priorities
 
 ### Tier 1: Understand Before Acting
-- Explore with `ls`, then use `read_function`/`read_struct` to understand the code you need to change
+- Explore with `ls`, then `read` the symbols you need to change — all of them in one call
 - Read the CONTEXT section thoroughly — it often answers your questions without extra tool calls
-- Only drill deeper (another `read_function`) when the description indicates something critical to your task
+- Only drill deeper (another `read`) when the description indicates something critical to your task
 
 ### Tier 2: Prefer Rich Tools Over Raw Tools
-- `read_function`/`read_struct` > `read`
+- symbol IDs > file paths; one batched `read` > several single reads
 - Named lookups > raw file grepping
 - Let the topology do the heavy lifting
 
@@ -115,7 +115,7 @@ When asked to document the project or generate descriptions:
 2. Split the list into deterministic batches of at most the configured description batch size (default 5)
 3. Assign each batch to a **descriptions-generation-executor** sub-agent when subagents are available. Each executor:
    - Receives only its assigned IDs, names, and kinds
-   - Calls `read` with each assigned resource's ID
+   - Calls `read` once with all assigned resource IDs
    - Reads the source code
    - Manually generates a concise description (1-3 lines for functions/structs/interfaces, 1 line for variables/files/packages)
    - Calls `update_description` to persist it
@@ -137,9 +137,7 @@ When asked to document the project or generate descriptions:
 | Tool | When to Use |
 |------|-------------|
 | `ls` | Start here — explore project structure |
-| `read` | Read any resource by its ID — topology-aware, detects kind automatically |
-| `read_function` | Investigate a function by name — preferred over `read` for rich context |
-| `read_struct` | Investigate a struct by name — preferred over `read` for rich context |
+| `read` | Read any resources by ID — takes a list, topology-aware, detects each kind automatically. Registers as `read_resource` when the harness keeps its own native read. |
 | `update_description` | Persist a generated description |
 | `node_list_no_description` | Before generating descriptions |
 | `edit` | Make code changes (topology auto-updates) |

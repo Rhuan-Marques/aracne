@@ -30,6 +30,10 @@ type toolDeps struct {
 	batchSize         int
 	filter            domain.ContextFilter
 	includeNotVisible bool
+	cfg               *helper.Config
+	// nativeReadAvailable reports whether this agent still has the harness's own read tool,
+	// which decides whether the aracne one registers as "read" or "read_resource".
+	nativeReadAvailable bool
 }
 
 // mcpToolConstructors maps each MCP tool name to its constructor. It is the
@@ -37,14 +41,12 @@ type toolDeps struct {
 // BuildToolRegistry both derive from it, and a test asserts its key set matches
 // the toolspec catalog so config names, validation, and registration can't drift.
 var mcpToolConstructors = map[string]func(toolDeps) tools.Tool{
-	"read":                     func(d toolDeps) tools.Tool { return tools.NewRead(d.manager) },
-	"read_function":            func(d toolDeps) tools.Tool { return universaltools.NewReadFunction(d.manager) },
-	"read_struct":              func(d toolDeps) tools.Tool { return universaltools.NewReadStruct(d.manager) },
-	"read_interface":           func(d toolDeps) tools.Tool { return universaltools.NewReadInterface(d.manager) },
-	"read_named_type":          func(d toolDeps) tools.Tool { return universaltools.NewReadNamedType(d.manager) },
-	"read_file":                func(d toolDeps) tools.Tool { return universaltools.NewReadFile(d.manager) },
-	"read_package":             func(d toolDeps) tools.Tool { return universaltools.NewReadPackage(d.manager) },
-	"read_dependency":          func(d toolDeps) tools.Tool { return universaltools.NewReadDependency(d.manager) },
+	// One constructor for the whole read family. The registered tool's NAME is decided at
+	// build time from the agent's blocked_tools, so the catalog key "read" and the runtime
+	// name can differ -- see BuildToolRegistry.
+	"read": func(d toolDeps) tools.Tool {
+		return universaltools.NewRead(d.manager, d.cfg, d.nativeReadAvailable, d.scannerReg)
+	},
 	"grep":                     func(d toolDeps) tools.Tool { return tools.NewGrep(d.manager) },
 	"edit":                     func(d toolDeps) tools.Tool { return tools.NewEdit(d.manager, d.scannerReg) },
 	"write":                    func(d toolDeps) tools.Tool { return tools.NewWrite(d.manager, d.scannerReg) },
@@ -151,6 +153,9 @@ func BuildToolRegistry(manager *topology.TopologyManager, scannerReg *scanner.Re
 		batchSize:         cfg.AgentParam(harness, agentName, "max-batch-size", helper.DefaultDescriptionBatchSize),
 		filter:            cfg.EffectiveContextFilter(),
 		includeNotVisible: cfg.Descriptions.IncludeNotVisible,
+		cfg:               cfg,
+		// The synthetic "all" profile serves the chat MCP server, which has no native read.
+		nativeReadAvailable: agentName != "all" && !blocksNativeRead(cfg, harness, agentName),
 	}
 	readScan := cfg.EffectiveReadScan()
 	for _, name := range allMCPToolNames() {
@@ -160,4 +165,16 @@ func BuildToolRegistry(manager *topology.TopologyManager, scannerReg *scanner.Re
 		}
 	}
 	return registry
+}
+
+// blocksNativeRead reports whether the agent's blocked_tools denies the harness's own read
+// tool. When it does, the aracne read tool takes the short name; otherwise it registers as
+// "read_resource" so the two are never confusable in one session.
+func blocksNativeRead(cfg *helper.Config, harness, agentName string) bool {
+	for _, t := range cfg.EffectiveAgent(harness, agentName).BlockedTools {
+		if t == "read" {
+			return true
+		}
+	}
+	return false
 }

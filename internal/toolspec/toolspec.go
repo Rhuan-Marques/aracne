@@ -22,15 +22,15 @@ type Spec struct {
 // specs is the ordered catalog. Order is used only for deterministic listing
 // of "all" tools; per-agent listings preserve the config order.
 var specs = []Spec{
-	{"read", "read any resource by its ID", true, true},
-	{"read_function", "inspect a function's source and connected context", true, true},
-	{"read_struct", "inspect a struct/class's source, methods, and interfaces", true, true},
-	{"read_interface", "inspect an interface/protocol and its implementations", true, true},
-	{"read_named_type", "inspect a named type and its usages", true, true},
-	{"read_file", "inspect a file's source and topology context, or a raw line range via start_line/end_line", true, true},
-	{"read_package", "inspect a package and its members", true, true},
-	{"read_dependency", "inspect a dependency and its usages", true, true},
-	{"grep", "search code contents, returning topology resource metadata", true, true},
+	// One read tool, not eight. The per-kind split (read_function, read_struct,
+	// read_interface, read_named_type, read_file, read_package, read_dependency) asked models
+	// to classify a resource before reading it -- something the ID resolver already does --
+	// and they routinely picked the wrong one, paying a correction turn for it. Which KINDS
+	// are readable moved to read.kinds, a project-wide setting; this entry only decides
+	// whether an agent may read at all. The registered tool answers to "read_resource" when
+	// the harness has its own native read (see toolspec.ReadToolName).
+	{"read", "read any resources by ID -- one call takes several, and returns their source plus connected context", true, true},
+	{"grep", "search node names, node descriptions and code contents, ranked in that order", true, true},
 	{"edit", "apply exact string replacements to a file, or delete text with an empty new_string", true, true},
 	{"write", "create or overwrite a file", true, true},
 	{"warnings_list", "list topology warnings", true, true},
@@ -103,10 +103,36 @@ var powershellCmdToKey = map[string]string{
 // warn-only default actually means: the native tools are allowed, and aracne's equivalents
 // have to win on merit. Forbidding them is what produced redundant read turns.
 var nativeWarnings = map[string]string{
-	"read":  "aracne: `mcp__aracne__read_function` also returns the symbol's neighbours and descriptions.",
-	"grep":  "aracne: `mcp__aracne__grep` also names the enclosing resource; it takes glob/type/output_mode.",
+	"read":  "aracne: `mcp__aracne__read_resource` takes several ids at once and returns their neighbours too.",
+	"grep":  "aracne: `mcp__aracne__grep` also searches node names and descriptions, which no plain grep can reach.",
 	"edit":  "aracne: `mcp__aracne__edit` updates the topology inline (the update-file hook covers this one too).",
 	"write": "aracne: `mcp__aracne__write` updates the topology inline.",
+}
+
+// ReadToolNames are the names the single read tool can answer to at runtime.
+const (
+	// ReadToolName is used when the harness's own read is blocked for this agent, so the
+	// short name is free.
+	ReadToolName = "read"
+	// ReadResourceToolName is used when the harness still offers a native read. Two tools
+	// called "read" in one session is a coin flip for the model even though the MCP prefix
+	// makes them technically distinct, and the loser is usually the one that knows the
+	// topology.
+	ReadResourceToolName = "read_resource"
+)
+
+// ResolveReadToolName returns the name the read tool registers under. nativeReadAvailable
+// reports whether the harness's own read tool is left enabled for this agent.
+func ResolveReadToolName(nativeReadAvailable bool) string {
+	if nativeReadAvailable {
+		return ReadResourceToolName
+	}
+	return ReadToolName
+}
+
+// IsReadToolName reports whether name is either runtime name of the read tool.
+func IsReadToolName(name string) bool {
+	return name == ReadToolName || name == ReadResourceToolName
 }
 
 // Lookup returns the spec for a tool name.

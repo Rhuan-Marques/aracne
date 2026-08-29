@@ -1,0 +1,787 @@
+<title>Aracne Under Opus</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,400;0,600;0,700;1,400&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --bg:#eceff1; --surface:#ffffff; --surface-2:#f5f7f8;
+  --ink:#0f1619; --ink-2:#39484e; --muted:#6b7a80;
+  --line:#d3dade; --line-2:#e4eaed;
+  --petrol:#10566d; --petrol-soft:#dcecf1;
+  --graphite:#859399;
+  --pass:#2c7a5b; --warn:#a8660f; --fail:#a4303f;
+  --pass-soft:#dbeee5; --warn-soft:#f6ead6; --fail-soft:#f6dee1;
+  --shadow:0 1px 2px rgba(15,22,25,.06),0 8px 24px -18px rgba(15,22,25,.4);
+  --maxw:1180px; --prose:70ch;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0d1316; --surface:#141c20; --surface-2:#192327;
+    --ink:#e3ecef; --ink-2:#b0c1c7; --muted:#7d9099;
+    --line:#25333a; --line-2:#1e2a30;
+    --petrol:#5cb4d0; --petrol-soft:#12303c;
+    --graphite:#6d7f89;
+    --pass:#5cba90; --warn:#d9a441; --fail:#e0707d;
+    --pass-soft:#122c22; --warn-soft:#2e2413; --fail-soft:#33161b;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px -20px rgba(0,0,0,.9);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0d1316; --surface:#141c20; --surface-2:#192327;
+  --ink:#e3ecef; --ink-2:#b0c1c7; --muted:#7d9099;
+  --line:#25333a; --line-2:#1e2a30;
+  --petrol:#5cb4d0; --petrol-soft:#12303c;
+  --graphite:#6d7f89;
+  --pass:#5cba90; --warn:#d9a441; --fail:#e0707d;
+  --pass-soft:#122c22; --warn-soft:#2e2413; --fail-soft:#33161b;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px -20px rgba(0,0,0,.9);
+}
+
+*{box-sizing:border-box}
+body{
+  background:var(--bg); color:var(--ink);
+  font-family:"IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  font-size:15.5px; line-height:1.62; margin:0;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:var(--maxw); margin:0 auto; padding:0 28px 96px}
+
+/* ---------- masthead ---------- */
+header.masthead{border-bottom:1px solid var(--line); margin-bottom:44px; padding:56px 0 30px}
+.eyebrow{
+  font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11.5px;
+  letter-spacing:.16em; text-transform:uppercase; color:var(--petrol); margin:0 0 18px
+}
+h1{
+  font-family:Spectral,Georgia,serif; font-weight:700; font-size:clamp(2.4rem,5.4vw,3.6rem);
+  line-height:1.04; letter-spacing:-.018em; margin:0 0 18px; text-wrap:balance;
+}
+.standfirst{font-size:1.13rem; color:var(--ink-2); max-width:62ch; margin:0 0 26px}
+.runchips{display:flex; flex-wrap:wrap; gap:8px}
+.chip{
+  font-family:"IBM Plex Mono",monospace; font-size:11.5px; letter-spacing:.02em;
+  border:1px solid var(--line); background:var(--surface); color:var(--ink-2);
+  padding:5px 10px; border-radius:3px; white-space:nowrap;
+}
+.chip b{color:var(--ink); font-weight:500}
+
+/* ---------- layout ---------- */
+.cols{display:grid; grid-template-columns:190px minmax(0,1fr); gap:52px; align-items:start}
+@media(max-width:900px){.cols{grid-template-columns:1fr; gap:0}
+  nav.index{position:static; margin-bottom:36px; border-left:0; border-top:1px solid var(--line); padding:18px 0 0}}
+nav.index{position:sticky; top:26px; font-size:13px; border-left:2px solid var(--line); padding-left:16px}
+nav.index a{
+  display:block; color:var(--muted); text-decoration:none; padding:5px 0; line-height:1.35;
+  border-left:2px solid transparent; margin-left:-18px; padding-left:16px;
+}
+nav.index a:hover,nav.index a:focus-visible{color:var(--petrol); border-left-color:var(--petrol); outline:none}
+nav.index .qn{font-family:"IBM Plex Mono",monospace; font-size:10.5px; color:var(--petrol); letter-spacing:.08em}
+nav.index .grp{font-family:"IBM Plex Mono",monospace; font-size:10.5px; letter-spacing:.14em;
+  text-transform:uppercase; color:var(--muted); margin:20px 0 6px; opacity:.7}
+nav.index .grp:first-child{margin-top:0}
+
+main{min-width:0}
+section{margin:0 0 68px; scroll-margin-top:24px}
+h2{
+  font-family:Spectral,Georgia,serif; font-weight:600; font-size:1.72rem; line-height:1.18;
+  letter-spacing:-.012em; margin:0 0 6px; text-wrap:balance;
+}
+h3{font-family:"IBM Plex Sans",sans-serif; font-weight:600; font-size:1.02rem; margin:34px 0 10px; letter-spacing:.005em}
+h4{font-family:"IBM Plex Mono",monospace; font-weight:500; font-size:11.5px; letter-spacing:.12em;
+  text-transform:uppercase; color:var(--muted); margin:26px 0 10px}
+p{margin:0 0 14px; max-width:var(--prose)}
+ul,ol{max-width:var(--prose); padding-left:20px; margin:0 0 16px}
+li{margin:0 0 7px}
+a{color:var(--petrol)}
+code{font-family:"IBM Plex Mono",monospace; font-size:.875em; background:var(--surface-2);
+  border:1px solid var(--line-2); border-radius:3px; padding:1px 4px}
+strong{font-weight:600}
+.lede{font-size:1.04rem; color:var(--ink-2)}
+
+/* question header */
+.qhead{display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; margin-bottom:14px;
+  border-top:2px solid var(--ink); padding-top:14px}
+.qnum{font-family:"IBM Plex Mono",monospace; font-size:11.5px; letter-spacing:.14em;
+  color:var(--petrol); flex:0 0 auto; padding-top:5px}
+.qhead h2{flex:1 1 320px; margin:0}
+.verdict{
+  font-family:"IBM Plex Mono",monospace; font-size:11px; letter-spacing:.1em; text-transform:uppercase;
+  padding:5px 10px; border-radius:3px; white-space:nowrap; font-weight:500; align-self:center;
+}
+.v-no{background:var(--fail-soft); color:var(--fail); border:1px solid currentColor}
+.v-part{background:var(--warn-soft); color:var(--warn); border:1px solid currentColor}
+.v-yes{background:var(--pass-soft); color:var(--pass); border:1px solid currentColor}
+
+/* ---------- panels ---------- */
+.panel{background:var(--surface); border:1px solid var(--line); border-radius:5px;
+  box-shadow:var(--shadow); padding:22px 24px; margin:20px 0}
+.panel.tight{padding:0; overflow:hidden}
+.panel h4:first-child{margin-top:0}
+
+.verdictbox{background:var(--surface); border:1px solid var(--line); border-left:4px solid var(--petrol);
+  border-radius:4px; padding:24px 26px; margin:0 0 40px; box-shadow:var(--shadow)}
+.verdictbox p{max-width:74ch; font-size:1.05rem}
+.verdictbox p:last-child{margin-bottom:0}
+
+/* ---------- stat strip ---------- */
+.stats{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:1px;
+  background:var(--line); border:1px solid var(--line); border-radius:5px; overflow:hidden; margin:24px 0 8px}
+.stat{background:var(--surface); padding:16px 18px}
+.stat .k{font-family:"IBM Plex Mono",monospace; font-size:10.5px; letter-spacing:.1em;
+  text-transform:uppercase; color:var(--muted); margin-bottom:8px}
+.stat .v{font-family:Spectral,serif; font-size:1.85rem; font-weight:600; line-height:1;
+  font-variant-numeric:tabular-nums; letter-spacing:-.01em}
+.stat .d{font-family:"IBM Plex Mono",monospace; font-size:11.5px; margin-top:7px; font-variant-numeric:tabular-nums}
+.up{color:var(--fail)} .down{color:var(--pass)} .flat{color:var(--muted)}
+
+/* ---------- tables ---------- */
+.tablewrap{overflow-x:auto; border:1px solid var(--line); border-radius:5px; background:var(--surface);
+  box-shadow:var(--shadow); margin:20px 0}
+table{border-collapse:collapse; width:100%; font-size:13.5px; font-variant-numeric:tabular-nums}
+caption{caption-side:top; text-align:left; font-family:"IBM Plex Mono",monospace; font-size:11px;
+  letter-spacing:.1em; text-transform:uppercase; color:var(--muted);
+  padding:14px 18px 10px; border-bottom:1px solid var(--line-2)}
+th,td{padding:8px 14px; text-align:right; border-bottom:1px solid var(--line-2); white-space:nowrap}
+th:first-child,td:first-child{text-align:left; white-space:normal}
+thead th{font-family:"IBM Plex Mono",monospace; font-size:10.5px; letter-spacing:.08em;
+  text-transform:uppercase; color:var(--muted); font-weight:500; background:var(--surface-2)}
+tbody tr:last-child td{border-bottom:0}
+tbody tr:hover{background:var(--surface-2)}
+td.mono,th.mono{font-family:"IBM Plex Mono",monospace}
+.dim{color:var(--muted)}
+tr.total td{border-top:2px solid var(--line); font-weight:600}
+
+/* ---------- bar comparisons ---------- */
+.bars{display:grid; gap:11px; margin:6px 0 4px}
+.barrow{display:grid; grid-template-columns:minmax(120px,190px) minmax(0,1fr) 74px; gap:14px; align-items:center; font-size:13px}
+.barrow .lab{color:var(--ink-2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.bartrack{background:var(--surface-2); border:1px solid var(--line-2); border-radius:2px; height:17px; position:relative}
+.barfill{height:100%; border-radius:1px}
+.barrow .num{font-family:"IBM Plex Mono",monospace; font-size:12px; text-align:right;
+  font-variant-numeric:tabular-nums; color:var(--ink-2)}
+.f-ara{background:var(--petrol)}
+.f-base{background:var(--graphite)}
+.f-warn{background:var(--warn)}
+.f-fail{background:var(--fail)}
+.f-pass{background:var(--pass)}
+.legend{display:flex; gap:18px; flex-wrap:wrap; font-family:"IBM Plex Mono",monospace;
+  font-size:11px; color:var(--muted); margin:14px 0 2px}
+.legend span{display:flex; align-items:center; gap:7px}
+.sw{width:11px; height:11px; border-radius:2px; display:inline-block}
+
+/* ---------- code exhibits ---------- */
+figure.exhibit{margin:22px 0; border:1px solid var(--line); border-radius:5px;
+  background:var(--surface); overflow:hidden; box-shadow:var(--shadow)}
+figure.exhibit figcaption{
+  font-family:"IBM Plex Mono",monospace; font-size:11px; letter-spacing:.07em;
+  color:var(--muted); padding:11px 16px; border-bottom:1px solid var(--line-2);
+  background:var(--surface-2); display:flex; justify-content:space-between; gap:16px; flex-wrap:wrap;
+}
+figure.exhibit figcaption b{color:var(--ink); font-weight:500; letter-spacing:.02em}
+pre{margin:0; padding:16px; overflow-x:auto; font-family:"IBM Plex Mono",monospace;
+  font-size:12.2px; line-height:1.55; color:var(--ink-2)}
+pre .hl{color:var(--petrol); font-weight:500}
+pre .ok{color:var(--pass)}
+pre .bad{color:var(--fail)}
+pre .cm{color:var(--muted)}
+
+.callout{border-left:3px solid var(--warn); background:var(--warn-soft); padding:14px 18px;
+  border-radius:0 4px 4px 0; margin:22px 0}
+.callout.bad{border-left-color:var(--fail); background:var(--fail-soft)}
+.callout.good{border-left-color:var(--pass); background:var(--pass-soft)}
+.callout p{max-width:66ch; margin:0}
+.callout p+p{margin-top:10px}
+.callout .tag{font-family:"IBM Plex Mono",monospace; font-size:10.5px; letter-spacing:.11em;
+  text-transform:uppercase; display:block; margin-bottom:6px; opacity:.85}
+
+/* recommendations */
+ol.recs{list-style:none; padding:0; max-width:none; counter-reset:rec}
+ol.recs>li{counter-increment:rec; background:var(--surface); border:1px solid var(--line);
+  border-radius:5px; padding:18px 22px 18px 62px; position:relative; margin-bottom:12px; box-shadow:var(--shadow)}
+ol.recs>li::before{content:counter(rec,decimal-leading-zero); position:absolute; left:20px; top:18px;
+  font-family:"IBM Plex Mono",monospace; font-size:12px; color:var(--petrol); letter-spacing:.06em}
+ol.recs h3{margin:0 0 6px; font-size:1rem}
+ol.recs p{margin:0 0 8px; max-width:68ch; font-size:14px; color:var(--ink-2)}
+ol.recs p:last-child{margin-bottom:0}
+.effort{display:inline-flex; gap:6px; align-items:center; font-family:"IBM Plex Mono",monospace;
+  font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted);
+  border:1px solid var(--line); border-radius:3px; padding:3px 8px; margin-right:6px}
+
+footer{border-top:1px solid var(--line); margin-top:60px; padding-top:22px;
+  font-family:"IBM Plex Mono",monospace; font-size:11.5px; color:var(--muted)}
+footer p{max-width:78ch}
+:focus-visible{outline:2px solid var(--petrol); outline-offset:2px; border-radius:2px}
+@media (prefers-reduced-motion:no-preference){html{scroll-behavior:smooth}}
+</style>
+
+<div class="wrap">
+
+<header class="masthead">
+  <p class="eyebrow">Benchmark forensics · opus-medium-seeds3</p>
+  <h1>Aracne Under Opus</h1>
+  <p class="standfirst">What Opus actually did with the topology tools across 162 graded runs — which tools it reached for, which it never touched, and whether the graph paid for the context it cost.</p>
+  <div class="runchips">
+    <span class="chip"><b>162</b> runs</span>
+    <span class="chip"><b>27</b> repos × <b>3</b> seeds × <b>2</b> arms</span>
+    <span class="chip"><b>5</b> languages</span>
+    <span class="chip">model <b>claude-opus-5</b></span>
+    <span class="chip">effort <b>medium</b></span>
+    <span class="chip">max turns <b>80</b></span>
+    <span class="chip">run date <b>2026-08-26</b></span>
+  </div>
+</header>
+
+<div class="cols">
+<nav class="index" aria-label="Report contents">
+  <div class="grp">Summary</div>
+  <a href="#verdict">Bottom line</a>
+  <a href="#panel">Telemetry panel</a>
+  <div class="grp">Questions</div>
+  <a href="#q1"><span class="qn">Q1</span> Effective use</a>
+  <a href="#q2"><span class="qn">Q2</span> Node vs file reads</a>
+  <a href="#q3"><span class="qn">Q3</span> What a node read returns</a>
+  <a href="#q4"><span class="qn">Q4</span> Line-cut reads</a>
+  <a href="#q5"><span class="qn">Q5</span> Grep</a>
+  <a href="#q6"><span class="qn">Q6</span> Beating the prior</a>
+  <div class="grp">Detail</div>
+  <a href="#instances">Per-instance results</a>
+  <a href="#recs">What to change</a>
+  <a href="#method">Method &amp; caveats</a>
+</nav>
+
+<main>
+
+<section id="verdict">
+  <div class="verdictbox">
+    <p><strong>Aracne is being used, but only as a slower <code>Read</code> and a better <code>grep</code>.</strong> Opus adopts the three tools that mirror tools it already has — <code>grep</code>, <code>read_file</code>, <code>edit</code> — inside one or two turns, and uses them competently. It essentially never touches the topology: <strong>15 node reads across 81 runs</strong>, zero <code>read_struct</code>, zero <code>read_interface</code>, zero <code>warnings_list</code>.</p>
+    <p>The +54% context bill is therefore being paid for a graph the model almost never queries. And the refusal is not stubbornness — it is <em>correct on the merits</em>. Sampling 120 real <code>read_function</code> calls across ten of these repos, <strong>53% return no <code># CONTEXT:</code> section at all</strong>, and on Python/JS the call returns the entire enclosing class (up to 88 KB for one method). A 50-line <code>read_file</code> cut is cheaper, never errors on a wrong ID, and loses nothing the model would have got.</p>
+    <p>The one genuine win is <code>grep</code>: 210 calls, well-narrowed, and <strong>63% come back carrying resource IDs and descriptions</strong> the model could not have grepped for. That is the part of aracne that is beating the prior today.</p>
+  </div>
+</section>
+
+<section id="panel">
+  <h4>Per-run means, both arms</h4>
+  <div class="stats">
+    <div class="stat"><div class="k">Solve rate</div><div class="v">77.8%</div><div class="d down">+3.7pp vs 74.1%</div></div>
+    <div class="stat"><div class="k">Context tokens</div><div class="v">685k</div><div class="d up">+54% vs 446k</div></div>
+    <div class="stat"><div class="k">Turns</div><div class="v">16.9</div><div class="d up">+25% vs 13.5</div></div>
+    <div class="stat"><div class="k">Cost / run</div><div class="v">$0.68</div><div class="d up">+24% vs $0.55</div></div>
+    <div class="stat"><div class="k">Node reads</div><div class="v">15</div><div class="d flat">in 81 runs</div></div>
+    <div class="stat"><div class="k">Guard denials</div><div class="v">95</div><div class="d up">in 71 of 81 runs</div></div>
+  </div>
+  <p class="dim" style="font-size:12.5px;font-family:'IBM Plex Mono',monospace;max-width:none">Context tokens = cache_tokens (the re-sent conversation), the dominant term in both cost and latency.</p>
+
+  <div class="tablewrap">
+  <table>
+    <caption>Tool mix per run — what the agent actually called</caption>
+    <thead><tr><th>Tool</th><th class="mono">baseline</th><th class="mono">aracne</th><th class="mono">calls / run</th><th class="mono">share</th></tr></thead>
+    <tbody>
+      <tr><td>Bash</td><td class="mono">999</td><td class="mono">378</td><td class="mono">4.67</td><td class="mono">29.3%</td></tr>
+      <tr><td><code>mcp__aracne__read_file</code></td><td class="mono dim">—</td><td class="mono">306</td><td class="mono">3.78</td><td class="mono">23.7%</td></tr>
+      <tr><td><code>mcp__aracne__edit</code></td><td class="mono dim">—</td><td class="mono">287</td><td class="mono">3.54</td><td class="mono">22.2%</td></tr>
+      <tr><td><code>mcp__aracne__grep</code></td><td class="mono dim">—</td><td class="mono">210</td><td class="mono">2.59</td><td class="mono">16.3%</td></tr>
+      <tr><td>ToolSearch <span class="dim">(schema loading)</span></td><td class="mono">3</td><td class="mono">83</td><td class="mono">1.02</td><td class="mono">6.4%</td></tr>
+      <tr><td><code>mcp__aracne__read_function</code></td><td class="mono dim">—</td><td class="mono">15</td><td class="mono">0.19</td><td class="mono">1.2%</td></tr>
+      <tr><td><code>mcp__aracne__write</code></td><td class="mono dim">—</td><td class="mono">6</td><td class="mono">0.07</td><td class="mono">0.5%</td></tr>
+      <tr><td><code>mcp__aracne__read_struct</code></td><td class="mono dim">—</td><td class="mono">0</td><td class="mono">0.00</td><td class="mono">0%</td></tr>
+      <tr><td><code>mcp__aracne__read_interface</code></td><td class="mono dim">—</td><td class="mono">0</td><td class="mono">0.00</td><td class="mono">0%</td></tr>
+      <tr><td><code>mcp__aracne__warnings_list</code></td><td class="mono dim">—</td><td class="mono">0</td><td class="mono">0.00</td><td class="mono">0%</td></tr>
+      <tr><td>native Edit / Read <span class="dim">(blocked in aracne arm)</span></td><td class="mono">17</td><td class="mono">0</td><td class="mono">0.00</td><td class="mono">0%</td></tr>
+      <tr class="total"><td>Total</td><td class="mono">1025</td><td class="mono">1290</td><td class="mono">15.9</td><td class="mono">100%</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="callout">
+    <span class="tag">Read this first</span>
+    <p>The baseline arm is <strong>97.5% Bash</strong> — one native <code>Read</code> call in 81 runs. Opus does its discovery with <code>sed -n '660,770p'</code> and <code>grep -rn</code>, not with the Read tool. Every comparison below is therefore <em>aracne MCP tools vs. the shell</em>, which is the harder and more honest baseline.</p>
+  </div>
+</section>
+
+<section id="q1">
+  <div class="qhead">
+    <span class="qnum">Q1</span>
+    <h2>Is Opus understanding how to use aracne effectively?</h2>
+    <span class="verdict v-part">Partly</span>
+  </div>
+
+  <p class="lede">It learns the surface fast and drives it competently. It never learns the graph. And it gets there by being blocked, not by being told.</p>
+
+  <h3>The guard, not the contract, is doing the routing</h3>
+  <p>Every one of the 81 aracne runs called <code>ToolSearch</code> to load the MCP schemas. But <strong>66 of 81 runs (81%) opened with a Bash call</strong> — <code>cat</code>, <code>ls</code>, <code>grep -rn</code> — before touching aracne at all, and <strong>71 of 81 runs (88%) hit at least one guard denial</strong>, 95 in total. The sequence is almost invariant:</p>
+
+  <figure class="exhibit">
+    <figcaption><b>cli__cli-4136 · aracne · seed 0</b><span>first four turns</span></figcaption>
+<pre>[Bash]        ls .../pkg/cmd/repo/list/                                  <span class="cm">→ 50B</span>
+[Bash]        cat list.go &amp;&amp; echo ===== &amp;&amp; cat http.go                  <span class="bad">→ 139B  DENIED by guard</span>
+[ToolSearch]  select:read_file,edit,grep                                <span class="cm">→ 0B</span>
+[read_file]   pkg/cmd/repo/list/list.go                                 <span class="ok">→ 6208B</span></pre>
+  </figure>
+
+  <p>The CLAUDE.md contract is present in context from turn zero and states plainly that native reads are blocked. The model reads it and tries <code>cat</code> anyway. That is a useful calibration: <strong>contract text does not change the first move; the denial does.</strong> The cost is roughly one wasted turn per run, before any work starts.</p>
+
+  <h3>It self-selects only the tools that look like tools it already has</h3>
+  <p>Because the MCP tools are deferred behind <code>ToolSearch</code>, the model must <em>name</em> the tools it wants. What it asks for is revealing:</p>
+
+  <div class="bars">
+    <div class="barrow"><span class="lab"><code>edit</code></span><span class="bartrack"><span class="barfill f-ara" style="width:100%"></span></span><span class="num">81 / 81</span></div>
+    <div class="barrow"><span class="lab"><code>read_file</code></span><span class="bartrack"><span class="barfill f-ara" style="width:98.8%"></span></span><span class="num">80 / 81</span></div>
+    <div class="barrow"><span class="lab"><code>grep</code></span><span class="bartrack"><span class="barfill f-ara" style="width:97.5%"></span></span><span class="num">79 / 81</span></div>
+    <div class="barrow"><span class="lab"><code>read_function</code></span><span class="bartrack"><span class="barfill f-warn" style="width:58%"></span></span><span class="num">47 / 81</span></div>
+    <div class="barrow"><span class="lab"><code>write</code></span><span class="bartrack"><span class="barfill f-warn" style="width:6.2%"></span></span><span class="num">5 / 81</span></div>
+    <div class="barrow"><span class="lab"><code>read_struct</code></span><span class="bartrack"><span class="barfill f-fail" style="width:4.9%"></span></span><span class="num">4 / 81</span></div>
+    <div class="barrow"><span class="lab"><code>read_interface</code></span><span class="bartrack"><span class="barfill f-fail" style="width:0.6%"></span></span><span class="num">0 / 81</span></div>
+    <div class="barrow"><span class="lab"><code>warnings_list</code></span><span class="bartrack"><span class="barfill f-fail" style="width:0.6%"></span></span><span class="num">0 / 81</span></div>
+  </div>
+  <p class="dim" style="font-size:12px">Tools requested by name in a <code>ToolSearch</code> query, per run.</p>
+
+  <p>The three tools with an obvious native counterpart are loaded in ~100% of runs. <code>read_function</code> is loaded in 58% — <strong>and then never called in 35 of those 47 runs.</strong> The model loads it out of diligence, looks at the task, and reaches for <code>read_file</code> instead.</p>
+
+  <h3>The one structural handicap it can't work around</h3>
+  <p>Across all 2,315 assistant messages in both arms, <strong>not a single one issued two tool calls in parallel</strong>. Batching happens only inside Bash — and there, the baseline is very good at it:</p>
+
+  <div class="tablewrap">
+  <table>
+    <caption>Discovery operations packed into one turn</caption>
+    <thead><tr><th>Arm</th><th class="mono">Bash calls</th><th class="mono">calls with ≥2 read/search ops</th><th class="mono">mean ops per call</th><th class="mono">discovery ops per turn</th></tr></thead>
+    <tbody>
+      <tr><td>baseline (shell)</td><td class="mono">999</td><td class="mono">469 &nbsp;<span class="dim">(47%)</span></td><td class="mono">1.64</td><td class="mono">1.64</td></tr>
+      <tr><td>aracne (MCP)</td><td class="mono">378</td><td class="mono">138 &nbsp;<span class="dim">(37%)</span></td><td class="mono">1.30</td><td class="mono">1.00</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>A single baseline turn does <code>cat list.go &amp;&amp; cat http.go</code>, or <code>sed -n 80,110p a.rs; sed -n 680,760p b.rs</code>. Aracne's MCP tools take exactly one target per call, so the same work costs two or three turns — and <em>every extra turn re-sends the whole accumulated conversation</em>. That is the mechanism behind +25% turns and +54% context tokens, and no amount of prompt wording fixes it.</p>
+</section>
+
+<section id="q2">
+  <div class="qhead">
+    <span class="qnum">Q2</span>
+    <h2>Is it using node reads instead of file reads?</h2>
+    <span class="verdict v-no">No</span>
+  </div>
+
+  <p class="lede">15 node reads against 306 file reads. Twelve of 81 runs used a node read at all, and never more than twice.</p>
+
+  <div class="bars">
+    <div class="barrow"><span class="lab"><code>read_file</code> (line range)</span><span class="bartrack"><span class="barfill f-ara" style="width:69.3%"></span></span><span class="num">212</span></div>
+    <div class="barrow"><span class="lab"><code>read_file</code> (whole file)</span><span class="bartrack"><span class="barfill f-ara" style="width:30.7%"></span></span><span class="num">94</span></div>
+    <div class="barrow"><span class="lab"><code>read_function</code></span><span class="bartrack"><span class="barfill f-warn" style="width:4.9%"></span></span><span class="num">15</span></div>
+    <div class="barrow"><span class="lab"><code>read_struct</code> / <code>read_interface</code></span><span class="bartrack"><span class="barfill f-fail" style="width:0.4%"></span></span><span class="num">0</span></div>
+  </div>
+  <p class="dim" style="font-size:12px">Read calls across 81 aracne runs, by shape.</p>
+
+  <h3>The transition that never happens</h3>
+  <p>Aracne's designed flow is <em>grep to find the resource, then read the resource by ID</em>. The grep output literally prints the ID above every match run. Here is what the model does with it:</p>
+
+  <div class="tablewrap">
+  <table>
+    <caption>What follows an <code>mcp__aracne__grep</code> call (n = 200 transitions)</caption>
+    <thead><tr><th>Next tool</th><th class="mono">count</th><th class="mono">share</th><th>Reading</th></tr></thead>
+    <tbody>
+      <tr><td><code>read_file</code></td><td class="mono">112</td><td class="mono">56.0%</td><td class="dim">takes the <em>path:line</em>, ignores the ID</td></tr>
+      <tr><td><code>grep</code></td><td class="mono">37</td><td class="mono">18.5%</td><td class="dim">refines the search</td></tr>
+      <tr><td><code>edit</code></td><td class="mono">26</td><td class="mono">13.0%</td><td class="dim">grep answered it outright — a real win</td></tr>
+      <tr><td>Bash</td><td class="mono">21</td><td class="mono">10.5%</td><td class="dim">build / test / git</td></tr>
+      <tr><td><code>read_function</code></td><td class="mono">2</td><td class="mono">1.0%</td><td class="dim">the intended path</td></tr>
+      <tr><td>other</td><td class="mono">2</td><td class="mono">1.0%</td><td class="dim">&nbsp;</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>Grep hands the model a resource ID and a description. The model takes the line number and goes back to the file. <strong>The intended grep → node-read transition fires 1% of the time.</strong></p>
+
+  <div class="callout good">
+    <span class="tag">Worth noting</span>
+    <p>When Opus <em>does</em> call a node read, it forms the ID correctly and idiomatically without being shown examples: <code>Config.from_file</code>, <code>requests/utils.iter_slices</code>, <code>Flask.register_blueprint</code>. Zero ambiguity errors across the whole arm. The forgiving-ID design works. The problem is not that the model can't address nodes — it's that it has no reason to.</p>
+  </div>
+</section>
+
+<section id="q3">
+  <div class="qhead">
+    <span class="qnum">Q3</span>
+    <h2>What does a node read actually return?</h2>
+    <span class="verdict v-part">Half the time, nothing extra</span>
+  </div>
+
+  <p class="lede">Transcripts store only result sizes, so I replayed the tools live against the frozen fixtures. Here is the exact wire format, and then the measurement of what it usually contains.</p>
+
+  <h3>The shape, when it works</h3>
+  <p>Descriptions reach the model as a flat <code># CONTEXT:</code> block after the code fence — one <code>## &lt;full-resource-id&gt;: &lt;description&gt;</code> line per neighbour, sorted, indented one level for members of a named type. This is <code>read_function</code> on ripgrep's <code>ArgMatches::patterns</code>, verbatim and complete:</p>
+
+  <figure class="exhibit">
+    <figcaption><b>mcp__aracne__read_function { "name": "patterns" }</b><span>BurntSushi/ripgrep · rust · 2,108 bytes</span></figcaption>
+<pre>```rust
+<span class="cm">// use grep (external crate)</span>
+
+struct ArgMatches(clap::ArgMatches&lt;'static&gt;);
+
+    fn patterns(&amp;self) -&gt; Result&lt;Vec&lt;String&gt;&gt; {
+        if self.is_present("files") || self.is_present("type-list") {
+            return Ok(vec![]);
+        }
+        let mut pats = vec![];
+        match self.values_of_os("regexp") {
+            None =&gt; {
+                if self.values_of_os("file").is_none() {
+                    if let Some(os_pat) = self.value_of_os("pattern") {
+                        pats.push(self.pattern_from_os_str(os_pat)?);
+                    }
+                }
+            }
+            Some(os_pats) =&gt; {
+                for os_pat in os_pats {
+                    pats.push(self.pattern_from_os_str(os_pat)?);
+                }
+            }
+        }
+        if let Some(paths) = self.values_of_os("file") {
+            for path in paths {
+                if path == "-" {
+                    pats.extend(cli::patterns_from_stdin()?.into_iter()
+                            .map(|p| self.pattern_from_string(p)));
+                } else {
+                    pats.extend(cli::patterns_from_path(path)?.into_iter()
+                            .map(|p| self.pattern_from_string(p)));
+                }
+            }
+        }
+        Ok(pats)
+    }
+```
+
+<span class="hl"># CONTEXT:</span>
+<span class="hl">## ripgrep::args::ArgMatches::is_present</span>: Check whether a named argument was provided on the command line.
+<span class="hl">## ripgrep::args::ArgMatches::pattern_from_os_str</span>: Convert an OS string pattern to a regex pattern string by normalizing and transforming the input.
+<span class="hl">## ripgrep::args::ArgMatches::pattern_from_string</span>: Transform a string pattern into a regex by applying literal escaping, line anchors, or an empty-never-matching pattern.
+<span class="hl">## ripgrep::args::ArgMatches::value_of_os</span>: Retrieves the OS string value for a named argument from the parsed matches.
+<span class="hl">## ripgrep::args::ArgMatches::values_of_os</span>: Retrieve OS-specific string values associated with a named command-line argument.</pre>
+  </figure>
+
+  <p>That is the product working exactly as designed: the callee descriptions are genuinely useful, and they cost about 500 bytes. <code>read_file</code> on a whole file adds a second tier — the file's own members, nested under their enclosing type:</p>
+
+  <figure class="exhibit">
+    <figcaption><b>mcp__aracne__read_file { "name": "crates/core/logger.rs" }</b><span>context section only · 3,209 bytes total</span></figcaption>
+<pre><span class="hl"># CONTEXT:</span>
+<span class="hl">## function ripgrep::logger::Logger::enabled</span>: Returns whether logging is enabled; always returns true since filtering is handled by the global log level.
+<span class="hl">## function ripgrep::logger::Logger::flush</span>: Flush pending output (no-op since eprintln auto-flushes).
+<span class="hl">## function ripgrep::logger::Logger::init</span>: Installs the ripgrep logger as the global logging handler.
+<span class="hl">## function ripgrep::logger::Logger::log</span>: Outputs log records to stderr with level, target, file location, and message formatted as pipe-separated fields.
+<span class="hl">## struct ripgrep::logger::Logger</span>: Logger implementation that outputs structured log records to stderr with level and location info.
+	ripgrep::logger::Logger::enabled: Returns whether logging is enabled; always returns true since filtering is handled by the global log level.
+	ripgrep::logger::Logger::flush: Flush pending output (no-op since eprintln auto-flushes).
+	ripgrep::logger::Logger::init: Installs the ripgrep logger as the global logging handler.
+	ripgrep::logger::Logger::log: Outputs log records to stderr with level, target, file location, and message formatted as pipe-separated fields.
+<span class="hl">## var ripgrep::logger::LOGGER</span>: no description</pre>
+  </figure>
+
+  <p>Note the duplication: every method description is emitted twice, once flat under <code>##</code> and once indented under its struct. On this small file that is ~450 wasted bytes out of 780 of context.</p>
+
+  <h3>The measurement: 53% of node reads carry no context at all</h3>
+  <p>I sampled 12 random function/method resources from each of ten benchmark fixtures (two per language) and called <code>read_function</code> on each — 120 calls, zero errors.</p>
+
+  <div class="tablewrap">
+  <table>
+    <caption>read_function output composition · 120 sampled calls across 10 repos</caption>
+    <thead><tr><th>Language</th><th class="mono">n</th><th class="mono">has # CONTEXT</th><th class="mono">median total</th><th class="mono">median code</th><th class="mono">median context</th><th class="mono">p90 total</th></tr></thead>
+    <tbody>
+      <tr><td>typescript</td><td class="mono">24</td><td class="mono">79%</td><td class="mono">808 B</td><td class="mono">459 B</td><td class="mono">280 B</td><td class="mono">3,540 B</td></tr>
+      <tr><td>go</td><td class="mono">24</td><td class="mono">67%</td><td class="mono">1,312 B</td><td class="mono">889 B</td><td class="mono">109 B</td><td class="mono">2,900 B</td></tr>
+      <tr><td>rust</td><td class="mono">24</td><td class="mono">50%</td><td class="mono">430 B</td><td class="mono">311 B</td><td class="mono">68 B</td><td class="mono">1,094 B</td></tr>
+      <tr><td>python</td><td class="mono">24</td><td class="mono">21%</td><td class="mono">1,112 B</td><td class="mono">1,038 B</td><td class="mono">0 B</td><td class="mono">15,290 B</td></tr>
+      <tr><td>javascript</td><td class="mono">24</td><td class="mono">17%</td><td class="mono">282 B</td><td class="mono">282 B</td><td class="mono">0 B</td><td class="mono">4,931 B</td></tr>
+      <tr class="total"><td>all</td><td class="mono">120</td><td class="mono">47%</td><td class="mono">690 B</td><td class="mono">481 B</td><td class="mono">0 B</td><td class="mono">—</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p><strong>The median <code>read_function</code> call returns zero bytes of topology context</strong> and a mean of 1.1 context entries. For a leaf function — <code>isCI</code>, <code>genKey</code>, <code>Logger::flush</code> — it returns the source and nothing else, which is precisely what a line-range read returns, except you had to know the name and you risked an ID miss to get it.</p>
+
+  <h3>The Python / JavaScript over-return</h3>
+  <div class="callout bad">
+    <span class="tag">Defect</span>
+    <p>On Python and JavaScript, <code>read_function</code> on a <em>method</em> returns the <strong>entire enclosing class</strong>. Measured on these fixtures: <code>Config.from_file</code> → <strong>14,273 bytes</strong> with a <strong>zero-byte</strong> context section, for a 20-line method. <code>Session.__enter__</code> → 15,290 B. <code>Blueprint.app_template_test</code> → 20,743 B. <code>Flask.test_request_context</code> → <strong>88,013 bytes</strong>, roughly 22k tokens, from one tool call.</p>
+    <p>In the same run, <code>read_file("src/flask/config.py", 220, 290)</code> returned <strong>2,361 bytes</strong> and contained everything needed to make the fix. The model picked the 6× cheaper option. It was right.</p>
+  </div>
+
+  <h3>What the descriptions themselves look like</h3>
+  <p>Across the 27 benchmarked repos: <strong>161,827 nodes, 68,161 described (42.1%)</strong>, mean description length 130 characters (median 78) — roughly 20–30 tokens each. Coverage is extremely uneven, and it tracks which languages won:</p>
+
+  <div class="bars">
+    <div class="barrow"><span class="lab">rust</span><span class="bartrack"><span class="barfill f-pass" style="width:87%"></span></span><span class="num">87%</span></div>
+    <div class="barrow"><span class="lab">go</span><span class="bartrack"><span class="barfill f-pass" style="width:79%"></span></span><span class="num">79%</span></div>
+    <div class="barrow"><span class="lab">python</span><span class="bartrack"><span class="barfill f-pass" style="width:67%"></span></span><span class="num">67%</span></div>
+    <div class="barrow"><span class="lab">javascript</span><span class="bartrack"><span class="barfill f-warn" style="width:41%"></span></span><span class="num">41%</span></div>
+    <div class="barrow"><span class="lab">typescript</span><span class="bartrack"><span class="barfill f-fail" style="width:13%"></span></span><span class="num">13%</span></div>
+  </div>
+  <p class="dim" style="font-size:12px">Node description coverage, weighted by node count. TypeScript is dominated by <code>mui/material-ui</code> (74,909 nodes, 10.3% covered); <code>vuejs/core</code> is 53% and <code>darkreader</code> 61%.</p>
+</section>
+
+<section id="q4">
+  <div class="qhead">
+    <span class="qnum">Q4</span>
+    <h2>Is it leaning on line-cut file reads? Why?</h2>
+    <span class="verdict v-yes">Yes — 69%, and rationally</span>
+  </div>
+
+  <p class="lede">212 of 306 <code>read_file</code> calls pass <code>start_line</code>/<code>end_line</code>. Median window: 50 lines. And a line-range read returns raw lines with <em>no</em> topology context, by design.</p>
+
+  <div class="tablewrap">
+  <table>
+    <caption>read_file by shape · 81 aracne runs</caption>
+    <thead><tr><th>Shape</th><th class="mono">calls</th><th class="mono">mean bytes</th><th class="mono">median bytes</th><th class="mono">total</th><th>Topology context</th></tr></thead>
+    <tbody>
+      <tr><td>line range (<code>start_line</code>/<code>end_line</code>)</td><td class="mono">212 <span class="dim">(69%)</span></td><td class="mono">2,267</td><td class="mono">1,578</td><td class="mono">0.48 MB</td><td style="text-align:left"><span style="color:var(--fail)">none — raw lines only</span></td></tr>
+      <tr><td>whole file</td><td class="mono">94 <span class="dim">(31%)</span></td><td class="mono">7,011</td><td class="mono">4,630</td><td class="mono">0.66 MB</td><td style="text-align:left"><span style="color:var(--pass)">full <code># CONTEXT:</code> block</span></td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>Put plainly: <strong>42% of every byte aracne returns through <code>read_file</code> arrives with zero topology value</strong>, because the model asked for a window.</p>
+
+  <h3>Four reasons it prefers the line cut — three of them good</h3>
+
+  <p><strong>1. It is the native habit, transferred intact.</strong> In the baseline arm Opus issued <strong>290 <code>sed -n 'X,Yp'</code> line-range reads</strong>. The same instinct simply routes through whatever tool is available. This is the training-prior component, and it is real.</p>
+
+  <p><strong>2. The contract explicitly blesses it.</strong> The injected <code>CLAUDE.md</code> says, in the Navigation Model section the model reads first:</p>
+  <figure class="exhibit">
+    <figcaption><b>CLAUDE.md · Navigation Model</b><span>as shipped in this benchmark</span></figcaption>
+<pre><span class="bad">**The native read tool is blocked in this project** — use the aracne lookups
+below. `read_file` covers whole files and line ranges.</span></pre>
+  </figure>
+  <p>and the tool schema at benchmark time read <em>"Read a file's source plus its topology context. Pass start_line/end_line for a raw line range instead."</em> — neutral phrasing that presents the range as an equal option rather than a lossy one.</p>
+
+  <p><strong>3. A line cut never misses.</strong> A node read can fail on an ID; a line range cannot. Nine <code>read_*</code> calls in this run came back as errors or near-empty results. The model has no way to know in advance which IDs resolve.</p>
+
+  <p><strong>4. On Python and JS it is genuinely cheaper — often by 6×.</strong> Covered above. When <code>read_function</code> returns 14 KB of enclosing class with no context and a 70-line window returns 2.4 KB with the answer in it, preferring the window is not bias. It is arithmetic.</p>
+
+  <div class="callout">
+    <span class="tag">Already in flight</span>
+    <p>The working tree (uncommitted, post-benchmark) already sharpens both strings: the schema now reads <em>"Prefer the whole file: a start_line/end_line range returns raw lines only, and walking a file in ranges costs a turn each"</em>, and <code>claude_md.go</code> has been rewritten to cut the contract roughly in half. Neither was in the binary these 162 runs used, so this report measures the <em>old</em> wording — the effect of the new wording is unmeasured and worth an A/B.</p>
+  </div>
+</section>
+
+<section id="q5">
+  <div class="qhead">
+    <span class="qnum">Q5</span>
+    <h2>Is it using aracne's grep correctly? Is it searching by node?</h2>
+    <span class="verdict v-yes">Correctly — but there is no node to search by</span>
+  </div>
+
+  <p class="lede">Grep is the one part of aracne that is unambiguously working. 210 calls, 2.59 per run, and the narrowing options are used properly.</p>
+
+  <div class="tablewrap">
+  <table>
+    <caption>Argument shapes used on <code>mcp__aracne__grep</code> · 210 calls</caption>
+    <thead><tr><th>Arguments</th><th class="mono">calls</th><th>What it shows</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">pattern + path</td><td class="mono">69</td><td class="dim" style="text-align:left">scoped to a file or directory</td></tr>
+      <tr><td class="mono">pattern + path + head_limit</td><td class="mono">53</td><td class="dim" style="text-align:left">capped deliberately</td></tr>
+      <tr><td class="mono">pattern + path + before/after</td><td class="mono">28</td><td class="dim" style="text-align:left">context lines — grep used as a read</td></tr>
+      <tr><td class="mono">pattern + glob (± head_limit)</td><td class="mono">24</td><td class="dim" style="text-align:left">language / path filtering</td></tr>
+      <tr><td class="mono">pattern + output_mode</td><td class="mono">14</td><td class="dim" style="text-align:left">files_with_matches / count</td></tr>
+      <tr><td class="mono">pattern + type</td><td class="mono">8</td><td class="dim" style="text-align:left">language shorthand</td></tr>
+      <tr><td class="mono">pattern only</td><td class="mono">6 <span class="dim">(3%)</span></td><td class="dim" style="text-align:left">unnarrowed repo sweep</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>Only 3% of greps are unnarrowed sweeps. 87% carry at least one narrowing argument. This is skilled use.</p>
+
+  <h3>How often the topology annotation actually fires</h3>
+  <p>I replayed 142 of the real grep calls against their own fixtures. <strong>90 (64%) came back with at least one <code>#&nbsp;resource</code> header; 88 (63%) with at least one description.</strong> Median 3 headers per annotated call; median result 1,282 bytes. Seven calls (5%) matched nothing.</p>
+
+  <figure class="exhibit">
+    <figcaption><b>mcp__aracne__grep { "pattern": "^fn suggest", "path": "crates/core/args.rs" }</b><span>752 bytes · replayed</span></figcaption>
+<pre><span class="hl"># ripgrep::args::suggest</span> — Suggests PCRE2-specific error messages for regex errors when applicable, otherwise returns the original message.
+crates/core/args.rs:1746:fn suggest(msg: String) -&gt; String {
+<span class="hl"># ripgrep::args::suggest_pcre2</span> — Suggests using PCRE2 when a regex error involves backreferences or lookarounds, if PCRE2 is available.
+crates/core/args.rs:1756:fn suggest_pcre2(msg: &amp;str) -&gt; Option&lt;String&gt; {
+crates/core/args.rs:1758:fn suggest(msg: &amp;str) -&gt; Option&lt;String&gt; {
+crates/core/args.rs:1773:fn suggest(_: &amp;str) -&gt; Option&lt;String&gt; {
+<span class="hl"># ripgrep::args::suggest_multiline</span> — Append a suggestion to enable multiline mode when a pattern contains an invalid literal newline.
+crates/core/args.rs:1799:fn suggest_multiline(msg: String) -&gt; String {</pre>
+  </figure>
+
+  <p>That is real information ripgrep-the-tool cannot produce, delivered for about 90 bytes per resource. It is also why 13% of post-grep transitions go straight to <code>edit</code> — the grep answered the question.</p>
+
+  <h3>But: the graph is output-only</h3>
+  <div class="callout bad">
+    <span class="tag">Design gap</span>
+    <p><code>mcp__aracne__grep</code> takes <code>pattern, path, glob, type, case_insensitive, output_mode, head_limit, before, after</code>. Every one of those is a ripgrep argument. <strong>There is no way to phrase a query in terms of the topology</strong> — no "resources whose description matches X", no "callers of Y", no "implementations of Z", no "restrict to functions". The graph appears only as decoration on results the model could have obtained with <code>grep -rn</code>.</p>
+    <p>So the answer to "is it searching by nodes" is: it can't. Neither can anything else in the MCP surface. That is the single largest missing capability in the product, and it is why <code>read_function</code> has no job to do — every question the model has can be answered with grep plus a line window, so that is what it does.</p>
+  </div>
+</section>
+
+<section id="q6">
+  <div class="qhead">
+    <span class="qnum">Q6</span>
+    <h2>Can aracne beat the training prior, or is that hopeless?</h2>
+    <span class="verdict v-part">Beatable — but not by prompting</span>
+  </div>
+
+  <p class="lede">The prior is real and visible. It is also not what is losing here, and this run contains the proof.</p>
+
+  <p>Opus adopted <code>mcp__aracne__grep</code> in 79 of 81 runs and <code>mcp__aracne__edit</code> in 81 of 81 — within one or two turns, with correct arguments, and it kept using them. If the prior were decisive, that would not have happened. What those two tools have in common is that <strong>they are drop-in: same mental model, same arguments, strictly more output for the same call.</strong> The model switched instantly and without persuasion.</p>
+
+  <p>The node reads are not drop-in. They ask the model to give up something it has (an addressing scheme that never fails, and shell batching) in exchange for something that, measured across 120 real calls, is <strong>absent 53% of the time</strong> and occasionally costs 22k tokens. Re-wording the contract cannot change that trade; only changing the payoff can.</p>
+
+  <div class="callout good">
+    <span class="tag">The shape of the fix</span>
+    <p>Make the topology tool answer questions grep and a line-window <em>cannot answer at all</em> — reverse edges (who calls this, who implements this), batched neighbourhoods (one call, N resources), description-space search. Then the choice stops being "which read is cheaper" and becomes "there is no other way to get this." That is how <code>grep</code> already won.</p>
+  </div>
+
+  <h3>The scoreboard this has to move</h3>
+  <div class="tablewrap">
+  <table>
+    <caption>Per-run means · baseline vs aracne · 81 runs each</caption>
+    <thead><tr><th>Metric</th><th class="mono">baseline</th><th class="mono">aracne</th><th class="mono">Δ</th></tr></thead>
+    <tbody>
+      <tr><td>Solve rate</td><td class="mono">74.1% <span class="dim">(60/81)</span></td><td class="mono">77.8% <span class="dim">(63/81)</span></td><td class="mono down">+3.7pp</td></tr>
+      <tr><td>Context tokens (cache)</td><td class="mono">445,950</td><td class="mono">684,733</td><td class="mono up">+54%</td></tr>
+      <tr><td>Turns</td><td class="mono">13.5</td><td class="mono">16.9</td><td class="mono up">+25%</td></tr>
+      <tr><td>Tool calls</td><td class="mono">12.7</td><td class="mono">15.9</td><td class="mono up">+26%</td></tr>
+      <tr><td>Cost per run</td><td class="mono">$0.55</td><td class="mono">$0.68</td><td class="mono up">+24%</td></tr>
+      <tr><td>Wall time</td><td class="mono">80.2 s</td><td class="mono">87.9 s</td><td class="mono up">+10%</td></tr>
+      <tr><td>Discovery bytes returned</td><td class="mono">18.1 KB</td><td class="mono">22.4 KB</td><td class="mono up">+24%</td></tr>
+      <tr><td>&nbsp;&nbsp;<span class="dim">of which grep</span></td><td class="mono dim">included above</td><td class="mono">5.1 KB</td><td class="mono dim">—</td></tr>
+      <tr><td>&nbsp;&nbsp;<span class="dim">of which reads</span></td><td class="mono dim">included above</td><td class="mono">15.0 KB</td><td class="mono dim">—</td></tr>
+      <tr><td>ID misses</td><td class="mono">0</td><td class="mono">9 <span class="dim">(6 runs)</span></td><td class="mono up">—</td></tr>
+      <tr><td>Ambiguous-ID replies</td><td class="mono">0</td><td class="mono">0</td><td class="mono flat">—</td></tr>
+      <tr><td>Guard denials</td><td class="mono">0</td><td class="mono">95 <span class="dim">(71 runs)</span></td><td class="mono up">—</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>Note the decomposition: result <em>bytes</em> grew only 24%, but context tokens grew 54%. The gap is turns. Aracne is not returning much more material than the shell did — it is returning it across more requests, each of which re-sends everything before it.</p>
+</section>
+
+<section id="instances">
+  <h2>Per-instance results</h2>
+  <p class="lede">Five of 27 instances changed outcome. Three went to aracne, two to baseline — and every one flipped unanimously across all three seeds.</p>
+
+  <div class="tablewrap">
+  <table>
+    <caption>Outcome flips · 27 instances, 3 seeds each</caption>
+    <thead><tr><th>Instance</th><th>Language</th><th class="mono">baseline</th><th class="mono">aracne</th><th class="mono">ctx base → aracne</th><th class="mono">turns</th></tr></thead>
+    <tbody>
+      <tr><td><code>mui__material-ui-39108</code></td><td>typescript</td><td class="mono" style="color:var(--fail)">0/3</td><td class="mono" style="color:var(--pass)">3/3</td><td class="mono">1058k → 839k</td><td class="mono">30.3 → 20.7</td></tr>
+      <tr><td><code>mwaskom__seaborn-3407</code></td><td>python</td><td class="mono" style="color:var(--fail)">0/3</td><td class="mono" style="color:var(--pass)">3/3</td><td class="mono">471k → 526k</td><td class="mono">14.7 → 15.0</td></tr>
+      <tr><td><code>psf__requests-3362</code></td><td>python</td><td class="mono" style="color:var(--fail)">0/3</td><td class="mono" style="color:var(--pass)">3/3</td><td class="mono">521k → 408k</td><td class="mono">16.3 → 13.0</td></tr>
+      <tr><td><code>pallets__flask-4992</code></td><td>python</td><td class="mono" style="color:var(--pass)">3/3</td><td class="mono" style="color:var(--fail)">0/3</td><td class="mono">182k → 232k</td><td class="mono">7.0 → 8.0</td></tr>
+      <tr><td><code>sveltejs__svelte-14456</code></td><td>javascript</td><td class="mono" style="color:var(--pass)">3/3</td><td class="mono" style="color:var(--fail)">0/3</td><td class="mono">1548k → 3501k</td><td class="mono">36.0 → 40.7</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>The <code>mui</code> win is the best case for the product: aracne solved a task baseline could not, and did it with <strong>21% less context and 10 fewer turns</strong>. <code>requests</code> and <code>sphinx</code> show the same shape. That is what a working topology looks like.</p>
+
+  <h3>Worst context regressions (same outcome, both arms)</h3>
+  <div class="bars">
+    <div class="barrow"><span class="lab"><code>cli__cli-4136</code> · go</span><span class="bartrack"><span class="barfill f-fail" style="width:100%"></span></span><span class="num">+281%</span></div>
+    <div class="barrow"><span class="lab"><code>anuraghazra__grs</code> · js</span><span class="bartrack"><span class="barfill f-fail" style="width:73%"></span></span><span class="num">+207%</span></div>
+    <div class="barrow"><span class="lab"><code>zeromicro__go-zero-964</code> · go</span><span class="bartrack"><span class="barfill f-fail" style="width:46%"></span></span><span class="num">+131%</span></div>
+    <div class="barrow"><span class="lab"><code>iamkun__dayjs-2399</code> · js</span><span class="bartrack"><span class="barfill f-warn" style="width:41%"></span></span><span class="num">+115%</span></div>
+    <div class="barrow"><span class="lab"><code>tokio-rs__bytes-547</code> · rust</span><span class="bartrack"><span class="barfill f-warn" style="width:42%"></span></span><span class="num">+120%</span></div>
+  </div>
+  <p class="dim" style="font-size:12px">Context-token increase, aracne vs baseline, on instances where both arms produced the same outcome.</p>
+
+  <p><code>cli/cli</code> is the canonical case. Baseline: one Bash call, <code>cat list.go &amp;&amp; cat http.go</code>, 5.7 turns, 161k context. Aracne: three separate <code>read_file</code> calls returning 22 KB of whole-file-plus-context, 17 turns, 613k context. Same patch, same grade, four times the bill — purely because the reads could not be batched.</p>
+
+  <h3>The flask failure is an index bug, not a model failure</h3>
+  <div class="callout bad">
+    <span class="tag">Reproducible defect</span>
+    <p>In all three aracne seeds, the very first <code>read_function {"name": "Config.from_file"}</code> returned <strong><code>is_error: true</code>, 48 bytes</strong> — a "not found in topology" on a resource that plainly exists in the source and resolves fine when queried today. In seed 2 the transcript shows the recovery: after three <code>mcp__aracne__edit</code> calls forced a re-parse of <code>config.py</code>, <em>the identical call</em> succeeded and returned 14,273 bytes.</p>
+    <p>So the frozen fixture's <code>topology.db</code> was missing the node until a write repaired it. The model did the right thing, got a hard error on its first topology query, and fell back to <code>read_file</code> — where it produced a patch <em>functionally identical to the baseline's</em> (see the caveat below on why it was graded as a failure anyway).</p>
+  </div>
+</section>
+
+<section id="recs">
+  <h2>What to change</h2>
+  <p class="lede">Ranked by expected effect on the two numbers that matter — context tokens and node-read adoption. Every one is checkable by re-running this same matrix.</p>
+
+  <ol class="recs">
+    <li>
+      <h3>Make reads batchable</h3>
+      <p>Accept a list: <code>read_file{names:[…]}</code>, <code>read_function{names:[…]}</code>, or one <code>read{ids:[…]}</code>. The baseline gets 1.64 discovery operations per turn out of the shell; aracne gets exactly 1.00, and no assistant message in 2,315 issued parallel tool calls. This gap is the direct cause of +25% turns, and turns are the cause of +54% context.</p>
+      <p><span class="effort">effort: small</span><span class="effort">expected: largest single win</span></p>
+    </li>
+    <li>
+      <h3>Stop returning the enclosing class from <code>read_function</code></h3>
+      <p>On Python and JavaScript a method read returns the whole class body — 14 KB for <code>Config.from_file</code>, 88 KB for <code>Flask.test_request_context</code>. Return the method plus a one-line class signature, the way the Rust formatter already does. Until this is fixed, preferring a line window is the correct play and the model will keep making it.</p>
+      <p><span class="effort">effort: small</span><span class="effort">languages: python, javascript, typescript</span></p>
+    </li>
+    <li>
+      <h3>Put the graph in the input, not just the output</h3>
+      <p>Add the queries that have no grep equivalent: <code>callers_of(id)</code>, <code>implementations_of(id)</code>, <code>neighbors(id, depth)</code>, and a description-space search. Right now every question the model has can be answered with a regex and a line window, so it uses a regex and a line window. This is the capability that would make a node read the only way to get an answer.</p>
+      <p><span class="effort">effort: medium</span><span class="effort">expected: unlocks node-read adoption</span></p>
+    </li>
+    <li>
+      <h3>Annotate line-range reads instead of stripping them</h3>
+      <p>69% of read calls pass a line range, and they currently receive nothing but raw bytes — 42% of all <code>read_file</code> output. Naming the resources that overlap the requested span, with their descriptions, costs ~90 bytes per resource and would put topology in front of the model on its most common action rather than its rarest.</p>
+      <p><span class="effort">effort: small</span><span class="effort">reaches: 212 of 306 read calls</span></p>
+    </li>
+    <li>
+      <h3>Give grep a resource-shaped output mode</h3>
+      <p><code>output_mode: "resources"</code> returning <em>id + kind + description + span</em>, no source lines. Grep is already the entry point the model trusts, and 63% of calls already resolve resources. Handing back IDs plus a batched read (rec. 1) is a genuine token win over <code>grep -rn</code> plus <code>sed</code>, and it creates the grep → node-read transition that currently fires 1% of the time.</p>
+      <p><span class="effort">effort: small</span><span class="effort">pairs with: 1, 3</span></p>
+    </li>
+    <li>
+      <h3>Fix the cold-index miss and surface index health</h3>
+      <p><code>Config.from_file</code> was unresolvable in a frozen fixture until an edit forced a re-parse — it cost that instance 3 of 3 runs. Whatever leaves a restored DB incomplete needs finding, and a miss should say <em>"not indexed"</em> rather than <em>"not found"</em> so the model (and the benchmark) can tell a bad ID from a stale database.</p>
+      <p><span class="effort">effort: medium</span><span class="effort">correctness</span></p>
+    </li>
+    <li>
+      <h3>Collapse the three node readers into one</h3>
+      <p><code>read_interface</code> was requested 0 times in 81 runs and <code>read_struct</code> 4 times. Splitting by kind forces the model to know a resource's kind before it can read it, which is exactly the thing it is asking. One <code>read_node{id}</code> that dispatches internally removes a decision and shrinks the deferred-tool surface the model has to discover.</p>
+      <p><span class="effort">effort: small</span><span class="effort">simplification</span></p>
+    </li>
+    <li>
+      <h3>De-duplicate the <code># CONTEXT:</code> block</h3>
+      <p>Whole-file reads print each member description twice — once flat under <code>##</code>, once indented under its type. On <code>logger.rs</code> that is 450 of 780 context bytes. Free savings on the read shape that <em>does</em> carry topology.</p>
+      <p><span class="effort">effort: trivial</span></p>
+    </li>
+    <li>
+      <h3>Re-measure the contract rewrite on its own</h3>
+      <p>The uncommitted <code>claude_md.go</code> rewrite and the sharpened <code>read_file</code> schema both target exactly the behaviour this report measures, and neither was in the benchmarked binary. Run them as a standalone A/B before bundling them with the tool changes, or the two effects will be impossible to separate.</p>
+      <p><span class="effort">effort: one run</span><span class="effort">methodology</span></p>
+    </li>
+    <li>
+      <h3>Fix per-seed grading before trusting any correctness delta</h3>
+      <p>See the caveat below — seed outcomes in this run are not independent. The efficiency numbers are per-run and unaffected, but the ±3.7pp solve-rate difference should not be quoted until this is corrected.</p>
+      <p><span class="effort">effort: small</span><span class="effort">blocks: correctness claims</span></p>
+    </li>
+  </ol>
+</section>
+
+<section id="method">
+  <h2>Method &amp; caveats</h2>
+
+  <h4>What was analysed</h4>
+  <p>All 162 transcripts and all 162 telemetry rows in <code>bench/results/opus-medium-seeds3/</code> — every tool call, every argument, every result size, in both arms. That part is a census, not a sample.</p>
+  <p>Tool <em>result bodies</em> are discarded at capture time (<code>bench/bench/toolstats.py</code> replaces each with <code>&lt;N bytes elided&gt;</code>), so byte counts survive but content does not. To recover content I ran <code>arac serve</code> over stdio JSON-RPC directly against the frozen fixture worktrees and replayed calls: 120 sampled <code>read_function</code> calls across 10 repos (2 per language) for the output-composition table, and 142 of the benchmark's own real <code>grep</code> calls for the annotation rate. Every verbatim exhibit in this report is a live capture, not a reconstruction.</p>
+
+  <h4>Caveat 1 — seed outcomes are not independent</h4>
+  <div class="callout bad">
+    <p>The predictions file writes three rows per instance (one per seed) all sharing <code>instance_id</code> and <code>model_name_or_path</code>. SWE-bench keys its report at <code>logs/run_evaluation/&lt;run&gt;/&lt;model&gt;/&lt;instance_id&gt;/report.json</code> — one report per <em>instance</em> — and <code>grade.py</code> then assigns <code>row["success"] = resolved[task.key]</code> to every seed row of that instance. <strong>All three seeds receive one grade, taken from whichever patch the harness graded.</strong></p>
+    <p>The signature is visible in the data: across 54 instance×arm cells, every single one is 0/3 or 3/3 — never 1/3 or 2/3. And the patches genuinely differ: <code>flask</code> seeds 0 and 1 produced a patch functionally identical to the passing baseline, while seed 2 used a different parameter name and genuinely fails. All three were recorded as failures.</p>
+    <p><strong>Consequence:</strong> effective N for correctness is 27 instances with one graded patch each, not 81 runs. Everything in this report about <em>behaviour</em> and <em>efficiency</em> is measured per run and is unaffected.</p>
+  </div>
+
+  <h4>Caveat 2 — the binary is one commit behind the tree</h4>
+  <p>These runs used <code>bin/arac</code> as built on 2026-08-26. The working tree carries uncommitted changes to <code>universal_read.go</code>, <code>grep.go</code>, <code>warnings_list.go</code> and a substantial rewrite of <code>claude_md.go</code>. Where those changes bear on a finding, it is flagged inline.</p>
+
+  <h4>Caveat 3 — the baseline is the shell, not the Read tool</h4>
+  <p>Opus used the native <code>Read</code> tool once in 81 baseline runs. The comparison is against <code>sed</code>, <code>cat</code> and <code>grep -rn</code> inside Bash, which batch freely. This makes the baseline stronger than a Read-tool baseline would be, and it is the correct comparison — but it means the +25% turn penalty is partly a property of <em>MCP</em>, not of aracne specifically.</p>
+
+  <h4>Caveat 4 — small per-language subsamples</h4>
+  <p>27 instances across 5 languages: python 8, rust 8, javascript 5, go 3, typescript 3. Per-language claims (including the TypeScript win and the JavaScript regression) rest on 3–8 repos and should be treated as directional.</p>
+
+</section>
+
+<footer>
+  <p>Sources: <code>bench/results/opus-medium-seeds3/{runs.jsonl, transcripts/*.jsonl, patches/*.patch, logs/run_evaluation/}</code> · live replay against <code>bench/fixtures/*/worktree</code> via <code>arac serve --tool-profile main --harness claude_code</code> · <code>internal/llm/languages/universaltools/universal_read.go</code>, <code>internal/llm/tools/grep.go</code>, <code>internal/prompts/claude_md.go</code>, <code>bench/bench/{toolstats.py, grade.py, arms.py}</code>.</p>
+</footer>
+</main>
+</div>
+</div>

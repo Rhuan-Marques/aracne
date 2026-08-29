@@ -73,8 +73,9 @@ local browser. Nothing in v1 calls an LLM on aracne's own account.
   `arac edit`, `arac write`, `arac check-updates`
 
 **C. MCP server tools (v1 default profiles)**
-- Reads: `read`, `read_function`, `read_struct`, `read_interface`,
-  `read_named_type`, `read_file`, `read_package`, `read_dependency`
+- Reads: a single `read` taking a list of resource IDs (registers as
+  `read_resource` when the harness keeps its own native read); which kinds it
+  resolves is `read.kinds`
 - Search: topology-annotated `grep`
 - Mutations (topology-synced): `edit`, `write`
 - Maintenance: `warnings_list`, `update_description`,

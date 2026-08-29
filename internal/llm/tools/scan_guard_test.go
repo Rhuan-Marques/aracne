@@ -22,7 +22,7 @@ func (f *fakeScanTool) Run(json.RawMessage) (string, error) { f.ran = true; retu
 func TestWrapWithReadScan_Decision(t *testing.T) {
 	mgr := topology.New()
 	reg := scanner.NewRegistry()
-	read := &fakeScanTool{name: "read_file"}
+	read := &fakeScanTool{name: "read"}
 
 	// Disabled (none / empty / nil registry) leaves read tools unwrapped.
 	if WrapWithReadScan(read, mgr, reg, helper.ReadScanNone) != Tool(read) {
@@ -42,7 +42,8 @@ func TestWrapWithReadScan_Decision(t *testing.T) {
 	}
 
 	// Read/grep tools get wrapped when enabled, preserving identity metadata.
-	for _, name := range []string{"read", "read_function", "read_struct", "read_interface", "read_named_type", "read_file", "read_package", "read_dependency", "grep"} {
+	// Both runtime names of the single read tool, plus grep.
+	for _, name := range []string{"read", "read_resource", "grep"} {
 		ft := &fakeScanTool{name: name}
 		got := WrapWithReadScan(ft, mgr, reg, helper.ReadScanDefault)
 		if got == Tool(ft) {
@@ -60,7 +61,7 @@ func TestWrapWithReadScan_Decision(t *testing.T) {
 func TestWrapWithReadScan_RunIsBestEffort(t *testing.T) {
 	mgr := topology.New()        // no db => scan resolves to a no-op/error path
 	reg := scanner.NewRegistry() // no scanners registered => scan errors out
-	read := &fakeScanTool{name: "read_file"}
+	read := &fakeScanTool{name: "read"}
 	wrapped := WrapWithReadScan(read, mgr, reg, helper.ReadScanDefault)
 
 	out, err := wrapped.Run(json.RawMessage(`{}`))

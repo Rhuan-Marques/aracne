@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,52 +10,24 @@ import (
 	"aracne/internal/topology/idresolve"
 )
 
-// Struct that holds a topology manager for reading resources by ID.
-type Read struct {
-	mgr *topology.TopologyManager
-}
-
-// Creates a Read tool for fetching topology resources by ID.
-func NewRead(mgr *topology.TopologyManager) *Read {
-	return &Read{mgr: mgr}
-}
-
-// Returns the tool name "read".
-func (r *Read) Name() string {
-	return "read"
-}
-
-// Returns the full description of the Read tool explaining its ability to fetch resource code or raw file text.
-func (r *Read) Description() string {
-	return "Read any resource by its ID (function, struct, interface, file, package, variable, etc.) and return its source code. Also accepts a file path (absolute or relative) and falls back to returning the raw text of any file, even one not in the topology. Same behavior as `arac read {resource_id}`."
-}
-
-// Returns parameter definitions for read tool: resource_id or file path (required).
-func (r *Read) Parameters() []Parameter {
-	return []Parameter{
-		{Name: "resource_id", Type: "string", Description: "The resource ID, or a file path (absolute or relative), to read", Required: true},
-	}
-}
-
-// Executes a resource read by ID, returning source code from topology or raw file content with fallback to filesystem lookup.
-func (r *Read) Run(args json.RawMessage) (string, error) {
-	var params struct {
-		ResourceID string `json:"resource_id"`
-	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
-	}
-	if params.ResourceID == "" {
-		return "", fmt.Errorf("missing required argument: resource_id")
+// ResourceSource returns a resource's raw source text, with no topology context attached.
+//
+// This used to be the `read` MCP tool. It is no longer exposed to models -- the single
+// context-aware `read` replaced it -- but two internal callers still want the plain cut:
+// description generation (whose executor is asked to describe the code, and for which a
+// "# CONTEXT:" tree is noise that skews the description) and the bug-solver prompt. Keeping
+// them on the raw path also decouples them from the read tool's runtime rename.
+func ResourceSource(mgr *topology.TopologyManager, resourceID string) (string, error) {
+	if resourceID == "" {
+		return "", fmt.Errorf("missing resource id")
 	}
 
-	id := helper.NormalizeResourceID(params.ResourceID)
+	id := helper.NormalizeResourceID(resourceID)
 
-	// The topology may not be readable (e.g. not scanned yet); we still fall
-	// back to reading the input as a raw file below, mirroring read_file and
-	// `arac read`.
+	// The topology may not be readable (e.g. not scanned yet); we still fall back to reading
+	// the input as a raw file below.
 	root := ""
-	topo, topoErr := r.mgr.ReadAll()
+	topo, topoErr := mgr.ReadAll()
 	if topoErr == nil {
 		root = topo.Root
 	}
@@ -69,51 +40,46 @@ func (r *Read) Run(args json.RawMessage) (string, error) {
 			if !ok {
 				continue
 			}
-			loc := res.Location
-			entry, err := r.mgr.Cut(loc)
+			entry, err := mgr.Cut(res.Location)
 			if err != nil {
 				return "", fmt.Errorf("read resource: %w", err)
 			}
-			name := filepath.Base(loc.Path)
-			return fmt.Sprintf("%s\n%s", name, entry.Cut), nil
+			return fmt.Sprintf("%s\n%s", filepath.Base(res.Location.Path), entry.Cut), nil
 		}
 	}
 
-	// Not a known topology resource: read the input as a raw text file. Try
-	// each candidate path so a relative path resolves against both the working
-	// directory and the topology root.
-	maxSize := helper.LoadConfig(helper.ConfigPath(r.mgr.DbPath())).EffectiveMaxFileSize()
+	// Not a known topology resource: read the input as a raw text file. Try each candidate so
+	// a relative path resolves against both the working directory and the topology root.
+	maxSize := helper.LoadConfig(helper.ConfigPath(mgr.DbPath())).EffectiveMaxFileSize()
 	for _, cand := range candidates {
 		if info, err := os.Stat(cand); err == nil && !info.IsDir() {
 			return helper.ReadRawFile(cand, maxSize)
 		}
 	}
 
-	// Neither an exact resource nor a file on disk. Before giving up, let the shared
-	// resolver try: it tolerates a wrong root prefix and the wrong separator convention,
-	// and follows the alias table for IDs minted under a previous id-scheme. This tier is
-	// LAST here (unlike in the read_* tools) because this tool's raw-file fallback is a
-	// legitimate answer that must not be pre-empted by a fuzzy resource match.
+	// Neither an exact resource nor a file on disk. Before giving up, let the shared resolver
+	// try: it tolerates a wrong root prefix and the wrong separator convention, and follows
+	// the alias table for IDs minted under a previous id-scheme. This tier is LAST because the
+	// raw-file fallback is a legitimate answer that must not be pre-empted by a fuzzy match.
 	if topoErr == nil {
-		res := idresolve.Resolve(topo, params.ResourceID, idresolve.Options{
+		res := idresolve.Resolve(topo, resourceID, idresolve.Options{
 			Alias: func(old string) (string, bool) {
-				return helper.ResolveAlias(r.mgr.DbPath(), old)
+				return helper.ResolveAlias(mgr.DbPath(), old)
 			},
 		})
 		if res.Found() {
-			entry, err := r.mgr.Cut(res.Resource.Location)
+			entry, err := mgr.Cut(res.Resource.Location)
 			if err != nil {
 				return "", fmt.Errorf("read resource: %w", err)
 			}
 			return fmt.Sprintf("%s\n%s", filepath.Base(res.Resource.Location.Path), entry.Cut), nil
 		}
-		if hint := idresolve.FormatCandidates(params.ResourceID, res.Candidates); hint != "" {
-			return "", fmt.Errorf("resource %q not found in topology. %s",
-				params.ResourceID, hint)
+		if hint := idresolve.FormatCandidates(resourceID, res.Candidates); hint != "" {
+			return "", fmt.Errorf("resource %q not found in topology. %s", resourceID, hint)
 		}
 	}
 
-	return "", fmt.Errorf("resource %q not found in topology", params.ResourceID)
+	return "", fmt.Errorf("resource %q not found in topology", resourceID)
 }
 
 // readPathCandidates returns the input followed by alternative path forms to try

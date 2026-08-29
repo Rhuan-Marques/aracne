@@ -414,10 +414,10 @@ func (m *Manager) bugSolverWorkflowPrompt(bug domain.KnownBug) string {
 	return b.String()
 }
 
-// Fetches resource content via the Read tool and returns it as a string for LLM prompt injection.
+// Fetches a resource's raw source for LLM prompt injection. Deliberately the raw cut, not a
+// context-rich read: this text is embedded in a prompt that already states what to do with it.
 func (m *Manager) readResourceForPrompt(resourceID string) string {
-	payload, _ := json.Marshal(map[string]string{"resource_id": resourceID})
-	text, err := tools.NewRead(m.manager).Run(payload)
+	text, err := tools.ResourceSource(m.manager, resourceID)
 	if err != nil {
 		return "Error reading resource " + resourceID + ": " + err.Error()
 	}

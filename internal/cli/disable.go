@@ -290,7 +290,7 @@ func removeAracneIntegrationSection(path, label string) {
 func stripAracneIntegrationSegment(content string) string {
 	lineEnding := markdownLineEnding(content)
 
-	start := findMarkdownLine(content, AracIntegrationStart, 0)
+	start := findAracIntegrationStart(content)
 	if start < 0 {
 		return content
 	}

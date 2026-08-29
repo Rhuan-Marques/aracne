@@ -113,6 +113,37 @@ func SyncManifestFiles(dbPath string, paths []string) error {
 	return WriteManifest(manifest, manifestPath)
 }
 
+// ForgetManifestFiles drops the manifest entries for the given paths: the scoped counterpart
+// of the deletion sweep SyncManifest performs over a whole topology.
+//
+// Needed by the single-file update path, which must not leave an entry behind for a file it
+// just removed from the graph (deleted, hidden by config, or no longer a source file). A stale
+// entry there makes the next incremental scan report the file as deleted again, forever.
+func ForgetManifestFiles(dbPath string, paths []string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	manifestPath := ManifestPath(dbPath)
+	manifest := ReadManifest(manifestPath)
+	changed := false
+	for _, path := range paths {
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			abs = path
+		}
+		for _, key := range []string{abs, path} {
+			if _, ok := manifest[key]; ok {
+				delete(manifest, key)
+				changed = true
+			}
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return WriteManifest(manifest, manifestPath)
+}
+
 // Recursively collects source files of a given language from a directory, skipping ignored directories.
 func CollectSourceFiles(root, language string) ([]string, error) {
 	var files []string

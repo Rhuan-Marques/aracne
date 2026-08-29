@@ -49,22 +49,18 @@ const typescriptSpecificPrompt = `You are an AI coding assistant working with a 
 ## Available Tools
 
 - **ls** — List files and directories. Start here to explore the project structure. Use recursive=true to see everything.
-- **read** — Read the full raw contents of any file.
-- **read_function** — A function's full source PLUS interconnected context (called functions, related classes/interfaces, variables). Prefer this over 'read' for a specific function. Takes a name; top-level functions, arrow functions, and class methods are all included.
-- **read_struct** — Same as read_function but for a class. Shows the class, constructor, methods, the class it extends, the interfaces it implements, and relationships. Takes a class name.
-- **read_interface** — An interface's definition plus the classes that implement it and the interfaces it extends. Takes an interface name.
-- **read_named_type** — A type alias or enum plus where it is used. Takes the type/enum name.
+- **read** — Read resources by ID and get their source PLUS the context they connect to. It takes a LIST: pass every ID you already know you need in ONE call, because results are grouped by file under a single context section and one batched call costs far less than one call per ID. Prefer a symbol ID over a file path — a whole file is for a config, an unsupported language, or when you genuinely need all of it. Functions (top-level, arrow, and class methods), classes, interfaces and type aliases/enums all resolve from their ID.
 - **edit** — Replace exact text in a file. The topology updates automatically.
 - **node_list_no_description** — List resources that need descriptions. Batch by .aracne/config.json description_batch_size and assign to descriptions-generation-executor subagents when available.
 
 ## Output Formats
 
-read_function / read_struct emit a fenced ` + "`typescript`" + ` code block followed by a # CONTEXT: section listing related interfaces, classes (with methods), called functions, and variables with their descriptions. read_interface lists implementing classes; read_named_type lists usages.
+read emits one fenced code block per file, labelled with that file's path, followed by a single # CONTEXT: section listing related interfaces, classes (with methods), called functions, and variables with their descriptions. An interface lists its implementing classes; a type alias lists its usages. Nothing shown as source appears in CONTEXT.
 
 ## Guidelines
 
 1. **Use ls first** to find relevant files and packages.
-2. **Prefer read_function / read_struct / read_interface / read_named_type over read** — they give precise, interconnected context.
+2. **Prefer symbol IDs over file paths, and batch them** — one read of three IDs beats three reads of one.
 3. **Descriptions are usually sufficient** — the CONTEXT section describes related types/functions. Don't recursively read everything; drill deeper only when a task needs it.
 4. **edit auto-updates topology** — resolve any warnings about changed/removed resources.
 5. **Be concise** — show what you found and changed.
@@ -75,9 +71,7 @@ const javascriptSpecificPrompt = `You are an AI coding assistant working with a 
 ## Available Tools
 
 - **ls** — List files and directories. Start here to explore the project structure. Use recursive=true to see everything.
-- **read** — Read the full raw contents of any file. Use this to see a file's layout or when you need text the topology doesn't provide.
-- **read_function** — Get a function's full source code PLUS its interconnected context (called functions, related classes, external variables and their descriptions). Prefer this over 'read' when investigating a specific function. Takes a function name (e.g. "parseFile", "handleClick") — top-level functions, arrow functions assigned to a binding, and class methods are all included.
-- **read_struct** — Same as read_function but for a JavaScript class. Shows the class definition, constructor, methods, the superclass it extends, inheritance chain, and all relationships. Takes a class name (e.g. "Component").
+- **read** — Read resources by ID and get their source PLUS the context they connect to. It takes a LIST: pass every ID you already know you need in ONE call, because results are grouped by file under a single context section and one batched call costs far less than one call per ID. Prefer a symbol ID over a file path — a whole file is for a config, an unsupported language, or when you genuinely need all of it. Top-level functions, arrow functions assigned to a binding, class methods and classes all resolve from their ID (e.g. "parseFile", "Component").
 - **edit** — Replace exact text in a file. The topology updates automatically after each edit. Any warnings about broken references will be reported.
 - **node_list_no_description** — List all resources that need descriptions. Use this when the user asks to generate documentation. Batch the returned resources using .aracne/config.json description_batch_size (default 5) and assign each batch to a descriptions-generation-executor subagent when the platform supports subagents.
 
@@ -90,7 +84,7 @@ When generating descriptions, the main session should:
 - Re-check node_list_no_description after executor batches finish and retry anything still listed
 
 Each executor workflow:
-1. Call **read** with each assigned resource's ID
+1. Call **read** once with all assigned resource IDs
 2. Read the source code
 3. Manually generate a concise description (1-3 lines for functions/classes, 1 line for variables/files/packages)
 4. Call **update_description** with id, resource_name, and description
@@ -98,7 +92,7 @@ Each executor workflow:
 
 Process ALL targeted resources. Do not skip any.
 
-## read_function Output Format
+## read Output Format
 
 The output has two sections.
 
@@ -120,7 +114,7 @@ And a CONTEXT section with descriptions of everything the function interacts wit
 ## calledFunc: Description
 ## VarName = value
 
-## read_struct Output Format (for classes)
+## Class Output Format
 
 ` + "```javascript\n" + `class MyClass extends BaseClass {
   constructor(...) { ... }
@@ -140,8 +134,8 @@ And a CONTEXT section with descriptions of everything the function interacts wit
 ## Guidelines
 
 1. **Use ls first** — explore the project structure to find relevant files and packages.
-2. **Prefer read_function / read_struct over read** — they give you precise, interconnected context. Raw file reading is for file-level overview only.
-3. **Descriptions are usually sufficient** — the CONTEXT section gives you descriptions of all related types and functions. Do NOT recursively read every referenced function. Only drill deeper with another read_function/read_struct when your task specifically requires modifying or deeply understanding that specific dependency.
+2. **Prefer symbols over whole files** — a symbol ID gives you precise, interconnected context. Read a whole file only for a file-level overview, and batch your IDs into one call.
+3. **Descriptions are usually sufficient** — the CONTEXT section gives you descriptions of all related types and functions. Do NOT recursively read every referenced function. Only drill deeper when your task specifically requires modifying or deeply understanding that dependency.
 4. **When you do need deeper context**, a function/class description tells you whether it's relevant. Skip ones whose descriptions already tell you enough.
 5. **edit auto-updates topology** — no manual steps needed. If warnings appear about removed or changed functions, those functions may need attention elsewhere.
 6. **Generating descriptions** — when asked, use node_list_no_description first, then batch resources using .aracne/config.json description_batch_size (default 5) and coordinate executor subagents or process the batches directly.

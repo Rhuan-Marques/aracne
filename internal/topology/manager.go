@@ -559,11 +559,20 @@ func (m *TopologyManager) Cut(loc domain.Location) (*domain.CodeEntry, error) {
 	if loc.EndsAt < loc.StartsAt {
 		return nil, fmt.Errorf("EndsAt %d < StartsAt %d", loc.EndsAt, loc.StartsAt)
 	}
-	if loc.StartsAt < 1 || loc.StartsAt > len(lines) {
+	if loc.StartsAt < 1 {
 		return nil, fmt.Errorf("StartsAt %d out of range (1-%d)", loc.StartsAt, len(lines))
 	}
-	if loc.EndsAt > len(lines) {
-		return nil, fmt.Errorf("EndsAt %d out of range (max %d)", loc.EndsAt, len(lines))
+	// Past the end of the file is not a malformed record, it is an index describing source
+	// that is no longer there. Typed, so the read path can re-index this one file and answer
+	// the question rather than handing the caller a range error it cannot act on. See
+	// StaleIndexError.
+	if loc.StartsAt > len(lines) || loc.EndsAt > len(lines) {
+		return nil, &StaleIndexError{
+			Path:     loc.Path,
+			StartsAt: loc.StartsAt,
+			EndsAt:   loc.EndsAt,
+			Lines:    len(lines),
+		}
 	}
 	cut := strings.Join(lines[loc.StartsAt-1:loc.EndsAt], "\n")
 	return &domain.CodeEntry{Location: loc, Cut: cut}, nil
@@ -617,7 +626,20 @@ func (m *TopologyManager) UpdateFile(path string, reg *scanner.Registry) ([]doma
 			return nil, fmt.Errorf("write topology db: %w", err)
 		}
 		helper.CleanupOrphanedBugs(m.dbPath, topo)
-		helper.SyncManifest(topo, m.dbPath)
+		// SCOPED to this one file. SyncManifest stamps EVERY file in the topology with its
+		// current mtime, which is right after a scan that parsed them all and badly wrong
+		// here: parsing one file would declare the whole tree freshly indexed. Anything that
+		// had changed without being re-parsed -- a checkout, a restored database, a branch
+		// switch -- was then invisible to every later incremental scan, because the manifest
+		// said it was current. One edit froze that staleness in permanently, which is how a
+		// benchmark fixture could stay wrong for the whole run.
+		if _, stillIndexed := topo.Resources[absPath]; stillIndexed {
+			if err := helper.SyncManifestFiles(m.dbPath, []string{absPath}); err != nil {
+				return nil, fmt.Errorf("sync manifest: %w", err)
+			}
+		} else if err := helper.ForgetManifestFiles(m.dbPath, []string{absPath}); err != nil {
+			return nil, fmt.Errorf("sync manifest: %w", err)
+		}
 		return warnings, nil
 	}
 

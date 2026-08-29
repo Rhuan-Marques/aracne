@@ -203,8 +203,7 @@ A second, larger wave of fixtures stress-tests *interactions the topology should
 arguably handle but frequently does not*. Each probe file is self-documenting —
 its header comment states the EXPECTED behavior and the suspected gap. The
 findings below were captured by writing each file (which auto-scans) and
-inspecting the resulting graph with `read_function` / `read_struct` /
-`read_interface`. Legend: ✅ resolves, ❌ gap/bug, ⚠️ partial.
+inspecting the resulting graph with `read`. Legend: ✅ resolves, ❌ gap/bug, ⚠️ partial.
 
 ### The one rule that explains most method-call gaps
 A method-call edge resolves **only when the receiver is a bare identifier (a
@@ -260,7 +259,7 @@ drops the chained method:
 - ✅ **enums** (const / string / heterogeneous) extract and are usable as types; member access is a use of the enum (`enums_adv`).
 - ⚠️ **ambient**: `declare module "spec" { … }` members are extracted but with messy quoted IDs (`ambient_adv.d."virtual:shapes".VirtualCircle`); **`declare global { … }` contents are dropped**.
 - ⚠️ keyof / indexed-access / mapped / conditional / `infer`, `satisfies`, `as const`, type predicates & assertion functions all parse without crashing (`generics_adv`, `predicates`).
-- ⚠️ a TS module's `read_file` context lists owned functions/classes but **not** its interfaces / enums / type-aliases (possible missing `has_interface` / `has_named_type` ownership edges).
+- ⚠️ a TS module's whole-file `read` covers owned functions/classes but **not** its interfaces / enums / type-aliases (possible missing `has_interface` / `has_named_type` ownership edges).
 
 ### Probe files added
 `jsfamily/`: `barrel.js`, `barrel_consumer.js`, `nested.js`, `objects.js`,
@@ -418,7 +417,7 @@ signatures, multi-implements/extends), `ambient_adv.d.ts` (`declare module` +
 | _30 | `declare global` members extracted | ambient_adv.d.ts |
 
 > **bug `_9` is a FALSE POSITIVE** (intra-class `this.method()`): it was filed
-> from an MCP `read_function` whose CONTEXT render simply omits same-class
+> from an MCP `read` whose CONTEXT render simply omits same-class
 > sibling-method edges. A full scan *does* resolve `Helper.run -> Helper.compute`
 > (green lock-in `this_call_resolves_sibling_method`). It should be dismissed.
 
@@ -442,12 +441,12 @@ generic instantiation resolves the class + the annotated `.get()`.
 Topology (preferred — these were used to validate every family):
 
 ```
-mcp__aracne__read_interface  aracne/testing_ground/go/shapes.Shape          # multi-impl
-mcp__aracne__read_function   aracne/testing_ground/go/consumer.Report       # cross-pkg inference
-mcp__aracne__read_function   aracne.testing_ground.python.from_factory      # factory chaining
-mcp__aracne__read_function   aracne/testing_ground/jsfamily/consumer.report # aliased/namespace imports
-mcp__aracne__read_interface  aracne/testing_ground/tsfamily/models.Drawable # single-impl
-mcp__aracne__read_function   aracne/testing_ground/tsfamily/factory.areaOf  # annotation-driven
+mcp__aracne__read            aracne/testing_ground/go/shapes.Shape          # multi-impl
+mcp__aracne__read            aracne/testing_ground/go/consumer.Report       # cross-pkg inference
+mcp__aracne__read            aracne.testing_ground.python.from_factory      # factory chaining
+mcp__aracne__read            aracne/testing_ground/jsfamily/consumer.report # aliased/namespace imports
+mcp__aracne__read            aracne/testing_ground/tsfamily/models.Drawable # single-impl
+mcp__aracne__read            aracne/testing_ground/tsfamily/factory.areaOf  # annotation-driven
 mcp__aracne__grep            "<pattern>"   testing_ground
 mcp__aracne__warnings_list
 ```

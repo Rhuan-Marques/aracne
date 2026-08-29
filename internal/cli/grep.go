@@ -46,10 +46,14 @@ func RunGrep(args []string) {
 	}
 
 	// Honour the project's own scan.ignore rules, so a search does not descend into build
-	// output the scanner has been told to skip.
+	// output the scanner has been told to skip, and grep.description_kinds, which limits
+	// which kinds may match on their description. A nil kind slice means "not
+	// configured" and lets topogrep apply its defaults.
 	var ignore *domain.IgnoreMatcher
-	if topo != nil && topo.Root != "" {
-		if cfg := helper.LoadConfig(helper.ConfigPath(*dbPath)); cfg != nil {
+	var descriptionKinds []domain.ResourceKind
+	if cfg := helper.LoadConfig(helper.ConfigPath(*dbPath)); cfg != nil {
+		descriptionKinds = cfg.Grep.DescriptionKinds
+		if topo != nil && topo.Root != "" {
 			ignore = domain.BuildIgnoreMatcher(topo.Root, cfg.Scan.Ignore)
 		}
 	}
@@ -65,6 +69,8 @@ func RunGrep(args []string) {
 		Before:     *before,
 		After:      *after,
 		Ignore:     ignore,
+
+		DescriptionKinds: descriptionKinds,
 	}
 	res, err := topogrep.SearchWith(opt, topo)
 	if err != nil {

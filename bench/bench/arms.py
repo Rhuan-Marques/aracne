@@ -48,7 +48,7 @@ def prepare_workdir(arm: str, task, cfg: dict, repos_dir: Path, ephemeral_dir: P
             f"(< {cfg['coverage_min']:.0%}); run prepare + your /descriptions-generate, "
             f"or pass --allow-cold"
         )
-    wt = fixtures.restore(task, fixtures_root)
+    wt = fixtures.restore(task, cfg, fixtures_root)
     # Optionally overlay a benchmark-selected .aracne/config.json for this run (aracne arm only).
     if cfg.get("aracne_config_path"):
         fixtures.apply_aracne_config(wt, cfg["aracne_config_path"])

@@ -218,24 +218,58 @@ def _warn_orphans() -> None:
     print("        stop them with: docker rm -f $(docker ps -q)")
 
 
+def _seed_of(row) -> int:
+    """The seed a result row came from. Missing/garbled -> 0, so a single-seed run behaves
+    exactly as it did before seeds existed."""
+    try:
+        return int(row.get("seed") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _batches(source: str, items: list[tuple]) -> list[tuple[str, list]]:
     """Split one (source, arm) group into independently-graded harness calls.
 
-    Multi-SWE-bench builds EVERY image before it runs ANY instance, so a single wedged
-    build (a hung postinstall, an unreachable registry) takes the whole call down with it
-    and no instance is ever judged. Splitting per repo bounds that blast radius: a bad repo
-    costs only its own instances, and the other repos still grade and report.
+    SPLIT BY SEED — this is a correctness requirement, not an optimization. BOTH harnesses key
+    everything they produce by the INSTANCE: SWE-bench writes
+    logs/run_evaluation/<run>/<model>/<instance_id>/report.json and a final report listing
+    resolved instance_ids, and Multi-SWE-bench keys its reports by "org/repo:pr-N". Neither id
+    carries a seed. Putting three seeds of one instance in one call therefore wrote three
+    identical prediction rows, got ONE verdict back, and `_grade_batch` copied it onto all
+    three — so the run reported 3 graded patches while exactly one had been run. The signature
+    was visible in the data: across 54 instance x arm cells of a 3-seed run, every cell was 0/3
+    or 3/3 and never 1/3 or 2/3, while the patches themselves genuinely differed (two flask
+    seeds matched the passing baseline, the third used a different parameter name and really
+    did fail — all three were recorded as failures). One seed per call gives each patch its own
+    harness id-space, its own report, and its own verdict.
 
-    Each batch gets its own dirs, but they share the Docker image cache and the repo clones,
-    so splitting costs little beyond a few extra harness startups.
+    SPLIT BY REPO (multi_swe_bench only) — blast radius. Multi-SWE-bench builds EVERY image
+    before it runs ANY instance, so a single wedged build (a hung postinstall, an unreachable
+    registry) takes the whole call down with it and no instance is ever judged. Splitting per
+    repo means a bad repo costs only its own instances.
+
+    Each batch gets its own dirs, but they share the Docker image cache and the repo clones, so
+    splitting costs little beyond a few extra harness startups.
     """
-    if source != "multi_swe_bench":
-        return [("", items)]
-    by_repo: dict[str, list] = defaultdict(list)
+    # Only disambiguate when there is something to disambiguate: a single-seed run keeps the
+    # exact tags (and therefore the result-directory layout) it had before.
+    multi_seed = len({_seed_of(item[0]) for item in items}) > 1
+
+    grouped: dict[tuple, list] = defaultdict(list)
     for item in items:
-        raw = item[1].raw
-        by_repo[f"{raw.get('org')}__{raw.get('repo')}"].append(item)
-    return sorted(by_repo.items())
+        row, task = item[0], item[1]
+        repo = ""
+        if source == "multi_swe_bench":
+            repo = f"{task.raw.get('org')}__{task.raw.get('repo')}"
+        grouped[(repo, _seed_of(row))].append(item)
+
+    batches = []
+    for (repo, seed), group in sorted(grouped.items()):
+        # The tag names the batch's dirs, files and harness run id, so it must be unique per
+        # batch and stable across a regrade.
+        parts = [p for p in (repo, f"s{seed}" if multi_seed else "") if p]
+        batches.append(("__".join(parts), group))
+    return batches
 
 
 def grade_all(pending: list[tuple], cfg: dict, out_dir: Path) -> None:
@@ -266,7 +300,7 @@ def _grade_batch(source: str, arm: str, tag: str, items: list[tuple],
     label = f"{source}/{arm}" + (f"/{tag}" if tag else "")
     try:
         if source == "swe_bench":
-            resolved = _grade_swe(items, arm, cfg, out_dir)
+            resolved = _grade_swe(items, arm, cfg, out_dir, tag)
         else:
             resolved = _grade_multi(items, arm, cfg, out_dir, tag)
     except GradeTimeout as e:
@@ -305,11 +339,17 @@ def _grade_batch(source: str, arm: str, tag: str, items: list[tuple],
         outcome.stamp(row)
 
 
-def _grade_swe(items: list[tuple], arm: str, cfg: dict, out_dir: Path) -> dict[str, bool]:
+def _grade_swe(items: list[tuple], arm: str, cfg: dict, out_dir: Path,
+               tag: str = "") -> dict[str, bool]:
+    """Grade one SWE-bench batch. `tag` (from `_batches`) separates one seed's harness
+    id-space from another's: the run id, the model name, the predictions file and therefore
+    logs/run_evaluation/<run_id>/<model>/<instance_id>/report.json are all per batch. Without
+    it three seeds of an instance collapsed onto one instance_id and shared one verdict."""
     src = cfg["sources"]["swe_bench"]
-    model = f"{src['model_name']}-{arm}"
-    run_id = f"aracne-{arm}"
-    preds = out_dir / f"preds_swe_{arm}.jsonl"
+    suffix = f"-{tag}" if tag else ""
+    model = f"{src['model_name']}-{arm}{suffix}"
+    run_id = f"aracne-{arm}{suffix}"
+    preds = out_dir / f"preds_swe_{arm}{suffix}.jsonl"
     with preds.open("w", encoding="utf-8") as f:
         for row, task, _arm, patch in items:
             f.write(json.dumps({
@@ -325,7 +365,7 @@ def _grade_swe(items: list[tuple], arm: str, cfg: dict, out_dir: Path) -> dict[s
              "--predictions_path", str(preds),
              "--run_id", run_id,
              "--max_workers", str(src.get("max_workers", 4))],
-            out_dir, cfg, watch=[out_dir], label=f"swe_bench/{arm}",
+            out_dir, cfg, watch=[out_dir], label=f"swe_bench/{arm}" + (f"/{tag}" if tag else ""),
         )
     except GradeTimeout as e:
         raise GradeTimeout(str(e), _parse_swe_logs(out_dir, run_id, model, items)) from None
@@ -333,8 +373,8 @@ def _grade_swe(items: list[tuple], arm: str, cfg: dict, out_dir: Path) -> dict[s
         partial = _parse_swe_logs(out_dir, run_id, model, items)
         if not partial:
             raise
-        print(f"[grade] swe_bench/{arm} harness aborted; keeping {len(partial)} "
-              f"instance verdict(s) it had already written.")
+        print(f"[grade] swe_bench/{arm}{'/' + tag if tag else ''} harness aborted; "
+              f"keeping {len(partial)} instance verdict(s) it had already written.")
         return partial
 
     report = out_dir / f"{model}.{run_id}.json"

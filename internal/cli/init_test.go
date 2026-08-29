@@ -191,8 +191,7 @@ func TestClaudeToolsForAgent_DefaultMainAgent(t *testing.T) {
 	tools := claudeToolsForAgent(eff)
 
 	want := map[string]bool{
-		"mcp__aracne__read_file":     true,
-		"mcp__aracne__read_function": true,
+		"mcp__aracne__read":          true,
 		"mcp__aracne__warnings_list": true,
 		"mcp__aracne__edit":          true,
 		"mcp__aracne__write":         true,
@@ -239,8 +238,8 @@ func TestOpenCodePermissionsForAgent_DefaultMainAgent(t *testing.T) {
 	}
 	// Under warn-only, bash is a plain scalar allow: the glob-pattern map existed only to
 	// deny the direct shell read/grep forms, and nothing is denied any more.
-	if !strings.Contains(perms, `"aracne_read_file": allow`) {
-		t.Fatalf("expected aracne_read_file: allow:\n%s", perms)
+	if !strings.Contains(perms, `"aracne_read": allow`) {
+		t.Fatalf("expected aracne_read: allow:\n%s", perms)
 	}
 }
 

@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -160,7 +159,7 @@ func runDescriptionGeneration(manager *topology.TopologyManager, provider llm.Pr
 		if exemplarLimit > 0 {
 			topo, _ = manager.ReadAll()
 		}
-		results := runDescriptionBatchWave(provider, toolMap, lang, batches, parallel, topo, exemplarLimit)
+		results := runDescriptionBatchWave(provider, manager, toolMap, lang, batches, parallel, topo, exemplarLimit)
 		for _, result := range results {
 			if result.Err != nil {
 				fmt.Fprintf(os.Stderr, "Executor batch failed (%d resources): %v\n", len(result.Batch), result.Err)
@@ -174,7 +173,7 @@ func runDescriptionGeneration(manager *topology.TopologyManager, provider llm.Pr
 }
 
 // Runs description generation for resource batches in parallel using an LLM provider and collects results.
-func runDescriptionBatchWave(provider llm.Provider, toolMap map[string]tools.Tool, lang string, batches [][]descriptionResource, parallel int, topo *domain.Topology, exemplarLimit int) []descriptionBatchResult {
+func runDescriptionBatchWave(provider llm.Provider, manager *topology.TopologyManager, toolMap map[string]tools.Tool, lang string, batches [][]descriptionResource, parallel int, topo *domain.Topology, exemplarLimit int) []descriptionBatchResult {
 	if parallel > len(batches) {
 		parallel = len(batches)
 	}
@@ -187,7 +186,7 @@ func runDescriptionBatchWave(provider llm.Provider, toolMap map[string]tools.Too
 		go func() {
 			defer wg.Done()
 			for batch := range jobs {
-				text, err := runDescriptionExecutorBatch(provider, toolMap, lang, batch, topo, exemplarLimit)
+				text, err := runDescriptionExecutorBatch(provider, manager, toolMap, lang, batch, topo, exemplarLimit)
 				results <- descriptionBatchResult{Batch: batch, Text: text, Err: err}
 			}
 		}()
@@ -208,7 +207,7 @@ func runDescriptionBatchWave(provider llm.Provider, toolMap map[string]tools.Too
 }
 
 // Executes an LLM agent to generate descriptions for a batch of resources using exemplars from the topology for consistency.
-func runDescriptionExecutorBatch(provider llm.Provider, toolMap map[string]tools.Tool, lang string, batch []descriptionResource, topo *domain.Topology, exemplarLimit int) (string, error) {
+func runDescriptionExecutorBatch(provider llm.Provider, manager *topology.TopologyManager, toolMap map[string]tools.Tool, lang string, batch []descriptionResource, topo *domain.Topology, exemplarLimit int) (string, error) {
 	a := agent.New(provider, tools.NewRegistry(), lang)
 	a.SetMaxIterations(len(batch)*4 + 10)
 	var exemplars []prompts.DescriptionExemplar
@@ -219,7 +218,7 @@ func runDescriptionExecutorBatch(provider llm.Provider, toolMap map[string]tools
 		}
 		exemplars = prompts.BuildDescriptionExemplars(topo, ids, exemplarLimit)
 	}
-	input := descriptionExecutorInput(batch, makeResourceReader(toolMap), exemplars)
+	input := descriptionExecutorInput(batch, makeResourceReader(manager), exemplars)
 	return a.RunSubAgent(prompts.DescriptionsGenerationExecutorPrompt(), input, toolMap)
 }
 
@@ -284,20 +283,15 @@ func descriptionExecutorInput(batch []descriptionResource, readResource func(str
 	return prompts.DescriptionsGenerationExecutorInput(resources, exemplars)
 }
 
-// makeResourceReader returns a closure that pre-reads a resource's source via
-// the read tool, so executors don't have to read each one themselves. Returns
-// nil when the read tool is unavailable.
-func makeResourceReader(toolMap map[string]tools.Tool) func(string) string {
-	readTool, ok := toolMap["read"]
-	if !ok {
-		return nil
-	}
+// makeResourceReader returns a closure that pre-reads a resource's source, so executors don't
+// have to read each one themselves.
+//
+// It takes the RAW cut rather than going through the read tool. The executor's job is to
+// describe this one resource; a "# CONTEXT:" tree of its neighbours would both bloat the batch
+// prompt and pull the description toward what the resource touches instead of what it does.
+func makeResourceReader(mgr *topology.TopologyManager) func(string) string {
 	return func(id string) string {
-		payload, err := json.Marshal(map[string]string{"resource_id": id})
-		if err != nil {
-			return ""
-		}
-		text, err := readTool.Run(payload)
+		text, err := tools.ResourceSource(mgr, id)
 		if err != nil {
 			return ""
 		}

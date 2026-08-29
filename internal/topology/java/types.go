@@ -81,8 +81,12 @@ type ResourceUsage struct {
 // cut, optional parent class, called methods, used classes/interfaces, and
 // external dependencies.
 type JavaFunctionContext struct {
-	Function        *FunctionCut
-	ParentStruct    *StructCut
+	Function     *FunctionCut
+	ParentStruct *StructCut
+	// OversizedParent is the enclosing type when it was too large to inline above the member
+	// (read.context_filter.max_inline_parent_lines). It renders as an ordinary named+described
+	// neighbour instead of as source.
+	OversizedParent *StructCut
 	CalledFunctions []SimplifiedFunction
 	StructsUsed     []StructUsage
 	InterfacesUsed  []SimplifiedInterface

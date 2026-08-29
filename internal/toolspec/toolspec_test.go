@@ -6,8 +6,15 @@ import (
 )
 
 func TestSurfaceClassification(t *testing.T) {
-	if !IsMCPTool("read_function") || !IsChatTool("read_function") {
-		t.Fatal("read_function should be both MCP and chat")
+	if !IsMCPTool("read") || !IsChatTool("read") {
+		t.Fatal("read should be both MCP and chat")
+	}
+	// The per-kind read tools were collapsed into "read"; naming one in a config is now an
+	// error rather than a silently different tool set.
+	for _, gone := range []string{"read_function", "read_struct", "read_interface", "read_named_type", "read_file", "read_package", "read_dependency"} {
+		if IsMCPTool(gone) || IsChatTool(gone) {
+			t.Fatalf("%s should no longer be a valid tool name", gone)
+		}
 	}
 	if IsMCPTool("ls") {
 		t.Fatal("ls should not be an MCP tool")
@@ -18,7 +25,7 @@ func TestSurfaceClassification(t *testing.T) {
 	if IsMCPTool("nope") || IsChatTool("nope") {
 		t.Fatal("unknown tool should not be valid on any surface")
 	}
-	if !IsNativeTool("bash") || IsNativeTool("read_function") {
+	if !IsNativeTool("bash") || IsNativeTool("read_resource") {
 		t.Fatal("native-blockable set mismatch")
 	}
 }
@@ -183,5 +190,24 @@ func TestShellCommandKeyUnchangedForStreamEditors(t *testing.T) {
 		if got, ok := ShellCommandKey(word); !ok || got != "edit" {
 			t.Errorf("ShellCommandKey(%q) = (%q, %v), want (edit, true)", word, got, ok)
 		}
+	}
+}
+
+func TestResolveReadToolName(t *testing.T) {
+	// With a native read still available the aracne tool takes the longer name, so the two are
+	// never confusable in one session.
+	if got := ResolveReadToolName(true); got != ReadResourceToolName {
+		t.Fatalf("ResolveReadToolName(true) = %q, want %q", got, ReadResourceToolName)
+	}
+	if got := ResolveReadToolName(false); got != ReadToolName {
+		t.Fatalf("ResolveReadToolName(false) = %q, want %q", got, ReadToolName)
+	}
+	for _, name := range []string{ReadToolName, ReadResourceToolName} {
+		if !IsReadToolName(name) {
+			t.Fatalf("IsReadToolName(%q) = false", name)
+		}
+	}
+	if IsReadToolName("grep") {
+		t.Fatal("IsReadToolName(grep) should be false")
 	}
 }

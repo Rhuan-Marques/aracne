@@ -101,7 +101,7 @@ func (p PermissionPolicy) insideWorkspace(path string) bool {
 // Checks if a tool name is read-only (safe for unprivileged access).
 func isReadOnlyTool(name string) bool {
 	switch name {
-	case "read", "read_function", "read_struct", "read_interface", "read_named_type", "read_file", "read_package", "read_dependency", "grep", "glob", "ls", "warnings_list", "bug_list", "node_list_no_description":
+	case "read", "read_resource", "grep", "glob", "ls", "warnings_list", "bug_list", "node_list_no_description":
 		return true
 	default:
 		return false

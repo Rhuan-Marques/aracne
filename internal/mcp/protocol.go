@@ -72,6 +72,12 @@ type InputSchema struct {
 type Property struct {
 	Type        string `json:"type"`
 	Description string `json:"description"`
+	Items       *Items `json:"items,omitempty"`
+}
+
+// Items is the JSON Schema element type of an array property.
+type Items struct {
+	Type string `json:"type"`
 }
 
 // Represents the parameters for an MCP tool call request, holding the tool name and optional JSON arguments.

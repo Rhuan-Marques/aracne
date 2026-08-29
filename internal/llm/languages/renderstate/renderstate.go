@@ -31,9 +31,10 @@ const (
 
 // State is per-render. It must not be shared between concurrent renders.
 type State struct {
-	imports map[string]bool
-	parents map[string]bool
-	entries map[string]bool
+	imports  map[string]bool
+	parents  map[string]bool
+	entries  map[string]bool
+	excluded map[string]bool
 
 	bytes   int
 	shown   int
@@ -49,6 +50,7 @@ func New() *State {
 		imports:    map[string]bool{},
 		parents:    map[string]bool{},
 		entries:    map[string]bool{},
+		excluded:   map[string]bool{},
 		MaxEntries: DefaultMaxEntries,
 		MaxBytes:   DefaultMaxBytes,
 	}
@@ -78,6 +80,56 @@ func (s *State) NewImports(lines []string) []string {
 		out = append(out, l)
 	}
 	return out
+}
+
+// ResetImports forgets which import lines have been emitted, without touching the entry,
+// parent or exclusion sets.
+//
+// A batched read groups its results by containing file and gives each group its own import
+// block. Those blocks are independent: two files that both import `os` must each say so, or
+// the second group reads as though it had no imports at all. Everything else the State
+// tracks stays response-wide, which is the whole point -- only the import ledger is
+// per-group.
+func (s *State) ResetImports() {
+	if s == nil {
+		return
+	}
+	s.imports = map[string]bool{}
+}
+
+// ExcludeID marks a resource as rendered in full somewhere in this response, so the CONTEXT
+// section never repeats it.
+//
+// This is the invariant the batched read is built on: a resource the caller asked for -- and
+// every resource that lives inside a file the caller asked for -- is already present as
+// source. Listing it again under "# CONTEXT:" as an ID plus a description is pure
+// duplication, and for a whole-file read it was an index of the fence directly above it.
+//
+// Distinct from FirstTime: FirstTime dedups WITHIN the context section, ExcludeID keeps the
+// body's contents OUT of it.
+func (s *State) ExcludeID(id string) {
+	if s == nil || id == "" {
+		return
+	}
+	s.excluded[id] = true
+}
+
+// IsExcluded reports whether `id` was rendered in full in the body of this response.
+func (s *State) IsExcluded(id string) bool {
+	if s == nil || id == "" {
+		return false
+	}
+	return s.excluded[id]
+}
+
+// Renderable reports whether a neighbour with this ID should be rendered in the CONTEXT
+// section: not already shown as source in the body, and not already listed here. It is the
+// single check every render* helper makes, so the two rules cannot drift apart.
+func (s *State) Renderable(id string) bool {
+	if s == nil {
+		return true
+	}
+	return !s.IsExcluded(id) && s.FirstTime(id)
 }
 
 // MarkRendered records a code cut as already shown, so a later entry that would repeat it

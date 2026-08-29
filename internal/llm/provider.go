@@ -26,8 +26,14 @@ type Parameters struct {
 
 // Describes a JSON Schema property with its type and description, used for LLM tool parameter definitions.
 type Property struct {
-	Type        string `json:"type"`
-	Description string `json:"description"`
+	Type        string    `json:"type"`
+	Description string    `json:"description"`
+	Items       *ItemSpec `json:"items,omitempty"`
+}
+
+// ItemSpec is the JSON Schema element type of an array property.
+type ItemSpec struct {
+	Type string `json:"type"`
 }
 
 // ToolCall represents a tool invocation request from an LLM response. It contains the call ID, type, and the function details (name and arguments).

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"aracne/internal/cli"
 )
 
 func TestInitDefault_CreatesBothAgents(t *testing.T) {
@@ -253,7 +255,7 @@ func TestInitMarkdownFiles_ContainIntegrationSection(t *testing.T) {
 	mustRun(t, dir, "init", "-y")
 
 	agentsMd := readFile(t, dir, "AGENTS.md")
-	if !strings.Contains(agentsMd, "# Aracne Project Integration") {
+	if !strings.Contains(agentsMd, cli.AracIntegrationStart) {
 		t.Fatal("AGENTS.md missing integration section")
 	}
 	if !strings.Contains(agentsMd, "Good Luck in your task.") {
@@ -261,7 +263,7 @@ func TestInitMarkdownFiles_ContainIntegrationSection(t *testing.T) {
 	}
 
 	claudeMd := readFile(t, dir, "CLAUDE.md")
-	if !strings.Contains(claudeMd, "# Aracne Project Integration") {
+	if !strings.Contains(claudeMd, cli.AracIntegrationStart) {
 		t.Fatal("CLAUDE.md missing integration section")
 	}
 	if !strings.Contains(claudeMd, "Good Luck in your task.") {

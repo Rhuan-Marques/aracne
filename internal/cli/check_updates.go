@@ -1,19 +1,28 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
-
-	"aracne/internal/helper"
-	"aracne/internal/topology/domain"
 )
 
-// Detects added, modified, and deleted files by comparing current source against the manifest.
+// RunCheckUpdates reports index health: which source files have drifted from the topology
+// since the last scan.
+//
+// It is the surface that answers "should I believe this graph". Everything else answers what
+// the graph SAYS; nothing said whether it is still true. A database restored beside source it
+// was not built from -- a benchmark fixture unfrozen into a reset worktree, a checkout made
+// while no scanner was watching -- produces reads that fail in ways that look like bad IDs,
+// and nothing pointed at the real cause. Exits 1 when the index is stale, so a script (or a
+// benchmark harness) can gate on it instead of discovering the problem inside a run.
+//
+// The diff itself is TopologyManager.IndexHealth, the same primitive the read tool blames a
+// miss on and the watch loop acts on, so the three cannot drift apart.
 func RunCheckUpdates(args []string) {
 	dbPath := ".aracne/topology.db"
 	root := ""
+	asJSON := false
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--db":
@@ -26,82 +35,70 @@ func RunCheckUpdates(args []string) {
 				root = args[i+1]
 				i++
 			}
+		case "--json":
+			asJSON = true
 		}
 	}
 
-	topo, err := helper.ReadDb(dbPath)
+	manager, _ := InitRegistry(dbPath)
+	health, err := manager.IndexHealth(root)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading topology: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error checking updates: %v\n", err)
 		os.Exit(1)
 	}
 
-	projectRoot := root
-	if projectRoot == "" {
-		projectRoot = topo.Root
-	}
-	if projectRoot == "" {
-		projectRoot = "."
-	}
-
-	// Respect the config's hidden paths so they never show up as pending updates.
-	cfg := helper.LoadConfig(helper.ConfigPath(dbPath))
-	domain.SetActivePathVisibility(domain.BuildPathVisibility(projectRoot, cfg.Paths))
-	domain.SetActiveIgnore(domain.BuildIgnoreMatcher(projectRoot, cfg.Scan.Ignore))
-
-	manifestPath := helper.ManifestPath(dbPath)
-
-	var added, modified, deleted []string
-	languages := topo.Languages
-	if len(languages) == 0 && topo.Language != "" {
-		languages = []string{topo.Language}
-	}
-	for _, lang := range languages {
-		a, m, d, diffErr := helper.DiffScanFiles(projectRoot, lang, manifestPath)
-		if diffErr != nil {
-			fmt.Fprintf(os.Stderr, "Error checking updates: %v\n", diffErr)
+	if asJSON {
+		payload := map[string]any{
+			"db":       dbPath,
+			"root":     health.Root,
+			"stale":    health.Stale(),
+			"drifted":  health.Drifted(),
+			"added":    relativize(health.Root, health.Added),
+			"modified": relativize(health.Root, health.Modified),
+			"deleted":  relativize(health.Root, health.Deleted),
+		}
+		out, _ := json.MarshalIndent(payload, "", "  ")
+		fmt.Println(string(out))
+		if health.Stale() {
 			os.Exit(1)
 		}
-		added = append(added, a...)
-		modified = append(modified, m...)
-		deleted = append(deleted, d...)
+		return
 	}
 
-	sort.Strings(added)
-	sort.Strings(modified)
-	sort.Strings(deleted)
-
-	if len(added) == 0 && len(modified) == 0 && len(deleted) == 0 {
+	if !health.Stale() {
 		fmt.Println("All files are up to date.")
 		return
 	}
 
-	total := len(added) + len(modified) + len(deleted)
-	fmt.Printf("%d file(s) not up to date:\n\n", total)
-
-	if len(added) > 0 {
-		fmt.Printf("  Added (%d):\n", len(added))
-		for _, f := range added {
-			rel, _ := filepath.Rel(projectRoot, f)
-			fmt.Printf("    + %s\n", rel)
+	fmt.Printf("%d file(s) not up to date:\n\n", health.Drifted())
+	section := func(label, marker string, paths []string) {
+		if len(paths) == 0 {
+			return
+		}
+		fmt.Printf("  %s (%d):\n", label, len(paths))
+		for _, f := range relativize(health.Root, paths) {
+			fmt.Printf("    %s %s\n", marker, f)
 		}
 		fmt.Println()
 	}
+	section("Added", "+", health.Added)
+	section("Modified", "~", health.Modified)
+	section("Deleted", "-", health.Deleted)
+	fmt.Println("The topology is STALE for these files. Run `arac scan` to re-index.")
+	os.Exit(1)
+}
 
-	if len(modified) > 0 {
-		fmt.Printf("  Modified (%d):\n", len(modified))
-		for _, f := range modified {
-			rel, _ := filepath.Rel(projectRoot, f)
-			fmt.Printf("    ~ %s\n", rel)
+// relativize renders absolute file paths against the topology root, leaving anything outside
+// it absolute rather than printing a "../.." chain.
+func relativize(root string, paths []string) []string {
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		rel, err := filepath.Rel(root, p)
+		if err != nil || len(rel) >= 2 && rel[:2] == ".." {
+			out = append(out, p)
+			continue
 		}
-		fmt.Println()
+		out = append(out, filepath.ToSlash(rel))
 	}
-
-	if len(deleted) > 0 {
-		fmt.Printf("  Deleted (%d):\n", len(deleted))
-		for _, f := range deleted {
-			rel, _ := filepath.Rel(projectRoot, f)
-			fmt.Printf("    - %s\n", rel)
-		}
-		fmt.Println()
-	}
+	return out
 }

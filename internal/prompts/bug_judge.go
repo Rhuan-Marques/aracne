@@ -28,7 +28,7 @@ If the issue is really present and could cause incorrect behavior, a crash, or a
 ## Workflow
 
 1. Compare the bug against the known false-positive patterns and duplicate candidates (Rules 1-2) before reading any code.
-2. If it survives, use ` + "`" + `read_function` + "`" + `, ` + "`" + `read_struct` + "`" + `, ` + "`" + `read_file` + "`" + `, or ` + "`" + `grep` + "`" + ` to inspect the implicated code and the context around it.
+2. If it survives, use ` + "`" + `read` + "`" + ` (pass every id you need in one call) or ` + "`" + `grep` + "`" + ` to inspect the implicated code and the context around it.
 3. Apply the first rule that fits and call the matching tool.
 4. Report your decision for each assigned bug with one line of reasoning.
 

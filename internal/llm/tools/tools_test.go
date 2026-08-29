@@ -17,15 +17,15 @@ func TestNewRegistry(t *testing.T) {
 
 func TestRegisterAndGet(t *testing.T) {
 	r := NewRegistry()
-	tool := &Read{}
+	tool := &Ls{}
 	r.Register(tool)
 
-	got, ok := r.Get("read")
+	got, ok := r.Get("ls")
 	if !ok {
 		t.Fatal("expected tool to be found")
 	}
-	if got.Name() != "read" {
-		t.Errorf("expected name 'read', got %q", got.Name())
+	if got.Name() != "ls" {
+		t.Errorf("expected name 'ls', got %q", got.Name())
 	}
 }
 
@@ -39,8 +39,8 @@ func TestGetNonexistent(t *testing.T) {
 
 func TestListTools(t *testing.T) {
 	r := NewRegistry()
-	r.Register(&Read{})
 	r.Register(&Ls{})
+	r.Register(&WarningsList{})
 
 	list := r.List()
 	if len(list) != 2 {
@@ -49,19 +49,12 @@ func TestListTools(t *testing.T) {
 }
 
 func TestToolInterface(t *testing.T) {
-	var tool Tool = &Read{}
-	if tool.Name() != "read" {
+	var tool Tool = &Ls{}
+	if tool.Name() != "ls" {
 		t.Errorf("unexpected name: %q", tool.Name())
 	}
 	if tool.Description() == "" {
 		t.Error("expected non-empty description")
-	}
-	params := tool.Parameters()
-	if len(params) != 1 || params[0].Name != "resource_id" {
-		t.Errorf("unexpected parameters: %+v", params)
-	}
-	if !params[0].Required {
-		t.Error("expected resource_id to be required")
 	}
 }
 
@@ -92,25 +85,6 @@ func TestLsToolInterface(t *testing.T) {
 	}
 	if !foundPath || !foundRecursive {
 		t.Error("expected path and recursive parameters")
-	}
-}
-
-func TestReadRunMissingArg(t *testing.T) {
-	tool := &Read{}
-
-	args, _ := json.Marshal(map[string]string{})
-	_, err := tool.Run(args)
-	if err == nil {
-		t.Error("expected error for missing resource_id")
-	}
-}
-
-func TestReadRunInvalidJSON(t *testing.T) {
-	tool := &Read{}
-
-	_, err := tool.Run(json.RawMessage("{invalid}"))
-	if err == nil {
-		t.Error("expected error for invalid JSON")
 	}
 }
 

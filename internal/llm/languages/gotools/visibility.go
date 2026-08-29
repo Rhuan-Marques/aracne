@@ -53,11 +53,16 @@ func writeFullBlock(b *strings.Builder, st *renderstate.State, full *golang.Full
 			b.WriteString("\n\n")
 		}
 	}
-	b.WriteString(full.Cut)
-	// Register the cut so a later entry that encloses this type back-references it.
-	st.MarkRendered(full.Cut)
-	if !strings.HasSuffix(full.Cut, "\n") {
-		b.WriteString("\n")
+	// Guarded the same way ParentCut is. A neighbour reachable by two edges -- a struct in
+	// StructsUsed and again as an interface implementation, say -- reached here twice and
+	// printed its whole body both times, because only ParentCut was ever compared.
+	if st.ParentSeen(full.Cut) {
+		renderstate.BackRef(b, "// source")
+	} else {
+		b.WriteString(full.Cut)
+		if !strings.HasSuffix(full.Cut, "\n") {
+			b.WriteString("\n")
+		}
 	}
 	b.WriteString("```\n")
 }

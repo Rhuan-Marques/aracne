@@ -158,10 +158,14 @@ func toToolDefinitions(toolList []tools.Tool) []llm.ToolDefinition {
 		props := make(map[string]llm.Property)
 		var required []string
 		for _, p := range t.Parameters() {
-			props[p.Name] = llm.Property{
+			prop := llm.Property{
 				Type:        p.Type,
 				Description: p.Description,
 			}
+			if p.Items != "" {
+				prop.Items = &llm.ItemSpec{Type: p.Items}
+			}
+			props[p.Name] = prop
 			if p.Required {
 				required = append(required, p.Name)
 			}

@@ -175,8 +175,8 @@ func TestWriteClaudePermissions(t *testing.T) {
 		}
 	}
 	// A representative tool is present (guards against an empty universe).
-	if counts["mcp__aracne__read_function"] == 0 {
-		t.Fatalf("expected mcp__aracne__read_function in allow:\n%s", data)
+	if counts["mcp__aracne__read_resource"] == 0 {
+		t.Fatalf("expected mcp__aracne__read_resource in allow:\n%s", data)
 	}
 	// User-defined rules are preserved.
 	if counts["Bash(go test:*)"] != 1 {

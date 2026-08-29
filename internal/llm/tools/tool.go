@@ -8,6 +8,9 @@ type Parameter struct {
 	Type        string
 	Description string
 	Required    bool
+	// Items is the element type when Type is "array". JSON Schema requires it, and a client
+	// that validates the schema rejects an array property without one.
+	Items string
 }
 
 // Defines the contract for an LLM-callable tool. Requires Name, Description, Parameters, and Run methods — Run receives JSON arguments and returns a string result or error.

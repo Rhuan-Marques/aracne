@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"aracne/internal/chat"
+	"aracne/internal/toolspec"
 	"aracne/internal/topology/domain"
 )
 
@@ -154,20 +155,22 @@ func deriveSeenResources(idx *graphIndex, filter domain.ContextFilter, messages 
 		if msg.Role != "tool" || msg.Status != "completed" {
 			continue
 		}
-		switch msg.ToolName {
-		case "read_function", "read_struct", "read_interface", "read_named_type":
-			id := idx.resolveResourceName(toolStringArg(msg.ToolInput, "name"), readToolKinds(msg.ToolName))
-			if id == "" {
-				continue
+		switch {
+		// One read tool now, taking a list. Each entry may name a resource or a file; a file
+		// puts everything declared inside it in context, exactly as the tool's output does.
+		case toolspec.IsReadToolName(msg.ToolName):
+			for _, raw := range toolStringListArg(msg.ToolInput, "ids") {
+				if id := idx.resolveResourceName(raw, nil); id != "" {
+					mark(id, ctxGreen)
+					markNeighbors(idx, filter, id, mark)
+					continue
+				}
+				for _, id := range idx.resourcesInFile(raw) {
+					mark(id, ctxGreen)
+					markNeighbors(idx, filter, id, mark)
+				}
 			}
-			mark(id, ctxGreen)
-			markNeighbors(idx, filter, id, mark)
-		case "read_file":
-			for _, id := range idx.resourcesInFile(toolStringArg(msg.ToolInput, "name")) {
-				mark(id, ctxGreen)
-				markNeighbors(idx, filter, id, mark)
-			}
-		case "grep":
+		case msg.ToolName == "grep":
 			for _, id := range parseGrepResourceIDs(msg.ToolOutput) {
 				mark(id, ctxYellow)
 			}
@@ -205,23 +208,6 @@ func markNeighbors(idx *graphIndex, filter domain.ContextFilter, id string, mark
 		for _, edge := range idx.incoming[id] {
 			consider(edge.Source, edge.Type)
 		}
-	}
-}
-
-// readToolKinds maps a read tool to the resource kinds it can resolve, used to
-// disambiguate a bare name into a single resource ID.
-func readToolKinds(tool string) map[string]bool {
-	switch tool {
-	case "read_function":
-		return map[string]bool{"function": true, "method": true}
-	case "read_struct":
-		return map[string]bool{"struct": true}
-	case "read_interface":
-		return map[string]bool{"interface": true}
-	case "read_named_type":
-		return map[string]bool{"named_type": true}
-	default:
-		return nil
 	}
 }
 
@@ -279,16 +265,26 @@ func (idx *graphIndex) resourcesInFile(name string) []string {
 
 // parseGrepResourceIDs extracts the topology resource IDs reported by the grep
 // tool. grep surfaces matches as names/descriptions only, so they are yellow.
+//
+// The marker is grep's per-resource header, "# <id>" optionally followed by
+// " — <description>" (see topogrep.FormatResult). This used to look for a
+// "ResourceID:" prefix that grep has never emitted, which made the whole branch
+// dead: no grep call ever coloured a node.
 func parseGrepResourceIDs(output string) []string {
 	var ids []string
 	seen := make(map[string]bool)
 	for _, line := range strings.Split(output, "\n") {
 		trimmed := strings.TrimSpace(line)
-		const marker = "ResourceID:"
+		const marker = "# "
 		if !strings.HasPrefix(trimmed, marker) {
 			continue
 		}
-		id := strings.TrimSpace(strings.TrimPrefix(trimmed, marker))
+		id := strings.TrimPrefix(trimmed, marker)
+		// The description is joined by an em dash; keep only the ID.
+		if dash := strings.Index(id, " — "); dash >= 0 {
+			id = id[:dash]
+		}
+		id = strings.TrimSpace(id)
 		if id == "" || seen[id] {
 			continue
 		}
@@ -310,6 +306,29 @@ func favoriteRules(rules []OptimizationRule) []OptimizationRule {
 }
 
 // toolStringArg reads a string argument from a decoded tool-input map.
+func toolStringListArg(input map[string]any, key string) []string {
+	if input == nil {
+		return nil
+	}
+	switch v := input[key].(type) {
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	case string:
+		// The tool tolerates a bare string, so a transcript can contain one.
+		if v != "" {
+			return []string{v}
+		}
+	}
+	return nil
+}
+
+// toolStringArg reads a single string argument from a recorded tool call.
 func toolStringArg(input map[string]any, key string) string {
 	if input == nil {
 		return ""

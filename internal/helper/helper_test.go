@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"aracne/internal/topogrep"
 	"aracne/internal/topology/domain"
 )
 
@@ -1009,4 +1010,77 @@ func containsStrInner(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+func TestGrepDescriptionKindsDefaultWhenKeyAbsent(t *testing.T) {
+	// An existing config predating the key must pick up the defaults rather than
+	// silently losing description search.
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"scan":{"mode":"default"}}`), 0644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+	cfg, ok := LoadConfigStrict(path)
+	if !ok {
+		t.Fatal("config should parse cleanly")
+	}
+	if len(cfg.Grep.DescriptionKinds) != len(DefaultGrepDescriptionKinds()) {
+		t.Fatalf("Grep.DescriptionKinds = %v, want defaults", cfg.Grep.DescriptionKinds)
+	}
+	if len(DefaultConfig().Grep.DescriptionKinds) == 0 {
+		t.Fatal("DefaultConfig must ship the grep description kinds")
+	}
+}
+
+func TestGrepDescriptionKindsEmptyListDisablesAndSurvivesNormalization(t *testing.T) {
+	// [] is a deliberate "never match on a description". Back-filling it into the
+	// defaults, the way an empty Descriptions.Kinds is treated, would make the
+	// setting impossible to express.
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"scan":{"mode":"default"},"grep":{"description_kinds":[]}}`), 0644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+	cfg, ok := LoadConfigStrict(path)
+	if !ok {
+		t.Fatal("config should parse cleanly")
+	}
+	if cfg.Grep.DescriptionKinds == nil {
+		t.Fatal("an explicit [] must stay non-nil, or it reads as unset")
+	}
+	if len(cfg.Grep.DescriptionKinds) != 0 {
+		t.Fatalf("Grep.DescriptionKinds = %v, want empty", cfg.Grep.DescriptionKinds)
+	}
+}
+
+func TestGrepDescriptionKindsAreNormalized(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"scan":{"mode":"default"},"grep":{"description_kinds":["functions","named-type"]}}`), 0644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+	cfg, ok := LoadConfigStrict(path)
+	if !ok {
+		t.Fatal("config should parse cleanly")
+	}
+	want := []domain.ResourceKind{domain.ResourceFunction, domain.ResourceNamedType}
+	if len(cfg.Grep.DescriptionKinds) != len(want) {
+		t.Fatalf("Grep.DescriptionKinds = %v, want %v", cfg.Grep.DescriptionKinds, want)
+	}
+	for i := range want {
+		if cfg.Grep.DescriptionKinds[i] != want[i] {
+			t.Fatalf("Grep.DescriptionKinds = %v, want %v", cfg.Grep.DescriptionKinds, want)
+		}
+	}
+}
+
+// topogrep restates this default so it stays free of the config package; the two
+// must not drift.
+func TestDefaultDescriptionKindsMatchConfig(t *testing.T) {
+	cfg, lib := DefaultGrepDescriptionKinds(), topogrep.DefaultDescriptionKinds()
+	if len(cfg) != len(lib) {
+		t.Fatalf("helper=%v topogrep=%v", cfg, lib)
+	}
+	for i := range cfg {
+		if cfg[i] != lib[i] {
+			t.Fatalf("helper=%v topogrep=%v", cfg, lib)
+		}
+	}
 }

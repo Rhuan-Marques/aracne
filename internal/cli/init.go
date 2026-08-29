@@ -487,9 +487,25 @@ func writeMarkdownFile(path, label, content string, autoYes bool) {
 }
 
 const (
-	AracIntegrationStart = "# Aracne Project Integration"
-	AracIntegrationEnd   = "Good Luck in your task."
+	// AracIntegrationStart is the heading that opens the generated block, and the marker used
+	// to find that block again so a re-run REPLACES it instead of appending a second copy.
+	// It must track the heading prompts.introductionSection actually emits.
+	AracIntegrationStart = "# Aracne"
+	// AracIntegrationLegacyStart is the heading earlier versions wrote. It is still matched so
+	// upgrading a project rewrites its existing block rather than stacking a new one under it,
+	// and so `arac disable` can still remove a block written by an older binary.
+	AracIntegrationLegacyStart = "# Aracne Project Integration"
+	AracIntegrationEnd         = "Good Luck in your task."
 )
+
+// findAracIntegrationStart locates the generated block's opening heading, current or legacy,
+// returning -1 when the file has no aracne block.
+func findAracIntegrationStart(content string) int {
+	if i := findMarkdownLine(content, AracIntegrationStart, 0); i >= 0 {
+		return i
+	}
+	return findMarkdownLine(content, AracIntegrationLegacyStart, 0)
+}
 
 // Updates or creates a markdown file by merging a new segment into an existing integration section.
 func writeMarkdownIntegrationFile(path, label, segment string) {
@@ -528,7 +544,7 @@ func updateMarkdownIntegrationSegment(existing, segment string) string {
 		return segment
 	}
 
-	start := findMarkdownLine(existing, AracIntegrationStart, 0)
+	start := findAracIntegrationStart(existing)
 	if start >= 0 {
 		end := findMarkdownLine(existing, AracIntegrationEnd, start)
 		if end >= 0 {

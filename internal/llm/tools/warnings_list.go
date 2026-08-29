@@ -27,15 +27,15 @@ func (w *WarningsList) Name() string {
 
 // Returns the description of the warnings_list tool explaining its purpose and supported filters.
 func (w *WarningsList) Description() string {
-	return "List outstanding topology warnings: missing references, removed resources, changed signatures. Filter by source_id, target_id or kind."
+	return "List outstanding topology warnings: missing references, removed resources, changed signatures."
 }
 
 // Returns optional filter parameters for warnings_list: source_id, target_id, and kind.
 func (w *WarningsList) Parameters() []Parameter {
 	return []Parameter{
-		{Name: "source_id", Type: "string", Description: "Filter warnings by source resource ID", Required: false},
-		{Name: "target_id", Type: "string", Description: "Filter warnings by target resource ID", Required: false},
-		{Name: "kind", Type: "string", Description: "Filter by warning kind: use_missing_node, node_removed, signature_changed", Required: false},
+		{Name: "source_id", Type: "string", Description: "Filter by source resource ID", Required: false},
+		{Name: "target_id", Type: "string", Description: "Filter by target resource ID", Required: false},
+		{Name: "kind", Type: "string", Description: "Kind: use_missing_node | node_removed | signature_changed", Required: false},
 	}
 }
 

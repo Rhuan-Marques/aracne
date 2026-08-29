@@ -27,24 +27,25 @@ func (g *Grep) Name() string {
 
 // Returns the tool description for grep.
 func (g *Grep) Description() string {
-	return "Search file contents with a regular expression. Returns `path:line:match`, " +
-		"with the enclosing topology resource named once above its matches. Narrow with " +
-		"`glob`/`type`/`path` and use `output_mode` to get just filenames or counts; " +
-		"results are capped, and the reply says how many were withheld."
+	return "Regex search over topology node names, node descriptions and file contents, " +
+		"ranked in that order. Descriptions are searchable only here, so plain English " +
+		"finds a node whose code never says it. Returns `path:line:match`, naming the " +
+		"enclosing node above its matches -- which often answers the question with no " +
+		"follow-up read. Results are capped; the reply says what was withheld."
 }
 
 // Returns parameter definitions for the grep tool.
 func (g *Grep) Parameters() []Parameter {
 	return []Parameter{
-		{Name: "pattern", Type: "string", Description: "Regular expression pattern to search for", Required: true},
+		{Name: "pattern", Type: "string", Description: "Regex to match", Required: true},
 		{Name: "path", Type: "string", Description: "File or directory to search (default '.')", Required: false},
-		{Name: "glob", Type: "string", Description: "Filename glob to restrict the search, e.g. '*.go' or '**/*_test.ts'", Required: false},
-		{Name: "type", Type: "string", Description: "Language shorthand to restrict the search: go, py, js, ts, rust, java, c, cpp, md, json, yaml, toml, sh", Required: false},
+		{Name: "glob", Type: "string", Description: "Filename glob, e.g. '*.go', '**/*_test.ts'", Required: false},
+		{Name: "type", Type: "string", Description: "Language filter: go, py, js, ts, rust, java, c, cpp, md, json, yaml, toml, sh", Required: false},
 		{Name: "case_insensitive", Type: "boolean", Description: "Match case-insensitively", Required: false},
-		{Name: "output_mode", Type: "string", Description: "'content' (default, matching lines), 'files_with_matches' (paths only), or 'count' (per-file counts)", Required: false},
-		{Name: "head_limit", Type: "integer", Description: "Maximum matching lines to return (default 200). Use -1 for no limit.", Required: false},
-		{Name: "before", Type: "integer", Description: "Lines of context to show before each match", Required: false},
-		{Name: "after", Type: "integer", Description: "Lines of context to show after each match", Required: false},
+		{Name: "output_mode", Type: "string", Description: "'content' (default) | 'files_with_matches' | 'count'", Required: false},
+		{Name: "head_limit", Type: "integer", Description: "Max matching lines (default 200; -1 = unlimited)", Required: false},
+		{Name: "before", Type: "integer", Description: "Context lines before each match", Required: false},
+		{Name: "after", Type: "integer", Description: "Context lines after each match", Required: false},
 	}
 }
 
@@ -81,8 +82,8 @@ func (g *Grep) Run(args json.RawMessage) (string, error) {
 		Mode:       topogrep.OutputMode(params.OutputMode),
 		Before:     params.Before,
 		After:      params.After,
-		Ignore:     grepIgnore(g.mgr, topo),
 	}
+	opt.Ignore, opt.DescriptionKinds = grepConfig(g.mgr, topo)
 	if params.HeadLimit != nil {
 		opt.HeadLimit = *params.HeadLimit
 	}
@@ -96,20 +97,25 @@ func (g *Grep) Run(args json.RawMessage) (string, error) {
 	return topogrep.FormatResult(res, opt), nil
 }
 
-// grepIgnore builds the project's scan.ignore matcher so search honours the same
-// exclusions as the scanner. Without it a search descends into build output the project
-// has explicitly told aracne to skip.
-func grepIgnore(mgr *topology.TopologyManager, topo *domain.Topology) *domain.IgnoreMatcher {
+// grepConfig reads the project settings the search honours, in one config load: the
+// scan.ignore matcher, so a search does not descend into build output the project has
+// explicitly told aracne to skip, and grep.description_kinds, which limits the kinds
+// whose description may match.
+//
+// A nil kind slice means "not configured" and lets topogrep apply its defaults, so a
+// missing or unreadable config still gets description matching rather than silently
+// losing it.
+func grepConfig(mgr *topology.TopologyManager, topo *domain.Topology) (*domain.IgnoreMatcher, []domain.ResourceKind) {
+	cfg := helper.LoadConfig(helper.ConfigPath(mgr.DbPath()))
+	if cfg == nil {
+		return nil, nil
+	}
 	root := ""
 	if topo != nil {
 		root = topo.Root
 	}
 	if root == "" {
-		return nil
+		return nil, cfg.Grep.DescriptionKinds
 	}
-	cfg := helper.LoadConfig(helper.ConfigPath(mgr.DbPath()))
-	if cfg == nil {
-		return nil
-	}
-	return domain.BuildIgnoreMatcher(root, cfg.Scan.Ignore)
+	return domain.BuildIgnoreMatcher(root, cfg.Scan.Ignore), cfg.Grep.DescriptionKinds
 }

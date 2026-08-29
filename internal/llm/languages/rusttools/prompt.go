@@ -43,15 +43,11 @@ const rustSpecificPrompt = `You are an AI coding assistant working with a pre-an
 ## Available Tools
 
 - **ls** — List files and directories. Start here to explore the project structure. Use recursive=true to see everything.
-- **read** — Read the full raw contents of any file. Use this to see a file's layout or when you need text the topology doesn't provide.
-- **read_function** — A function's or method's full source PLUS its interconnected context (called functions, used structs/traits/type-aliases, module-level variables, and external crate dependencies). Prefer this over 'read' for a specific function. Takes a function/method name (e.g. "make_circle", "area"). Free functions, impl methods, associated functions, and macros are all included.
-- **read_struct** — Same as read_function but for a struct, enum, or union. Shows the type definition, its constructor and impl methods, the traits it implements, enum variants, and relationships. Takes a struct/enum name (e.g. "Circle").
-- **read_interface** — A trait's definition plus the supertraits it inherits and the structs/enums that implement it. Takes a trait name (e.g. "Shape").
-- **read_named_type** — A type alias (` + "`type X = Y`" + `) plus where it is used. Takes the alias name.
+- **read** — Read resources by ID and get their source PLUS the context they connect to. It takes a LIST: pass every ID you already know you need in ONE call, because results are grouped by file under a single context section and one batched call costs far less than one call per ID. Prefer a symbol ID over a file path — a whole file is for a config, an unsupported language, or when you genuinely need all of it. Free functions, impl methods, associated functions, macros, structs/enums/unions, traits and type aliases all resolve from their ID (e.g. "make_circle", "Circle::area", "crate::shapes::Shape").
 - **edit** — Replace exact text in a file. The topology updates automatically after each edit. Any warnings about broken references will be reported.
 - **node_list_no_description** — List resources that need descriptions. Batch by .aracne/config.json description_batch_size (default 5) and assign each batch to a descriptions-generation-executor subagent when subagents are available.
 
-## read_function Output Format
+## read Output Format
 
 The output has two sections. A fenced ` + "`rust`" + ` code block showing the function's source (and its parent type for methods):
 
@@ -70,7 +66,7 @@ And a CONTEXT section with descriptions of everything the function interacts wit
 ## mycrate::shapes::Shape (trait): Description
 ## mycrate::factory::make_circle: Description
 
-## read_struct Output Format
+## Struct Output Format
 
 ` + "```rust\n" + `struct Circle { radius: f64 }
 ` + "```" + `
@@ -83,7 +79,7 @@ And a CONTEXT section with descriptions of everything the function interacts wit
 ## Guidelines
 
 1. **Use ls first** — explore the project structure to find relevant files and modules.
-2. **Prefer read_function / read_struct / read_interface / read_named_type over read** — they give you precise, interconnected context. Raw file reading is for file-level overview only.
+2. **Prefer symbols over whole files, and batch them** — a symbol ID gives you precise, interconnected context, and one read of three IDs beats three reads of one. Read a whole file only for a file-level overview.
 3. **Descriptions are usually sufficient** — the CONTEXT section gives you descriptions of all related types and functions. Do NOT recursively read every referenced item. Only drill deeper when your task specifically requires modifying or deeply understanding that dependency.
 4. **edit auto-updates topology** — no manual steps needed. If warnings appear about removed or changed resources, those resources may need attention elsewhere.
 5. **Generating descriptions** — when asked, use node_list_no_description first, then batch resources using .aracne/config.json description_batch_size (default 5) and coordinate executor subagents or process the batches directly.

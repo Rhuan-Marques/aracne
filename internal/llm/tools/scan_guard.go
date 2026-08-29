@@ -12,15 +12,11 @@ import (
 // be preceded by a topology scan when read.scan is enabled. Other tools (edit,
 // write, bug_*, description maintenance, etc.) are never wrapped.
 var readScanToolNames = map[string]bool{
-	"read":            true,
-	"read_function":   true,
-	"read_struct":     true,
-	"read_interface":  true,
-	"read_named_type": true,
-	"read_file":       true,
-	"read_package":    true,
-	"read_dependency": true,
-	"grep":            true,
+	// Both runtime names of the single read tool: it answers to "read_resource" when the
+	// harness kept its own read. See toolspec.ResolveReadToolName.
+	"read":          true,
+	"read_resource": true,
+	"grep":          true,
 }
 
 // isReadOrGrepTool reports whether name is a read/grep tool eligible for a

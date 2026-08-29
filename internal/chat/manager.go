@@ -1121,7 +1121,11 @@ func toToolDefinitions(toolList []tools.Tool) []llm.ToolDefinition {
 	for _, tool := range toolList {
 		params := llm.Parameters{Type: "object", Properties: make(map[string]llm.Property)}
 		for _, param := range tool.Parameters() {
-			params.Properties[param.Name] = llm.Property{Type: param.Type, Description: param.Description}
+			prop := llm.Property{Type: param.Type, Description: param.Description}
+			if param.Items != "" {
+				prop.Items = &llm.ItemSpec{Type: param.Items}
+			}
+			params.Properties[param.Name] = prop
 			if param.Required {
 				params.Required = append(params.Required, param.Name)
 			}

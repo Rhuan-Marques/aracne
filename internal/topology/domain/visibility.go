@@ -40,6 +40,11 @@ func (v Visibility) Max(other Visibility) Visibility {
 	return v
 }
 
+// DefaultMaxInlineParentLines is the default ceiling for inlining a method's enclosing type.
+// Big enough for an ordinary Go struct or a small class, small enough that a 500-line Python
+// class never rides along with one of its methods.
+const DefaultMaxInlineParentLines = 40
+
 // ContextFilter is the resolved read.context_filter configuration. It decides,
 // per neighbor, whether it is hidden, rendered normally, or rendered in full.
 type ContextFilter struct {
@@ -57,15 +62,40 @@ type ContextFilter struct {
 	// HideNoDescription hides resources that would render Normal but have no
 	// description. Full resources are exempt (they show code, not a description).
 	HideNoDescription bool
+	// MaxInlineParentLines is the line-count ceiling for inlining a method's enclosing
+	// type above the method body.
+	//
+	// Reading a method has always shown its receiver so the code makes sense on its own. For
+	// Go and Rust that is a short type declaration. For Python, JS and Java the "class cut"
+	// is the ENTIRE class, so reading one method of a large class returned the whole class --
+	// often the whole file. Past this ceiling the parent drops to an ordinary Normal
+	// neighbour: named, described, and readable by ID if the model actually wants it.
+	// 0 disables inlining entirely; a negative value means no ceiling.
+	MaxInlineParentLines int
+}
+
+// InlineParent reports whether an enclosing type spanning lineCount lines is small enough to
+// print above the member being read.
+func (f ContextFilter) InlineParent(lineCount int) bool {
+	if f.MaxInlineParentLines < 0 {
+		return true
+	}
+	if lineCount <= 0 {
+		// An unknown span is the pre-existing behaviour's benefit of the doubt: a cut we
+		// cannot measure is almost always a short one-line declaration.
+		return f.MaxInlineParentLines != 0
+	}
+	return lineCount <= f.MaxInlineParentLines
 }
 
 // DefaultContextFilter returns the all-Normal filter (current behavior): no
 // hiding, no full cuts, no incoming section.
 func DefaultContextFilter() ContextFilter {
 	return ContextFilter{
-		ExtVarsVisibility: VisibilityNormal,
-		SmallFnVisibility: VisibilityNormal,
-		SmallFnThreshold:  5,
+		ExtVarsVisibility:    VisibilityNormal,
+		SmallFnVisibility:    VisibilityNormal,
+		SmallFnThreshold:     5,
+		MaxInlineParentLines: DefaultMaxInlineParentLines,
 	}
 }
 

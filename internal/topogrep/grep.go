@@ -14,6 +14,14 @@
 //
 //   - Never return unbounded output. Every result is capped and says so.
 //   - Pay for topology annotation ONCE per resource, not once per matching line.
+//
+// The search itself spans three tiers, in priority order: a node whose TITLE matches,
+// a node whose stored DESCRIPTION matches, then a matching LINE. The description tier
+// is the one a plain grep cannot reach at all -- that prose lives only in the topology
+// DB -- so `retry` finds a function documented as "retries on 5xx" whose code never
+// says "retry". A node is reported once, never twice: a title match outranks a
+// description match, and a node whose body already produced a line hit is promoted to
+// its tier rather than given a second row of its own.
 package topogrep
 
 import (
@@ -72,6 +80,38 @@ const AnnotateOverheadBudget = 0.25
 // matter; above it, annotation has to justify itself proportionally.
 const AnnotateFreeBytes = 4096
 
+// MatchSource says why a row is in the result, and its values are ordered by
+// priority: a node named after the query outranks one merely described by it,
+// which outranks a raw line hit. Ranking is therefore one extra sort key.
+type MatchSource int
+
+const (
+	// MatchTitle: the node's ID or Name matched the pattern.
+	MatchTitle MatchSource = iota
+	// MatchDescription: the node's stored description matched. Descriptions live
+	// only in the topology DB, so this is the one tier a plain grep cannot reach.
+	MatchDescription
+	// MatchContent: a source line matched. The default.
+	MatchContent
+)
+
+// NodeHitBudget caps node rows -- rows that exist only because a title or a
+// description matched -- at a fraction of the head limit, per tier.
+//
+// Prose is long and common words match a lot of it. Without a budget, one
+// ordinary query ("value", "the") would fill the entire head limit with node
+// rows and push out every line hit the caller actually grepped for, which is the
+// opposite of ranking. Promoted line matches are NOT capped by this: those are
+// real hits that would have been returned anyway.
+const NodeHitBudget = 0.25
+
+// MinNodeHits floors the budget so a small head_limit still shows some node
+// rows; MaxNodeHits applies when the head limit is unlimited.
+const (
+	MinNodeHits = 5
+	MaxNodeHits = 50
+)
+
 // maxLineBytes is the per-line ceiling. The previous 64 KB default silently dropped every
 // match already found in a file the moment one long line appeared (minified JS, generated
 // tables, vendored bundles) — see searchFile.
@@ -86,6 +126,14 @@ type Match struct {
 	Description string   `json:"description,omitempty"`
 	Before      []string `json:"before,omitempty"`
 	After       []string `json:"after,omitempty"`
+	// MatchedOn is why this row ranked where it did. It is a property of the
+	// enclosing resource, so every row of one resource shares it -- which is what
+	// keeps a resource's matches contiguous after the tiered sort.
+	MatchedOn MatchSource `json:"matched_on"`
+	// NodeHit marks a row that is the node's declaration line rather than a
+	// matching line: the node surfaced because its title or description matched
+	// and its body contained no hit at all.
+	NodeHit bool `json:"node_hit,omitempty"`
 }
 
 // Options configures one search.
@@ -102,6 +150,11 @@ type Options struct {
 	// Ignore applies the project's scan.ignore rules. Build it with
 	// domain.BuildIgnoreMatcher(root, cfg.Scan.Ignore); nil disables the check.
 	Ignore *domain.IgnoreMatcher
+	// DescriptionKinds limits which resource kinds may match on their stored
+	// description. nil means the caller did not choose and gets
+	// DefaultDescriptionKinds(); an explicit empty slice disables description
+	// matching entirely. Titles are never gated -- a name match is precise.
+	DescriptionKinds []domain.ResourceKind
 }
 
 // Result carries the hits plus enough accounting to tell the caller what it did not see.
@@ -117,9 +170,15 @@ type Result struct {
 	Truncated bool
 	// Limit is the limit actually applied (for rendering the trailer).
 	Limit int
-	// DistinctResources counts the distinct resources among the rendered matches; it
-	// decides whether annotation is worth its bytes (see AnnotateLimit).
+	// DistinctResources counts the distinct resources among the rendered LINE
+	// matches; it decides whether annotation is worth its bytes (see
+	// AnnotateLimit). Node rows are excluded: they are always annotated, because
+	// for them the header is the answer.
 	DistinctResources int
+	// TitleWithheld and DescriptionWithheld count the node rows dropped by the
+	// per-tier budget, so the trailer can say what was not shown.
+	TitleWithheld       int
+	DescriptionWithheld int
 }
 
 type resourceLocation struct {
@@ -164,32 +223,47 @@ func SearchWith(opt Options, topo *domain.Topology) (*Result, error) {
 	}
 
 	index := buildResourceIndex(topo)
+	tiers := matchNodes(re, topo, descriptionKindSet(opt.DescriptionKinds))
 	out := &Result{Counts: map[string]int{}, Limit: effectiveLimit(opt)}
 
+	var all []Match
 	if err := walkSearch(opt, exts, func(path string) error {
-		fileMatches, err := searchFile(path, re, index, opt)
+		fileMatches, err := searchFile(path, re, index, tiers, opt)
 		if err != nil {
 			return err
 		}
-		if len(fileMatches) == 0 {
-			return nil
-		}
-		display := fileMatches[0].Path
-		out.Files = append(out.Files, display)
-		out.Counts[display] = len(fileMatches)
-		out.Total += len(fileMatches)
-		out.Matches = append(out.Matches, fileMatches...)
+		all = append(all, fileMatches...)
 		return nil
 	}); err != nil {
 		return nil, err
 	}
 
-	sort.Slice(out.Matches, func(i, j int) bool {
-		if out.Matches[i].Path != out.Matches[j].Path {
-			return out.Matches[i].Path < out.Matches[j].Path
+	// Priority first, then the familiar path/line order within a tier. Tier is a
+	// property of the resource, so one resource's rows never straddle two tiers and
+	// FormatResult's one-header-per-run grouping still holds.
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].MatchedOn != all[j].MatchedOn {
+			return all[i].MatchedOn < all[j].MatchedOn
 		}
-		return out.Matches[i].Line < out.Matches[j].Line
+		if all[i].Path != all[j].Path {
+			return all[i].Path < all[j].Path
+		}
+		return all[i].Line < all[j].Line
 	})
+
+	all, out.TitleWithheld, out.DescriptionWithheld = capNodeHits(all, out.Limit)
+
+	// Accounting sits AFTER the node-hit budget, so Files and Counts describe rows the
+	// caller can actually get, and BEFORE the head limit, so they stay the honest
+	// pre-truncation numbers the trailer reports against.
+	out.Matches = all
+	out.Total = len(all)
+	for _, m := range all {
+		out.Counts[m.Path]++
+	}
+	for path := range out.Counts {
+		out.Files = append(out.Files, path)
+	}
 	sort.Strings(out.Files)
 
 	// Cap only what is rendered; Total and Counts keep the honest numbers so the trailer
@@ -200,12 +274,102 @@ func SearchWith(opt Options, topo *domain.Topology) (*Result, error) {
 	}
 	distinct := map[string]bool{}
 	for _, m := range out.Matches {
-		if m.ResourceID != "" {
+		if m.ResourceID != "" && !m.NodeHit {
 			distinct[m.ResourceID] = true
 		}
 	}
 	out.DistinctResources = len(distinct)
 	return out, nil
+}
+
+// DefaultDescriptionKinds is the set of resource kinds whose description may match
+// when the caller does not choose. It mirrors helper.DefaultGrepDescriptionKinds;
+// topogrep deliberately does not import the config package, so the default is
+// restated here and the two are kept in step by TestDefaultDescriptionKindsMatchConfig.
+func DefaultDescriptionKinds() []domain.ResourceKind {
+	return []domain.ResourceKind{
+		domain.ResourceFunction,
+		domain.ResourceMethod,
+		domain.ResourceStruct,
+		domain.ResourceInterface,
+	}
+}
+
+// descriptionKindSet resolves Options.DescriptionKinds. nil means "the caller did not
+// choose" and gets the defaults; an explicit empty slice means "never match on a
+// description" and must not be back-filled into the defaults.
+func descriptionKindSet(kinds []domain.ResourceKind) map[domain.ResourceKind]bool {
+	if kinds == nil {
+		kinds = DefaultDescriptionKinds()
+	}
+	if len(kinds) == 0 {
+		return nil
+	}
+	set := make(map[domain.ResourceKind]bool, len(kinds))
+	for _, kind := range kinds {
+		set[kind] = true
+	}
+	return set
+}
+
+// matchNodes decides once, for the whole topology, which nodes the pattern matches on
+// their title or on their stored description.
+//
+// This is the half of the search a plain grep cannot do: a description exists only in
+// the topology DB, so `retry` can find a function documented as "retries on 5xx" whose
+// code never says "retry". Title wins over description, so a node is never reported
+// twice for the same query.
+func matchNodes(re *regexp.Regexp, topo *domain.Topology, kinds map[domain.ResourceKind]bool) map[string]MatchSource {
+	if topo == nil || len(topo.Resources) == 0 {
+		return nil
+	}
+	tiers := make(map[string]MatchSource)
+	for id, res := range topo.Resources {
+		switch {
+		case re.MatchString(res.Name) || re.MatchString(id):
+			tiers[id] = MatchTitle
+		case res.Description != "" && kinds[res.Kind] && re.MatchString(res.Description):
+			tiers[id] = MatchDescription
+		}
+	}
+	if len(tiers) == 0 {
+		return nil
+	}
+	return tiers
+}
+
+// capNodeHits bounds the rows that exist only because a node's title or description
+// matched, per tier, and reports how many it dropped. See NodeHitBudget for why.
+func capNodeHits(matches []Match, limit int) ([]Match, int, int) {
+	budget := nodeHitBudget(limit)
+	kept := matches[:0]
+	shown := map[MatchSource]int{}
+	titleWithheld, descriptionWithheld := 0, 0
+	for _, m := range matches {
+		if m.NodeHit {
+			shown[m.MatchedOn]++
+			if shown[m.MatchedOn] > budget {
+				if m.MatchedOn == MatchTitle {
+					titleWithheld++
+				} else {
+					descriptionWithheld++
+				}
+				continue
+			}
+		}
+		kept = append(kept, m)
+	}
+	return kept, titleWithheld, descriptionWithheld
+}
+
+func nodeHitBudget(limit int) int {
+	if limit <= 0 {
+		return MaxNodeHits
+	}
+	if budget := int(float64(limit) * NodeHitBudget); budget > MinNodeHits {
+		return budget
+	}
+	return MinNodeHits
 }
 
 func effectiveLimit(opt Options) int {
@@ -225,7 +389,7 @@ func effectiveLimit(opt Options) int {
 func Format(matches []Match) string {
 	distinct := map[string]bool{}
 	for _, m := range matches {
-		if m.ResourceID != "" {
+		if m.ResourceID != "" && !m.NodeHit {
 			distinct[m.ResourceID] = true
 		}
 	}
@@ -283,8 +447,10 @@ func FormatResult(res *Result, opt Options) string {
 		if i > 0 {
 			b.WriteByte('\n')
 		}
-		// One header per resource run, not per line.
-		if annotate && m.ResourceID != "" && m.ResourceID != lastResource {
+		// One header per resource run, not per line. A node row is annotated whatever
+		// the gate says: it is in the result BECAUSE of its title or description, so
+		// without the header it renders as an unexplained declaration line.
+		if (annotate || m.NodeHit) && m.ResourceID != "" && m.ResourceID != lastResource {
 			b.WriteString("# ")
 			b.WriteString(m.ResourceID)
 			if m.Description != "" {
@@ -307,6 +473,10 @@ func FormatResult(res *Result, opt Options) string {
 			"omitted. Narrow with glob/type/path (or use output_mode=files_with_matches) "+
 			"to get resource IDs and descriptions back.", res.DistinctResources)
 	}
+	if withheld := res.TitleWithheld + res.DescriptionWithheld; withheld > 0 {
+		fmt.Fprintf(&b, "\n… %d more node(s) matched on name or description but were not "+
+			"shown. Narrow the pattern, or raise head_limit.", withheld)
+	}
 	if res.Truncated {
 		fmt.Fprintf(&b, "\n… %d more match(es) not shown (showing %d of %d). "+
 			"Narrow with glob/type/path, or raise head_limit.",
@@ -321,6 +491,11 @@ func annotationFits(matches []Match) bool {
 	content, header := 0, 0
 	seen := map[string]bool{}
 	for _, m := range matches {
+		// Node rows are annotated unconditionally, so they neither earn nor owe
+		// anything in the budget that decides annotation for the line matches.
+		if m.NodeHit {
+			continue
+		}
 		content += len(m.Path) + len(m.Text) + 8 // + "path:line:"
 		if m.ResourceID == "" || seen[m.ResourceID] {
 			continue
@@ -477,7 +652,7 @@ func typeExtensions(t string) (map[string]bool, error) {
 // previous `return nil, nil` meant one over-long line (a minified bundle, a generated
 // table) silently erased every hit in that file — a search that looked successful and
 // simply lied.
-func searchFile(path string, re *regexp.Regexp, index map[string][]resourceLocation, opt Options) ([]Match, error) {
+func searchFile(path string, re *regexp.Regexp, index map[string][]resourceLocation, tiers map[string]MatchSource, opt Options) ([]Match, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, nil
@@ -487,6 +662,14 @@ func searchFile(path string, re *regexp.Regexp, index map[string][]resourceLocat
 	canonical := canonicalPath(path)
 	resources := index[canonical]
 	display := displayPath(path)
+
+	// Declaration lines to capture for nodes this file owns whose title or description
+	// matched. Reading them here is free -- the scan is already walking every line --
+	// and it means a node row can never escape the glob/type/path/ignore filters the
+	// caller asked for, because it is only produced for a file the walk visited.
+	wanted := declarationLines(resources, tiers)
+	declared := map[int]string{} // index into resources -> declaration line text
+	lineHit := map[string]bool{} // resource id -> the body contained a match
 
 	var matches []Match
 	var ring []string // rolling window of the previous opt.Before lines
@@ -505,11 +688,22 @@ func searchFile(path string, re *regexp.Regexp, index map[string][]resourceLocat
 			pendingAfter--
 		}
 
+		for _, i := range wanted[lineNo] {
+			declared[i] = strings.TrimLeft(line, " \t")
+		}
+
 		if re.MatchString(line) {
-			m := Match{Path: display, Line: lineNo, Text: strings.TrimLeft(line, " \t")}
+			m := Match{Path: display, Line: lineNo, Text: strings.TrimLeft(line, " \t"), MatchedOn: MatchContent}
 			if resource := bestResource(resources, lineNo); resource != nil {
 				m.ResourceID = resource.id
 				m.Description = resource.description
+				// A line inside a node the pattern also named or described is that
+				// node's hit: promote it rather than emitting a second row for the
+				// same node further down.
+				if tier, ok := tiers[resource.id]; ok {
+					m.MatchedOn = tier
+				}
+				lineHit[resource.id] = true
 			}
 			if opt.Before > 0 && len(ring) > 0 {
 				m.Before = append([]string(nil), ring...)
@@ -528,7 +722,55 @@ func searchFile(path string, re *regexp.Regexp, index map[string][]resourceLocat
 	// Deliberately swallow the scanner error: whatever was found before the failure is
 	// real, and returning it beats erasing a whole file's hits because one line was long.
 	_ = scanner.Err()
+
+	// Only now, for nodes the pattern named or described whose body produced nothing:
+	// these are exactly the nodes a content-only grep misses.
+	for i, text := range declared {
+		resource := &resources[i]
+		if lineHit[resource.id] {
+			continue
+		}
+		matches = append(matches, Match{
+			Path:        display,
+			Line:        declarationLine(resource),
+			Text:        text,
+			ResourceID:  resource.id,
+			Description: resource.description,
+			MatchedOn:   tiers[resource.id],
+			NodeHit:     true,
+		})
+	}
 	return matches, nil
+}
+
+// declarationLines maps a line number to the resources whose declaration starts there,
+// for the matched nodes of one file. Nothing is allocated when the file owns no matched
+// node, which is the common case.
+func declarationLines(resources []resourceLocation, tiers map[string]MatchSource) map[int][]int {
+	if len(tiers) == 0 {
+		return nil
+	}
+	var wanted map[int][]int
+	for i := range resources {
+		if _, ok := tiers[resources[i].id]; !ok {
+			continue
+		}
+		if wanted == nil {
+			wanted = map[int][]int{}
+		}
+		line := declarationLine(&resources[i])
+		wanted[line] = append(wanted[line], i)
+	}
+	return wanted
+}
+
+// declarationLine is where a node row points. A resource with no line span (a
+// file-level resource, say) points at the top of its file.
+func declarationLine(resource *resourceLocation) int {
+	if resource.startsAt <= 0 {
+		return 1
+	}
+	return resource.startsAt
 }
 
 // buildResourceIndex maps canonical file path -> resources, narrowest span first.

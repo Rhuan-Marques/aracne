@@ -52,7 +52,7 @@ internal/
   viz/            HTTP server + go:embed'd static SPA (graph + chat) + websocket + context-graph
   prompts/        Generators for CLAUDE.md/AGENTS.md, agent .md files, slash commands, system prompts
   toolspec/       Single source of truth catalog of tool names (MCP vs chat vs blockable-native)
-  topogrep/       Topology-annotated grep (path:line:match + ResourceID + Description)
+  topogrep/       Topology-annotated grep: node name > node description > line match, path:line:match
 tests/            Cross-cutting suites incl. atscale_* topology-consistency (3 scan modes) + per-scanner tests
 testing_ground/   Hand-built multi-language corpus of edge cases (see its README.md)
 ```
@@ -105,9 +105,12 @@ overwritten with defaults). Top-level sections:
 - **`scan`** / **`scanner`** — default mode (`default`/`hard`/`all`) for the
   one-shot `arac scan` and the live scanner; `update_frequency`.
 - **`read`** — `max_file_size`; **`scan`** (`none`/`default`/`full`/`hard` — run a
-  topology scan *before* every read/grep); **`context_filter`** (how verbosely
-  the `# CONTEXT:` block renders neighbors, incoming "USED BY" edges, small-fn
-  threshold, hide-undocumented); **`pipe_passthrough`** (whether the guard
+  topology scan *before* every read/grep); **`kinds`** (project-wide allow-list of
+  resource kinds `read` will return — default `file`, `function`, `struct`,
+  `interface`; also accepts `named_type`, `package`, `dependency`, `variable`);
+  **`context_filter`** (how verbosely the `# CONTEXT:` block renders neighbors,
+  incoming "USED BY" edges, small-fn threshold, hide-undocumented,
+  `max_inline_parent_lines`); **`pipe_passthrough`** (whether the guard
   exempts piped reads like `cmd | tail`).
 - **`descriptions`** — which `kinds` to document + `style_exemplars` count.
 - **`llm`** — per-harness agent config under `<any>` / `opencode` / `claude_code`,
@@ -135,9 +138,12 @@ Single source of truth for tool names referenceable in config. Each `Spec`
 marks whether it's a valid **MCP** tool (`llm.*.mcp_tools`) and/or a **chat**
 tool (`viz.chat.*.tools`). Catalog highlights:
 
-- **Reads** — generic `read` + per-kind `read_function`, `read_struct`,
-  `read_interface`, `read_named_type`, `read_file`, `read_package`,
-  `read_dependency`. `grep` is topology-annotated.
+- **Reads** — a single `read`, taking a LIST of resource IDs and returning their
+  source grouped by file under one `# CONTEXT:` section. It registers as
+  `read_resource` when the harness keeps its own native read, and as `read` when
+  `blocked_tools` denies that. Which kinds it resolves is `read.kinds`, not a
+  per-agent tool list. `grep` is topology-annotated and searches node names and
+  descriptions as well as file contents.
 - **Mutations** — `edit`, `write` (MCP versions sync the topology DB inline).
 - **Topology/maintenance** — `warnings_list`, `update_description`,
   `node_list_no_description`.

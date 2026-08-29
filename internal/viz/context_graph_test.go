@@ -69,11 +69,15 @@ func contextTestIndex(t *testing.T) *graphIndex {
 	return idx
 }
 
-func toolMsg(name, arg string) chat.SessionMessage {
-	m := chat.SessionMessage{Role: "tool", Status: "completed", ToolName: name}
-	if arg != "" {
-		m.ToolInput = map[string]any{"name": arg}
+// readMsg builds a completed `read` call. The tool takes a LIST of ids, so the recorded input
+// is an []any exactly as it round-trips through a session transcript.
+func readMsg(ids ...string) chat.SessionMessage {
+	m := chat.SessionMessage{Role: "tool", Status: "completed", ToolName: "read"}
+	args := make([]any, 0, len(ids))
+	for _, id := range ids {
+		args = append(args, id)
 	}
+	m.ToolInput = map[string]any{"ids": args}
 	return m
 }
 
@@ -86,13 +90,14 @@ func TestDeriveSeenResources(t *testing.T) {
 		SmallFnThreshold:  5,
 	}
 
-	grepOut := "g.go:1:func G() {\n  ResourceID: p.G\n  Description: grep hit\n"
+	// Real topogrep output: one "# <id> — <description>" header above the resource's
+	// matches. The old fixture used a "ResourceID:" prefix grep has never emitted.
+	grepOut := "# p.G — grep hit\ng.go:1:func G() {\n"
 	messages := []chat.SessionMessage{
-		toolMsg("read_function", "p.A"), // A green; B yellow, Sm green, T yellow, NT excluded
-		{Role: "tool", Status: "error", ToolName: "read_struct", ToolInput: map[string]any{"name": "p.T"}}, // ignored
-		{Role: "tool", Status: "completed", ToolName: "grep", ToolOutput: grepOut},                         // G yellow
-		toolMsg("read_function", "p.B"), // B upgraded to green
-		toolMsg("read_file", "c.go"),    // C green
+		readMsg("p.A"), // A green; B yellow, Sm green, T yellow, NT excluded
+		{Role: "tool", Status: "error", ToolName: "read", ToolInput: map[string]any{"ids": []any{"p.T"}}}, // ignored
+		{Role: "tool", Status: "completed", ToolName: "grep", ToolOutput: grepOut},                        // G yellow
+		readMsg("p.B", "c.go"), // one batched call: B upgraded to green, C green
 	}
 
 	seen := deriveSeenResources(idx, filter, messages)
@@ -125,7 +130,7 @@ func TestDeriveSeenResourcesHideNoDescriptionAndNormal(t *testing.T) {
 		SmallFnVisibility: domain.VisibilityNormal,
 		SmallFnThreshold:  5,
 	}
-	seen := deriveSeenResources(idx, filter, []chat.SessionMessage{toolMsg("read_function", "p.A")})
+	seen := deriveSeenResources(idx, filter, []chat.SessionMessage{readMsg("p.A")})
 	if seen["p.A"] != ctxGreen {
 		t.Errorf("primary read should be green, got %q", seen["p.A"])
 	}
@@ -138,10 +143,22 @@ func TestDeriveSeenResourcesHideNoDescriptionAndNormal(t *testing.T) {
 }
 
 func TestParseGrepResourceIDs(t *testing.T) {
-	out := "a.go:1:hit\n  ResourceID: p.A\n  Description: x\nb.go:2:hit\n  ResourceID: p.B\n  ResourceID: p.A\n"
+	// The header topogrep.FormatResult actually emits: "# <id>", optionally followed
+	// by " — <description>", once per resource run. A bare header (no description)
+	// and a repeated resource must both work.
+	out := "# p.A — x\na.go:1:hit\n# p.B\nb.go:2:hit\n# p.A — x\na.go:9:hit\n"
 	got := parseGrepResourceIDs(out)
 	if len(got) != 2 || got[0] != "p.A" || got[1] != "p.B" {
 		t.Fatalf("parseGrepResourceIDs = %v, want [p.A p.B]", got)
+	}
+}
+
+func TestParseGrepResourceIDsIgnoresNonHeaderLines(t *testing.T) {
+	// Match lines are always "path:line:text", so a hit on a shell/Python comment
+	// cannot be mistaken for a header. Trailers start with "…".
+	out := "a.sh:3:# not a header\n… 12 more match(es) not shown (showing 200 of 212).\n"
+	if got := parseGrepResourceIDs(out); len(got) != 0 {
+		t.Fatalf("parseGrepResourceIDs = %v, want none", got)
 	}
 }
 

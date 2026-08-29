@@ -356,3 +356,290 @@ func TestAnnotationIsDroppedWhenTooManyDistinctResources(t *testing.T) {
 		t.Fatal("small result sets must keep their annotation")
 	}
 }
+
+// --------------------------------------------------------------------------- //
+// Node search: titles and descriptions are searchable, ranked above line hits.
+// --------------------------------------------------------------------------- //
+
+// nodeTopo builds a one-file topology from (id, name, kind, description, start, end).
+func nodeTopo(resources ...domain.Resource) *domain.Topology {
+	byID := map[string]domain.Resource{}
+	for _, r := range resources {
+		byID[r.ID] = r
+	}
+	return &domain.Topology{Resources: byID}
+}
+
+func TestDescriptionMatchSurfacesNodeWithNoLineMatch(t *testing.T) {
+	// The whole point: a description lives only in the topology DB, so this node is
+	// unreachable by any content-only grep. Its body never says "retry".
+	dir := t.TempDir()
+	writeTree(t, dir, map[string]string{
+		"client.go": "package http\n\nfunc (c *Client) do() error {\n\treturn c.send()\n}\n",
+	})
+
+	res, err := SearchWith(Options{Pattern: "retries", Root: dir}, nodeTopo(domain.Resource{
+		ID: "http.Client.do", Kind: domain.ResourceMethod, Name: "do",
+		Description: "Sends the request and retries on 5xx with backoff.",
+		Location:    domain.Location{Path: filepath.Join(dir, "client.go"), StartsAt: 3, EndsAt: 5},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Matches) != 1 {
+		t.Fatalf("want 1 node row, got %d: %+v", len(res.Matches), res.Matches)
+	}
+	m := res.Matches[0]
+	if !m.NodeHit || m.MatchedOn != MatchDescription {
+		t.Fatalf("want a description node row, got %+v", m)
+	}
+	if m.Line != 3 || !strings.HasPrefix(m.Text, "func (c *Client) do()") {
+		t.Fatalf("node row must point at the declaration line, got %+v", m)
+	}
+	// The header is the answer here, so it must be rendered.
+	out := FormatResult(res, Options{Mode: OutputContent, Pattern: "retries"})
+	for _, want := range []string{"# http.Client.do", "retries on 5xx", "client.go:3:"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestNodeWithLineMatchGetsNoSecondRow(t *testing.T) {
+	// The line hit already surfaces the node, with its description in the header.
+	// A separate node row would be the same node reported twice.
+	dir := t.TempDir()
+	writeTree(t, dir, map[string]string{
+		"client.go": "package http\n\nfunc do() error {\n\treturn retryOnce()\n}\n",
+	})
+
+	res, err := SearchWith(Options{Pattern: "retr", Root: dir}, nodeTopo(domain.Resource{
+		ID: "http.do", Kind: domain.ResourceFunction, Name: "do",
+		Description: "Sends the request and retries on 5xx.",
+		Location:    domain.Location{Path: filepath.Join(dir, "client.go"), StartsAt: 3, EndsAt: 5},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Matches) != 1 {
+		t.Fatalf("want exactly 1 row (no duplicate), got %d: %+v", len(res.Matches), res.Matches)
+	}
+	m := res.Matches[0]
+	if m.NodeHit {
+		t.Fatalf("a node with a line hit must not also get a node row: %+v", m)
+	}
+	// It is still ranked as a description match: the line is that node's hit.
+	if m.MatchedOn != MatchDescription || m.Line != 4 {
+		t.Fatalf("line hit should be promoted to the node's tier, got %+v", m)
+	}
+}
+
+func TestTitleMatchSuppressesDescriptionMatchForSameNode(t *testing.T) {
+	dir := t.TempDir()
+	writeTree(t, dir, map[string]string{"a.go": "package a\n\nvar x = 1\n"})
+
+	res, err := SearchWith(Options{Pattern: "retry", Root: dir}, nodeTopo(domain.Resource{
+		ID: "a.retry", Kind: domain.ResourceFunction, Name: "retry",
+		Description: "retry helper",
+		Location:    domain.Location{Path: filepath.Join(dir, "a.go"), StartsAt: 3, EndsAt: 3},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Matches) != 1 {
+		t.Fatalf("want 1 row, got %d: %+v", len(res.Matches), res.Matches)
+	}
+	if res.Matches[0].MatchedOn != MatchTitle {
+		t.Fatalf("title must win over description, got %+v", res.Matches[0])
+	}
+}
+
+func TestTiersRankTitleThenDescriptionThenLine(t *testing.T) {
+	dir := t.TempDir()
+	writeTree(t, dir, map[string]string{
+		// Three files so path ordering alone would NOT produce the wanted order:
+		// alphabetically raw < named < described.
+		"named.go":     "package p\n\nfunc needleName() {\n\tnop()\n}\n",
+		"described.go": "package p\n\nfunc other() {\n\tnop()\n}\n",
+		"raw.go":       "package p\n\n// needle in a plain file\n",
+	})
+	res, err := SearchWith(Options{Pattern: "needle", Root: dir}, nodeTopo(
+		domain.Resource{
+			ID: "p.needleName", Kind: domain.ResourceFunction, Name: "needleName",
+			Location: domain.Location{Path: filepath.Join(dir, "named.go"), StartsAt: 3, EndsAt: 5},
+		},
+		domain.Resource{
+			ID: "p.other", Kind: domain.ResourceFunction, Name: "other",
+			Description: "finds the needle",
+			Location:    domain.Location{Path: filepath.Join(dir, "described.go"), StartsAt: 3, EndsAt: 5},
+		},
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []MatchSource
+	var paths []string
+	for _, m := range res.Matches {
+		got = append(got, m.MatchedOn)
+		paths = append(paths, filepath.Base(m.Path))
+	}
+	want := []MatchSource{MatchTitle, MatchDescription, MatchContent}
+	if len(got) != len(want) {
+		t.Fatalf("want %d rows, got %d: %v %v", len(want), len(got), got, paths)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("wrong ranking: got %v (%v), want %v", got, paths, want)
+		}
+	}
+	if paths[0] != "named.go" || paths[1] != "described.go" || paths[2] != "raw.go" {
+		t.Fatalf("ranking must beat path order, got %v", paths)
+	}
+}
+
+func TestDescriptionKindsGateWhichNodesMayMatch(t *testing.T) {
+	dir := t.TempDir()
+	writeTree(t, dir, map[string]string{"a.go": "package a\n\nvar x = 1\n"})
+	topo := nodeTopo(domain.Resource{
+		ID: "a.go", Kind: domain.ResourceFile, Name: "a.go",
+		Description: "holds the needle",
+		Location:    domain.Location{Path: filepath.Join(dir, "a.go"), StartsAt: 1, EndsAt: 3},
+	})
+
+	// Default kinds exclude `file`, whose descriptions are scraped from doc comments.
+	res, err := SearchWith(Options{Pattern: "needle", Root: dir}, topo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Matches) != 0 {
+		t.Fatalf("file kind is not a default description kind: %+v", res.Matches)
+	}
+
+	// Opting the kind in surfaces it.
+	res, err = SearchWith(Options{
+		Pattern: "needle", Root: dir,
+		DescriptionKinds: []domain.ResourceKind{domain.ResourceFile},
+	}, topo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Matches) != 1 || res.Matches[0].MatchedOn != MatchDescription {
+		t.Fatalf("configured kind should match on description: %+v", res.Matches)
+	}
+
+	// An explicit empty list is "never match on description" and must not be
+	// back-filled into the defaults.
+	res, err = SearchWith(Options{
+		Pattern: "needle", Root: dir,
+		DescriptionKinds: []domain.ResourceKind{},
+	}, topo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Matches) != 0 {
+		t.Fatalf("empty kind list must disable description matching: %+v", res.Matches)
+	}
+}
+
+func TestNodeRowsAreSubCappedAndSayHowMany(t *testing.T) {
+	// Prose is long and common words match a lot of it. Without a budget one such
+	// query fills the head limit with node rows and pushes out every line hit.
+	dir := t.TempDir()
+	var body strings.Builder
+	var resources []domain.Resource
+	total := MaxNodeHits + 20
+	for i := 0; i < total; i++ {
+		body.WriteString(fmt.Sprintf("func Fn%d() {}\n", i))
+		resources = append(resources, domain.Resource{
+			ID: fmt.Sprintf("pkg.Fn%d", i), Kind: domain.ResourceFunction,
+			Name:        fmt.Sprintf("Fn%d", i),
+			Description: "handles the widget lifecycle",
+			Location:    domain.Location{Path: filepath.Join(dir, "big.go"), StartsAt: i + 1, EndsAt: i + 1},
+		})
+	}
+	writeTree(t, dir, map[string]string{"big.go": body.String()})
+
+	res, err := SearchWith(Options{Pattern: "widget", Root: dir, HeadLimit: -1},
+		nodeTopo(resources...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Matches) != MaxNodeHits {
+		t.Fatalf("want %d node rows after the cap, got %d", MaxNodeHits, len(res.Matches))
+	}
+	if res.DescriptionWithheld != total-MaxNodeHits {
+		t.Fatalf("want %d withheld, got %d", total-MaxNodeHits, res.DescriptionWithheld)
+	}
+	// Accounting runs after the cap, so Counts describes what the caller can get.
+	if res.Total != MaxNodeHits {
+		t.Fatalf("Total should count the capped set, got %d", res.Total)
+	}
+	out := FormatResult(res, Options{Mode: OutputContent, Pattern: "widget"})
+	if !strings.Contains(out, "more node(s) matched on name or description") {
+		t.Fatalf("the cap must be explained:\n%s", out)
+	}
+}
+
+func TestNodeRowsObeyGlobAndPathScoping(t *testing.T) {
+	// A node row is produced during the walk, so it can never escape the filters the
+	// caller asked for.
+	dir := t.TempDir()
+	writeTree(t, dir, map[string]string{
+		"keep/a.go": "package a\n\nfunc A() {}\n",
+		"skip/b.ts": "export function B() {}\n",
+	})
+	topo := nodeTopo(
+		domain.Resource{
+			ID: "a.A", Kind: domain.ResourceFunction, Name: "A", Description: "the needle",
+			Location: domain.Location{Path: filepath.Join(dir, "keep", "a.go"), StartsAt: 3, EndsAt: 3},
+		},
+		domain.Resource{
+			ID: "b.B", Kind: domain.ResourceFunction, Name: "B", Description: "the needle",
+			Location: domain.Location{Path: filepath.Join(dir, "skip", "b.ts"), StartsAt: 1, EndsAt: 1},
+		},
+	)
+
+	res, err := SearchWith(Options{Pattern: "needle", Root: dir, Type: "go"}, topo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Matches) != 1 || res.Matches[0].ResourceID != "a.A" {
+		t.Fatalf("type filter must scope node rows too: %+v", res.Matches)
+	}
+
+	res, err = SearchWith(Options{Pattern: "needle", Root: filepath.Join(dir, "skip")}, topo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Matches) != 1 || res.Matches[0].ResourceID != "b.B" {
+		t.Fatalf("path scoping must apply to node rows too: %+v", res.Matches)
+	}
+}
+
+func TestNodeRowsSurfaceInFileAndCountModes(t *testing.T) {
+	dir := t.TempDir()
+	writeTree(t, dir, map[string]string{"a.go": "package a\n\nfunc A() {}\n"})
+	res, err := SearchWith(Options{Pattern: "needle", Root: dir, Mode: OutputFiles},
+		nodeTopo(domain.Resource{
+			ID: "a.A", Kind: domain.ResourceFunction, Name: "A", Description: "the needle",
+			Location: domain.Location{Path: filepath.Join(dir, "a.go"), StartsAt: 3, EndsAt: 3},
+		}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Files) != 1 || res.Counts[res.Files[0]] != 1 {
+		t.Fatalf("a description-only hit must still list its file: %+v %+v", res.Files, res.Counts)
+	}
+}
+
+func TestNodeSearchIsANoOpWithoutTopology(t *testing.T) {
+	dir := t.TempDir()
+	writeTree(t, dir, map[string]string{"a.go": "package a\n\nfunc A() {}\n"})
+	res, err := SearchWith(Options{Pattern: "needle", Root: dir}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Matches) != 0 {
+		t.Fatalf("no topology means no node rows: %+v", res.Matches)
+	}
+}

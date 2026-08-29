@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"aracne/internal/toolspec"
@@ -74,9 +75,18 @@ const (
 
 // Configuration for file read operations, including max file size, scan mode, context filtering, and shell command passthrough behavior.
 type ReadSection struct {
-	MaxFileSize   int64                `json:"max_file_size"`
-	Scan          ReadScanMode         `json:"scan"`
-	ContextFilter ContextFilterSection `json:"context_filter"`
+	MaxFileSize int64        `json:"max_file_size"`
+	Scan        ReadScanMode `json:"scan"`
+	// Kinds is the global allow-list of resource kinds the `read` tool will return.
+	//
+	// This replaced the per-agent read_function/read_struct/read_interface/... tool lists.
+	// Which KINDS are readable is a property of the project, not of an agent, and splitting
+	// one capability across eight tool names made models pick the wrong one. An ID that
+	// resolves to a kind absent from this list returns an error naming the allowed kinds.
+	// Absent (null) means the default set; an explicit [] would make read useless and is
+	// rejected by Validate.
+	Kinds         []domain.ResourceKind `json:"kinds"`
+	ContextFilter ContextFilterSection  `json:"context_filter"`
 	// PipePassthrough exempts read/grep shell commands that consume piped
 	// stdin (e.g. `cmd | tail`) from the tool guard: such commands operate on
 	// command output, which the aracne MCP tools cannot serve. Direct file
@@ -94,6 +104,10 @@ type ContextFilterSection struct {
 	SmallFunctionsVisibility string `json:"small_functions_visibility"`
 	SmallFunctionThreshold   int    `json:"small_function_threshold"`
 	HideNoDescription        bool   `json:"hide_no_description"`
+	// MaxInlineParentLines caps how large a method's enclosing type may be before it stops
+	// being printed above the method and becomes an ordinary context entry. 0 disables
+	// inlining, negative means no cap. Absent uses the default.
+	MaxInlineParentLines *int `json:"max_inline_parent_lines,omitempty"`
 }
 
 // Configuration for the live/incremental scanner, including default scan mode and update frequency.
@@ -113,6 +127,20 @@ type DescriptionsSection struct {
 	// read context filter would not render as a normal line (small functions /
 	// external vars configured full or hidden).
 	IncludeNotVisible bool `json:"include_not_visible,omitempty"`
+}
+
+// GrepSection tunes `grep` / `arac grep`.
+type GrepSection struct {
+	// DescriptionKinds lists the resource kinds whose stored description may
+	// match the search pattern. A node found this way is returned even when its
+	// source contains no matching line, which is the whole point: descriptions
+	// live only in the topology DB.
+	//
+	// Absent (null) means the default set; an explicit [] disables description
+	// matching entirely. Kinds whose descriptions are thin or auto-seeded from
+	// doc comments (file, package, variable) are excluded by default because
+	// they flood results without answering anything.
+	DescriptionKinds []domain.ResourceKind `json:"description_kinds"`
 }
 
 // AgentConfig is a main_agent or sub-agent entry under llm.<harness>. Absent
@@ -222,6 +250,7 @@ type Config struct {
 	Read         ReadSection         `json:"read"`
 	Scanner      ScannerSection      `json:"scanner"`
 	Descriptions DescriptionsSection `json:"descriptions"`
+	Grep         GrepSection         `json:"grep"`
 	LLM          LLMSection          `json:"llm"`
 	Viz          VizSection          `json:"viz"`
 	// Paths marks directories/files (relative to the topology root) as hidden or
@@ -313,15 +342,92 @@ func (c *Config) EffectiveHideNoDescription() bool {
 	return c.Read.ContextFilter.HideNoDescription
 }
 
+// EffectiveMaxInlineParentLines resolves read.context_filter.max_inline_parent_lines,
+// defaulting when the key is absent. 0 and negative values are meaningful (disable inlining /
+// no cap), so absence is signalled by a nil pointer rather than by a zero.
+func (c *Config) EffectiveMaxInlineParentLines() int {
+	if c.Read.ContextFilter.MaxInlineParentLines == nil {
+		return domain.DefaultMaxInlineParentLines
+	}
+	return *c.Read.ContextFilter.MaxInlineParentLines
+}
+
+// EffectiveReadKinds resolves read.kinds, defaulting when absent.
+func (c *Config) EffectiveReadKinds() []domain.ResourceKind {
+	if c.Read.Kinds == nil {
+		return DefaultReadKinds()
+	}
+	return c.Read.Kinds
+}
+
+// DefaultReadKinds is what `read` resolves out of the box: the kinds a model actually
+// navigates by. named_type, package, dependency and variable are supported but off by default
+// -- they are reachable through the context section of a read that matters, and listing them
+// widens the surface for little gain.
+func DefaultReadKinds() []domain.ResourceKind {
+	return []domain.ResourceKind{
+		domain.ResourceFile,
+		domain.ResourceFunction,
+		domain.ResourceStruct,
+		domain.ResourceInterface,
+	}
+}
+
+// AllReadKinds is every kind valid in read.kinds. Note there is no "method": methods resolve
+// as functions, exactly as they did under read_function.
+func AllReadKinds() []domain.ResourceKind {
+	return []domain.ResourceKind{
+		domain.ResourceFile,
+		domain.ResourceFunction,
+		domain.ResourceStruct,
+		domain.ResourceInterface,
+		domain.ResourceNamedType,
+		domain.ResourcePackage,
+		domain.ResourceDependency,
+		domain.ResourceVariable,
+	}
+}
+
+// ValidateReadKinds reports any entry that is not a valid read.kinds value.
+func ValidateReadKinds(kinds []domain.ResourceKind) error {
+	if kinds == nil {
+		return nil
+	}
+	if len(kinds) == 0 {
+		return fmt.Errorf("read.kinds is empty: read would reject every resource")
+	}
+	allowed := map[domain.ResourceKind]bool{}
+	for _, k := range AllReadKinds() {
+		allowed[k] = true
+	}
+	var unknown []string
+	for _, k := range kinds {
+		if !allowed[k] {
+			unknown = append(unknown, string(k))
+		}
+	}
+	if len(unknown) == 0 {
+		return nil
+	}
+	sort.Strings(unknown)
+	names := make([]string, 0, len(AllReadKinds()))
+	for _, k := range AllReadKinds() {
+		names = append(names, string(k))
+	}
+	return fmt.Errorf("unknown read.kinds value(s): %s (valid: %s)",
+		strings.Join(unknown, ", "), strings.Join(names, ", "))
+}
+
 // EffectiveContextFilter composes the resolved read.context_filter settings
 // into a domain.ContextFilter used by the topology read managers.
 func (c *Config) EffectiveContextFilter() domain.ContextFilter {
 	return domain.ContextFilter{
-		IncludeIncoming:   c.EffectiveIncludeIncoming(),
-		ExtVarsVisibility: domain.ParseVisibility(c.EffectiveExternalVarsVisibility()),
-		SmallFnVisibility: domain.ParseVisibility(c.EffectiveSmallFunctionsVisibility()),
-		SmallFnThreshold:  c.EffectiveSmallFunctionThreshold(),
-		HideNoDescription: c.EffectiveHideNoDescription(),
+		IncludeIncoming:      c.EffectiveIncludeIncoming(),
+		ExtVarsVisibility:    domain.ParseVisibility(c.EffectiveExternalVarsVisibility()),
+		SmallFnVisibility:    domain.ParseVisibility(c.EffectiveSmallFunctionsVisibility()),
+		SmallFnThreshold:     c.EffectiveSmallFunctionThreshold(),
+		HideNoDescription:    c.EffectiveHideNoDescription(),
+		MaxInlineParentLines: c.EffectiveMaxInlineParentLines(),
 	}
 }
 
@@ -334,6 +440,9 @@ func ConfigPath(dbPath string) string {
 // catalog (toolspec). It returns an error naming the offending agent and tool
 // so a typo fails fast at init time.
 func (c *Config) Validate() error {
+	if err := ValidateReadKinds(c.Read.Kinds); err != nil {
+		return fmt.Errorf("read.kinds: %w", err)
+	}
 	checkAgent := func(path string, mcpTools, blockedTools []string) error {
 		if err := toolspec.ValidateMCPTools(mcpTools); err != nil {
 			return fmt.Errorf("%s: %w", path, err)
@@ -387,35 +496,38 @@ func DefaultDescribeTargets() []domain.ResourceKind {
 	return DefaultNeedDescription()
 }
 
+// DefaultGrepDescriptionKinds returns the resource kinds whose description grep
+// may match. It is deliberately the same set aracne writes descriptions for:
+// those are the nodes whose prose is authored rather than scraped from a doc
+// comment, so a match on them means something.
+func DefaultGrepDescriptionKinds() []domain.ResourceKind {
+	return DefaultNeedDescription()
+}
+
 // DefaultAgentMCPTools returns the canonical MCP tool list for a known agent.
 // agentName "" / "main" / "default" returns the main-agent set. This is the
 // single source of truth for both DefaultConfig and the MCP registry.
 //
-// The default uses the generic "read" tool. To split reads by resource kind,
-// replace "read" with the per-kind tools (read_function, read_struct,
-// read_interface, read_named_type, read_file, read_package, read_dependency).
+// There is exactly one read entry. The per-kind tools (read_function, read_struct,
+// read_interface, read_named_type, read_file, read_package, read_dependency) are gone:
+// listing an agent's readable KINDS is now read.kinds, which is a project-wide setting, and
+// "read" here only says whether this agent may read at all.
 func DefaultAgentMCPTools(agentName string) []string {
-	// DefaultAgentMCPTools returns the canonical MCP tool list for a known agent.
-	// agentName "" / "main" / "default" returns the main-agent set. This is the
-	// single source of truth for both DefaultConfig and the MCP registry.
-	// The default uses the generic "read" tool. To split reads by resource kind,
-	// replace "read" with the per-kind tools (read_function, read_struct,
-	// read_interface, read_named_type, read_file, read_package, read_dependency).
 	switch agentName {
 	case "descriptions-generation-executor", "descriptions-executor":
 		return []string{"read", "grep", "update_description"}
 	case "bug-hunter":
-		return []string{"read_file", "read_function", "read_struct", "read_interface", "grep", "bug_report"}
+		return []string{"read", "grep", "bug_report"}
 	case "bug-judge":
-		return []string{"read_file", "read_function", "read_struct", "read_interface", "grep", "bug_list", "bug_acknowledge", "bug_dismiss", "bug_delete"}
+		return []string{"read", "grep", "bug_list", "bug_acknowledge", "bug_dismiss", "bug_delete"}
 	case "bug-solver":
-		return []string{"read_file", "read_function", "read_struct", "read_interface", "grep", "edit", "write", "warnings_list", "bug_delete"}
+		return []string{"read", "grep", "edit", "write", "warnings_list", "bug_delete"}
 	default:
 		// The bug pipeline is a v2 feature and is not part of the default surface, so
 		// `bug_report`/`bug_list` are NOT here: their schemas cost roughly 260 tokens on
 		// every single request for a workflow the shipped binary does not run. Projects
 		// using the bug agents add them back via llm.<harness>.main_agent.mcp_tools.
-		return []string{"read_file", "read_function", "read_struct", "read_interface", "grep", "edit", "write", "warnings_list"}
+		return []string{"read", "grep", "edit", "write", "warnings_list"}
 	}
 }
 
@@ -437,7 +549,7 @@ func defaultBlockedTools() []string {
 
 func defaultChatMainAgentTools() []string {
 	// Returns the default tool set for the chat main agent including bash, MCP lookups, file operations, and topology utilities.
-	return []string{"ls", "bash", "glob", "ask_user_question", "CreateTasks", "grep", "read_file", "read_function", "read_struct", "read_interface", "edit", "write", "warnings_list", "bug_report", "bug_list", "bug_acknowledge", "bug_dismiss", "bug_delete", "update_description", "node_list_no_description"}
+	return []string{"ls", "bash", "glob", "ask_user_question", "CreateTasks", "grep", "read", "edit", "write", "warnings_list", "bug_report", "bug_list", "bug_acknowledge", "bug_dismiss", "bug_delete", "update_description", "node_list_no_description"}
 }
 
 // DefaultChatAgentTools returns the default tool list for a proprietary-chat
@@ -447,15 +559,15 @@ func DefaultChatAgentTools(agentName string) []string {
 	// sub-agent (used by CreateTasks). These are independent from the llm section.
 	switch agentName {
 	case "explorer":
-		return []string{"read", "read_function", "read_struct", "read_interface", "read_named_type", "read_file", "read_package", "read_dependency", "grep"}
+		return []string{"read", "grep"}
 	case "descriptions-generation-executor":
 		return []string{"read", "grep", "update_description"}
 	case "bug-hunter":
-		return []string{"read", "read_function", "read_struct", "read_interface", "read_file", "grep", "bug_report"}
+		return []string{"read", "grep", "bug_report"}
 	case "bug-judge":
-		return []string{"read", "read_function", "read_struct", "read_interface", "read_file", "grep", "bug_list", "bug_acknowledge", "bug_dismiss", "bug_delete"}
+		return []string{"read", "grep", "bug_list", "bug_acknowledge", "bug_dismiss", "bug_delete"}
 	case "bug-solver":
-		return []string{"read", "edit", "write", "read_function", "read_struct", "read_interface", "read_file", "grep", "warnings_list", "bug_delete"}
+		return []string{"read", "edit", "write", "grep", "warnings_list", "bug_delete"}
 	default:
 		return nil
 	}
@@ -507,6 +619,10 @@ const DefaultBugHunterThinkingBudget = 4096
 
 func boolPtr(b bool) *bool { return &b }
 
+// intPtr returns a pointer to i, for config fields where 0 is a meaningful value and absence
+// must be distinguishable from it.
+func intPtr(i int) *int { return &i }
+
 // Helper function that converts a boolean value to a pointer to bool.
 
 func DefaultConfig() *Config {
@@ -528,15 +644,18 @@ func DefaultConfig() *Config {
 		Read: ReadSection{
 			MaxFileSize:     512 * 1024,
 			Scan:            ReadScanNone,
+			Kinds:           DefaultReadKinds(),
 			PipePassthrough: boolPtr(true),
 			ContextFilter: ContextFilterSection{
 				ExternalVarsVisibility:   "normal",
 				SmallFunctionsVisibility: "normal",
 				SmallFunctionThreshold:   5,
+				MaxInlineParentLines:     intPtr(domain.DefaultMaxInlineParentLines),
 			},
 		},
 		Scanner:      ScannerSection{Mode: ScanModeDefault, UpdateFrequency: 200},
 		Descriptions: DescriptionsSection{Kinds: DefaultNeedDescription(), StyleExemplars: DefaultDescriptionStyleExemplars},
+		Grep:         GrepSection{DescriptionKinds: DefaultGrepDescriptionKinds()},
 		LLM: LLMSection{
 			Any: LLMHarness{
 				// main_agent uses MCP edit/write (which sync the topology DB
@@ -723,6 +842,12 @@ func normalizeConfig(c *Config) {
 	c.Read.Scan = normalizeReadScan(string(c.Read.Scan))
 	c.Read.ContextFilter.ExternalVarsVisibility = normalizeVisibility(c.Read.ContextFilter.ExternalVarsVisibility)
 	c.Read.ContextFilter.SmallFunctionsVisibility = normalizeVisibility(c.Read.ContextFilter.SmallFunctionsVisibility)
+	if c.Read.Kinds == nil {
+		c.Read.Kinds = DefaultReadKinds()
+	}
+	if c.Read.ContextFilter.MaxInlineParentLines == nil {
+		c.Read.ContextFilter.MaxInlineParentLines = intPtr(domain.DefaultMaxInlineParentLines)
+	}
 	if c.Read.ContextFilter.SmallFunctionThreshold <= 0 {
 		c.Read.ContextFilter.SmallFunctionThreshold = 5
 	}
@@ -730,6 +855,13 @@ func normalizeConfig(c *Config) {
 		c.Descriptions.Kinds = DefaultNeedDescription()
 	} else if kinds, err := NormalizeDescribeTargets(c.Descriptions.Kinds); err == nil {
 		c.Descriptions.Kinds = kinds
+	}
+	// nil (key absent) means "use the defaults"; an explicit [] is a deliberate
+	// "never match on description" and must survive normalization.
+	if c.Grep.DescriptionKinds == nil {
+		c.Grep.DescriptionKinds = DefaultGrepDescriptionKinds()
+	} else if kinds, err := NormalizeDescribeTargets(c.Grep.DescriptionKinds); err == nil {
+		c.Grep.DescriptionKinds = kinds
 	}
 	if strings.TrimSpace(c.Viz.Graph.OptimizationRules) == "" {
 		c.Viz.Graph.OptimizationRules = ".aracne/optimization_rules.json"

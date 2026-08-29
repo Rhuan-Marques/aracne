@@ -18,6 +18,72 @@ import (
 	"aracne/internal/topology/scanner/pyscanner"
 )
 
+// repoScanDB returns a temp DB path for a test that scans the repository root, with a config
+// beside it that keeps the scan to this project's own source.
+//
+// FullScan reads scan.ignore from the config next to the DB (helper.ConfigPath), and a temp DB
+// has none -- so these tests scanned EVERYTHING under the repo root. That is invisible on a
+// clean checkout and pathological on a working one: bench/ holds vendored third-party
+// checkouts (grpc-go, go-zero, ...) that the benchmark harness populates, which is thousands
+// of extra Go files. Scanning them turned a ~2s test into a >6min one, and the interface
+// matcher is O(structs x interfaces) so the blow-up is superlinear. The project's own
+// .aracne/config.json already ignores bench/; this gives the temp DB the same treatment.
+func repoScanDB(t *testing.T, name string) string {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), name)
+	cfg := helper.DefaultConfig()
+	// Only the generated/vendored trees. testing_ground/ stays in scope on purpose: it is this
+	// project's own hand-built edge-case corpus, and TestReadFunction walks every function in
+	// the topology, so excluding it would quietly drop the cases most likely to break a read.
+	cfg.Scan.Ignore = []string{"bench/", "node_modules/", "bin/"}
+	if err := helper.SaveConfig(cfg, helper.ConfigPath(dbPath)); err != nil {
+		t.Fatalf("write scan config: %v", err)
+	}
+	return dbPath
+}
+
+// TestRepoScanIgnoresGeneratedTreesOnly pins what a repo-root test scan covers.
+//
+// The ignore list is a performance fix, and the failure mode of a performance fix is that it
+// quietly deletes coverage. This asserts both directions: the vendored bench/ checkouts stay
+// out (they are what made these tests take minutes), and testing_ground/ -- the project's own
+// edge-case corpus, which TestReadFunction walks in full -- stays in.
+func TestRepoScanIgnoresGeneratedTreesOnly(t *testing.T) {
+	dbPath := repoScanDB(t, "test_scan_scope.db")
+	mgr := topology.New()
+	mgr.Load(dbPath)
+	if err := mgr.FullScan("../..", newTestRegistry()); err != nil {
+		t.Fatal(err)
+	}
+	topo, err := helper.ReadDb(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var sawTestingGround, sawInternal, sawBench bool
+	for _, res := range topo.Resources {
+		path := filepath.ToSlash(res.Location.Path)
+		switch {
+		case strings.Contains(path, "/testing_ground/"):
+			sawTestingGround = true
+		case strings.Contains(path, "/bench/"):
+			sawBench = true
+		case strings.Contains(path, "/internal/"):
+			sawInternal = true
+		}
+	}
+
+	if sawBench {
+		t.Error("bench/ must stay ignored: its vendored checkouts are what made these scans take minutes")
+	}
+	if !sawInternal {
+		t.Error("the project's own internal/ source should be scanned")
+	}
+	if !sawTestingGround {
+		t.Error("testing_ground/ should stay in scope; it is the edge-case corpus these read tests walk")
+	}
+}
+
 func newTestRegistry() *scanner.Registry {
 	reg := scanner.NewRegistry()
 	reg.Register(goscanner.NewGoScanner())
@@ -25,7 +91,7 @@ func newTestRegistry() *scanner.Registry {
 }
 
 func TestCut(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "test_cut.db")
+	dbPath := repoScanDB(t, "test_cut.db")
 
 	reg := newTestRegistry()
 	mgr := topology.New()
@@ -193,7 +259,7 @@ func TestDeleteAllBugs(t *testing.T) {
 }
 
 func TestBugSurvivesScan(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "test_bug_scan_survival.db")
+	dbPath := repoScanDB(t, "test_bug_scan_survival.db")
 
 	reg := newTestRegistry()
 	mgr := topology.New()
@@ -434,7 +500,7 @@ func TestPyReadClass(t *testing.T) {
 }
 
 func TestReadFunction(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "test_readfn.db")
+	dbPath := repoScanDB(t, "test_readfn.db")
 
 	reg := newTestRegistry()
 	mgr := topology.New()
@@ -486,7 +552,7 @@ func TestReadFunction(t *testing.T) {
 }
 
 func TestReadFunctionCalledFuncs(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "test_readfn2.db")
+	dbPath := repoScanDB(t, "test_readfn2.db")
 
 	reg := newTestRegistry()
 	mgr := topology.New()
@@ -533,7 +599,7 @@ func TestReadFunctionCalledFuncs(t *testing.T) {
 }
 
 func TestReadStruct(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "test_readstruct.db")
+	dbPath := repoScanDB(t, "test_readstruct.db")
 
 	reg := newTestRegistry()
 	mgr := topology.New()

@@ -66,25 +66,6 @@ func TestFormatGoFunctionContextVisibility(t *testing.T) {
 	}
 }
 
-func TestFormatGoFileContextNoPackageImports(t *testing.T) {
-	ctx := &golang.GoFileContext{
-		File:        &golang.FileCut{Cut: "package x\n\nimport \"fmt\"\n\nfunc Foo() {}"},
-		FromPackage: "x",
-		Functions:   []golang.SimplifiedFunction{{ID: "x.Foo", Description: "foo"}},
-		Imports:     []golang.PackagePath{"fmt"},
-	}
-	out := FormatGoFileContext(ctx)
-	if strings.Contains(out, "## Package:") {
-		t.Errorf("file context should not repeat the Package line\n%s", out)
-	}
-	if strings.Contains(out, "## import") {
-		t.Errorf("file context should not repeat import lines\n%s", out)
-	}
-	if !strings.Contains(out, "## func x.Foo: foo") {
-		t.Errorf("file context missing function listing\n%s", out)
-	}
-}
-
 func TestFormatGoFunctionContextNormalUnchanged(t *testing.T) {
 	// Under the default (all-Normal) filter, output carries no fenced neighbor
 	// blocks and no USED BY section.

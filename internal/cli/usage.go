@@ -17,9 +17,9 @@ Usage:
   Aracne descriptions clear [flags]    Clear stored topology descriptions
   Aracne descriptions export [flags]   Back up descriptions to an ID-independent JSONL sidecar
   Aracne descriptions import [flags]   Restore descriptions from a sidecar after a re-scan
-  arac read [--kind <kind>] <resource-id>   Read a resource by ID; --kind forces exact kind (function, method, struct, named_type, interface, variable, file, package, dependency)
+  arac read [--kind <kind>] <resource-id>...  Read one or more resources by ID; --kind forces exact kind (function, method, struct, named_type, interface, variable, file, package, dependency)
   arac resource list [query] [--kind <kind>]... [--no-description]  List resources, optionally filtered by query, kind, or missing description
-  arac grep [flags] <pattern> [path]  Search file contents and annotate topology resource matches
+  arac grep [flags] <pattern> [path]  Search node names, node descriptions and file contents (ranked in that order)
   arac update-file <path>  Re-parse a file and update the topology database (--db to specify db path)
   Aracne read-resource-and-cut <id> <kind>  Get a resource's source code cut (kind: Function, Struct, Interface, ExternalVar, File, Package)
   arac update-description <id> <kind> <desc>  Update a resource's description in the topology DB
@@ -33,7 +33,7 @@ Usage:
   arac bug delete     <bugID>   Delete a bug from the database
   arac edit                 Edit a file (reads JSON from stdin: {"file_path", "old_string", "new_string"})
   arac write                Write a file (reads JSON from stdin: {"file_path", "content"})
-  Aracne check-updates        Check which files were added, modified, or deleted since last scan
+  arac check-updates [--json] Index health: which files drifted from the topology since the last scan (exit 1 if stale)
   Aracne analyze dead-code [flags]  Find unused functions, structs, interfaces, named types, and variables
 
 Flags for "scan":
@@ -58,6 +58,8 @@ Flags for "viz serve":
 
 Flags for "grep":
   --db <path>      Topology database path (default ".aracne/topology.db")
+  Which kinds may match on their description is set by grep.description_kinds in
+  .aracne/config.json (default: function,method,struct,interface; [] disables it).
 
 Flags for "descriptions generate":
   --targets <kinds>       Comma-separated resource kinds overriding config descriptions.kinds (default: function,method,struct,interface,file)
@@ -125,5 +127,6 @@ Flags for "analyze dead-code":
     Aracne descriptions generate
     Aracne descriptions clear --target function,type
     arac read internal/topology/golang.GoManager
-    arac read internal/cli/read.go`)
+    arac read internal/cli/read.go
+    arac read internal/cli.RunRead internal/cli.parseReadArgs`)
 }

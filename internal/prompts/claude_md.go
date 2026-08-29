@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"aracne/internal/helper"
+	"aracne/internal/toolspec"
 )
 
 // Returns CLAUDE.md content tailored to the effective agent configuration for claude_code.
@@ -36,8 +37,6 @@ func bt(s string) string {
 
 // --- tool-membership predicates -------------------------------------------
 
-var splitReadTools = []string{"read_function", "read_struct", "read_interface", "read_named_type", "read_file", "read_package", "read_dependency"}
-
 // Checks if a string exists in a list of strings.
 func inList(list []string, name string) bool {
 	for _, n := range list {
@@ -54,24 +53,24 @@ func hasMCPTool(eff helper.AgentConfig, name string) bool { return inList(eff.MC
 // Checks whether a native tool is allowed by verifying it's not in the agent config's blocked tools list.
 func nativeAllowed(eff helper.AgentConfig, key string) bool { return !inList(eff.BlockedTools, key) }
 
-// Returns the list of available split read tools (read_function, read_struct, etc.) supported by the agent configuration.
-func presentSplitReads(eff helper.AgentConfig) []string {
-	var out []string
-	for _, n := range splitReadTools {
-		if hasMCPTool(eff, n) {
-			out = append(out, n)
-		}
-	}
-	return out
+// usesMCPRead reports whether the agent has aracne's read tool.
+func usesMCPRead(eff helper.AgentConfig) bool { return hasMCPTool(eff, "read") }
+
+// readToolName is the name the read tool actually registers under for this agent. It takes the
+// short name only when the harness's own read is blocked; otherwise the two would be
+// confusable in one session.
+func readToolName(eff helper.AgentConfig) string {
+	return toolspec.ResolveReadToolName(nativeAllowed(eff, "read"))
 }
 
-// Checks whether the agent config supports MCP read tools (either generic read or any split read variant).
-func usesMCPRead(eff helper.AgentConfig) bool {
-	return hasMCPTool(eff, "read") || len(presentSplitReads(eff)) > 0
-}
-
-// Assembles navigation, tool, and behavioral guidance sections into complete agent instructions based on configuration and MCP tool prefix.
-
+// agentInstructionsContent assembles the contract the agent sees on every turn.
+//
+// Every byte here is re-sent on each request, so the guiding rule is: say only
+// what the tool schemas cannot. Per-tool behaviour (arguments, match semantics,
+// result caps) already ships in each tool's own description; repeating it here
+// bought nothing and was the bulk of the old 5.8 KB contract. What survives is
+// what no schema can express -- how the pieces fit together, how to spend
+// turns, and which native tools this project actually allows.
 func agentInstructionsContent(eff helper.AgentConfig, mcpToolPrefix string) string {
 	var b strings.Builder
 
@@ -96,38 +95,34 @@ func agentInstructionsContent(eff helper.AgentConfig, mcpToolPrefix string) stri
 	return b.String()
 }
 
-// Returns introductory text explaining aracne's role in codebase navigation and topology graphs.
+// Returns introductory text explaining aracne's role in codebase navigation.
 func introductionSection() string {
-	return `# Aracne Project Integration
-
-This project uses **aracne** for codebase navigation. The topology database provides a pre-analyzed graph of all functions, structs/classes, interfaces, variables, and their relationships.
-
-`
+	return "# Aracne\n\n" +
+		"`.aracne/topology.db` holds a pre-analyzed graph of this repo's functions, types, " +
+		"interfaces, variables and how they reference each other.\n\n"
 }
 
-// Generates the "Navigation Model" section of agent instructions, explaining file exploration and MCP lookup tool usage based on agent config.
+// Generates the "Navigation Model" section: how to pick between an aracne
+// lookup and the native read.
 func navigationModelSection(eff helper.AgentConfig) string {
 	b := &strings.Builder{}
-	fmt.Fprintf(b, "## Navigation Model\n\n")
-	fmt.Fprintf(b, "The topology is a directed graph can enhance your information about the repository you're using if you use it correctly.\n\n")
-	fmt.Fprintf(b, "**Navigation Flow:**\n")
-	fmt.Fprintf(b, "1. Use `ls` to understand the project file layout\n")
+	b.WriteString("## Navigation Model\n\n")
 
 	if !usesMCPRead(eff) {
-		fmt.Fprintf(b, "2. Use your `read` tool to read resources and files\n\n")
+		b.WriteString("Use `ls` for the file layout. Use your `read` tool for files and resources.\n\n")
 		return b.String()
 	}
 
-	fmt.Fprintf(b, "2. Use lookup MCP tools to get a resource's full context with interconnected relationships\n")
+	b.WriteString("Use `ls` for the file layout, then a lookup tool to pull a resource with its " +
+		"connected context in one call.\n\n")
 	if nativeAllowed(eff, "read") {
-		fmt.Fprintf(b, "\n**Which to use:** an aracne lookup for a *symbol* (returns its "+
-			"code plus neighbours and their descriptions — usually cheaper than the whole "+
-			"file); your native read for a *file* as a whole, a config, or a line range.\n\n")
+		b.WriteString("**Which to use:** the aracne lookup for a *symbol* (its code plus its neighbours " +
+			"and their descriptions -- usually cheaper than the whole file); your native read for a file " +
+			"as a whole, a config, or a line range.\n\n")
 	} else {
-		fmt.Fprintf(b, "\n**The native read tool is blocked in this project** — use the "+
-			"aracne lookups below. `read_file` covers whole files and line ranges.\n\n")
+		b.WriteString("**The native read tool is blocked in this project** -- use the lookup. " +
+			"It covers whole files too.\n\n")
 	}
-
 	return b.String()
 }
 
@@ -138,119 +133,92 @@ func nativeGrepNote(eff helper.AgentConfig) string {
 	if nativeAllowed(eff, "grep") {
 		return " Your native grep also works; use whichever fits."
 	}
-	return " **The native grep tool is blocked in this project** — use this one."
+	return " **The native grep tool is blocked in this project** -- use this one."
 }
 
-// Generates documentation for available MCP lookup tools based on agent config and read modes.
+// lookupToolsSection names the available lookup tools and the one thing their
+// schemas cannot state: how resource IDs resolve. Each tool's own description
+// already says what it reads, so it is not repeated per bullet.
 func lookupToolsSection(eff helper.AgentConfig, mcpToolPrefix string) string {
-	b := &strings.Builder{}
-
-	if usesMCPRead(eff) {
-		b.WriteString("## MCP Lookup tools:\n")
-		splits := presentSplitReads(eff)
-		if len(splits) > 0 {
-			for _, name := range splits {
-				fmt.Fprintf(b, "- %s: %s\n", bt(mcpToolPrefix+name), splitReadDescription(name))
-			}
-		} else {
-			fmt.Fprintf(b, "- %s: This command will give you the code and full context for any resource you want. These include: Files, Functions, Structs, etc. The tool receives a Resource ID, which can be the file's path or the ID of any resource.\n", bt(mcpToolPrefix+"read"))
-		}
-		b.WriteString("\n")
+	if !usesMCPRead(eff) {
+		return ""
 	}
 
-	b.WriteString("Note: prefer these over shelling out to `cat`/`Get-Content` — a shell " +
-		"read gives you bytes with no topology context, and the result is not tracked.")
+	b := &strings.Builder{}
+	b.WriteString("## MCP Lookup tool:\n\n")
 
+	fmt.Fprintf(b, "%s takes a LIST of resource IDs -- functions, methods, types, interfaces, files. "+
+		"Pass every ID you need in one call: results are grouped by file under a single context "+
+		"section, so one batched call costs far less than one call per ID.\n\n",
+		bt(mcpToolPrefix+readToolName(eff)))
+
+	b.WriteString("IDs are forgiving: a unique trailing part (`Flask.register_blueprint`) is enough, " +
+		"and a miss returns the nearest candidates rather than an error.\n\n")
 	return b.String()
 }
 
-// Maps split read tool names to their descriptions for display in Claude.md documentation.
-func splitReadDescription(name string) string {
-	switch name {
-	case "read_function":
-		return "Reads the function and context for resources it uses, receives a function ID."
-	case "read_struct":
-		return "Reads the struct and context for resources it uses, receives a struct ID."
-	case "read_interface":
-		return "Reads the interface and context for which resources it is implemented by, receives an interface ID."
-	case "read_named_type":
-		return "Reads the named type and context for which resources it is used by, receives a named type ID."
-	case "read_file":
-		return "Reads the content of a file, receives the file path."
-	case "read_package":
-		return "Reads the package and context for which resources it is used by, receives a package ID."
-	case "read_dependency":
-		return "Reads the dependency and context for which resources it is used by, receives a dependency ID."
-	default:
-		return "Reads the resource and its context."
-	}
-}
-
-// Builds markdown section documenting grep/search tools based on agent config capabilities
+// grepSection documents what aracne's grep adds over a plain one. The argument
+// list lives in the tool's own schema.
 func grepSection(eff helper.AgentConfig, mcpToolPrefix string) string {
 	if hasMCPTool(eff, "grep") {
-		return fmt.Sprintf("## Grep/Search\n\nUse the MCP tool %s for content search. It "+
-			"returns `path:line:match`, and for a focused result set it also names the "+
-			"enclosing topology resource and what it does — which often answers the "+
-			"question without a follow-up read.\n\nIt takes the usual narrowing options "+
-			"(glob, type, output_mode, head_limit, context lines) — narrow rather than "+
-			"reading a large result. Output is capped and says what was withheld.%s\n\n",
+		return fmt.Sprintf("## Grep/Search\n\n%s searches node names, node descriptions and file "+
+			"contents, ranked in that order, and names the enclosing node above its matches -- "+
+			"which often answers the question with no follow-up read. Descriptions live only in "+
+			"the topology, so a plain-English query finds nodes whose code never says it.%s\n\n",
 			bt(mcpToolPrefix+"grep"), nativeGrepNote(eff))
 	}
 	if nativeAllowed(eff, "grep") {
-		return "## Grep/Search\n\nUse your native `grep`/`Grep` search tool for content search. When you need topology metadata in results, use `arac grep <pattern> [path]`; it returns `path:line:match` plus `ResourceID` and `Description` when a match maps to a topology resource.\n\n"
+		return "## Grep/Search\n\nUse your native `grep`. To search node names and descriptions " +
+			"too, and get topology metadata on the matches, run `arac grep <pattern> [path]`.\n\n"
 	}
 	return ""
 }
 
-// Generates markdown documentation for the CONTEXT section output from MCP read tools, explaining hierarchical resource relationships.
+// resourceContextSection teaches the "# CONTEXT:" output format. The shape is
+// worth its bytes: it is what lets the agent answer follow-ups without another
+// call, which is the single largest turn saving available.
 func resourceContextSection(eff helper.AgentConfig) string {
 	// The "# CONTEXT:" output is produced only by the MCP read tools.
 	if !usesMCPRead(eff) {
 		return ""
 	}
 
-	b := &strings.Builder{}
-	fmt.Fprintf(b, "## Resource Context\n\n")
-	fmt.Fprintf(b, "When you call a MCP Lookup Tool, the output has two sections:\n\n")
-	fmt.Fprintf(b, "**Code Block:** The resource's full source code, plus relevant imports and enclosing type (for methods).\n\n")
-	fmt.Fprintf(b, "**%s Section:** A structured hierarchical listing of everything the resource touches. Each entry is keyed by the resource's full ID, which you can pass directly to a lookup tool to drill deeper:\n\n", bt("# CONTEXT:"))
-	fmt.Fprintf(b, "```\n")
-	fmt.Fprintf(b, "# CONTEXT:\n")
-	fmt.Fprintf(b, "## pkg.InterfaceName: Description\n")
-	fmt.Fprintf(b, "    pkg.ImplStruct: Description\n")
-	fmt.Fprintf(b, "        pkg.(ImplStruct).Method: Description\n")
-	fmt.Fprintf(b, "## pkg.OtherStruct: Description\n")
-	fmt.Fprintf(b, "    pkg.(OtherStruct).Method: Description\n")
-	fmt.Fprintf(b, "## pkg.CalledFunction: Description\n")
-	fmt.Fprintf(b, "## pkg.ExtVarName = value\n")
-	fmt.Fprintf(b, "```\n\n")
-	fmt.Fprintf(b, "Use the CONTEXT section to understand relationships **without making additional tool calls**.\n\n")
-	return b.String()
+	return "## Resource Context\n\n" +
+		"A lookup returns the source, then a `# CONTEXT:` tree of everything it touches, " +
+		"keyed by resource ID and indented by depth:\n\n" +
+		"```\n" +
+		"# CONTEXT:\n" +
+		"## pkg.Iface: description\n" +
+		"    pkg.Impl: description\n" +
+		"        pkg.(Impl).Method: description\n" +
+		"## pkg.Callee: description\n" +
+		"## pkg.Var = value\n" +
+		"```\n\n" +
+		"Answer follow-up questions from this tree instead of calling again. Pass an ID back to a " +
+		"lookup only when you need that resource's actual code.\n\n"
 }
 
-// Builds markdown section documenting available edit/write tools based on agent config capabilities
+// editWriteSection states which edit path is available. Match semantics and
+// the empty-new_string delete are in the edit tool's own schema.
 func editWriteSection(eff helper.AgentConfig, mcpToolPrefix string) string {
 	if hasMCPTool(eff, "edit") || hasMCPTool(eff, "write") {
-		note := "Your native edit/write also work — an `arac update-file` hook re-syncs " +
-			"the topology afterwards — so the graph stays correct either way."
+		note := "Your native edit/write also work -- an `arac update-file` hook re-syncs the topology " +
+			"afterwards -- so the graph stays correct either way."
 		if !nativeAllowed(eff, "edit") || !nativeAllowed(eff, "write") {
-			note = "**The native edit/write tools are blocked in this project** — use these."
+			note = "**The native edit/write tools are blocked in this project** -- use these."
 		}
-		return fmt.Sprintf("## Edit and Write:\n\nYou can edit files using the MCP tool %s "+
-			"and write them using %s; both update the topology inline.\n\n"+
-			"`old_string` must match exactly once — include surrounding context, or pass `replace_all: true` to "+
-			"change every occurrence. An empty `new_string` deletes the matched text, so you never need to rewrite "+
-			"a whole file just to remove a block.\n\n%s\n\n",
+		return fmt.Sprintf("## Edit and Write:\n\n%s and %s update the topology inline. %s\n\n",
 			bt(mcpToolPrefix+"edit"), bt(mcpToolPrefix+"write"), note)
 	}
 	if nativeAllowed(eff, "edit") {
-		return "## Edit and Write:\n\nYou can edit files using your native `edit` tool.\nYou can write files using your native `write` tool.\nAfter editing or writing, the context for the topology will be automatically updated to reflect your actions.\n\n"
+		return "## Edit and Write:\n\nUse your native `edit` and `write` tools; the topology re-syncs " +
+			"automatically afterwards.\n\n"
 	}
 	return ""
 }
 
-// Generates the "Other" section of agent instructions with bug report and topology warnings guidance when those tools are available.
+// Generates the "Other" section with bug report and topology warnings guidance
+// when those tools are available.
 func otherSection(eff helper.AgentConfig, mcpToolPrefix string) string {
 	hasBugReport := hasMCPTool(eff, "bug_report")
 	hasWarnings := hasMCPTool(eff, "warnings_list")
@@ -261,29 +229,26 @@ func otherSection(eff helper.AgentConfig, mcpToolPrefix string) string {
 	b := &strings.Builder{}
 	b.WriteString("## Other:\n\n")
 	if hasBugReport {
-		fmt.Fprintf(b, "- If you find a bug that is not relevant to your task, *do not fix it*. Instead, report it using %s\n", bt(mcpToolPrefix+"bug_report"))
+		fmt.Fprintf(b, "- Found a bug outside your task? Do not fix it -- file it with %s.\n", bt(mcpToolPrefix+"bug_report"))
 	}
 	if hasWarnings {
-		fmt.Fprintf(b, "- If you want to check for any topology warnings, you can do it using %s\n", bt(mcpToolPrefix+"warnings_list"))
+		fmt.Fprintf(b, "- %s lists outstanding topology warnings.\n", bt(mcpToolPrefix+"warnings_list"))
 	}
 	b.WriteString("\n")
 	return b.String()
 }
 
-// Returns markdown section explaining tool guard hooks and blocked_tools enforcement rules
+// guardNoteSection tells the agent what the guard does when it fires. The full
+// blocked_tools/pipe-exemption policy is configuration documentation, not
+// per-turn agent guidance, and lives in the project README instead -- the agent
+// only needs to know that a nudge is not a denial and that pipes are fine.
 func guardNoteSection() string {
 	return "## Tool Guard\n\n" +
-		"An `arac guard` hook watches your tool calls. Whenever you use a native tool " +
-		"(`Read`/`Grep`/`Edit`/`Write`) or a shell equivalent (`cat`/`head`/`tail`/`less`/`grep`/`rg`/`sed`/`awk`, " +
-		"or PowerShell `Get-Content`/`Select-String`), you are reminded to use the matching aracne MCP tool instead. " +
-		"`sed`/`awk` count as an edit only when they write (an `-i` flag or a `>` redirect); otherwise they count " +
-		"as a read, so filtering command output through them is fine.\n\n" +
-		"Any tool listed in `blocked_tools` for the `claude_code` harness is blocked outright. Blocking `grep` also " +
-		"blocks `grep`/`rg`/`Select-String` run through the Bash tool; blocking `bash` blocks the Bash tool entirely. " +
-		"A read/grep command that consumes piped output (e.g. `git log | tail`, `cmd | grep x`) is exempt — only " +
-		"direct file reads like `cat foo.go` are gated; set `read.pipe_passthrough` to `false` to gate piped reads too. " +
-		"The guard uses the main agent's `blocked_tools`; per-sub-agent blocking is enforced by each sub-agent's tool " +
-		"allow-list, not by this hook.\n\n"
+		"An `arac guard` hook watches your calls. A native `Read`/`Grep`/`Edit`/`Write`, or a shell " +
+		"equivalent (`cat`, `head`, `tail`, `less`, `grep`, `rg`, in-place `sed`/`awk`, `Get-Content`, " +
+		"`Select-String`), returns a one-line pointer to the matching aracne tool. That is a " +
+		"suggestion, not a denial -- anything this file has not called blocked still runs. Commands " +
+		"reading piped output (`git log | tail`) are exempt.\n\n"
 }
 
 // openCodeGuardNoteSection is the OpenCode counterpart to guardNoteSection:
@@ -291,9 +256,9 @@ func guardNoteSection() string {
 // permission block, which denies the direct read/grep shell forms.
 func openCodeGuardNoteSection() string {
 	return "## Tool Guard\n\n" +
-		"This project's OpenCode permissions deny the read/grep shell commands " +
-		"(`cat`/`head`/`tail`/`less`/`grep`/`rg`) when run directly on a file — use the matching aracne MCP " +
-		"tool instead. Reading piped command output (`cmd | head`, `cmd | grep x`) is still allowed.\n\n"
+		"This project's OpenCode permissions deny `cat`/`head`/`tail`/`less`/`grep`/`rg` when run " +
+		"directly on a file -- use the matching aracne tool. Reading piped output (`cmd | head`) is " +
+		"still allowed.\n\n"
 }
 
 // blocksShellReadOrGrep reports whether the agent blocks the read or grep tool,
@@ -307,43 +272,40 @@ func blocksShellReadOrGrep(eff helper.AgentConfig) bool {
 	return false
 }
 
-// Returns documentation on navigation best practices for exploring codebase topology instead of raw files.
+// howToNavigateSection is the turn-budget section.
+//
+// Benchmarking found the aracne arm spending 25% more turns than the baseline
+// for the same work, and that -- not the size of any single result -- was the
+// dominant cost: every extra turn re-sends the whole accumulated transcript.
+// Two habits caused most of it, so both are named explicitly here: reading a
+// file in successive small line ranges, and issuing lookups one turn at a time.
 func howToNavigateSection() string {
 	return `## How to Navigate:
 
-### 1: Prefer symbols over files
-Read a whole file when you want the file itself — unsupported language, config, or you
-genuinely need all of it.
-
-Resource IDs are forgiving: a unique trailing part is enough (Flask.register_blueprint),
-and a miss returns the nearest candidates rather than an error.
-
-### 2: Let Descriptions Guide You
-- A resource's description can tell you whether it is relevant to your task
-- If the resource's description makes it look irrelevant to your task, skip it
-- If you only need to understand what a resource does / is, descriptions can be *enough*. You don't need to read resources when the descriptions already gave you the necessary context
-
-### 3: Go Deeper with Intent
-- When exploring, ask yourself *what* you need to discover and understand fully.
-- Which resources do you need to **know the code** of.
-- These questions should guide you to navigate deeper in the topology to do your task to its best
-
-### 4: Beware of TopologyWarnings
-- When **editing**, you'll usually receive helpful warnings on resources that might have been affected by your changes. Keep those in mind and solve them as they come up
+1. **Prefer symbols over files.** Read a whole file when you want the file itself -- unsupported
+   language, config, or you genuinely need all of it.
+2. **Let descriptions decide.** A neighbour's description tells you whether it matters; if you only
+   need to know *what* something does, the description is already the answer -- do not read it.
+3. **Spend turns wide, not deep.** Every call re-sends the whole conversation, so one call for
+   three IDs beats three calls for one: put every lookup you already know you need into a single
+   read.
+4. **Act on warnings.** An edit reports resources your change may have broken; resolve them as they
+   appear.
 
 `
 }
 
-// Returns the behavioral rules section for agent instructions, covering conciseness, topology trust, accuracy, depth discipline, and exploration patterns.
+// behavioralRulesSection carries only rules that change behaviour and are not
+// stated anywhere else in the contract.
 func behavioralRulesSection() string {
 	return `## Behavioral Rules
 
-1. **Be concise** — Prefer short answers. Show what you found and what you changed, not how you did it.
-2. **Do not parse code yourself** — Always use topology tools. The database is the source of truth.
-3. **Do not guess** — If a tool returns no results or an error, report it accurately. Do not fabricate code or relationships.
-4. **One level deep** — Read the CONTEXT section and only drill deeper when essential. Descriptions are designed to answer most questions at the surface level.
-5. **Topology is always current** — After any ` + "`edit`" + `, the topology updates automatically. You never need to request a re-scan.
-6. **Avoid circular exploration** — If you already read a resource, do not re-read it in the same session. Trust your context.
+1. **Be concise** -- report what you found and what you changed, not how you did it.
+2. **Trust the topology** -- it is the source of truth and re-syncs after every edit. Never parse
+   code by hand, and never ask for a re-scan.
+3. **Do not guess** -- report an empty result or an error as what it is; never invent code or
+   relationships.
+4. **Do not re-read** -- if it is already in your context, use it.
 
 `
 }
