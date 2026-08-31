@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"aracne/internal/helper"
+	"aracne/internal/topology"
 	"aracne/internal/topology/domain"
 )
 
@@ -63,6 +64,68 @@ func TestDescriptionExecutorInputConstrainsAssignedResources(t *testing.T) {
 		if !strings.Contains(input, want) {
 			t.Fatalf("executor input missing %q:\n%s", want, input)
 		}
+	}
+}
+
+// A --regen_oversized batch must reach the executor as a rewrite of the stored text, not
+// as a blank-slate description.
+func TestDescriptionExecutorInputCarriesCurrentDescription(t *testing.T) {
+	current := strings.Repeat("wordy ", 40)
+	input := descriptionExecutorInput([]descriptionResource{
+		{ID: "fn:one", Name: "One", Kind: domain.ResourceFunction, Current: current},
+	}, nil, nil)
+	for _, want := range []string{"Rewrite the description", "Current description (", "fn:one"} {
+		if !strings.Contains(input, want) {
+			t.Fatalf("regen executor input missing %q:\n%s", want, input)
+		}
+	}
+}
+
+// --regen_oversized selects described-but-too-long resources; the default pass selects
+// undescribed ones. The two populations never overlap.
+func TestPendingDescriptionResourcesRegenOversized(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "topology.db")
+	loc := domain.Location{Path: "x.go", StartsAt: 1, EndsAt: 20}
+	overFn := strings.Repeat("x", domain.DescriptionBudgetFunction+1)
+	topo := &domain.Topology{Root: ".", Language: "go", Resources: map[string]domain.Resource{
+		"fn:over":  {ID: "fn:over", Name: "Over", Kind: domain.ResourceFunction, Description: overFn, Location: loc},
+		"fn:ok":    {ID: "fn:ok", Name: "Ok", Kind: domain.ResourceFunction, Description: "Fits fine.", Location: loc},
+		"fn:blank": {ID: "fn:blank", Name: "Blank", Kind: domain.ResourceFunction, Location: loc},
+		// Fits a function's 120 but overruns a type's 100.
+		"st:over": {ID: "st:over", Name: "StOver", Kind: domain.ResourceStruct, Description: strings.Repeat("y", domain.DescriptionBudgetType+1), Location: loc},
+	}}
+	if err := helper.WriteDb(topo, dbPath); err != nil {
+		t.Fatalf("WriteDb: %v", err)
+	}
+	manager := topology.New()
+	if err := manager.Load(dbPath); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	targets := []domain.ResourceKind{domain.ResourceFunction, domain.ResourceStruct}
+	regen, err := pendingDescriptionResources(manager, targets, domain.DefaultContextFilter(), false, true)
+	if err != nil {
+		t.Fatalf("pendingDescriptionResources: %v", err)
+	}
+	ids := make([]string, 0, len(regen))
+	for _, res := range regen {
+		ids = append(ids, res.ID)
+	}
+	if got := strings.Join(ids, ","); got != "fn:over,st:over" {
+		t.Fatalf("regen selection = %q, want \"fn:over,st:over\"", got)
+	}
+	for _, res := range regen {
+		if res.Current == "" {
+			t.Fatalf("%s must carry its stored description into the prompt", res.ID)
+		}
+	}
+
+	generate, err := pendingDescriptionResources(manager, targets, domain.DefaultContextFilter(), false, false)
+	if err != nil {
+		t.Fatalf("pendingDescriptionResources: %v", err)
+	}
+	if len(generate) != 1 || generate[0].ID != "fn:blank" || generate[0].Current != "" {
+		t.Fatalf("default pass should select only the undescribed resource, got %+v", generate)
 	}
 }
 

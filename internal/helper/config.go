@@ -1063,6 +1063,25 @@ func ShouldDescribe(res domain.Resource, targetSet map[domain.ResourceKind]bool,
 	return filter.For(res.Kind, locLineSpan(res.Location), true) == domain.VisibilityNormal
 }
 
+// ShouldRegenerateDescription is the mirror of ShouldDescribe for
+// `descriptions generate --regen_oversized`: same target-kind and read-context
+// visibility gates, but it selects resources that ALREADY have a description whose
+// stored text overruns its kind's budget (domain.ValidateDescription). The budget is
+// enforced on the write path only, so descriptions written before it existed are
+// grandfathered in the database and this is the one place that re-checks them.
+func ShouldRegenerateDescription(res domain.Resource, targetSet map[domain.ResourceKind]bool, filter domain.ContextFilter, includeNotVisible bool) bool {
+	if strings.TrimSpace(res.Description) == "" || !targetSet[res.Kind] {
+		return false
+	}
+	if domain.ValidateDescription(res.Kind, res.Description) == nil {
+		return false
+	}
+	if includeNotVisible {
+		return true
+	}
+	return filter.For(res.Kind, locLineSpan(res.Location), true) == domain.VisibilityNormal
+}
+
 func ShouldDescribeKind(kind domain.ResourceKind, targets []domain.ResourceKind) bool {
 	// Checks if a resource kind should be described based on configured describe targets.
 	if targets == nil {

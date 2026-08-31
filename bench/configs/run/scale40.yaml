@@ -35,7 +35,7 @@ max_describable_nodes: 8000   # keep large repos IN (was 600 — see above)
 seeds: 1                # seeds do NOT raise effective N; spend budget on repos instead
 arms: [baseline, aracne]
 run_harness: claude_code
-model: haiku            # the efficiency endpoint is the primary claim and is cheap to measure
+model: opus            # the efficiency endpoint is the primary claim and is cheap to measure
 max_turns: 80
 timeout_s: 2400
 run_parallel: 1         # raise (2-4) to cut wall-clock of a 54-cell matrix; see README "Parallelism"

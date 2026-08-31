@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"aracne/internal/helper"
 	"aracne/internal/topology"
@@ -458,5 +459,373 @@ func Untouched() int { return 8 }
 		if w.Kind == domain.WarnNodeRemoved {
 			t.Errorf("an unrelated edit re-reported a standing warning: %+v", w)
 		}
+	}
+}
+
+// --- signature_changed, cross-language ---
+//
+// The same defect that made node_removed useless for five of six languages was
+// left in place for signature_changed: the four non-Go scanners attribute it to
+// the symbol whose signature moved and set no TargetID at all. Nothing can
+// clear that shape -- the symbol still exists so CleanupOrphanedWarnings keeps
+// it, and with no caller named neither ClearReferrerWarningsForFile nor
+// goscanner's clearReanalyzedFunctionWarnings has anything to key on. Fixing
+// every caller left the row in the database forever, and so did reverting the
+// signature. helper.ExpandSignatureWarnings fans the warning out to its callers
+// before it is ever persisted, which is both the actionable form and the only
+// one the clearers can reach.
+
+type crossLangSigCase struct {
+	lang string
+	// files written before the first scan, relative path -> content
+	files map[string]string
+	// the file whose function signature changes
+	target  string
+	oldText string
+	newText string
+	// the file holding the caller, and the edit that fixes the call site
+	caller    string
+	callerOld string
+	callerNew string
+	// expected attribution: the changed symbol, and the caller to go verify
+	wantSource string
+	wantTarget string
+	// stableID is false for Java alone: its method ids encode the signature, so
+	// widening one is an identity change. Which kind of warning that produces
+	// depends on when the caller is re-resolved -- UpdateFile leaves the caller
+	// pointing at the vanished old id and the referrer pass reports node_removed,
+	// while IncrementalScan re-resolves the caller onto the new id and the
+	// signature warning survives. Both name the caller and both clear, which is
+	// the whole contract; only the kind differs, so Java asserts the contract and
+	// not the kind.
+	stableID bool
+}
+
+// warningKinds returns the kinds this case may legitimately raise. A stable id
+// means the caller keeps pointing at the same symbol across the edit, so the
+// change is only ever a signature change.
+func (c crossLangSigCase) warningKinds() []domain.WarningKind {
+	if c.stableID {
+		return []domain.WarningKind{domain.WarnSignatureChanged}
+	}
+	return []domain.WarningKind{domain.WarnSignatureChanged, domain.WarnNodeRemoved}
+}
+
+// namedCaller returns the id the warning tells an agent to go check. The two
+// kinds point opposite ways round: signature_changed keeps the changed symbol in
+// SourceID and names the caller in TargetID, node_removed is attributed to the
+// caller itself.
+func namedCaller(w domain.TopologyWarning) string {
+	if w.Kind == domain.WarnNodeRemoved {
+		return w.SourceID
+	}
+	return w.TargetID
+}
+
+func crossLangSigCases() []crossLangSigCase {
+	return []crossLangSigCase{
+		{
+			lang: "javascript",
+			files: map[string]string{
+				"package.json": `{ "name": "sigjs", "version": "1.0.0", "type": "module" }` + "\n",
+				"a.js":         "export const arrowAdd = (x, y) => x + y;\n",
+				"b.js":         "import { arrowAdd } from './a.js';\nexport function crossUser(a, b) { return arrowAdd(a, b); }\n",
+			},
+			target: "a.js", oldText: "(x, y) => x + y", newText: "(x, y, z) => x + y + z",
+			caller: "b.js", callerOld: "arrowAdd(a, b)", callerNew: "arrowAdd(a, b, 0)",
+			wantSource: "a.arrowAdd", wantTarget: "b.crossUser",
+			stableID: true,
+		},
+		{
+			lang: "typescript",
+			files: map[string]string{
+				"package.json": `{ "name": "sigts", "version": "1.0.0" }` + "\n",
+				"a.ts":         "export function calc(x: number): number { return x * 2; }\n",
+				"b.ts":         "import { calc } from './a';\nexport function useCalc(n: number): number { return calc(n); }\n",
+			},
+			target: "a.ts", oldText: "calc(x: number)", newText: "calc(x: number, k: number)",
+			caller: "b.ts", callerOld: "calc(n)", callerNew: "calc(n, 1)",
+			wantSource: "a.calc", wantTarget: "b.useCalc",
+			stableID: true,
+		},
+		{
+			lang: "python",
+			files: map[string]string{
+				"a.py": "def add(x, y):\n    return x + y\n",
+				"b.py": "from a import add\n\n\ndef use(x, y):\n    return add(x, y)\n",
+			},
+			target: "a.py", oldText: "def add(x, y):", newText: "def add(x, y, z):",
+			caller: "b.py", callerOld: "return add(x, y)", callerNew: "return add(x, y, 0)",
+			wantSource: "a.add", wantTarget: "b.use",
+			stableID: true,
+		},
+		{
+			lang: "rust",
+			files: map[string]string{
+				"Cargo.toml": "[package]\nname = \"sigrs\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+				"src/lib.rs": "pub mod a;\npub mod b;\n",
+				"src/a.rs":   "pub fn add(x: i32, y: i32) -> i32 { x + y }\n",
+				"src/b.rs":   "use crate::a::add;\npub fn use_it(x: i32, y: i32) -> i32 { add(x, y) }\n",
+			},
+			target: "src/a.rs", oldText: "add(x: i32, y: i32)", newText: "add(x: i32, y: i32, z: i32)",
+			caller: "src/b.rs", callerOld: "add(x, y) }", callerNew: "add(x, y, 0) }",
+			wantSource: "sigrs::a::add", wantTarget: "sigrs::b::use_it",
+			stableID: true,
+		},
+		{
+			lang: "java",
+			files: map[string]string{
+				"pom.xml": `<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.demo</groupId>
+  <artifactId>sigjava</artifactId>
+  <version>1.0.0</version>
+</project>
+`,
+				"src/main/java/com/demo/A.java": "package com.demo;\n\npublic class A {\n    public int add(int x, int y) { return x + y; }\n}\n",
+				"src/main/java/com/demo/B.java": "package com.demo;\n\npublic class B {\n    public int use(int x, int y) {\n        A a = new A();\n        return a.add(x, y);\n    }\n}\n",
+			},
+			target: "src/main/java/com/demo/A.java", oldText: "int add(int x, int y)", newText: "int add(int x, int y, int z)",
+			caller: "src/main/java/com/demo/B.java", callerOld: "a.add(x, y)", callerNew: "a.add(x, y, 0)",
+			wantSource: "com.demo.A.add(int,int)", wantTarget: "com.demo.B.use(int,int)",
+			stableID: false,
+		},
+	}
+}
+
+func (c crossLangSigCase) writeAll(t *testing.T, dir string) {
+	t.Helper()
+	for rel, content := range c.files {
+		p := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// replace rewrites rel, swapping the first occurrence of from for to, and pushes
+// the mtime forward so DiffScanFiles sees the change even when the manifest was
+// stamped in the same second.
+func (c crossLangSigCase) replace(t *testing.T, dir, rel, from, to string) {
+	t.Helper()
+	p := filepath.Join(dir, filepath.FromSlash(rel))
+	data, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(data)
+	if !strings.Contains(s, from) {
+		t.Fatalf("%s: %q not found in %s", c.lang, from, rel)
+	}
+	if err := os.WriteFile(p, []byte(strings.Replace(s, from, to, 1)), 0644); err != nil {
+		t.Fatal(err)
+	}
+	mtime := time.Now().Add(3 * time.Second)
+	if err := os.Chtimes(p, mtime, mtime); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestCrossLanguageSignatureChangedClearsWhenCallerIsFixed is the regression for
+// "the warning never goes away": changing a signature must name the caller that
+// needs verifying, and fixing that caller must clear the row from the database.
+// Go already behaved this way (TestIncrementalScanClearsSignatureChangedWhenCallerIsEdited);
+// before ExpandSignatureWarnings the other five languages never cleared at all.
+//
+// Both write paths are covered: UpdateFile is what the MCP edit/write tools call,
+// IncrementalScan is what `arac scan` and the watcher call.
+func TestCrossLanguageSignatureChangedClearsWhenCallerIsFixed(t *testing.T) {
+	paths := []struct {
+		name  string
+		apply func(t *testing.T, mgr *topology.TopologyManager, reg *scanner.Registry, dir, rel string) []domain.TopologyWarning
+	}{
+		{
+			name: "UpdateFile",
+			apply: func(t *testing.T, mgr *topology.TopologyManager, reg *scanner.Registry, dir, rel string) []domain.TopologyWarning {
+				t.Helper()
+				w, err := mgr.UpdateFile(filepath.Join(dir, filepath.FromSlash(rel)), reg)
+				if err != nil {
+					t.Fatalf("UpdateFile(%s): %v", rel, err)
+				}
+				return w
+			},
+		},
+		{
+			name: "IncrementalScan",
+			apply: func(t *testing.T, mgr *topology.TopologyManager, reg *scanner.Registry, dir, _ string) []domain.TopologyWarning {
+				t.Helper()
+				w, err := mgr.IncrementalScan(dir, reg)
+				if err != nil {
+					t.Fatalf("IncrementalScan: %v", err)
+				}
+				return w
+			},
+		},
+	}
+
+	for _, path := range paths {
+		t.Run(path.name, func(t *testing.T) {
+			for _, c := range crossLangSigCases() {
+				t.Run(c.lang, func(t *testing.T) {
+					dir := t.TempDir()
+					c.writeAll(t, dir)
+
+					reg := crossLangRegistry()
+					mgr := topology.New()
+					mgr.Load(filepath.Join(dir, "topology.db"))
+					if err := mgr.FullScan(dir, reg); err != nil {
+						t.Fatalf("FullScan: %v", err)
+					}
+					if n := countWarns(t, mgr, ""); n != 0 {
+						t.Fatalf("expected a clean graph before the edit, got %d warnings", n)
+					}
+
+					// widen the signature the other file calls
+					c.replace(t, dir, c.target, c.oldText, c.newText)
+					warnings := path.apply(t, mgr, reg, dir, c.target)
+
+					// 1. the warning reaches the caller of the update at all
+					var got *domain.TopologyWarning
+					for i := range warnings {
+						for _, k := range c.warningKinds() {
+							if warnings[i].Kind == k {
+								got = &warnings[i]
+								break
+							}
+						}
+						if got != nil {
+							break
+						}
+					}
+					if got == nil {
+						t.Fatalf("no %v warning; the update returned %d warnings: %+v",
+							c.warningKinds(), len(warnings), warnings)
+					}
+
+					// 2. it names a caller to go verify, not just the symbol that
+					//    changed. This is the whole fix: a warning with no caller in
+					//    it is both unactionable and unclearable.
+					if caller := namedCaller(*got); caller != c.wantTarget {
+						t.Errorf("warning names %q as the code to check, want the caller %q (%+v)",
+							caller, c.wantTarget, *got)
+					}
+					if !strings.Contains(got.Message, c.wantTarget) {
+						t.Errorf("message should name the caller to check, got %q", got.Message)
+					}
+					if got.Kind == domain.WarnSignatureChanged && c.stableID && got.SourceID != c.wantSource {
+						t.Errorf("SourceID = %q, want the changed symbol %q", got.SourceID, c.wantSource)
+					}
+
+					// 3. it survived the cleanup passes and reached the database
+					if n := countWarns(t, mgr, got.Kind); n != 1 {
+						w, _ := mgr.ListWarnings("", "", got.Kind)
+						t.Errorf("persisted %s warnings = %d, want 1: %+v", got.Kind, n, w)
+					}
+
+					// 4. fixing the caller clears it. Before the fix this stayed
+					//    in the warnings table forever for every non-Go language.
+					c.replace(t, dir, c.caller, c.callerOld, c.callerNew)
+					path.apply(t, mgr, reg, dir, c.caller)
+
+					if n := countWarns(t, mgr, ""); n != 0 {
+						w, _ := mgr.ListWarnings("", "", "")
+						t.Errorf("fixing the caller should clear the warning, still have %d: %+v", n, w)
+					}
+				})
+			}
+		})
+	}
+}
+
+// TestCrossLanguageSignatureChangedClearsWhenCallerIsDeleted covers the other
+// way a signature warning stops being actionable: the caller it points at is
+// gone, so there is nothing left to verify. CleanupOrphanedWarnings only tested
+// SourceID, which for signature_changed is the symbol that changed and is still
+// very much present.
+func TestCrossLanguageSignatureChangedClearsWhenCallerIsDeleted(t *testing.T) {
+	for _, c := range crossLangSigCases() {
+		if !c.stableID {
+			continue
+		}
+		t.Run(c.lang, func(t *testing.T) {
+			dir := t.TempDir()
+			c.writeAll(t, dir)
+
+			reg := crossLangRegistry()
+			mgr := topology.New()
+			mgr.Load(filepath.Join(dir, "topology.db"))
+			if err := mgr.FullScan(dir, reg); err != nil {
+				t.Fatalf("FullScan: %v", err)
+			}
+
+			c.replace(t, dir, c.target, c.oldText, c.newText)
+			if _, err := mgr.UpdateFile(filepath.Join(dir, filepath.FromSlash(c.target)), reg); err != nil {
+				t.Fatalf("UpdateFile: %v", err)
+			}
+			if n := countWarns(t, mgr, domain.WarnSignatureChanged); n != 1 {
+				t.Fatalf("expected 1 signature_changed before deleting the caller, got %d", n)
+			}
+
+			// delete the caller outright
+			callerPath := filepath.Join(dir, filepath.FromSlash(c.caller))
+			if err := os.Remove(callerPath); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := mgr.UpdateFile(callerPath, reg); err != nil {
+				t.Fatalf("UpdateFile (delete caller): %v", err)
+			}
+
+			if n := countWarns(t, mgr, domain.WarnSignatureChanged); n != 0 {
+				w, _ := mgr.ListWarnings("", "", domain.WarnSignatureChanged)
+				t.Errorf("removing the caller should clear the warning, still have %d: %+v", n, w)
+			}
+		})
+	}
+}
+
+// TestPartialIncrementalDropsWarningsItOrphans pins the scoped fast path's own
+// orphan sweep. WriteScopedResources truncates and rewrites the whole warnings
+// table from the map the scanner hands back, and that map is seeded with every
+// row in the table, so a warning the delta just orphaned is re-inserted and
+// outlives the code it points at. goscanner's resolveWarnings covers the
+// node_removed case but not use_missing_node, and the whole-graph
+// CleanupOrphanedWarnings cannot run on a working set -- an id absent from a
+// working set only means "not loaded".
+func TestPartialIncrementalDropsWarningsItOrphans(t *testing.T) {
+	p := newWarnProj(t)
+	p.write(t, "caller.go", `package testproject
+
+func Broken() int { return NoSuchFunc() }
+
+func Untouched() int { return 7 }
+`)
+	mgr := p.scan(t)
+	if n := countWarns(t, mgr, domain.WarnUseMissingNode); n == 0 {
+		t.Fatal("expected use_missing_node for the undefined call")
+	}
+
+	// Delete Broken. Nothing outside this file references it, so the edit stays
+	// on the scoped fast path -- the only path that rewrites the warnings table
+	// without a whole-graph orphan sweep.
+	before := topology.PartialIncrementalCount()
+	p.writeForIncrementalScan(t, "caller.go", `package testproject
+
+func Untouched() int { return 7 }
+`)
+	p.incrementalScan(t, mgr)
+
+	// Asserted for whichever path ran: the two must agree, and the full path's
+	// CleanupOrphanedWarnings has always done this. The skip below only reports
+	// that the scoped sweep itself went unexercised.
+	if n := countWarns(t, mgr, ""); n != 0 {
+		w, _ := mgr.ListWarnings("", "", "")
+		t.Errorf("%d warning(s) left pointing at deleted code: %+v", n, w)
+	}
+	if topology.PartialIncrementalCount() == before {
+		t.Skip("the edit fell back to the full path (ARAC_NO_PARTIAL?), so the scoped orphan sweep was not exercised")
 	}
 }

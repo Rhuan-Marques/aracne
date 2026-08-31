@@ -162,6 +162,29 @@ def apply_aracne_config(worktree, overlay_path) -> None:
     cfg_path.write_text(json.dumps(_merge_json(base, overlay), indent=2), encoding="utf-8")
 
 
+def sync_agent_contract(worktree, arac_bin: str = "arac") -> bool:
+    """Regenerate the fixture's Claude Code integration files from its CURRENT config.
+
+    WHY. `restore()` puts back the CLAUDE.md that was frozen at prepare time, and
+    `apply_aracne_config()` then changes the config out from under it. The contract is not
+    static text: `prompts.ClaudeMdContentForAgent` names the read tool `read` or
+    `read_resource` depending on blocked_tools (see toolspec.ResolveReadToolName), and the
+    settings allow-list is derived from mcp_tools. Skip this and a run overlay that blocks
+    native read ships a contract telling the model to call a tool that is not in its list --
+    the single most effective way to get zero adoption.
+
+    `arac init --claude` writes integration files only (no scan, no topology write), and it
+    reinstalls the guard hook, so it is safe and cheap to re-run per cell. Best-effort:
+    returns False if it could not run, leaving the frozen contract in place.
+    """
+    try:
+        subprocess.run([arac_bin, "init", "--claude", "-y"], cwd=str(worktree),
+                       check=True, capture_output=True, text=True, timeout=120)
+        return True
+    except (subprocess.SubprocessError, OSError):
+        return False
+
+
 # --------------------------------------------------------------------------- #
 # Base-commit hygiene
 # --------------------------------------------------------------------------- #

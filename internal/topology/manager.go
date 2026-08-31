@@ -222,6 +222,14 @@ func (m *TopologyManager) IncrementalScan(root string, reg *scanner.Registry) ([
 			resolveSet[path] = true
 		}
 	}
+	// Snapshot the files that actually changed on disk BEFORE the reverse-caller
+	// expansion below widens resolveSet. A reverse-caller file is re-resolved
+	// precisely because it calls something whose signature moved, so it is the
+	// file a signature warning must point AT, not one to skip.
+	editedFiles := make(map[string]bool, len(resolveSet))
+	for path := range resolveSet {
+		editedFiles[path] = true
+	}
 	callerFiles := m.reverseCallerFiles(topo, beforeResources, beforeSigKeys, resolveSet)
 	for f := range callerFiles {
 		resolveSet[f] = true
@@ -269,6 +277,12 @@ func (m *TopologyManager) IncrementalScan(root string, reg *scanner.Registry) ([
 	// lookup for the symbol case. This does it from the graph, so it works for
 	// every language.
 	referrerWarnings := referrerPass(topo, removedSince(beforeSigs, topo.Resources), "", resolveSet)
+
+	// Every scanner but goscanner reports a signature change against the symbol
+	// that changed and names no caller. Nothing can ever clear that shape, so fan
+	// it out to the callers that now need verifying before it reaches
+	// topo.Warnings and, from there, the database.
+	allWarnings = helper.ExpandSignatureWarnings(topo, allWarnings, editedFiles)
 
 	for _, w := range allWarnings {
 		topo.Warnings[w.ID] = w
@@ -389,6 +403,13 @@ func (m *TopologyManager) tryPartialIncremental(root string, reg *scanner.Regist
 		if m.partialNeedsCrossFileResolve(absPath, upserts, deletes) {
 			return false, nil, nil
 		}
+		// WriteScopedResources rewrites the whole warnings table from this map, so
+		// a warning this very delta orphaned would be re-inserted and outlive the
+		// code it points at. The whole-graph CleanupOrphanedWarnings cannot run on
+		// a working set; this drops the ones the delta is known to have
+		// invalidated. Runs before the report loop below so a dropped warning is
+		// not surfaced either.
+		helper.CleanupOrphanedWarningsScoped(warnings, deletes)
 		if err := helper.WriteScopedResources(m.dbPath, upserts, deletes, warnings); err != nil {
 			return true, allWarnings, fmt.Errorf("write topology db: %w", err)
 		}
@@ -675,6 +696,10 @@ func (m *TopologyManager) UpdateFile(path string, reg *scanner.Registry) ([]doma
 	if err != nil {
 		return nil, err
 	}
+	// Every scanner but goscanner reports a signature change against the symbol
+	// that changed and names no caller. Nothing can ever clear that shape, so fan
+	// it out to the callers that now need verifying before it is merged in.
+	scannerWarnings = helper.ExpandSignatureWarnings(topo, scannerWarnings, map[string]bool{absPath: true})
 	mergeNewWarnings(topo, scannerWarnings)
 
 	// This file was just re-parsed from source, so what it references now is

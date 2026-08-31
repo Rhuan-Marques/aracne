@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"aracne/internal/topology/domain"
 )
@@ -14,7 +15,18 @@ type DescriptionResource struct {
 	Name       string
 	Kind       domain.ResourceKind
 	ReadOutput string
+	// CurrentDescription is set only when the resource is being RE-described because its
+	// stored description overruns its kind's budget (`descriptions generate
+	// --regen_oversized`). It is shown to the executor as the text to replace, which also
+	// flips the input's framing from "describe this" to "rewrite this, shorter".
+	CurrentDescription string
 }
+
+// currentDescriptionPreview caps how much of an over-budget description is quoted back to
+// the executor. The source is already in the prompt and the rewrite must come from the
+// code, not from compressing the old text, so a long offender is shown only far enough to
+// recognise what is being replaced.
+const currentDescriptionPreview = 200
 
 // DescriptionExemplar is an already-written description fed to the executor as a
 // house-style anchor so generated descriptions match the codebase's voice.
@@ -31,7 +43,7 @@ func DescriptionsGenerationExecutorPrompt() string {
 ## Loop (per assigned resource)
 1. Use the source if it is already provided; otherwise call **read** with its ` + "`resource_id`" + `.
 2. Glance at neighbors only when the resource alone is unclear.
-3. Write the shortest description that is still accurate. One line, within the character budget in your task prompt — a hard cap, not a target. Cut articles and filler before you cut facts.
+3. Write the shortest description that is still accurate. One line, within the character budget in your task prompt — update_description rejects anything over it. Cut articles and filler before you cut facts.
 4. Call **update_description** immediately.
 
 ## Rules
@@ -44,10 +56,17 @@ func DescriptionsGenerationExecutorPrompt() string {
 // Formats executor subagent instructions for describing assigned resources, with per-kind limits and exemplars.
 func DescriptionsGenerationExecutorInput(resources []DescriptionResource, exemplars []DescriptionExemplar) string {
 	var b strings.Builder
+	regen := hasCurrentDescriptions(resources)
 	if len(resources) == 1 {
 		res := resources[0]
-		b.WriteString("Describe only the assigned resource below. You may glance at neighbors, but update only this resource.\n\n")
-		b.WriteString(fmt.Sprintf("Resource ID: %s\nName: %s\nKind: %s\n\n", res.ID, res.Name, res.Kind))
+		if regen {
+			b.WriteString("Rewrite the description of the assigned resource below: it already has one, but it overruns the character budget for its kind. You may glance at neighbors, but update only this resource.\n\n")
+		} else {
+			b.WriteString("Describe only the assigned resource below. You may glance at neighbors, but update only this resource.\n\n")
+		}
+		b.WriteString(fmt.Sprintf("Resource ID: %s\nName: %s\nKind: %s\n", res.ID, res.Name, res.Kind))
+		writeCurrentDescription(&b, "", res)
+		b.WriteByte('\n')
 		if strings.TrimSpace(res.ReadOutput) != "" {
 			b.WriteString("Source (already read for you):\n\n```text\n")
 			b.WriteString(strings.TrimSpace(res.ReadOutput))
@@ -57,14 +76,23 @@ func DescriptionsGenerationExecutorInput(resources []DescriptionResource, exempl
 		}
 		writeExemplars(&b, exemplars)
 		b.WriteString(singleDescriptionInstruction(res.Kind))
+		if regen {
+			b.WriteString(" ")
+			b.WriteString(rewriteInstruction)
+		}
 		b.WriteString(" Then call update_description immediately.\n")
 		return b.String()
 	}
 
-	b.WriteString("Describe only the assigned resources below. You may glance at neighbors, but update only assigned resources.\n\n")
+	if regen {
+		b.WriteString("Rewrite the descriptions of the assigned resources below: each already has one, but it overruns the character budget for its kind. You may glance at neighbors, but update only assigned resources.\n\n")
+	} else {
+		b.WriteString("Describe only the assigned resources below. You may glance at neighbors, but update only assigned resources.\n\n")
+	}
 	b.WriteString("Assigned resources:\n\n")
 	for _, res := range resources {
 		b.WriteString(fmt.Sprintf("- ID: %s\n  Name: %s\n  Kind: %s\n", res.ID, res.Name, res.Kind))
+		writeCurrentDescription(&b, "  ", res)
 		if strings.TrimSpace(res.ReadOutput) != "" {
 			b.WriteString("  Source (already read):\n\n```text\n")
 			b.WriteString(strings.TrimSpace(res.ReadOutput))
@@ -73,6 +101,11 @@ func DescriptionsGenerationExecutorInput(resources []DescriptionResource, exempl
 		b.WriteByte('\n')
 	}
 	b.WriteString("For any resource without source above, call read with its id first. Call update_description immediately after each description.\n\n")
+	if regen {
+		b.WriteString(rewriteInstruction)
+		b.WriteByte('\n')
+		b.WriteByte('\n')
+	}
 	writeExemplars(&b, exemplars)
 	b.WriteString("## Per-kind limits\n\n")
 	for _, line := range descriptionGuidelinesForKinds(resources) {
@@ -81,6 +114,41 @@ func DescriptionsGenerationExecutorInput(resources []DescriptionResource, exempl
 		b.WriteByte('\n')
 	}
 	return b.String()
+}
+
+// rewriteInstruction is the extra guidance a re-description needs and a first description
+// does not: the old text is over budget, so shortening it is the whole job, and it must be
+// re-derived from the code rather than trimmed word by word from a description that was
+// already too long.
+const rewriteInstruction = "Write the new description from the code, not by trimming the old one, and keep every fact that still fits."
+
+// hasCurrentDescriptions reports whether any assigned resource is being re-described.
+func hasCurrentDescriptions(resources []DescriptionResource) bool {
+	for _, res := range resources {
+		if strings.TrimSpace(res.CurrentDescription) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// writeCurrentDescription renders the over-budget description a resource is replacing,
+// with its length and budget so the executor knows how much has to go; no-op for a
+// resource that has no description yet. indent prefixes the line in list form.
+func writeCurrentDescription(b *strings.Builder, indent string, res DescriptionResource) {
+	trimmed := strings.TrimSpace(res.CurrentDescription)
+	if trimmed == "" {
+		return
+	}
+	// Counted the way domain.ValidateDescription counts it — the whole trimmed text in
+	// runes — so the number quoted here is the one the budget was measured against, not
+	// the length of the first line of a multi-line offender.
+	n := utf8.RuneCountInString(trimmed)
+	current := strings.Join(strings.Fields(trimmed), " ")
+	if utf8.RuneCountInString(current) > currentDescriptionPreview {
+		current = string([]rune(current)[:currentDescriptionPreview]) + "…"
+	}
+	b.WriteString(fmt.Sprintf("%sCurrent description (%d chars, over the %d-char budget) — replace it: %s\n", indent, n, domain.DescriptionBudget(res.Kind), current))
 }
 
 // writeExemplars renders a compact house-style block; no-op when empty.
@@ -109,6 +177,12 @@ func oneLine(s string) string {
 // file as tiebreaker: a resource of the same Kind as the batch is always
 // preferred over a different Kind, and within a Kind one sharing a source file
 // with the batch wins. Returns nil when limit <= 0 or nothing qualifies.
+//
+// A description that overruns its own kind's budget is never an exemplar. The block
+// asks the executor to match the examples' "voice and brevity", so an over-budget one
+// teaches a length update_description would reject — and in a --regen_oversized run,
+// where over-budget descriptions are exactly what the database is full of, it would
+// anchor the rewrite to the text being replaced.
 func BuildDescriptionExemplars(topo *domain.Topology, batchIDs []string, limit int) []DescriptionExemplar {
 	if topo == nil || limit <= 0 || len(batchIDs) == 0 {
 		return nil
@@ -145,6 +219,9 @@ func BuildDescriptionExemplars(topo *domain.Topology, batchIDs []string, limit i
 		if strings.TrimSpace(res.Description) == "" {
 			continue
 		}
+		if domain.ValidateDescription(res.Kind, res.Description) != nil {
+			continue
+		}
 		sameKind := kinds[res.Kind]
 		sameFile := res.Location.Path != "" && paths[res.Location.Path]
 		// 0: same Kind + same file, 1: same Kind, 2: same file, 3: neither.
@@ -177,23 +254,24 @@ func BuildDescriptionExemplars(topo *domain.Topology, batchIDs []string, limit i
 
 // Returns the per-resource-kind guideline for writing one-line descriptions in the topology database.
 func singleDescriptionInstruction(kind domain.ResourceKind) string {
+	budget := domain.DescriptionBudget(kind)
 	switch kind {
 	case domain.ResourceFunction, domain.ResourceMethod:
-		return "One line, ≤120 chars: what it does, plus any notable params, returns, or side effects."
+		return fmt.Sprintf("One line, ≤%d chars: what it does, plus any notable params, returns, or side effects.", budget)
 	case domain.ResourceStruct, domain.ResourceNamedType:
-		return "One line, ≤100 chars: what it represents and its key fields or methods."
+		return fmt.Sprintf("One line, ≤%d chars: what it represents and its key fields or methods.", budget)
 	case domain.ResourceInterface:
-		return "One line, ≤100 chars: the contract and key methods."
+		return fmt.Sprintf("One line, ≤%d chars: the contract and key methods.", budget)
 	case domain.ResourceVariable:
-		return "One line, ≤80 chars: what it stores and why."
+		return fmt.Sprintf("One line, ≤%d chars: what it stores and why.", budget)
 	case domain.ResourceFile:
-		return "One line, ≤100 chars: the file's role in its package."
+		return fmt.Sprintf("One line, ≤%d chars: the file's role in its package.", budget)
 	case domain.ResourcePackage:
-		return "One line, ≤100 chars: the package's purpose."
+		return fmt.Sprintf("One line, ≤%d chars: the package's purpose.", budget)
 	case domain.ResourceDependency:
-		return "One line, ≤80 chars: what external dependency and why."
+		return fmt.Sprintf("One line, ≤%d chars: what external dependency and why.", budget)
 	default:
-		return "One line, ≤100 chars, on what this resource does."
+		return fmt.Sprintf("One line, ≤%d chars, on what this resource does.", budget)
 	}
 }
 
@@ -212,7 +290,7 @@ func descriptionGuidelinesForKinds(resources []DescriptionResource) []string {
 	var lines []string
 	functionLike := seen[domain.ResourceFunction] || seen[domain.ResourceMethod]
 	if functionLike {
-		lines = append(lines, "Functions/methods: one line each, ≤120 chars — what it does + any notable params/returns/side effects")
+		lines = append(lines, fmt.Sprintf("Functions/methods: one line each, ≤%d chars — what it does + any notable params/returns/side effects", domain.DescriptionBudget(domain.ResourceFunction)))
 		delete(seen, domain.ResourceFunction)
 		delete(seen, domain.ResourceMethod)
 	}
@@ -222,26 +300,27 @@ func descriptionGuidelinesForKinds(resources []DescriptionResource) []string {
 		}
 		lines = append(lines, pluralDescriptionInstruction(kind))
 	}
-	lines = append(lines, "Never exceed the character budget: these descriptions are re-sent in every CONTEXT block, so an overlong one is paid for on every later lookup")
+	lines = append(lines, "Never exceed the character budget — update_description rejects an over-budget write: these descriptions are re-sent in every CONTEXT block, so an overlong one is paid for on every later lookup")
 	return lines
 }
 
 // Returns description guidelines for a resource kind, specifying line limits and key details to include per type.
 func pluralDescriptionInstruction(kind domain.ResourceKind) string {
+	budget := domain.DescriptionBudget(kind)
 	switch kind {
 	case domain.ResourceStruct, domain.ResourceNamedType:
-		return "Types: one line each, ≤100 chars — what they represent and key fields/methods"
+		return fmt.Sprintf("Types: one line each, ≤%d chars — what they represent and key fields/methods", budget)
 	case domain.ResourceInterface:
-		return "Interfaces: one line each, ≤100 chars — contract and key methods"
+		return fmt.Sprintf("Interfaces: one line each, ≤%d chars — contract and key methods", budget)
 	case domain.ResourceVariable:
-		return "Variables: one line each, ≤80 chars — what they store and why"
+		return fmt.Sprintf("Variables: one line each, ≤%d chars — what they store and why", budget)
 	case domain.ResourceFile:
-		return "Files: one line each, ≤100 chars — role in the package"
+		return fmt.Sprintf("Files: one line each, ≤%d chars — role in the package", budget)
 	case domain.ResourcePackage:
-		return "Packages: one line each, ≤100 chars — overall purpose"
+		return fmt.Sprintf("Packages: one line each, ≤%d chars — overall purpose", budget)
 	case domain.ResourceDependency:
-		return "Dependencies: one line each, ≤80 chars — what and why"
+		return fmt.Sprintf("Dependencies: one line each, ≤%d chars — what and why", budget)
 	default:
-		return fmt.Sprintf("%s: one line each, ≤100 chars", kind)
+		return fmt.Sprintf("%s: one line each, ≤%d chars", kind, budget)
 	}
 }

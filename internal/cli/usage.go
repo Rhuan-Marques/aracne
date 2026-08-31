@@ -66,6 +66,9 @@ Flags for "descriptions generate":
   --batch-size <n>        Maximum resources assigned to each description executor (default 5)
   --parallel <n>          Maximum description executors to run concurrently (default 4)
   --max-retries <n>       Maximum executor attempts per resource (default 3)
+  --regen_oversized       Rewrite existing descriptions that overrun their kind's character
+                          budget (function/method 120, type 100, variable 80) instead of
+                          describing undocumented resources
 
 Flags for "descriptions export":
   --out <path>            Sidecar to write (default .aracne/descriptions.jsonl)

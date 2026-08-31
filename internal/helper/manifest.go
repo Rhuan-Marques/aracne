@@ -458,10 +458,54 @@ func RemoveFileResources(topo *domain.Topology, fileID string) []domain.Topology
 }
 
 // Removes warnings from topology for resources that no longer exist.
+//
+// A signature_changed warning is also dropped when its TargetID -- the caller it
+// asks you to go verify, see ExpandSignatureWarnings -- is gone, because there
+// is nothing left to check. The other two kinds carry a TargetID that names a
+// symbol which is missing on purpose, so only their SourceID is tested.
 func CleanupOrphanedWarnings(topo *domain.Topology) {
 	for id, w := range topo.Warnings {
 		if _, ok := topo.Resources[w.SourceID]; !ok {
 			delete(topo.Warnings, id)
+			continue
+		}
+		if w.Kind != domain.WarnSignatureChanged || w.TargetID == "" {
+			continue
+		}
+		if _, ok := topo.Resources[w.TargetID]; !ok {
+			delete(topo.Warnings, id)
+		}
+	}
+}
+
+// CleanupOrphanedWarningsScoped is the partial path's counterpart to
+// CleanupOrphanedWarnings, which cannot run there. On a working set an id that
+// is absent from topo.Resources only means "not loaded", so the whole-graph
+// test would delete nearly every warning in the table. This drops exactly the
+// ones the delta is known to have orphaned: those whose SourceID, or whose
+// signature_changed TargetID caller, is among the ids being deleted.
+//
+// The partial path needs this because WriteScopedResources rewrites the whole
+// warnings table from the map it is handed, so anything left in the map is
+// re-inserted. referrerPass has no safe scoped form either -- it must sweep
+// every resource in the repo to find surviving referrers -- and is deliberately
+// not mirrored here; the fast path falls back to the full path whenever a
+// change could need it.
+func CleanupOrphanedWarningsScoped(warnings map[string]domain.TopologyWarning, deleted []string) {
+	if len(warnings) == 0 || len(deleted) == 0 {
+		return
+	}
+	gone := make(map[string]bool, len(deleted))
+	for _, id := range deleted {
+		gone[id] = true
+	}
+	for id, w := range warnings {
+		if gone[w.SourceID] {
+			delete(warnings, id)
+			continue
+		}
+		if w.Kind == domain.WarnSignatureChanged && w.TargetID != "" && gone[w.TargetID] {
+			delete(warnings, id)
 		}
 	}
 }

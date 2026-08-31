@@ -56,6 +56,10 @@ def error_row(task: Task, arm: str, seed: int, error: str) -> dict:
         # the ROW (not looked up later) so size-stratified analysis works from runs.jsonl
         # alone — including in `rescore`, which never touches the fixtures dir.
         "repo_nodes": None,
+        # Did `arac scanner run` watch this cell? Only the aracne arm starts one, and it is
+        # best-effort — recorded so a freshness mechanism that did not run cannot be mistaken
+        # for one that ran and had nothing to do.
+        "bg_scanner": False,
         # Per-tool telemetry folded from the agent transcript (bench/toolstats.py). Always
         # present, so a backend that reports nothing is distinguishable from a real zero
         # via `has_transcript`/`transcript_path`.
@@ -117,11 +121,17 @@ def _run_cell(task: Task, arm: str, seed: int, cfg: dict, out_dir: Path,
     row["repo_nodes"] = meta.get("total")
 
     try:
-        rr = agents.run_agent(
-            cfg["run_harness"], agents.task_prompt(task.problem_statement),
-            workdir, cfg["model"], cfg["max_turns"], cfg["timeout_s"],
-            stream=True, effort=cfg.get("effort"),
-        )
+        # The watcher owns topology freshness for the aracne arm, so reads do not each pay
+        # for an incremental scan. It must wrap the agent call and nothing else: started
+        # after the workdir is restored (there is no DB to watch before that) and stopped
+        # before grading reads the patch.
+        with arms.background_scanner(arm, workdir, cfg) as scanning:
+            row["bg_scanner"] = scanning
+            rr = agents.run_agent(
+                cfg["run_harness"], agents.task_prompt(task.problem_statement),
+                workdir, cfg["model"], cfg["max_turns"], cfg["timeout_s"],
+                stream=True, effort=cfg.get("effort"),
+            )
         row.update(
             input_tokens=rr.input_tokens, output_tokens=rr.output_tokens,
             cache_tokens=rr.cache_tokens, num_turns=rr.num_turns,

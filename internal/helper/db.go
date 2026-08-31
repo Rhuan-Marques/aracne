@@ -652,7 +652,15 @@ func ReadDb(path string) (*domain.Topology, error) {
 // matches no row returns an error too — previously this call succeeded silently against a
 // nonexistent ID, so a description generator working from stale or mis-formatted IDs
 // would report success while storing nothing.
+//
+// The description is length-checked before the write. The budget applies to descriptions
+// arriving now, never to what is already stored (see domain.ValidateDescription): bulk
+// restores go through UpdateDescriptions, which stays uncapped so a sidecar can put back
+// long descriptions written before the cap existed.
 func UpdateDescription(dbPath string, kind domain.ResourceKind, id string, description string) error {
+	if err := domain.ValidateDescription(kind, description); err != nil {
+		return err
+	}
 	return withSQLiteWrite(dbPath, func(db *sql.DB) error {
 		query := "UPDATE resources SET description = ? WHERE id = ?"
 		args := []interface{}{description, id}

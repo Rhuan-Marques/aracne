@@ -2,6 +2,7 @@ package helper
 
 import (
 	"fmt"
+	"sort"
 
 	"aracne/internal/topology/domain"
 )
@@ -146,11 +147,16 @@ func ReferenceConnType(language string, kind domain.ResourceKind) string {
 	}
 }
 
-// ClearReferrerWarningsForFile drops node_removed warnings attributed to a
-// resource that lives in path. That file was just re-parsed from source, so
+// ClearReferrerWarningsForFile drops the warnings that send an agent to a
+// resource living in path. That file was just re-parsed from source, so
 // whatever it references now is authoritative: a stale reference that survived
 // the edit is re-emitted by the referrer pass in this same update, and one that
 // did not survive should stop being reported.
+//
+// The two kinds that qualify point opposite ways round. node_removed is
+// attributed to the referrer through SourceID, while signature_changed keeps
+// the changed symbol as SourceID and names the caller to verify in TargetID
+// (goscanner's shape; see ExpandSignatureWarnings).
 //
 // This is goscanner's clearReanalyzedFunctionWarnings generalized from one
 // function to one file, and from Go to every language.
@@ -158,15 +164,107 @@ func ClearReferrerWarningsForFile(topo *domain.Topology, path string) {
 	if path == "" {
 		return
 	}
+	inFile := func(id string) bool {
+		res, ok := topo.Resources[id]
+		return ok && res.Location.Path == path
+	}
 	for id, w := range topo.Warnings {
-		if w.Kind != domain.WarnNodeRemoved {
-			continue
-		}
-		res, ok := topo.Resources[w.SourceID]
-		if ok && res.Location.Path == path {
-			delete(topo.Warnings, id)
+		switch w.Kind {
+		case domain.WarnNodeRemoved:
+			if inFile(w.SourceID) {
+				delete(topo.Warnings, id)
+			}
+		case domain.WarnSignatureChanged:
+			if inFile(w.TargetID) {
+				delete(topo.Warnings, id)
+			}
 		}
 	}
+}
+
+// ExpandSignatureWarnings rewrites every self-attributed signature_changed
+// warning -- SourceID naming the symbol whose signature moved, TargetID empty --
+// into one caller-attributed warning per surviving referrer.
+//
+// The self-attributed shape can never be cleared. The symbol it names still
+// exists, so CleanupOrphanedWarnings keeps it; and with no caller in TargetID
+// neither ClearReferrerWarningsForFile nor goscanner's
+// clearReanalyzedFunctionWarnings has anything to key on. Fixing every caller
+// left the row in the database forever. Naming the caller is also the only form
+// an agent can act on, which is the same reason node_removed was moved off this
+// shape and onto the referrer pass.
+//
+// Warnings that already name a caller -- goscanner builds the final shape
+// itself -- and every other kind pass through untouched. skipPaths are the files
+// re-parsed in this same update: a referrer living in one of them was just
+// re-resolved from source, so warning about it would duplicate what the scanner
+// already reported. A changed symbol whose referrers have all gone yields no
+// warning at all; there is nothing left to verify, which is what goscanner does
+// by only emitting inside its caller loop.
+func ExpandSignatureWarnings(topo *domain.Topology, ws []domain.TopologyWarning, skipPaths map[string]bool) []domain.TopologyWarning {
+	changed := make(map[string]bool)
+	for _, w := range ws {
+		if w.Kind == domain.WarnSignatureChanged && w.TargetID == "" {
+			changed[w.SourceID] = true
+		}
+	}
+	// The overwhelmingly common update changes no signature at all, and the walk
+	// below is over every resource in the repo. Do not pay for it needlessly.
+	if len(changed) == 0 {
+		return ws
+	}
+
+	referrers := make(map[string][]string, len(changed))
+	for _, res := range topo.Resources {
+		if skipPaths[res.Location.Path] {
+			continue
+		}
+		// A referrer reaching the same symbol through two edge kinds (calls and
+		// uses_struct, say) is still one thing to verify, so record it once per
+		// changed symbol rather than once per edge.
+		var recorded map[string]bool
+		for connType, targets := range res.Connections {
+			if !ReferenceConnTypes[connType] {
+				continue
+			}
+			for _, target := range targets {
+				if !changed[target] || recorded[target] {
+					continue
+				}
+				if recorded == nil {
+					recorded = make(map[string]bool, len(changed))
+				}
+				recorded[target] = true
+				referrers[target] = append(referrers[target], res.ID)
+			}
+		}
+	}
+	for _, ids := range referrers {
+		sort.Strings(ids)
+	}
+
+	out := make([]domain.TopologyWarning, 0, len(ws))
+	for _, w := range ws {
+		if w.Kind != domain.WarnSignatureChanged || w.TargetID != "" {
+			out = append(out, w)
+			continue
+		}
+		name := w.SourceID
+		if res, ok := topo.Resources[w.SourceID]; ok && res.Name != "" {
+			name = res.Name
+		}
+		for _, callerID := range referrers[w.SourceID] {
+			out = append(out, domain.TopologyWarning{
+				// goscanner's id, so the two producers collapse onto one key.
+				ID:       callerID + "@" + string(domain.WarnSignatureChanged) + "@" + w.SourceID,
+				SourceID: w.SourceID,
+				Kind:     domain.WarnSignatureChanged,
+				TargetID: callerID,
+				Message:  fmt.Sprintf("%s changed signature, verify caller %s", name, callerID),
+			})
+		}
+	}
+	return out
 }
 
 // ResolveReferrerWarnings drops node_removed warnings whose target is back in

@@ -29,6 +29,10 @@ type descriptionResource struct {
 	ID   string
 	Name string
 	Kind domain.ResourceKind
+	// Current is the resource's stored description, set only in a --regen_oversized run,
+	// where the executor is replacing an over-budget description rather than writing a
+	// first one. Empty in a normal generation run.
+	Current string
 }
 
 // Holds a batch of resources with their generated descriptions text and any error from the LLM
@@ -46,6 +50,7 @@ func RunGenerateDescriptions(args []string) {
 	parallel := fs.Int("parallel", defaultDescriptionParallel, "Maximum description executors to run concurrently")
 	maxRetries := fs.Int("max-retries", defaultDescriptionMaxRetries, "Maximum executor attempts per resource")
 	includeNotVisibleFlag := fs.Bool("include-not-visible", false, "Include resources the read context filter would not render as a normal line (small functions / external vars set full or hidden)")
+	regenOversized := fs.Bool("regen_oversized", false, "Rewrite existing descriptions that overrun their kind's character budget instead of describing undocumented resources")
 	fs.Parse(args)
 
 	apiKey := os.Getenv("DEEPSEEK_API_KEY")
@@ -100,12 +105,16 @@ func RunGenerateDescriptions(args []string) {
 		*maxRetries = 1
 	}
 
-	pending, err := undocumentedDescriptionResources(manager, cfg.Descriptions.Kinds, filter, includeNotVisible)
+	pending, err := pendingDescriptionResources(manager, cfg.Descriptions.Kinds, filter, includeNotVisible, *regenOversized)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Generating descriptions for %d resources (targets: %s, batch size: %d, parallel: %d, max retries: %d)...\n", len(pending), helper.FormatDescribeTargets(cfg.Descriptions.Kinds), *batchSize, *parallel, *maxRetries)
+	action := fmt.Sprintf("Generating descriptions for %d resources", len(pending))
+	if *regenOversized {
+		action = fmt.Sprintf("Regenerating %d over-budget description(s)", len(pending))
+	}
+	fmt.Printf("%s (targets: %s, batch size: %d, parallel: %d, max retries: %d)...\n", action, helper.FormatDescribeTargets(cfg.Descriptions.Kinds), *batchSize, *parallel, *maxRetries)
 	if len(pending) == 0 {
 		fmt.Println("done")
 		return
@@ -114,20 +123,27 @@ func RunGenerateDescriptions(args []string) {
 	toolReg := BuildToolRegistry(manager, reg, cfg, "claude_code", "descriptions-generation-executor")
 	toolMap := registryToolMap(toolReg)
 
-	if err := runDescriptionGeneration(manager, provider, toolMap, lang, cfg.Descriptions.Kinds, *batchSize, *parallel, *maxRetries, cfg.Descriptions.StyleExemplars, filter, includeNotVisible); err != nil {
+	if err := runDescriptionGeneration(manager, provider, toolMap, lang, cfg.Descriptions.Kinds, *batchSize, *parallel, *maxRetries, cfg.Descriptions.StyleExemplars, filter, includeNotVisible, *regenOversized); err != nil {
 		fmt.Fprintf(os.Stderr, "\nError: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Println("done")
 }
 
-// Orchestrates batch-wise LLM description generation with retry logic, splitting undocumented resources into parallel executor waves.
-func runDescriptionGeneration(manager *topology.TopologyManager, provider llm.Provider, toolMap map[string]tools.Tool, lang string, targets []domain.ResourceKind, batchSize, parallel, maxRetries, exemplarLimit int, filter domain.ContextFilter, includeNotVisible bool) error {
+// Orchestrates batch-wise LLM description generation with retry logic, splitting undocumented
+// resources -- or, under regenOversized, resources whose stored description overruns its
+// kind's budget -- into parallel executor waves.
+//
+// Both modes converge the same way: the database is re-read after every wave and whatever
+// still qualifies is re-batched. That works for a rewrite because update_description REJECTS
+// an over-budget write, so a failed shrink leaves the old description standing and the
+// resource simply comes back in the next round instead of leaving a hole.
+func runDescriptionGeneration(manager *topology.TopologyManager, provider llm.Provider, toolMap map[string]tools.Tool, lang string, targets []domain.ResourceKind, batchSize, parallel, maxRetries, exemplarLimit int, filter domain.ContextFilter, includeNotVisible, regenOversized bool) error {
 	attempts := make(map[string]int)
 	failed := make(map[string]string)
 
 	for {
-		pending, err := undocumentedDescriptionResources(manager, targets, filter, includeNotVisible)
+		pending, err := pendingDescriptionResources(manager, targets, filter, includeNotVisible, regenOversized)
 		if err != nil {
 			return err
 		}
@@ -144,6 +160,9 @@ func runDescriptionGeneration(manager *topology.TopologyManager, provider llm.Pr
 			retryable = append(retryable, res)
 		}
 		if len(retryable) == 0 {
+			if regenOversized {
+				return fmt.Errorf("failed to shrink descriptions for %d resources: %s", len(failed), formatDescriptionFailures(failed))
+			}
 			return fmt.Errorf("failed to generate descriptions for %d resources: %s", len(failed), formatDescriptionFailures(failed))
 		}
 
@@ -222,8 +241,11 @@ func runDescriptionExecutorBatch(provider llm.Provider, manager *topology.Topolo
 	return a.RunSubAgent(prompts.DescriptionsGenerationExecutorPrompt(), input, toolMap)
 }
 
-// Returns all resources of specified kinds that lack descriptions, sorted by kind, name, and ID.
-func undocumentedDescriptionResources(manager *topology.TopologyManager, targets []domain.ResourceKind, filter domain.ContextFilter, includeNotVisible bool) ([]descriptionResource, error) {
+// Returns the resources a generation run has left to do, sorted by kind, name, and ID:
+// targeted resources that lack a description, or -- under regenOversized -- targeted
+// resources whose stored description overruns its kind's budget. Both selections apply the
+// same kind targeting and read-context visibility gate.
+func pendingDescriptionResources(manager *topology.TopologyManager, targets []domain.ResourceKind, filter domain.ContextFilter, includeNotVisible, regenOversized bool) ([]descriptionResource, error) {
 	topo, err := manager.ReadAll()
 	if err != nil {
 		return nil, err
@@ -231,6 +253,13 @@ func undocumentedDescriptionResources(manager *topology.TopologyManager, targets
 	targetSet := helper.DescribeTargetSet(targets)
 	resources := make([]descriptionResource, 0)
 	for id, res := range topo.Resources {
+		if regenOversized {
+			if !helper.ShouldRegenerateDescription(res, targetSet, filter, includeNotVisible) {
+				continue
+			}
+			resources = append(resources, descriptionResource{ID: id, Name: res.Name, Kind: res.Kind, Current: strings.TrimSpace(res.Description)})
+			continue
+		}
 		if !helper.ShouldDescribe(res, targetSet, filter, includeNotVisible) {
 			continue
 		}
@@ -274,7 +303,7 @@ func chunkDescriptionResources(resources []descriptionResource, batchSize int) [
 func descriptionExecutorInput(batch []descriptionResource, readResource func(string) string, exemplars []prompts.DescriptionExemplar) string {
 	resources := make([]prompts.DescriptionResource, 0, len(batch))
 	for _, res := range batch {
-		dr := prompts.DescriptionResource{ID: res.ID, Name: res.Name, Kind: res.Kind}
+		dr := prompts.DescriptionResource{ID: res.ID, Name: res.Name, Kind: res.Kind, CurrentDescription: res.Current}
 		if readResource != nil {
 			dr.ReadOutput = readResource(res.ID)
 		}

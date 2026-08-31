@@ -53,7 +53,8 @@ func runClaudeGuardHook(input io.Reader, output io.Writer) {
 			emitPreToolDeny(output, d.Message)
 		}
 	case "PostToolUse":
-		if msg := warningMessage(implicatedKeys(event.ToolName, event.ToolInput, exemptPiped)); msg != "" {
+		keys := implicatedKeys(event.ToolName, event.ToolInput, exemptPiped)
+		if msg := warningMessage(keys, !blocked[toolspec.ReadToolName]); msg != "" {
 			emitPostToolWarning(output, msg)
 		}
 	}
@@ -78,7 +79,7 @@ func decideGuard(toolName string, toolInput map[string]interface{}, blocked map[
 		return guardDecision{}
 	}
 	reason := fmt.Sprintf("Blocked by aracne config (blocked_tools: %s). ", strings.Join(denied, ", "))
-	if warn := warningMessage(keys); warn != "" {
+	if warn := warningMessage(keys, !blocked[toolspec.ReadToolName]); warn != "" {
 		reason += warn
 	} else {
 		reason += "Use the aracne MCP tools instead of this native/shell command."
@@ -101,8 +102,10 @@ func implicatedKeys(toolName string, toolInput map[string]interface{}, exemptPip
 }
 
 // warningMessage joins the per-key guidance for the given keys, skipping keys
-// without an MCP equivalent (e.g. "bash") and de-duplicating.
-func warningMessage(keys []string) string {
+// without an MCP equivalent (e.g. "bash") and de-duplicating. nativeReadAvailable
+// resolves the read tool's runtime name so the guidance never points at a name
+// that is absent from this agent's tool list.
+func warningMessage(keys []string, nativeReadAvailable bool) string {
 	var parts []string
 	seen := make(map[string]bool, len(keys))
 	for _, k := range keys {
@@ -110,7 +113,7 @@ func warningMessage(keys []string) string {
 			continue
 		}
 		seen[k] = true
-		if w := toolspec.WarningFor(k); w != "" {
+		if w := toolspec.WarningFor(k, nativeReadAvailable); w != "" {
 			parts = append(parts, w)
 		}
 	}

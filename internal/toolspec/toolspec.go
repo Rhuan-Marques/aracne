@@ -102,11 +102,23 @@ var powershellCmdToKey = map[string]string{
 // They are also phrased as an offer rather than a correction, which is what the shipped
 // warn-only default actually means: the native tools are allowed, and aracne's equivalents
 // have to win on merit. Forbidding them is what produced redundant read turns.
+//
+// The read key is absent here on purpose: its tool answers to two names depending on the
+// agent's blocked_tools, so its guidance is built at call time by readWarning.
 var nativeWarnings = map[string]string{
-	"read":  "aracne: `mcp__aracne__read_resource` takes several ids at once and returns their neighbours too.",
 	"grep":  "aracne: `mcp__aracne__grep` also searches node names and descriptions, which no plain grep can reach.",
 	"edit":  "aracne: `mcp__aracne__edit` updates the topology inline (the update-file hook covers this one too).",
 	"write": "aracne: `mcp__aracne__write` updates the topology inline.",
+}
+
+// readWarning is the read tool's guidance, named for the tool the agent actually has. A
+// static name is wrong half the time: blocking the harness's own read is exactly what makes
+// the aracne tool register as "read", and that is also the case where the guidance arrives
+// attached to a DENIAL -- so naming "read_resource" there refuses the call and sends the
+// model to a tool that is not in its list. See ResolveReadToolName.
+func readWarning(nativeReadAvailable bool) string {
+	return "aracne: `mcp__aracne__" + ResolveReadToolName(nativeReadAvailable) +
+		"` takes several ids at once and returns their neighbours too."
 }
 
 // ReadToolNames are the names the single read tool can answer to at runtime.
@@ -284,7 +296,12 @@ func baseCommandName(tok string) string {
 
 // WarningFor returns the model-facing guidance for an aracne tool key, or ""
 // when the key has no MCP equivalent (e.g. "bash") or is unknown.
-func WarningFor(key string) string { return nativeWarnings[key] }
+func WarningFor(key string, nativeReadAvailable bool) string {
+	if key == ReadToolName {
+		return readWarning(nativeReadAvailable)
+	}
+	return nativeWarnings[key]
+}
 
 // Validates a list of tool names against an allowed set, returning an error for any unknown tools.
 func validate(names []string, ok func(string) bool, kind string) error {

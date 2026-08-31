@@ -2,7 +2,7 @@
   "scan": { "mode": "default" },
   "read": {
     "max_file_size": 33554432,
-    "scan": "default",
+    "scan": "none",
     "pipe_passthrough": true,
     "context_filter": {
       "include_incoming": true,
@@ -21,7 +21,7 @@
     "<any>": {
       "main_agent": {
         "mcp_tools": ["read", "grep", "edit", "write", "warnings_list"],
-        "blocked_tools": []
+        "blocked_tools": ["read", "edit", "write"]
       },
       "agents": {
         "bug-hunter": { "model": "<inherits>", "mcp_tools": ["read", "grep", "bug_report"] },
@@ -34,7 +34,7 @@
     "claude_code": {
       "main_agent": {
         "mcp_tools": ["read", "grep", "edit", "write", "warnings_list"],
-        "blocked_tools": []
+        "blocked_tools": ["read", "edit", "write"]
       },
       "agents": {
         "descriptions-generation-executor": { "model": "haiku" }

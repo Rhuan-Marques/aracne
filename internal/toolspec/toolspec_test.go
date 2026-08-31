@@ -94,17 +94,35 @@ func TestShellCommandKey(t *testing.T) {
 
 func TestWarningFor(t *testing.T) {
 	for _, key := range []string{"read", "grep", "edit", "write"} {
-		if WarningFor(key) == "" {
-			t.Fatalf("WarningFor(%q) should be non-empty", key)
+		for _, nativeRead := range []bool{true, false} {
+			if WarningFor(key, nativeRead) == "" {
+				t.Fatalf("WarningFor(%q, %v) should be non-empty", key, nativeRead)
+			}
 		}
 	}
-	if !strings.Contains(WarningFor("grep"), "mcp__aracne__grep") {
-		t.Fatalf("grep warning should reference the MCP tool: %q", WarningFor("grep"))
+	if !strings.Contains(WarningFor("grep", true), "mcp__aracne__grep") {
+		t.Fatalf("grep warning should reference the MCP tool: %q", WarningFor("grep", true))
 	}
 	for _, key := range []string{"bash", "nope", ""} {
-		if WarningFor(key) != "" {
+		if WarningFor(key, true) != "" {
 			t.Fatalf("WarningFor(%q) should be empty", key)
 		}
+	}
+}
+
+// The read tool answers to two names, and the guidance has to name the one the agent was
+// actually given -- naming the other sends the model to a tool it does not have.
+func TestWarningForRead_NamesTheToolTheAgentHas(t *testing.T) {
+	withNative := WarningFor("read", true)
+	if !strings.Contains(withNative, "mcp__aracne__"+ReadResourceToolName) {
+		t.Fatalf("native read allowed: warning should name %q: %q", ReadResourceToolName, withNative)
+	}
+	blockedNative := WarningFor("read", false)
+	if !strings.Contains(blockedNative, "mcp__aracne__"+ReadToolName+"`") {
+		t.Fatalf("native read blocked: warning should name %q: %q", ReadToolName, blockedNative)
+	}
+	if strings.Contains(blockedNative, ReadResourceToolName) {
+		t.Fatalf("native read blocked: warning must not mention %q: %q", ReadResourceToolName, blockedNative)
 	}
 }
 

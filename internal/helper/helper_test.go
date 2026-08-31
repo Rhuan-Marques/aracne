@@ -814,6 +814,56 @@ func TestShouldDescribe(t *testing.T) {
 	}
 }
 
+// ShouldRegenerateDescription selects the exact complement of ShouldDescribe's population:
+// resources that ARE described, but over their kind's budget.
+func TestShouldRegenerateDescription(t *testing.T) {
+	targets := DescribeTargetSet([]domain.ResourceKind{domain.ResourceFunction, domain.ResourceVariable, domain.ResourceStruct})
+
+	// Small functions render as full code, external vars are hidden.
+	filter := domain.ContextFilter{
+		ExtVarsVisibility: domain.VisibilityHidden,
+		SmallFnVisibility: domain.VisibilityFull,
+		SmallFnThreshold:  5,
+	}
+
+	overFn := strings.Repeat("x", domain.DescriptionBudgetFunction+1)
+	atFn := strings.Repeat("x", domain.DescriptionBudgetFunction)
+	bigLoc := domain.Location{StartsAt: 1, EndsAt: 20}
+
+	cases := []struct {
+		name              string
+		res               domain.Resource
+		includeNotVisible bool
+		want              bool
+	}{
+		{"over-budget fn is regenerated", domain.Resource{Kind: domain.ResourceFunction, Description: overFn, Location: bigLoc}, false, true},
+		{"at-budget fn is left alone", domain.Resource{Kind: domain.ResourceFunction, Description: atFn, Location: bigLoc}, false, false},
+		{"undescribed fn is not this pass's job", domain.Resource{Kind: domain.ResourceFunction, Location: bigLoc}, false, false},
+		{"trailing whitespace does not push it over", domain.Resource{Kind: domain.ResourceFunction, Description: atFn + "\n", Location: bigLoc}, false, false},
+		{"off-target kind is skipped", domain.Resource{Kind: domain.ResourceInterface, Description: overFn, Location: bigLoc}, false, false},
+		{"small fn rendered full is skipped", domain.Resource{Kind: domain.ResourceFunction, Description: overFn, Location: domain.Location{StartsAt: 1, EndsAt: 3}}, false, false},
+		{"small fn included when include_not_visible", domain.Resource{Kind: domain.ResourceFunction, Description: overFn, Location: domain.Location{StartsAt: 1, EndsAt: 3}}, true, true},
+		{"hidden external var is skipped", domain.Resource{Kind: domain.ResourceVariable, Description: overFn}, false, false},
+		{"external var included when include_not_visible", domain.Resource{Kind: domain.ResourceVariable, Description: overFn}, true, true},
+	}
+	for _, tc := range cases {
+		if got := ShouldRegenerateDescription(tc.res, targets, filter, tc.includeNotVisible); got != tc.want {
+			t.Errorf("%s: ShouldRegenerateDescription = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+
+	// Budgets are per kind: text that fits a function overruns a struct.
+	between := strings.Repeat("x", domain.DescriptionBudgetType+1)
+	structRes := domain.Resource{Kind: domain.ResourceStruct, Description: between, Location: bigLoc}
+	fnRes := domain.Resource{Kind: domain.ResourceFunction, Description: between, Location: bigLoc}
+	if !ShouldRegenerateDescription(structRes, targets, domain.DefaultContextFilter(), false) {
+		t.Errorf("a %d-char struct description overruns the %d-char type budget", len(between), domain.DescriptionBudgetType)
+	}
+	if ShouldRegenerateDescription(fnRes, targets, domain.DefaultContextFilter(), false) {
+		t.Errorf("the same text still fits the %d-char function budget", domain.DescriptionBudgetFunction)
+	}
+}
+
 func TestLoadConfigCleanBreakOnOldFormat(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	// An old-format config has none of the new-schema fields.
