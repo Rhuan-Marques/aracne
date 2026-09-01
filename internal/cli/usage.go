@@ -17,7 +17,7 @@ Usage:
   Aracne descriptions clear [flags]    Clear stored topology descriptions
   Aracne descriptions export [flags]   Back up descriptions to an ID-independent JSONL sidecar
   Aracne descriptions import [flags]   Restore descriptions from a sidecar after a re-scan
-  arac read [--kind <kind>] <resource-id>...  Read one or more resources by ID; --kind forces exact kind (function, method, struct, named_type, interface, variable, file, package, dependency)
+  arac read [--kind <kind>] [--full] <resource-id>...  Read one or more resources by ID; --kind forces exact kind (function, method, struct, named_type, interface, variable, file, package, dependency); --full returns whole file bodies under read.file_mode "skeleton"
   arac resource list [query] [--kind <kind>]... [--no-description]  List resources, optionally filtered by query, kind, or missing description
   arac grep [flags] <pattern> [path]  Search node names, node descriptions and file contents (ranked in that order)
   arac update-file <path>  Re-parse a file and update the topology database (--db to specify db path)

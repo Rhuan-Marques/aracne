@@ -12,7 +12,9 @@
       "small_functions_visibility": "full",
       "small_function_threshold": 7
     },
-    "file_mode": "skeleton"
+    "file_mode": "skeleton",
+    "skeleton_threshold": 12,
+    "max_symbol_lines": 160
   },
   "scanner": {
     "mode": "default",
@@ -39,6 +41,7 @@
         ],
         "blocked_tools": [
           "read",
+          "grep",
           "edit",
           "write"
         ]
@@ -102,6 +105,7 @@
         ],
         "blocked_tools": [
           "read",
+          "grep",
           "edit",
           "write"
         ]

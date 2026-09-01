@@ -10,7 +10,7 @@
       "include_incoming": true,
       "external_vars_visibility": "normal",
       "small_functions_visibility": "full",
-      "small_function_threshold": 7
+      "small_function_threshold": 40
     },
     "file_mode": "skeleton"
   },
@@ -37,11 +37,7 @@
           "write",
           "warnings_list"
         ],
-        "blocked_tools": [
-          "read",
-          "edit",
-          "write"
-        ]
+        "blocked_tools": []
       },
       "agents": {
         "bug-hunter": {
@@ -100,11 +96,7 @@
           "write",
           "warnings_list"
         ],
-        "blocked_tools": [
-          "read",
-          "edit",
-          "write"
-        ]
+        "blocked_tools": []
       },
       "agents": {
         "descriptions-generation-executor": {

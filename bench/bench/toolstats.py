@@ -21,6 +21,7 @@ transcript on a large repo is tens of MB of duplicated source text.
 from __future__ import annotations
 
 import json
+import re
 
 # Substrings that identify an aracne resolution failure in a tool result. These are the
 # exact strings the engine emits — see internal/llm/languages/universaltools/universal_read.go
@@ -28,6 +29,66 @@ import json
 _MISS_MARKERS = ("not found in topology", "does not exist")
 _AMBIGUOUS_MARKER = "Multiple resources matching"
 _GUARD_MARKER = "Blocked by aracne config"
+
+# A fetch is an ANSWER-KEY fetch when the thing being fetched names the repository under test.
+# SWE-bench's answer is a public URL derived mechanically from the instance id, and across
+# three `scale40` runs every single network call the agent made was one of these -- PR diffs,
+# issue threads, PR-title searches -- and none was documentation or a package registry. So the
+# rule is narrow: the web is fair game, the repository holding the graded diff is not.
+#
+# This counter is the AUDIT half of that rule. bench/bench/netshim.py is the prevention half,
+# and it only wraps `curl`/`wget`; anything that reaches the network another way (a hand-rolled
+# `python3 -c urllib`, a harness tool making its own request) shows up here instead. A non-zero
+# count means the shim leaked, and paired._graded drops that repository from BOTH arms so a
+# contaminated pass never counts as a solve for either.
+_NET_MARKERS = ("http://", "https://")
+
+# What a BLOCKED answer-key fetch looks like coming back. netshim prints the first; a shell
+# reports the second for a binary that is not installed (`gh` is not, on the benchmark host).
+# Either way the model learned nothing, which is the whole point of the distinction below.
+_BLOCKED_FETCH = ("aracne-bench: refusing to fetch", "No such file or directory",
+                  "command not found")
+
+# A fetch that returned NOTHING taught the model nothing, so it is not contamination however
+# it failed. This catches the case the marker list cannot: `gh issue view … 2>/dev/null` sends
+# its "not installed" error to the void and comes back as a clean, empty result.
+#
+# The redirect check is the exception to the exception: `curl -o file` legitimately prints
+# nothing on success, so an empty result there may still have delivered the diff.
+# An fd redirect (`2>/dev/null`) and a discard are not "writing the result somewhere":
+# `gh issue view … 2>/dev/null` swallowing its own not-installed error is exactly the case
+# this whole rule exists to classify as "returned nothing".
+_WRITES_TO_FILE = re.compile(r"(?:^|\s)(?:-o|--output)(?:\s|=)|(?<![\d&])>>?\s*(?!&|/dev/null)[^\s|;&]+")
+
+
+def _fetch_returned_nothing(command, text: str) -> bool:
+    if any(m in text for m in _BLOCKED_FETCH):
+        return True
+    body = text.strip()
+    if body in ("", "{}"):
+        return True
+    try:
+        payload = json.loads(body)
+    except (ValueError, TypeError):
+        return False
+    if not isinstance(payload, dict) or "stdout" not in payload:
+        return False
+    if (payload.get("stdout") or "").strip() or (payload.get("stderr") or "").strip():
+        return False
+    return not (isinstance(command, str) and _WRITES_TO_FILE.search(command))
+
+
+# Commands that reach the network. Not forbidden -- a run legitimately installs a dependency --
+# but a task solved by fetching its own upstream PR diff is not measuring what the benchmark
+# thinks it is. In compact-blocked-20260830c, `sveltejs/svelte` curl'd the PR and `git apply`ed
+# it; that single cell carried the entire headline efficiency win for its arm, and the same
+# thing happened once in the baseline. Counting it is what lets the analysis exclude it.
+# Anchored on a word boundary rather than on a command separator. The separator form
+# missed `timeout 60 curl ...`, which is exactly how the agent wrote every fetch it made
+# in the scale40 runs -- so the counter read zero while the transcript showed five.
+# A stray "curl" inside a quoted string now counts too; for an audit counter that is the
+# safe direction, and n_answer_key_fetches additionally requires a URL and the repo name.
+_NETWORK_RE = re.compile(r"(?<![\w./-])(?:curl|wget|gh)\s|git\s+(?:fetch|clone|pull)\b")
 
 MCP_PREFIX = "mcp__aracne__"
 
@@ -70,11 +131,41 @@ def empty_stats() -> dict:
         "n_id_misses": 0,
         "n_ambiguous": 0,
         "n_guard_denials": 0,
+        "n_network_calls": 0,
+        # Two counters, because "went looking" and "found it" are different facts and only the
+        # second invalidates a pair. The first run with netshim in place made the distinction
+        # matter immediately: a cell issued two answer-key calls, the shim refused the `curl`
+        # and `gh` was not installed, so the model got nothing -- censoring that cell would
+        # have thrown away a clean data point for a lookup that provably failed.
+        "n_answer_key_attempts": 0,
+        "n_answer_key_fetches": 0,
         "has_transcript": False,
     }
 
 
-def summarize(stdout: str) -> tuple[dict, str]:
+def _is_answer_key_call(name: str, block: dict, answer_key: str) -> bool:
+    """Does this tool call try to reach the repository under test?
+
+    Matched against the call's INPUT rather than its result: the question is what the agent
+    asked for, and a refused fetch is as much a contamination signal as a successful one -- it
+    says the model went looking for the answer, which is what invalidates the pair.
+
+    Any network call naming the repository counts, with no requirement that a URL appear:
+    `gh pr list --repo org/repo` is an answer-key lookup written without one. A LOCAL command
+    naming the repository -- grepping the worktree, reading go.mod -- is not a network call and
+    so never reaches this test.
+    """
+    if not answer_key:
+        return False
+    if name == "WebFetch":
+        return answer_key in json.dumps(block.get("input") or {})
+    command = (block.get("input") or {}).get("command")
+    if not isinstance(command, str) or not _NETWORK_RE.search(command):
+        return False
+    return answer_key in command
+
+
+def summarize(stdout: str, answer_key: str = "") -> tuple[dict, str]:
     """Fold a stream-json transcript into counters, and return a size-reduced transcript.
 
     Never raises: a malformed or truncated stream still yields whatever was parseable, so
@@ -85,6 +176,8 @@ def summarize(stdout: str) -> tuple[dict, str]:
         return stats, ""
 
     names: dict[str, str] = {}      # tool_use_id -> tool name
+    answer_key_pending: set = set()  # tool_use_ids of answer-key ATTEMPTS awaiting a result
+    commands: dict = {}             # tool_use_id -> the shell command it ran
     reduced: list[str] = []
     saw_event = False
 
@@ -111,6 +204,14 @@ def summarize(stdout: str) -> tuple[dict, str]:
                     stats["n_mcp_calls"] += 1
                 else:
                     stats["n_native_calls"] += 1
+                if _is_answer_key_call(name, block, answer_key):
+                    stats["n_answer_key_attempts"] += 1
+                    answer_key_pending.add(block.get("id"))
+                    commands[block.get("id")] = (block.get("input") or {}).get("command")
+                if name == "Bash":
+                    command = (block.get("input") or {}).get("command", "")
+                    if isinstance(command, str) and _NETWORK_RE.search(command):
+                        stats["n_network_calls"] += 1
 
         elif etype == "user":
             for block in _blocks(event):
@@ -141,6 +242,13 @@ def summarize(stdout: str) -> tuple[dict, str]:
                     stats["n_ambiguous"] += 1
                 if _GUARD_MARKER in text:
                     stats["n_guard_denials"] += 1
+                # An attempt only contaminates the cell if it came back with something. A
+                # refusal leaves the model exactly where it was.
+                tid = block.get("tool_use_id")
+                if tid in answer_key_pending:
+                    answer_key_pending.discard(tid)
+                    if not _fetch_returned_nothing(commands.get(tid), text):
+                        stats["n_answer_key_fetches"] += 1
                 # Drop the body: we needed only its size.
                 block["content"] = f"<{nbytes} bytes elided by toolstats>"
 
@@ -163,7 +271,8 @@ ROW_FIELDS = (
     "n_tool_calls", "n_mcp_calls", "n_native_calls",
     "mcp_result_bytes", "native_result_bytes",
     "grep_result_bytes", "read_result_bytes",
-    "n_id_misses", "n_ambiguous", "n_guard_denials",
+    "n_id_misses", "n_ambiguous", "n_guard_denials", "n_network_calls",
+    "n_answer_key_attempts", "n_answer_key_fetches",
 )
 
 

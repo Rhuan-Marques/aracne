@@ -96,6 +96,7 @@ func DefaultContextFilter() ContextFilter {
 		SmallFnVisibility:    VisibilityNormal,
 		SmallFnThreshold:     5,
 		MaxInlineParentLines: DefaultMaxInlineParentLines,
+		HideNoDescription:    true,
 	}
 }
 

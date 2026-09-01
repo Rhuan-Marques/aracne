@@ -92,6 +92,35 @@ type ReadSection struct {
 	// command output, which the aracne MCP tools cannot serve. Direct file
 	// reads (`cat foo.go`) are still gated. Absent means the default (true).
 	PipePassthrough *bool `json:"pipe_passthrough"`
+	// FileMode decides what a whole-FILE read returns: "full" (default) is the file verbatim,
+	// "skeleton" is each top-level declaration's signature with large bodies elided.
+	//
+	// A benchmark run measured a file read returning 1.00x the bytes on disk, plus the context
+	// block on top -- strictly more expensive than `cat`, with the context block as the only
+	// thing bought. Skeleton mode is the answer, but it is opt-in: a model that has only seen
+	// a skeleton must not build an `edit` old_string from it, and that risk is worth measuring
+	// before it is anyone's default. Reading a SYMBOL is unaffected and already compact.
+	FileMode string `json:"file_mode"`
+	// SkeletonThreshold is how many lines a declaration may span before file_mode "skeleton"
+	// replaces its body with an elision marker. Absent uses the default.
+	//
+	// It exists because skeleton mode originally borrowed
+	// read.context_filter.small_function_threshold, whose real job is deciding how verbosely
+	// a NEIGHBOUR is rendered in the "# CONTEXT:" block. The benchmark config set that to 40
+	// for good reasons of its own, and at 40 lines almost nothing in real code elides:
+	// skeleton mode fired on 2 of 39 reads in compact-blocked-after-bs-20260830c and the
+	// median whole-file read still returned 1.00x the bytes on disk. Two different questions
+	// deserve two different knobs.
+	SkeletonThreshold *int `json:"skeleton_threshold,omitempty"`
+	// MaxSymbolLines caps a SYMBOL body the same way SkeletonThreshold caps a file's
+	// declarations: past it the read returns the signature plus an elision marker naming the
+	// id, and the model can ask again with `full: true` for the exact bytes.
+	//
+	// Symbol reads were the one path with no ceiling at all. Reading
+	// ['into_config', 'EngineState.merge_env'] out of nushell returned 75,893 bytes -- the
+	// largest single tool result across two benchmark runs -- because `into_config` is one
+	// enormous function. 0 or negative disables the cap.
+	MaxSymbolLines *int `json:"max_symbol_lines,omitempty"`
 }
 
 // ContextFilterSection tunes the "# CONTEXT:" block emitted by the read tools:
@@ -103,7 +132,7 @@ type ContextFilterSection struct {
 	ExternalVarsVisibility   string `json:"external_vars_visibility"`
 	SmallFunctionsVisibility string `json:"small_functions_visibility"`
 	SmallFunctionThreshold   int    `json:"small_function_threshold"`
-	HideNoDescription        bool   `json:"hide_no_description"`
+	HideNoDescription        *bool  `json:"hide_no_description"`
 	// MaxInlineParentLines caps how large a method's enclosing type may be before it stops
 	// being printed above the method and becomes an ordinary context entry. 0 disables
 	// inlining, negative means no cap. Absent uses the default.
@@ -338,8 +367,67 @@ func (c *Config) EffectiveSmallFunctionThreshold() int {
 }
 
 // Returns whether to hide resources without descriptions in context output.
+// FileModeSkeleton renders a file as its declarations with large bodies elided;
+// FileModeFull returns the file verbatim.
+const (
+	FileModeFull     = "full"
+	FileModeSkeleton = "skeleton"
+)
+
+// EffectiveFileMode resolves read.file_mode, defaulting to "full" for anything unrecognized
+// so a typo degrades to today's behaviour rather than to a surprising one.
+func (c *Config) EffectiveFileMode() string {
+	if strings.ToLower(strings.TrimSpace(c.Read.FileMode)) == FileModeSkeleton {
+		return FileModeSkeleton
+	}
+	return FileModeFull
+}
+
+// DefaultSkeletonThreshold is the declaration size, in lines, past which file_mode "skeleton"
+// elides a body. Twelve keeps small helpers, constructors and one-line accessors intact --
+// which is most of what a reader wants a file's shape for -- while eliding the bodies that
+// make a whole-file read cost the same as `cat`.
+const DefaultSkeletonThreshold = 12
+
+// DefaultMaxSymbolLines is the body size, in lines, past which a symbol read elides. Generous
+// on purpose: reading a symbol is the habit the tool wants to encourage, and truncating an
+// ordinary 100-line function would punish exactly the behaviour it is trying to buy.
+const DefaultMaxSymbolLines = 160
+
+// EffectiveSkeletonThreshold resolves read.skeleton_threshold.
+func (c *Config) EffectiveSkeletonThreshold() int {
+	if c.Read.SkeletonThreshold == nil || *c.Read.SkeletonThreshold <= 0 {
+		return DefaultSkeletonThreshold
+	}
+	return *c.Read.SkeletonThreshold
+}
+
+// EffectiveMaxSymbolLines resolves read.max_symbol_lines. A configured 0 or negative disables
+// the cap, which is why absence and zero must stay distinguishable.
+func (c *Config) EffectiveMaxSymbolLines() int {
+	if c.Read.MaxSymbolLines == nil {
+		return DefaultMaxSymbolLines
+	}
+	if *c.Read.MaxSymbolLines <= 0 {
+		return 0
+	}
+	return *c.Read.MaxSymbolLines
+}
+
+// EffectiveHideNoDescription resolves read.context_filter.hide_no_description, defaulting to
+// TRUE when the key is absent -- hence the pointer, which is how this file already
+// distinguishes "unset" from a meaningful false (see EffectiveMaxInlineParentLines).
+//
+// The default flipped after a benchmark run measured what an undescribed neighbour actually
+// buys. The CONTEXT section earns its tokens by letting the model skip a read: a description
+// says whether the neighbour matters. An entry with no description makes that promise and
+// does not keep it, so it costs a line and answers nothing. Constants are exempt upstream --
+// a value shown is a description (see applyExtVars).
 func (c *Config) EffectiveHideNoDescription() bool {
-	return c.Read.ContextFilter.HideNoDescription
+	if c.Read.ContextFilter.HideNoDescription == nil {
+		return true
+	}
+	return *c.Read.ContextFilter.HideNoDescription
 }
 
 // EffectiveMaxInlineParentLines resolves read.context_filter.max_inline_parent_lines,

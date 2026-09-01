@@ -178,6 +178,8 @@ def aggregate(rows: list[dict], cfg: dict, prep: list[dict] | None = None) -> di
         per_lang[lang] = {
             "arms": arms_stats,
             "delta": _delta(arms_stats.get("aracne"), arms_stats.get("baseline")),
+            "delta_by_arm": {a: _delta(arms_stats.get(a), arms_stats.get("baseline"))
+                             for a in arms if a != "baseline"},
         }
 
     overall_arms = {arm: _arm_stats(by_arm.get(arm, [])) for arm in arms}
@@ -191,13 +193,25 @@ def aggregate(rows: list[dict], cfg: dict, prep: list[dict] | None = None) -> di
         "overall": {
             "arms": overall_arms,
             "delta": _delta(overall_arms.get("aracne"), overall_arms.get("baseline")),
+            "delta_by_arm": {a: _delta(overall_arms.get(a), overall_arms.get("baseline"))
+                             for a in arms if a != "baseline"},
         },
     }
     # The paired analysis is the one that supports a claim; attach it alongside the pooled
     # descriptives so every consumer (console, HTML, LLM analysis) can reach it.
     margin = cfg.get("ni_margin", paired.DEFAULT_MARGIN)
-    agg["paired"] = paired.analyse(rows, margin)
-    agg["paired_by_language"] = paired.analyse_by_language(rows, languages, margin)
+    # One paired block per treatment arm, all against the same control. `paired` stays the
+    # primary arm's block so every existing consumer keeps working; `paired_by_arm` is what a
+    # three-arm run needs, and without it a third arm runs, lands in runs.jsonl, shows up in
+    # the pooled tables -- and is then silently absent from every number that supports a claim.
+    treatments = paired.treatment_arms(rows) or [paired.ARACNE]
+    primary = paired.ARACNE if paired.ARACNE in treatments else treatments[0]
+    agg["paired"] = paired.analyse(rows, margin, primary)
+    agg["paired_by_language"] = paired.analyse_by_language(rows, languages, margin, primary)
+    agg["paired_by_arm"] = {t: paired.analyse(rows, margin, t) for t in treatments}
+    agg["paired_by_arm_by_language"] = {
+        t: paired.analyse_by_language(rows, languages, margin, t) for t in treatments
+    }
     for lang, block in per_lang.items():
         block["paired"] = agg["paired_by_language"].get(lang)
     if prep is not None:

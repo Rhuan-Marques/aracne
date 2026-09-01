@@ -134,7 +134,7 @@ func TestDecideGuard(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			d := decideGuard(tt.tool, tt.input, tt.blocked, tt.exempt)
+			d := decideGuard(tt.tool, tt.input, tt.blocked, tt.exempt, "")
 			if d.Deny != tt.wantDeny {
 				t.Fatalf("decideGuard(%q) Deny = %v, want %v (msg: %q)", tt.tool, d.Deny, tt.wantDeny, d.Message)
 			}

@@ -22,7 +22,7 @@ import (
 // gone from both surfaces. `sed -n '10,40p' file` remains for the rare case that needs it.
 func RunRead() {
 	args := os.Args[2:]
-	ids, forcedKind, parseErr := parseReadArgs(args)
+	ids, forcedKind, full, parseErr := parseReadArgs(args)
 	if parseErr != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", parseErr)
 		printReadUsage()
@@ -36,8 +36,9 @@ func RunRead() {
 	// The CLI is the human/bash surface, so it reads every kind regardless of read.kinds --
 	// that setting exists to narrow what a MODEL is offered, not to lock a person out.
 	out, err := universaltools.NewRead(manager, cfg, false, reg).ReadIDs(ids, universaltools.ReadIDsOptions{
-		Kinds:      helper.AllReadKinds(),
-		ForcedKind: forcedKind,
+		Kinds:         helper.AllReadKinds(),
+		ForcedKind:    forcedKind,
+		ForceFullFile: full,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -47,20 +48,21 @@ func RunRead() {
 }
 
 // parseReadArgs collects the resource IDs and an optional --kind narrowing hint.
-func parseReadArgs(args []string) ([]string, domain.ResourceKind, error) {
+func parseReadArgs(args []string) ([]string, domain.ResourceKind, bool, error) {
 	var ids []string
 	var forcedKind domain.ResourceKind
+	var full bool
 
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
 		case arg == "--kind":
 			if i+1 >= len(args) {
-				return nil, "", fmt.Errorf("--kind requires a value")
+				return nil, "", false, fmt.Errorf("--kind requires a value")
 			}
 			kind := MapResourceKind(args[i+1])
 			if kind == "" {
-				return nil, "", fmt.Errorf("unknown resource kind %q", args[i+1])
+				return nil, "", false, fmt.Errorf("unknown resource kind %q", args[i+1])
 			}
 			forcedKind = kind
 			i++
@@ -68,20 +70,24 @@ func parseReadArgs(args []string) ([]string, domain.ResourceKind, error) {
 			value := strings.TrimPrefix(arg, "--kind=")
 			kind := MapResourceKind(value)
 			if kind == "" {
-				return nil, "", fmt.Errorf("unknown resource kind %q", value)
+				return nil, "", false, fmt.Errorf("unknown resource kind %q", value)
 			}
 			forcedKind = kind
+		case arg == "--full":
+			// Counterpart to the tool's `full` parameter: return whole file bodies even
+			// under read.file_mode "skeleton".
+			full = true
 		case strings.HasPrefix(arg, "-"):
-			return nil, "", fmt.Errorf("unknown flag %q", arg)
+			return nil, "", false, fmt.Errorf("unknown flag %q", arg)
 		default:
 			ids = append(ids, arg)
 		}
 	}
 
 	if len(ids) == 0 {
-		return nil, "", fmt.Errorf("missing resource ID")
+		return nil, "", false, fmt.Errorf("missing resource ID")
 	}
-	return ids, forcedKind, nil
+	return ids, forcedKind, full, nil
 }
 
 // Prints usage information and examples for the read command to stderr.

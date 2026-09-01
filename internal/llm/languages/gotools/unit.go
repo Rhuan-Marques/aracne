@@ -56,20 +56,29 @@ func baseUnit(id string, kind domain.ResourceKind, loc domain.Location, imports,
 // The parent struct is part of the BODY, not the context: a method without its receiver type
 // is hard to read. It is registered with the render state so the context section does not
 // print it again.
-func FunctionUnit(ctx *golang.GoFunctionContext) readunit.Unit {
+func FunctionUnit(ctx *golang.GoFunctionContext, st *renderstate.State) readunit.Unit {
 	u := baseUnit(string(ctx.Function.ID), domain.ResourceFunction, ctx.Function.Loc,
 		importTokens(ctx.PackagesUsed), importTokens(ctx.Dependencies))
 
 	var body strings.Builder
 	inlinedParent := ctx.ParentStruct != nil
+	// A batch that asks for five methods of one struct used to inline the struct five times.
+	// st is nil for single-unit callers, where ParentSeen reports false and nothing changes.
+	elidedParent := inlinedParent && st.ParentSeen(ctx.ParentStruct.Cut)
 	if inlinedParent {
-		body.WriteString(ctx.ParentStruct.Cut)
+		if elidedParent {
+			body.WriteString(renderstate.ElisionMarker(string(ctx.ParentStruct.ID),
+				"enclosing type already shown in this response"))
+		} else {
+			body.WriteString(ctx.ParentStruct.Cut)
+		}
 	}
 	// Only append the member when the inlined parent does not already contain it. A Go/Rust
 	// type declaration does not; a Python/JS/Java class cut is the whole class and does, and
-	// appending anyway printed the method twice.
-	if !inlinedParent || !ctx.ParentStruct.Loc.Contains(ctx.Function.Loc) {
-		if inlinedParent {
+	// appending anyway printed the method twice. An ELIDED parent contains nothing, so the
+	// member always has to be written -- otherwise the body would be a marker and no code.
+	if !inlinedParent || elidedParent || !ctx.ParentStruct.Loc.Contains(ctx.Function.Loc) {
+		if inlinedParent && !elidedParent {
 			body.WriteString("\n\n")
 		}
 		body.WriteString(ctx.Function.Cut)

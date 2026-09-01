@@ -132,8 +132,9 @@ def _arms_table(arms: dict, delta: dict | None) -> str:
             f"<tbody>{''.join(rows)}</tbody></table>")
 
 
-def _bar_pair(label: str, baseline_val, aracne_val, unit: str, lower_is_better: bool) -> str:
-    """Two proportional bars (baseline vs aracne) for one headline metric."""
+def _bar_pair(label: str, baseline_val, aracne_val, unit: str, lower_is_better: bool,
+              aracne_label: str = "aracne") -> str:
+    """Two proportional bars (control vs treatment) for one headline metric."""
     def w(v, mx):
         return 0 if (v is None or not mx) else max(2, round(v / mx * 100))
 
@@ -154,15 +155,31 @@ def _bar_pair(label: str, baseline_val, aracne_val, unit: str, lower_is_better: 
         f"<div class='barrow'><span class='barname'>baseline</span>"
         f"<span class='bartrack'><span class='bar' style='width:{w(baseline_val, mx)}%;background:{C_BASELINE}'></span></span>"
         f"<span class='barval'>{fmt(baseline_val)}</span></div>"
-        f"<div class='barrow'><span class='barname'>aracne</span>"
+        f"<div class='barrow'><span class='barname'>{_esc(aracne_label)}</span>"
         f"<span class='bartrack'><span class='bar' style='width:{w(aracne_val, mx)}%;background:{C_ARACNE}'></span></span>"
         f"<span class='barval'>{fmt(aracne_val)}</span></div></div>")
+
+
+def _primary_treatment(arms: dict) -> str:
+    """The treatment arm the headline tiles and bars describe.
+
+    Prefers the arm literally named "aracne" so existing two-arm runs render exactly as
+    before, and otherwise takes the first non-control arm -- without which a run whose
+    treatment is named anything else renders headline tiles full of blanks.
+    """
+    if "aracne" in arms:
+        return "aracne"
+    others = sorted(a for a in arms if a != "baseline")
+    return others[0] if others else "aracne"
 
 
 def _tiles(overall: dict) -> str:
     d = overall.get("delta")
     arms = overall.get("arms", {})
-    b, a = arms.get("baseline", {}), arms.get("aracne", {})
+    primary = _primary_treatment(arms)
+    b, a = arms.get("baseline", {}), arms.get(primary, {})
+    if not overall.get("delta") and overall.get("delta_by_arm"):
+        d = overall["delta_by_arm"].get(primary)
 
     def tile(label, value, cls, sub=""):
         return (f"<div class='tile'><div class='tlabel'>{_esc(label)}</div>"
@@ -433,13 +450,14 @@ def _footnotes(overall: dict) -> str:
 def _render(agg: dict, rows: list[dict], meta: dict, analysis_text: str | None) -> str:
     overall = agg.get("overall", {})
     arms = overall.get("arms", {})
-    b, a = arms.get("baseline", {}), arms.get("aracne", {})
+    primary = _primary_treatment(arms)
+    b, a = arms.get("baseline", {}), arms.get(primary, {})
 
     bars = "".join([
-        _bar_pair("Success rate", b.get("success_rate"), a.get("success_rate"), "%", False),
-        _bar_pair("Mean context tokens", b.get("mean_context_tokens"), a.get("mean_context_tokens"), "k", True),
-        _bar_pair("Mean turns", b.get("mean_turns"), a.get("mean_turns"), "", True),
-        _bar_pair("Mean wall (s)", b.get("mean_wall_s"), a.get("mean_wall_s"), "s", True),
+        _bar_pair("Success rate", b.get("success_rate"), a.get("success_rate"), "%", False, primary),
+        _bar_pair("Mean context tokens", b.get("mean_context_tokens"), a.get("mean_context_tokens"), "k", True, primary),
+        _bar_pair("Mean turns", b.get("mean_turns"), a.get("mean_turns"), "", True, primary),
+        _bar_pair("Mean wall (s)", b.get("mean_wall_s"), a.get("mean_wall_s"), "s", True, primary),
     ])
     legend = (f"<div class='legend'><span><span class='sw' style='background:{C_BASELINE}'></span>baseline</span>"
               f"<span><span class='sw' style='background:{C_ARACNE}'></span>aracne</span></div>")

@@ -36,7 +36,7 @@ func importTokens[T ~string](in []T) []string {
 }
 
 // FunctionUnit decomposes a Python function or method read.
-func FunctionUnit(ctx *python.PythonFunctionContext) readunit.Unit {
+func FunctionUnit(ctx *python.PythonFunctionContext, st *renderstate.State) readunit.Unit {
 	u := readunit.Unit{
 		ID:          string(ctx.Function.ID),
 		Kind:        domain.ResourceFunction,
@@ -51,14 +51,22 @@ func FunctionUnit(ctx *python.PythonFunctionContext) readunit.Unit {
 
 	var body strings.Builder
 	inlinedParent := ctx.ParentClass != nil
+	// A batch that asks for several members of one type used to inline the type once per
+	// member. st is nil for single-unit callers, where ParentSeen reports false.
+	elidedParent := inlinedParent && st.ParentSeen(ctx.ParentClass.Cut)
 	if inlinedParent {
-		body.WriteString(ctx.ParentClass.Cut)
+		if elidedParent {
+			body.WriteString(renderstate.ElisionMarker(string(ctx.ParentClass.ID),
+				"enclosing type already shown in this response"))
+		} else {
+			body.WriteString(ctx.ParentClass.Cut)
+		}
 	}
 	// Only append the member when the inlined parent does not already contain it. A Go/Rust
 	// type declaration does not; a Python/JS/Java class cut is the whole class and does, and
 	// appending anyway printed the method twice.
-	if !inlinedParent || !ctx.ParentClass.Loc.Contains(ctx.Function.Loc) {
-		if inlinedParent {
+	if !inlinedParent || elidedParent || !ctx.ParentClass.Loc.Contains(ctx.Function.Loc) {
+		if inlinedParent && !elidedParent {
 			body.WriteString("\n\n")
 		}
 		body.WriteString(ctx.Function.Cut)

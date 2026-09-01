@@ -38,6 +38,11 @@ from collections import defaultdict
 from . import outcome
 from .rowmetrics import EFFICIENCY_METRICS, has_metrics
 
+# The two slots a pair has, not the two arm names a run may contain. A matrix can carry any
+# number of treatment arms -- `aracne` blocks the native tools, `aracne-open` offers the same
+# topology and blocks nothing -- and each is analysed against the same control, one pair set at
+# a time. Every computation below reads the treatment row from the ARACNE slot, so
+# parameterising which ARM fills that slot generalises the whole module.
 BASELINE = "baseline"
 ARACNE = "aracne"
 
@@ -73,7 +78,7 @@ def pair_key(row: dict) -> tuple:
     return (row.get("instance_id"), str(row.get("seed")))
 
 
-def build_pairs(rows: list[dict]) -> list[dict]:
+def build_pairs(rows: list[dict], treatment: str = ARACNE) -> list[dict]:
     """Collapse result rows into matched pairs, dropping any task missing an arm.
 
     An unmatched row is silently unusable for a paired analysis (there is nothing to
@@ -83,25 +88,26 @@ def build_pairs(rows: list[dict]) -> list[dict]:
     by_key: dict[tuple, dict] = defaultdict(dict)
     for row in rows:
         arm = row.get("arm")
-        if arm in (BASELINE, ARACNE):
+        if arm in (BASELINE, treatment):
             by_key[pair_key(row)][arm] = row
     pairs = []
     for key, arms in sorted(by_key.items(), key=lambda kv: str(kv[0])):
-        if BASELINE in arms and ARACNE in arms:
+        if BASELINE in arms and treatment in arms:
             pairs.append({
                 "key": key,
                 "cluster": cluster_id(arms[BASELINE]),
                 "language": arms[BASELINE].get("language"),
+                # Stored under the canonical slot, whichever arm supplied it.
                 BASELINE: arms[BASELINE],
-                ARACNE: arms[ARACNE],
+                ARACNE: arms[treatment],
             })
     return pairs
 
 
-def _unpaired_count(rows: list[dict]) -> int:
+def _unpaired_count(rows: list[dict], treatment: str = ARACNE) -> int:
     by_key: dict[tuple, set] = defaultdict(set)
     for row in rows:
-        if row.get("arm") in (BASELINE, ARACNE):
+        if row.get("arm") in (BASELINE, treatment):
             by_key[pair_key(row)].add(row["arm"])
     return sum(1 for arms in by_key.values() if len(arms) < 2)
 
@@ -147,7 +153,22 @@ def _by_cluster(pairs: list[dict], observe) -> list[list]:
 # ------------------------------------------------------------------------ solve rate
 
 def _graded(row: dict) -> bool:
-    """Only a real grader verdict counts. A timeout is censored, never a failure."""
+    """Only a real grader verdict counts. A timeout is censored, never a failure.
+
+    A CONTAMINATED cell is censored the same way. SWE-bench's answer is a public URL derived
+    from the instance id, and a cell that fetched the repository under test may have read the
+    graded diff rather than solved the task -- `toolstats.n_answer_key_fetches` records that it
+    tried. Three "solves" across the first three `scale40` runs came from exactly this, and one
+    of them was the only aracne-only win in the matrix, so counting them was not a rounding
+    error on the correctness claim; it WAS the correctness claim.
+    
+    Censoring rather than failing, because a contaminated cell tells us nothing about the
+    agent in either direction. Because `solve_analysis` requires BOTH arms graded, censoring
+    one arm drops the whole repository -- which is the point: the pair is what is compromised,
+    and dropping it from one side only would bias the comparison toward the clean arm.
+    """
+    if row.get("n_answer_key_fetches"):
+        return False
     return row.get("success") is not None and not outcome.is_timeout(row)
 
 
@@ -213,9 +234,17 @@ def ratio_analysis(pairs: list[dict], name: str, extract) -> dict:
 
     Both arms must have usable agent metrics and a strictly positive value: a zero would
     make the log undefined, and a hard-errored run has no meaningful count to compare.
+
+    A CONTAMINATED pair is excluded here too, not only from the solve rate. A cell that
+    fetched the graded diff stops working the moment it has the answer, so its token and turn
+    counts measure a download rather than the agent -- and because the fetch is usually early,
+    the effect is a spuriously CHEAP arm. Leaving it in would let a lookup masquerade as an
+    efficiency win, which is the same error in the other direction from scoring it as a solve.
     """
     def observe(pair):
         a_row, b_row = pair[ARACNE], pair[BASELINE]
+        if a_row.get("n_answer_key_fetches") or b_row.get("n_answer_key_fetches"):
+            return None
         if not (has_metrics(a_row) and has_metrics(b_row)):
             return None
         a, b = extract(a_row), extract(b_row)
@@ -329,13 +358,19 @@ def size_analysis(pairs: list[dict], metric: str = "context_tokens") -> dict:
 
 # ---------------------------------------------------------------------------- top level
 
-def analyse(rows: list[dict], margin: float = DEFAULT_MARGIN) -> dict:
+def treatment_arms(rows: list[dict]) -> list[str]:
+    """Every non-control arm present in a row set, in a stable order."""
+    return sorted({r.get("arm") for r in rows if r.get("arm") and r.get("arm") != BASELINE})
+
+
+def analyse(rows: list[dict], margin: float = DEFAULT_MARGIN, treatment: str = ARACNE) -> dict:
     """Full paired analysis of a row set: solve rate + every efficiency endpoint."""
-    pairs = build_pairs(rows)
+    pairs = build_pairs(rows, treatment)
     clusters = sorted({p["cluster"] for p in pairs})
     return {
+        "arms": {"control": BASELINE, "treatment": treatment},
         "n_pairs": len(pairs),
-        "n_unpaired": _unpaired_count(rows),
+        "n_unpaired": _unpaired_count(rows, treatment),
         "effective_n": len(clusters),
         "clusters": clusters,
         "solve": solve_analysis(pairs, margin),
@@ -346,10 +381,10 @@ def analyse(rows: list[dict], margin: float = DEFAULT_MARGIN) -> dict:
 
 
 def analyse_by_language(rows: list[dict], languages: list[str],
-                        margin: float = DEFAULT_MARGIN) -> dict:
+                        margin: float = DEFAULT_MARGIN, treatment: str = ARACNE) -> dict:
     out = {}
     for lang in languages:
         subset = [r for r in rows if r.get("language") == lang]
         if subset:
-            out[lang] = analyse(subset, margin)
+            out[lang] = analyse(subset, margin, treatment)
     return out

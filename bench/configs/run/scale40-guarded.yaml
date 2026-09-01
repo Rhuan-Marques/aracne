@@ -1,0 +1,77 @@
+# The sizing study: 40 tasks, ONE PER REPOSITORY, across all five languages.
+#
+# Why this shape. The paired analysis clusters on repository, so effective N is the REPO
+# count — the previous `multi` manifest held 10 tasks over only 6 repos, which is why its
+# context-token interval spanned [-24%, +15%] and settled nothing. Eight distinct repos per
+# language gives an effective N of ~40, enough to put a ~±6-8% interval on the paired
+# context-token ratio.
+#
+# max_describable_nodes is deliberately HIGH. The old 600-node cap dropped exactly the large
+# repositories where topology navigation should beat grepping, biasing the study AGAINST
+# aracne and making the pool unrepresentative. Keeping big repos in is what makes the
+# size-stratified breakdown (small / medium / large + slope) possible at all.
+#
+# Run the phases in order, all with `--config scale40`:
+#   python bench/run_benchmark.py sample   --config scale40
+#   python bench/run_benchmark.py prepare  --config scale40
+#   python bench/run_benchmark.py generate --config scale40
+#   python bench/run_benchmark.py freeze   --config scale40
+#   python bench/run_benchmark.py run      --config scale40
+#
+# COST: generation is the expensive phase (it describes every repo once) and it scales with
+# repo size, so with a raised node cap expect it to dominate. It is resumable — run it
+# across several sessions with the same sample_id rather than in one window.
+
+sample_id: scale40
+languages: [go, javascript, typescript, rust, python]
+
+samples: 8              # FINAL tasks per language -> 40 total, and (at max_per_repo 1) 40 repos
+oversample: 4           # 32 candidates/lang so `prepare` has room to drop unusable repos
+max_per_repo: 1         # ONE task per repository: every task is an independent cluster
+sample_seed: 0
+
+max_describable_nodes: 8000   # keep large repos IN (was 600 — see above)
+
+seeds: 1                # seeds do NOT raise effective N; spend budget on repos instead
+arms: [aracne]
+run_harness: claude_code
+model: opus            # the efficiency endpoint is the primary claim and is cheap to measure
+max_turns: 80
+timeout_s: 2400
+run_parallel: 1         # raise (2-4) to cut wall-clock of a 54-cell matrix; see README "Parallelism"
+
+# Grading caps sized for cold Docker builds on large JS/TS repos. The earlier 60s stall cap
+# killed every vuejs/core grade mid-build and censored 30% of the matrix.
+grade_timeout_s: 7200
+grade_stall_timeout_s: 1800
+
+ni_margin: 0.10         # correctness guardrail beside the efficiency claim
+
+# ---------------------------------------------------------------------------
+# scale40-guarded: the same 40-repo sample, run for the AGENT-BEHAVIOUR question.
+#
+# Two harness settings are on here that scale40.yaml leaves off. Both change the aracne arm
+# only, and the imported baseline ran WITHOUT them, so any report using this config has to say
+# so:
+#
+#   isolate_operator_config -- the agent inherits HOME and therefore the operator's
+#   ~/.claude/CLAUDE.md. On this machine that file is an RTK command-rewriting instruction,
+#   and it manufactured a guard bypass in an earlier run (`rtk proxy sed -n '1280,1400p' ...`
+#   returned 4,626 bytes through a wrapper binary the classifier had never heard of). Reading
+#   an operator's shell preferences into a measurement of a shell guard is not a measurement.
+#
+#   allowed_tools -- Claude Code DEFERS MCP tools behind a schema lookup when the tool list is
+#   large. That cost 28 calls across 24 of 27 cells in one run and 26 across 25 of 27 in the
+#   next, purely to discover tools the project's own CLAUDE.md had already named by their
+#   exact identifiers. Trimming the native surface to Bash keeps them in the front list. The
+#   native read/grep/edit/write are absent rather than blocked, which is the same thing the
+#   guard was enforcing anyway; WebFetch goes with them, which also closes one of the two
+#   upstream-diff contamination paths the last two runs found.
+isolate_operator_config: true
+# `--tools`, not `--allowedTools`: the latter is only a permission list and leaves all 26
+# built-ins in the model's tool list (verified on a smoke cell, which still opened with a
+# ToolSearch). Bash is the only built-in a SWE-bench task needs -- it builds and runs the
+# tests. Dropping the rest also removes WebFetch, which closes one of the two upstream-diff
+# contamination paths the previous two runs found.
+builtin_tools:
+  - Bash

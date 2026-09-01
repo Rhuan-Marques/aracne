@@ -37,6 +37,43 @@ var containmentKeys = []string{
 	connMethods, connConstructor,
 }
 
+// FileTopLevelMembers returns only what the file declares DIRECTLY -- a struct's own id but
+// not its methods -- ordered by source line.
+//
+// Distinct from FileMembers on both counts, and both differences matter. FileMembers is
+// transitive and alphabetical, which is exactly right for its job (deciding what a whole-file
+// read already covers, where order is irrelevant and methods count). Rendering a file's
+// skeleton needs the opposite: the declarations as they appear, once each, so the result reads
+// like the file it stands for.
+func FileTopLevelMembers(topo *Topology, fileID string) []string {
+	if topo == nil {
+		return nil
+	}
+	res, ok := topo.Resources[fileID]
+	if !ok {
+		return nil
+	}
+	seen := map[string]bool{fileID: true}
+	var out []string
+	for _, key := range containmentKeys {
+		for _, id := range res.Connections[key] {
+			if id == "" || seen[id] {
+				continue
+			}
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := topo.Resources[out[i]].Location, topo.Resources[out[j]].Location
+		if a.StartsAt != b.StartsAt {
+			return a.StartsAt < b.StartsAt
+		}
+		return out[i] < out[j]
+	})
+	return out
+}
+
 // FileMembers returns every resource declared inside the given file, transitively: a file's
 // classes plus those classes' methods and constructors.
 //

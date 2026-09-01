@@ -21,7 +21,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from . import agents, arms, fixtures, locks, outcome, toolstats
+from . import agents, arms, fixtures, locks, netshim, outcome, toolstats
 from .gitutil import run_git
 from .sources import Task
 
@@ -88,7 +88,7 @@ def run_one(task: Task, arm: str, seed: int, cfg: dict, out_dir: Path,
     fixture would clobber each other's checkout. Baseline cells work in their own ephemeral
     clone and need no such lock. With `run_parallel: 1` the locks are uncontended no-ops.
     """
-    if arm == "aracne":
+    if arms.is_aracne_arm(arm):
         with locks.fixture(fixtures.fixture_key(task)):
             return _run_cell(task, arm, seed, cfg, out_dir, repos_dir, work_dir, fixtures_root)
     return _run_cell(task, arm, seed, cfg, out_dir, repos_dir, work_dir, fixtures_root)
@@ -131,6 +131,12 @@ def _run_cell(task: Task, arm: str, seed: int, cfg: dict, out_dir: Path,
                 cfg["run_harness"], agents.task_prompt(task.problem_statement),
                 workdir, cfg["model"], cfg["max_turns"], cfg["timeout_s"],
                 stream=True, effort=cfg.get("effort"),
+                isolate_operator_config=bool(cfg.get("isolate_operator_config")),
+                allowed_tools=cfg.get("allowed_tools") or None,
+                builtin_tools=cfg.get("builtin_tools") or None,
+                # The web stays open; the repository holding this task's answer does not.
+                deny_repo=(netshim.deny_target(task.clone_url)
+                           if cfg.get("deny_answer_key", True) else None),
             )
         row.update(
             input_tokens=rr.input_tokens, output_tokens=rr.output_tokens,
@@ -140,7 +146,7 @@ def _run_cell(task: Task, arm: str, seed: int, cfg: dict, out_dir: Path,
         # Fold the transcript into counters and persist the size-reduced form. Written
         # under out_dir (NEVER inside the worktree: restore() git-cleans it before the
         # next run, which would delete the telemetry we just wrote).
-        stats, reduced = toolstats.summarize(rr.transcript)
+        stats, reduced = toolstats.summarize(rr.transcript, netshim.deny_target(task.clone_url))
         row.update(toolstats.row_fields(stats))
         if reduced:
             tpath = out_dir / "transcripts" / f"{_short(task.key)}__{arm}__s{seed}.jsonl"

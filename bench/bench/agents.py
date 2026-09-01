@@ -17,7 +17,11 @@ HARNESSES = ("claude_code", "opencode")
 
 def run_agent(harness: str, prompt: str, cwd, model: str, max_turns: int, timeout_s: int, *,
               agent: str | None = None, extra_args: list[str] | None = None,
-              stream: bool = False, effort: str | None = None):
+              stream: bool = False, effort: str | None = None,
+              isolate_operator_config: bool = False,
+              allowed_tools: list[str] | None = None,
+              builtin_tools: list[str] | None = None,
+              deny_repo: str | None = None):
     """Run `prompt` (verbatim — already templated by the caller) in `cwd` and return a RunResult.
 
     `stream` asks the backend for a per-event transcript on `RunResult.transcript`, which
@@ -31,7 +35,11 @@ def run_agent(harness: str, prompt: str, cwd, model: str, max_turns: int, timeou
     """
     if harness == "claude_code":
         return claude_driver.run_raw(prompt, cwd, model, max_turns, timeout_s, extra_args,
-                                     stream=stream, effort=effort)
+                                     stream=stream, effort=effort,
+                                     isolate_operator_config=isolate_operator_config,
+                                     allowed_tools=allowed_tools,
+                                     builtin_tools=builtin_tools,
+                                     deny_repo=deny_repo)
     if harness == "opencode":
         return opencode_driver.run_raw(prompt, cwd, model, max_turns, timeout_s,
                                        agent=agent, extra_args=extra_args)

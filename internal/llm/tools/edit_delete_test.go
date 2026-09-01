@@ -153,9 +153,44 @@ func TestEditRunAcceptsReplaceAll(t *testing.T) {
 	}
 }
 
-// The schema must keep new_string required. JSON Schema `required` enforces
-// presence, not content, so "" already validates; making it optional would let
-// an omitted field silently delete code.
+// An omitted new_string must never be treated as a deletion.
+//
+// This used to be a schema check: `file_path`/`old_string`/`new_string` were all `required`,
+// and JSON Schema enforces presence rather than content, so "" validated while an absent field
+// did not. Batching made that impossible to keep -- the three fields are optional at the top
+// level now, because a batch passes them inside `edits`, and JSON Schema `required` cannot
+// reach into an array of objects here. So the guarantee moved into parseEdits, where it is
+// strictly stronger: it holds for BOTH call forms rather than only the flat one.
+func TestEditRejectsOmittedNewString(t *testing.T) {
+	cases := map[string]string{
+		"flat form":  `{"file_path":"/tmp/x.go","old_string":"a"}`,
+		"batch form": `{"edits":[{"file_path":"/tmp/x.go","old_string":"a"}]}`,
+	}
+	for name, args := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := NewEdit(nil, nil).Run(json.RawMessage(args)); err == nil {
+				t.Fatal("an omitted new_string must be rejected, not treated as a deletion")
+			} else if !strings.Contains(err.Error(), "new_string is required") {
+				t.Fatalf("error should name the missing field, got: %v", err)
+			}
+		})
+	}
+	// An EXPLICIT empty string stays a legal deletion in both forms.
+	for name, args := range map[string]string{
+		"flat form":  `{"file_path":"/tmp/aracne-nonexistent","old_string":"a","new_string":""}`,
+		"batch form": `{"edits":[{"file_path":"/tmp/aracne-nonexistent","old_string":"a","new_string":""}]}`,
+	} {
+		t.Run("empty is allowed, "+name, func(t *testing.T) {
+			_, err := NewEdit(nil, nil).Run(json.RawMessage(args))
+			if err != nil && strings.Contains(err.Error(), "new_string is required") {
+				t.Fatal(`"" must be accepted as a deletion, not rejected as absent`)
+			}
+		})
+	}
+}
+
+// The batch form is what the tool wants callers to reach for, so the description has to say so
+// and the schema has to offer it.
 func TestEditParametersContract(t *testing.T) {
 	required := map[string]bool{}
 	types := map[string]string{}
@@ -163,10 +198,8 @@ func TestEditParametersContract(t *testing.T) {
 		required[p.Name] = p.Required
 		types[p.Name] = p.Type
 	}
-	for _, name := range []string{"file_path", "old_string", "new_string"} {
-		if !required[name] {
-			t.Errorf("%s must stay required", name)
-		}
+	if types["edits"] != "array" {
+		t.Errorf("edits type = %q, want array", types["edits"])
 	}
 	if required["replace_all"] {
 		t.Error("replace_all must be optional")
@@ -174,7 +207,11 @@ func TestEditParametersContract(t *testing.T) {
 	if types["replace_all"] != "boolean" {
 		t.Errorf("replace_all type = %q, want boolean", types["replace_all"])
 	}
-	if !strings.Contains(NewEdit(nil, nil).Description(), "empty new_string") {
+	desc := NewEdit(nil, nil).Description()
+	if !strings.Contains(desc, "empty new_string") {
 		t.Error("the description must tell the model that deletion is supported")
+	}
+	if !strings.Contains(strings.ToLower(desc), "one call") || !strings.Contains(desc, "`edits`") {
+		t.Error("the description must point the model at `edits` and tell it to batch — that is the whole point")
 	}
 }

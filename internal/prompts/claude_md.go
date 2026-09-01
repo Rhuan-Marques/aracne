@@ -207,8 +207,19 @@ func editWriteSection(eff helper.AgentConfig, mcpToolPrefix string) string {
 		if !nativeAllowed(eff, "edit") || !nativeAllowed(eff, "write") {
 			note = "**The native edit/write tools are blocked in this project** -- use these."
 		}
-		return fmt.Sprintf("## Edit and Write:\n\n%s and %s update the topology inline. %s\n\n",
-			bt(mcpToolPrefix+"edit"), bt(mcpToolPrefix+"write"), note)
+		batch := ""
+		if hasMCPTool(eff, "edit") {
+			// Benchmarking found the cost of the MCP edit path was not the topology sync but
+			// the CALL COUNT: agents sent one edit per hunk while the same agent, given a
+			// shell, batched ten replacements into a single heredoc. The tool takes an
+			// `edits` array for exactly this, but a model that never reads past the first
+			// parameter will not find it.
+			batch = fmt.Sprintf(" Put every replacement for a change in ONE %s call via its "+
+				"`edits` array -- it spans files, applies in order, and rolls back as a unit. "+
+				"A call per hunk is the most expensive way to use it.", bt(mcpToolPrefix+"edit"))
+		}
+		return fmt.Sprintf("## Edit and Write:\n\n%s and %s update the topology inline. %s%s\n\n",
+			bt(mcpToolPrefix+"edit"), bt(mcpToolPrefix+"write"), note, batch)
 	}
 	if nativeAllowed(eff, "edit") {
 		return "## Edit and Write:\n\nUse your native `edit` and `write` tools; the topology re-syncs " +

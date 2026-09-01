@@ -7,6 +7,7 @@ package toolspec
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -70,24 +71,58 @@ var nativeToolToKey = map[string]string{
 
 // shellCmdToKey maps a POSIX-shell command name to the aracne tool key it
 // stands in for, so the guard hook can warn/block on shell equivalents.
+//
+// The pager/dumper entries beyond `cat` were added after a benchmark run showed the agent
+// reaching for whatever spelling was still open once `cat` was refused: `more`, `nl` and
+// `od` read a file just as completely as `cat` does, so leaving them out only taught the
+// model a synonym.
 var shellCmdToKey = map[string]string{
 	"cat": "read", "head": "read", "tail": "read", "less": "read",
+	"more": "read", "nl": "read", "tac": "read", "strings": "read",
+	"xxd": "read", "od": "read", "hexdump": "read", "bat": "read",
 	"grep": "grep", "rg": "grep",
+	"egrep": "grep", "fgrep": "grep", "zgrep": "grep", "ack": "grep", "ag": "grep", "ug": "grep",
 	"sed": "edit", "awk": "edit",
+	// File-producing commands. These are `edit` only when a destination argument looks like
+	// source (see destinationWrites): `cp dist/a dist/b` in a build step must stay untouched.
+	"cp": "edit", "mv": "edit", "tee": "edit", "install": "edit",
+	"truncate": "edit", "dd": "edit", "patch": "edit", "ed": "edit",
+	// Interpreters. Classified only when their inline program text names a source file
+	// (see interpreterKey); a bare `python3 -c "print(1)"` stays unclassified.
+	"python": "edit", "python3": "edit", "node": "edit", "perl": "edit",
+	"ruby": "edit", "php": "edit", "deno": "edit", "bun": "edit",
+	// git is NOT here on purpose: the command word must stay unclassified so `git grep`
+	// and `git log` keep working. Only specific subcommands count -- see gitSubcommandKey.
 }
+
+// conditionalCmds are commands whose entry in shellCmdToKey is a placeholder: the real key
+// depends on their arguments, and ShellCommandKeyForArgs decides. Listing them here keeps
+// the "does the name alone settle it?" question in one place.
+//
+// streamEditors is the original member of this family (sed/awk read unless told to write);
+// destinationWrites and interpreters were added for the same reason, so that a name-only
+// lookup never blocks a command that does not actually touch source.
+var (
+	streamEditors     = map[string]bool{"sed": true, "awk": true}
+	destinationWrites = map[string]bool{
+		"cp": true, "mv": true, "tee": true, "install": true,
+		"truncate": true, "dd": true, "patch": true, "ed": true,
+	}
+	interpreters = map[string]bool{
+		"python": true, "python3": true, "node": true, "perl": true,
+		"ruby": true, "php": true, "deno": true, "bun": true,
+	}
+)
 
 // powershellCmdToKey maps PowerShell cmdlets to aracne tool keys (lowercased).
 // Only unambiguous full cmdlet names are listed; the short aliases gc/sls are
 // intentionally omitted to avoid colliding with unrelated user aliases.
-// streamEditors are the commands that mutate a file only under some flags. They
-// map to `edit` in shellCmdToKey, but that is the pessimistic reading: `sed` and
-// `awk` are stream editors, and unless they are told to write in place they only
-// read and filter, exactly like `head`. ShellCommandKeyForArgs decides which.
-var streamEditors = map[string]bool{"sed": true, "awk": true}
-
 var powershellCmdToKey = map[string]string{
 	"get-content":   "read",
 	"select-string": "grep",
+	"set-content":   "edit",
+	"add-content":   "edit",
+	"out-file":      "edit",
 }
 
 // nativeWarnings is the model-facing guidance shown when a native tool or its shell
@@ -229,18 +264,217 @@ func ShellCommandKey(cmd string) (string, bool) {
 func ShellCommandKeyForArgs(word string, args []string, redirectsOut bool) (string, bool) {
 	// Callers may pass a path-qualified word (/usr/bin/sed, sed.exe). The guard
 	// normalizes before calling, but do not depend on that.
-	name := baseCommandName(word)
+	name := strings.ToLower(baseCommandName(word))
+
+	// git is deliberately absent from shellCmdToKey so `git grep`/`git log` stay open.
+	// Only a handful of subcommands read or rewrite worktree files.
+	if name == "git" {
+		return gitSubcommandKey(args)
+	}
+
 	key, ok := ShellCommandKey(name)
 	if !ok {
 		return "", false
 	}
-	if key != "edit" || !streamEditors[strings.ToLower(name)] {
-		return key, true
+	switch {
+	case streamEditors[name]:
+		if redirectsOut || streamEditorMutates(word, args) {
+			return "edit", true
+		}
+		return "read", true
+	case interpreters[name]:
+		// The guard routes interpreters through InterpreterProgramKey with the full command
+		// line, because the program text does not survive segment splitting. Reaching here
+		// means a caller classified by name alone, which cannot decide this safely.
+		return "", false
+	case destinationWrites[name]:
+		if commandTouchesSource(args) {
+			return "edit", true
+		}
+		return "", false
 	}
-	if redirectsOut || streamEditorMutates(word, args) {
+	return key, true
+}
+
+// gitSubcommandKey classifies a `git` invocation. Most subcommands are none of aracne's
+// business, and saying so explicitly is what keeps `git grep` -- a genuinely better tool for
+// some searches -- from being refused. Only two families matter:
+//
+//   - `git show <rev>:<path>` and `git cat-file` print a file's contents, so they are reads
+//     wearing git as a disguise. Plain `git show` (a commit) is not.
+//   - `git apply`, `git checkout -- <path>` and friends rewrite worktree files, which
+//     desynchronizes the topology exactly the way a native write does.
+func gitSubcommandKey(args []string) (string, bool) {
+	sub := ""
+	for _, a := range args {
+		if !strings.HasPrefix(a, "-") {
+			sub = strings.ToLower(a)
+			break
+		}
+	}
+	switch sub {
+	case "apply", "restore", "revert", "am", "cherry-pick":
 		return "edit", true
+	case "checkout", "reset", "stash":
+		// Only the worktree-rewriting forms. `git checkout <branch>` and `git stash list`
+		// leave tracked file contents where the topology expects them.
+		for _, a := range args {
+			if a == "--" || a == "--hard" || a == "pop" || a == "apply" {
+				return "edit", true
+			}
+		}
+		return "", false
+	case "cat-file":
+		return "read", true
+	case "show":
+		// `git show HEAD:path/to/file.go` prints a file; `git show HEAD` prints a commit.
+		//
+		// Only the WORKING-TREE revision counts as a read the aracne tools could have served.
+		// aracne indexes the checked-out tree and nothing else, so `git show origin/master:f`
+		// asks for something it cannot answer at any price, and refusing it just removes a
+		// capability with no replacement offered. Measured over four runs: `HEAD:` appeared 8
+		// times and was always a plain source read (`HEAD:lib/response.js`,
+		// `HEAD:tracing/src/span.rs`) -- the bypass this branch exists to close -- while every
+		// other-revision use was one cell diffing its own change against `origin/master`.
+		for _, a := range args {
+			if strings.HasPrefix(a, "-") {
+				continue
+			}
+			i := strings.Index(a, ":")
+			if i <= 0 || i >= len(a)-1 || !hasSourceExtension(a[i+1:]) {
+				continue
+			}
+			if isWorkingTreeRev(a[:i]) {
+				return "read", true
+			}
+			return "", false
+		}
+		return "", false
 	}
-	return "read", true
+	return "", false
+}
+
+// isWorkingTreeRev reports whether a git revision names what is checked out right now, which is
+// the only revision the topology knows. `HEAD~1`, `HEAD^`, a branch and a SHA do not, and are
+// therefore things aracne cannot serve at any price.
+//
+// Only `HEAD` qualifies. The index form (`git show :path`) never reaches here -- the caller
+// requires a non-empty revision before the colon -- and claiming to handle it would be
+// documenting a branch no input takes.
+func isWorkingTreeRev(rev string) bool {
+	return rev == "HEAD"
+}
+
+// IsInterpreter reports whether a command word runs an inline program (python, node, perl,
+// …). The guard needs this before tokenizing, because an interpreter's program has to be
+// classified against the whole command line rather than a paren-split fragment.
+func IsInterpreter(word string) bool {
+	return interpreters[strings.ToLower(baseCommandName(word))]
+}
+
+// InterpreterProgramKey classifies `python -c …`, `node -e …`, `perl -ne …` and friends by
+// what their inline program actually does to a source file.
+//
+// The bar is deliberately high: a benchmark run found the agent reaching for
+// `python3 -c "print(''.join(open('x.js').readlines()[600:760]))"` as its standing answer
+// once `sed` was refused, and rewriting files through `python3 - <<EOF … open(p,'w') … EOF`
+// in eight runs. But the same interpreters run build steps and test harnesses all day, so
+// the program text must name something that looks like source before this fires at all.
+//
+// `program` is the whole command line, not the argument: quoting is already gone by the
+// time the guard has fields, so there is nothing to be gained by locating the exact -c
+// operand and a great deal to be lost by missing a heredoc body.
+func InterpreterProgramKey(word, program string) (string, bool) {
+	if !IsInterpreter(word) || !containsSourcePath(program) {
+		return "", false
+	}
+	lower := strings.ToLower(program)
+	// Write signals win over read signals: a script that opens for reading and then writes
+	// is an edit, and the pessimistic reading is the safe one for topology freshness.
+	//
+	// The mode markers are matched unquoted (`,w)`) as well as quoted: the guard's tokenizer
+	// strips quote characters before this ever runs, so `open(p,'w')` arrives as `open(p,w)`.
+	for _, marker := range []string{`,'w'`, `,"w"`, ",w)", ", w)", `,'a'`, ",a)",
+		"writefilesync", "write_text", "writefile", ".write(", "os.replace", "shutil.copy"} {
+		if strings.Contains(lower, marker) {
+			return "edit", true
+		}
+	}
+	for _, marker := range []string{"open(", "readfilesync", "read_text", "readlines", "readfile"} {
+		if strings.Contains(lower, marker) {
+			return "read", true
+		}
+	}
+	return "", false
+}
+
+// commandTouchesSource reports whether any argument looks like a source file, which is what
+// separates `cp /tmp/x src/main.rs` (rewrites tracked source) from `cp dist/a dist/b`.
+func commandTouchesSource(args []string) bool {
+	for _, a := range args {
+		if strings.HasPrefix(a, "-") {
+			continue
+		}
+		if hasSourceExtension(a) {
+			return true
+		}
+	}
+	return false
+}
+
+// containsSourcePath reports whether a blob of program text mentions a path with a source
+// extension. Deliberately crude: it only has to separate "this script touches code" from
+// "this script prints a number".
+func containsSourcePath(program string) bool {
+	for _, field := range strings.FieldsFunc(program, func(r rune) bool {
+		return r == '\'' || r == '"' || r == ' ' || r == '(' || r == ')' || r == ',' || r == '\n'
+	}) {
+		if hasSourceExtension(field) {
+			return true
+		}
+	}
+	return false
+}
+
+// sourceExtensions are the file suffixes that mean "this is code the topology tracks".
+// Kept narrow on purpose: a false positive here refuses a command, and the guard's whole
+// value depends on its refusals being obviously correct.
+var sourceExtensions = map[string]bool{
+	".go": true, ".js": true, ".jsx": true, ".ts": true, ".tsx": true, ".mjs": true, ".cjs": true,
+	".rs": true, ".py": true, ".pyi": true, ".java": true, ".kt": true,
+	".c": true, ".h": true, ".cc": true, ".cpp": true, ".hpp": true, ".vue": true, ".svelte": true,
+}
+
+// hasSourceExtension reports whether a token ends in a tracked source extension, ignoring a
+// trailing line/symbol suffix so `src/app.rs:95` still counts.
+//
+// Scratch paths are excluded. Agents legitimately write throwaway `.py`/`.rs` fixtures under
+// /tmp to reproduce a bug -- the benchmark run has three such commands -- and the topology
+// tracks none of them, so refusing those would be a denial that buys nothing.
+func hasSourceExtension(tok string) bool {
+	tok = strings.Trim(tok, `'"`)
+	if i := strings.LastIndex(tok, ":"); i > 0 && !strings.Contains(tok[i:], "/") {
+		tok = tok[:i]
+	}
+	if isScratchPath(tok) {
+		return false
+	}
+	dot := strings.LastIndex(tok, ".")
+	if dot < 0 {
+		return false
+	}
+	return sourceExtensions[strings.ToLower(tok[dot:])]
+}
+
+// isScratchPath reports whether a path lives somewhere no project keeps tracked source.
+func isScratchPath(tok string) bool {
+	p := strings.ToLower(filepath.ToSlash(tok))
+	for _, prefix := range []string{"/tmp/", "/var/tmp/", "/private/var/folders/", "/dev/"} {
+		if strings.HasPrefix(p, prefix) {
+			return true
+		}
+	}
+	return strings.Contains(p, "/appdata/local/temp/") || strings.Contains(p, "/windows/temp/")
 }
 
 // streamEditorMutates reports whether a sed/awk invocation writes to a file.

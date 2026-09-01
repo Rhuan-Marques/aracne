@@ -41,8 +41,8 @@ from pathlib import Path
 # Allow running as `python bench/run_benchmark.py` from the repo root.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from bench import (agents, analysis, chunkgen, fixtures, grade, htmlreport,  # noqa: E402
-                   metrics, outcome, report, runner, sources, toolstats)
+from bench import (agents, analysis, chunkgen, contamination, fixtures, grade,  # noqa: E402
+                   htmlreport, metrics, outcome, report, runner, sources, toolstats)
 from bench.sources import ALL_LANGUAGES, load_tasks  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
@@ -122,10 +122,33 @@ DEFAULTS = {
     "continue_run": None,        # continue a prior run by id/name (re-run its errored + unfinished steps)
     "run_name": None,            # unique id for this run; None -> random; also names results/<id>
     "aracne_config": None,       # aracne arm's .aracne/config.json overlay (name in configs/aracne/ or path)
+    # Per-arm overlay, e.g. {"aracne": "perf-balanced", "aracne-open": "perf-open"}. This is
+    # what lets two aracne arms differ ONLY in whether the native tools are blocked, which is
+    # the difference between measuring "does the topology help" and measuring it tangled with
+    # "does the guard hurt".
+    "arm_aracne_config": {},
+    # Point the agent at a scratch Claude config dir so it does not inherit the operator's
+    # ~/.claude settings and memory. Off by default: it copies credentials into a temp dir,
+    # and a run that silently loses auth is worse than one with a known confound.
+    "isolate_operator_config": False,
+    # Trim the agent's native tool surface (claude --allowedTools). Keeps the aracne MCP tools
+    # in the front tool list rather than behind a ToolSearch call.
+    "allowed_tools": [],
+    # Built-in tool surface (claude --tools). Trimming this is what actually un-defers the
+    # aracne MCP tools; allowed_tools alone is only a permission list. [] keeps the default.
+    "builtin_tools": [],
+    # Refuse the agent the ONE repository whose PR diff is the answer to its task, and leave
+    # the rest of the web reachable. See bench/bench/netshim.py for the measurement: across
+    # three scale40 runs, 100% of the agent's network calls were answer-key fetches.
+    "deny_answer_key": True,
     "max_per_repo": 1,           # max tasks drawn from ONE repository during `sample`.
                                  # Effective N in the paired analysis is the REPO count, so
                                  # >1 buys task count without buying statistical power.
     "baseline_from": None,       # reuse a prior run's rows for arms not being measured
+    # A task whose CONTROL reached the answer key cannot be scored, in either direction. The
+    # pair is compromised, not the arm, so the cheapest correct move is to never run it: see
+    # _drop_contaminated_tasks.
+    "skip_contaminated_baseline": True,
     "no_analysis": False,        # skip the end-of-run LLM results analysis
     "ni_margin": 0.10,           # non-inferiority margin for the PAIRED solve-rate test:
                                  # aracne is "non-inferior" when the lower bound of the
@@ -355,6 +378,14 @@ def parse_args(argv=None) -> argparse.Namespace:
                          "The baseline arm never loads aracne, so its result is unchanged by "
                          "an aracne change and does not need re-measuring. Requires the same "
                          "model and max_turns.")
+    # store_TRUE on a positively-named dest: the CLI->cfg merge drops False values
+    # (`v is not False`), so a store_false flag here would be silently inert.
+    sp.add_argument("--keep-contaminated-baseline", dest="keep_contaminated_baseline",
+                    action="store_true", default=None,
+                    help="run tasks whose imported baseline fetched the answer key anyway. "
+                         "They are dropped by default: the control read the graded diff, so "
+                         "the pair says nothing about either arm. Their rows stay censored by "
+                         "paired._graded regardless of this flag.")
     sp.add_argument("--continue", dest="continue_run", default=None, metavar="RUN",
                     help="continue a prior run by id/name: re-run its errored + not-yet-run steps "
                          "using that run's saved config snapshot (config flags are ignored)")
@@ -408,6 +439,12 @@ def build_config(args: argparse.Namespace) -> dict:
     cfg["config_path"] = str(config_path) if (config_path and config_path.exists()) else None
     # Runtime-only: the resolved aracne-config overlay (from the YAML or --aracne-config).
     cfg["aracne_config_path"] = _resolve_aracne_config_path(cfg.get("aracne_config"))
+    # Same resolution for the per-arm overlays, so a YAML can name presets rather than paths.
+    cfg["arm_aracne_config"] = {
+        arm: _resolve_aracne_config_path(value)
+        for arm, value in (cfg.get("arm_aracne_config") or {}).items()
+        if _resolve_aracne_config_path(value)
+    }
     return cfg
 
 
@@ -721,6 +758,53 @@ def _unique_tasks(tasks: list) -> list:
 # Subcommands
 # --------------------------------------------------------------------------- #
 
+def _drop_contaminated_tasks(cfg: dict, tasks: list) -> tuple[list, list]:
+    """Remove tasks whose IMPORTED control reached the answer key.
+
+    SWE-bench's answer sits at a URL derived mechanically from the instance id, and a control
+    cell that fetched the repository under test may have read the graded diff rather than
+    solved the task. That does not make the control wrong and the treatment right -- it makes
+    the PAIR uninterpretable, because the comparison is between an agent and a lookup.
+
+    Dropping the task rather than the row, and doing it before the matrix runs, for three
+    reasons. The paired analysis needs both arms graded, so a censored control already removes
+    the task from every claim-bearing number -- running the other arm against it buys a cell
+    that will be thrown away. Skipping is visible in the matrix line and in run_meta, where a
+    silent censoring at analysis time is not. And it is checked at the source: imported rows
+    predate the counter, so trusting the stored field is how two curl'd baseline solves stayed
+    in a scored matrix -- one of them a baseline-only win over an aracne failure.
+
+    Returns (kept, dropped_notes). Fails OPEN: an unreadable source run is reported and the
+    matrix proceeds, because a missing audit is a reason to look, not to cancel a run.
+    """
+    src = cfg.get("baseline_from")
+    if not src or not cfg.get("skip_contaminated_baseline") or cfg.get("keep_contaminated_baseline"):
+        return tasks, []
+    control_arms = tuple(a for a in ("baseline",) if a not in set(cfg["arms"]))
+    if not control_arms:
+        return tasks, []                  # the control is being measured here, not imported
+    try:
+        hits = contamination.contaminated_instances(src, arms=control_arms)
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        print(f"[contamination] could not audit '{src}' ({exc}); running the full matrix.")
+        return tasks, []
+    if not hits:
+        return tasks, []
+    kept = [t for t in tasks if t.key not in hits]
+    notes = []
+    for inst, info in sorted(hits.items()):
+        verdict = "solved" if info.get("success") else "failed"
+        notes.append(f"{inst}  ({info['fetches']} answer-key fetch(es); control {verdict})")
+    print(f"[contamination] skipping {len(hits)} task(s): the imported control read the "
+          f"answer key, so the pair cannot be scored.")
+    for n in notes:
+        print(f"    - {n}")
+    if len(kept) == len(tasks):
+        # The contaminated instances are not in this matrix at all; nothing to skip.
+        return tasks, []
+    return kept, notes
+
+
 def _import_prior_rows(cfg: dict, matrix: list, runs_path: Path,
                        done: set, all_rows: list) -> None:
     """Seed rows for an arm from a PRIOR run instead of re-running it.
@@ -766,6 +850,7 @@ def _import_prior_rows(cfg: dict, matrix: list, runs_path: Path,
     zero = toolstats.row_fields(toolstats.empty_stats())
 
     imported, no_telemetry, already = 0, 0, 0
+    audited = unaudited = dirty = 0
     for line in src_runs.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
@@ -782,6 +867,21 @@ def _import_prior_rows(cfg: dict, matrix: list, runs_path: Path,
         if "n_tool_calls" not in row:
             row.update(zero)
             no_telemetry += 1
+        # Answer-key counters arrived AFTER the counters above, so a row can carry full tool
+        # telemetry and still have no contamination field -- and `paired._graded` reads a
+        # missing field as clean. Recompute it from the source transcript instead of
+        # inheriting silence: that omission is what let two curl'd baseline solves be scored.
+        if row.get("n_answer_key_fetches") is None:
+            tpath = contamination.transcript_for(row, src_dir)
+            if tpath is None:
+                unaudited += 1
+            else:
+                a, f = contamination.scan(
+                    tpath, contamination.answer_key_for(row["instance_id"]))
+                row["n_answer_key_attempts"], row["n_answer_key_fetches"] = a, f
+                audited += 1
+                if f:
+                    dirty += 1
         row["imported_from"] = str(src_dir.name)
         outcome.stamp(row)
         all_rows.append(row)
@@ -800,6 +900,12 @@ def _import_prior_rows(cfg: dict, matrix: list, runs_path: Path,
     if no_telemetry:
         note = (f"  ({no_telemetry} predate tool telemetry — their per-tool counters are "
                 f"zero, so MCP-vs-native comparisons cover the measured arm only)")
+    if audited:
+        print(f"  Audited {audited} imported row(s) for answer-key access from their source "
+              f"transcripts; {dirty} had fetched it (censored by the paired analysis).")
+    if unaudited:
+        print(f"  WARNING: {unaudited} imported row(s) have no reachable transcript, so their "
+              f"contamination status is UNKNOWN and they will score as clean.")
     carried = f" ({already} already present)" if already else ""
     print(f"Imported {imported} row(s) from '{src_dir.name}' instead of re-running them"
           f"{carried}.{note}")
@@ -1195,7 +1301,16 @@ def cmd_run(cfg: dict) -> int:
             f"no tasks left after the languages filter {list(cfg['languages'])} on manifest "
             f"{sources.manifest_path(cfg['samples_dir'], cfg['sample_id'])} — "
             f"either widen `languages` or sample/prepare a manifest that has them.")
-    if "aracne" in cfg["arms"]:
+    # A task whose imported control read the answer key is dropped BEFORE the matrix is
+    # built, so it never costs a cell. --continue keeps the original run's decision by
+    # replaying its frozen manifest, so this only ever narrows a fresh run.
+    tasks, contaminated_notes = _drop_contaminated_tasks(cfg, tasks)
+    if not tasks:
+        raise SystemExit(
+            "every task in this matrix had a contaminated control; nothing left to run. "
+            "Re-measure the baseline arm, or pass --keep-contaminated-baseline to score "
+            "them anyway (paired analysis will still censor them).")
+    if any(a != "baseline" for a in cfg["arms"]):
         _check_fixture_configs(tasks, fixtures_root, cfg)
 
     matrix = [(t, arm, seed)
@@ -1256,6 +1371,9 @@ def cmd_run(cfg: dict) -> int:
             "aracne_config": cfg.get("aracne_config"),
             "aracne_config_path": cfg.get("aracne_config_path"),
             "cli_args": sys.argv[1:],
+            # What was dropped and why, so a reader of the results can tell a 25-task matrix
+            # from a 27-task one without re-deriving it from transcripts.
+            "skipped_contaminated_baseline": contaminated_notes,
             "config": _cfg_snapshot(cfg),   # replayed verbatim by --continue
         }
         (out_dir / "run_meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")

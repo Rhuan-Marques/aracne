@@ -20,8 +20,10 @@ func TestEffectiveContextFilterDefaults(t *testing.T) {
 	if c.EffectiveIncludeIncoming() {
 		t.Error("include incoming default should be false")
 	}
-	if c.EffectiveHideNoDescription() {
-		t.Error("hide no description default should be false")
+	// An undescribed neighbour costs a CONTEXT line and answers the one question the section
+	// exists to answer ("does this matter?") with nothing, so the default is to omit it.
+	if !c.EffectiveHideNoDescription() {
+		t.Error("hide no description default should be true")
 	}
 
 	f := c.EffectiveContextFilter()
@@ -37,7 +39,7 @@ func TestEffectiveContextFilterOverrides(t *testing.T) {
 		ExternalVarsVisibility:   "hidden",
 		SmallFunctionsVisibility: "full",
 		SmallFunctionThreshold:   8,
-		HideNoDescription:        true,
+		HideNoDescription:        boolPtr(true),
 	}}}
 
 	f := c.EffectiveContextFilter()

@@ -41,21 +41,39 @@ func runClaudeGuardHook(input io.Reader, output io.Writer) {
 		HookEventName string                 `json:"hook_event_name"`
 		ToolName      string                 `json:"tool_name"`
 		ToolInput     map[string]interface{} `json:"tool_input"`
+		// Cwd is the SESSION directory Claude Code reports on every hook event. It is the
+		// one working directory the agent's own `cd` cannot move, which is why guardDBPath
+		// prefers it over the process cwd -- see guardDBPath for what that cost us.
+		Cwd string `json:"cwd"`
 	}
 	if err := json.Unmarshal(raw, &event); err != nil || event.ToolName == "" {
 		return
 	}
 
-	blocked, exemptPiped := loadGuardConfig()
+	dbPath := guardDBPath(event.Cwd)
+	blocked, exemptPiped := loadGuardConfig(dbPath)
 	switch event.HookEventName {
 	case "PreToolUse":
-		if d := decideGuard(event.ToolName, event.ToolInput, blocked, exemptPiped); d.Deny {
+		if d := decideGuard(event.ToolName, event.ToolInput, blocked, exemptPiped, dbPath); d.Deny {
 			emitPreToolDeny(output, d.Message)
 		}
+		// Note: decideGuard already folded in the proxied content when it could, so the
+		// denial either carries the file or carries the pointer -- never both.
 	case "PostToolUse":
 		keys := implicatedKeys(event.ToolName, event.ToolInput, exemptPiped)
+		parts := []string{}
 		if msg := warningMessage(keys, !blocked[toolspec.ReadToolName]); msg != "" {
-			emitPostToolWarning(output, msg)
+			parts = append(parts, msg)
+		}
+		// The backstop for everything the classifier does not know how to refuse. Only Bash
+		// needs it: a native Edit/Write is already followed by the update-file hook.
+		if event.ToolName == "Bash" && mayHaveWrittenSource(keys) {
+			if msg := driftCheck(dbPath); msg != "" {
+				parts = append(parts, msg)
+			}
+		}
+		if len(parts) > 0 {
+			emitPostToolWarning(output, strings.Join(parts, "\n\n"))
 		}
 	}
 }
@@ -67,7 +85,7 @@ type guardDecision struct {
 }
 
 // decideGuard reports whether a tool call must be blocked and the reason.
-func decideGuard(toolName string, toolInput map[string]interface{}, blocked map[string]bool, exemptPiped bool) guardDecision {
+func decideGuard(toolName string, toolInput map[string]interface{}, blocked map[string]bool, exemptPiped bool, dbPath string) guardDecision {
 	keys := implicatedKeys(toolName, toolInput, exemptPiped)
 	var denied []string
 	for _, k := range keys {
@@ -78,7 +96,33 @@ func decideGuard(toolName string, toolInput map[string]interface{}, blocked map[
 	if len(denied) == 0 {
 		return guardDecision{}
 	}
+
+	// A command that never touches the indexed project is not what blocked_tools is for: there
+	// is no resource to read and no topology to keep in sync, so the aracne tools have nothing
+	// to offer in exchange for the refusal. Nine of fifty denials in netguard-20260831b were
+	// this -- an agent writing a throwaway repro script to /tmp -- each costing a turn and
+	// answered with advice naming tools that cannot write there.
+	if toolName == "Bash" {
+		if cmd, _ := toolInput["command"].(string); operatesOutsideProject(cmd, projectRoot(dbPath)) {
+			return guardDecision{}
+		}
+	}
+
 	reason := fmt.Sprintf("Blocked by aracne config (blocked_tools: %s). ", strings.Join(denied, ", "))
+
+	// A denied READ can be answered rather than merely refused: the model has already said
+	// which file it wants, and the guard can hand it over with its context attached for the
+	// same one call. Reads only -- an edit or a write must go through the tool that re-syncs
+	// the topology, which is the entire reason it was blocked.
+	if toolName == "Bash" && len(denied) == 1 && denied[0] == toolspec.ReadToolName {
+		cmd, _ := toolInput["command"].(string)
+		if content := proxyRead(cmd, dbPath); content != "" {
+			return guardDecision{Deny: true, Message: reason +
+				"Reading it for you, with the context it connects to -- no follow-up call needed:\n\n" +
+				content}
+		}
+	}
+
 	if warn := warningMessage(keys, !blocked[toolspec.ReadToolName]); warn != "" {
 		reason += warn
 	} else {
@@ -124,8 +168,8 @@ func warningMessage(keys []string, nativeReadAvailable bool) string {
 // config: the blocked_tools set and whether piped read/grep commands are exempt
 // (read.pipe_passthrough). A missing/unparseable config fails open: no blocks
 // and the exemption on, so the session is never broken.
-func loadGuardConfig() (blocked map[string]bool, exemptPiped bool) {
-	cfg, ok := helper.LoadConfigStrict(helper.ConfigPath(".aracne/topology.db"))
+func loadGuardConfig(dbPath string) (blocked map[string]bool, exemptPiped bool) {
+	cfg, ok := helper.LoadConfigStrict(helper.ConfigPath(dbPath))
 	if !ok {
 		return map[string]bool{}, true
 	}
@@ -164,7 +208,17 @@ func commandKeys(command string, exemptPiped bool) []string {
 			continue
 		}
 		word := fields[0]
-		key, ok := toolspec.ShellCommandKeyForArgs(word, fields[1:], seg.redirectsOut)
+		var key string
+		var ok bool
+		if toolspec.IsInterpreter(word) {
+			// An interpreter's program is its argument, and splitCommandSegments cuts on
+			// parentheses (it has to, for subshells) -- which shreds exactly the
+			// `open('x.py','w')` text that says what the program does. Classify these
+			// against the whole command line instead of the fragment.
+			key, ok = toolspec.InterpreterProgramKey(word, command)
+		} else {
+			key, ok = toolspec.ShellCommandKeyForArgs(word, fields[1:], seg.redirectsOut)
+		}
 		if !ok {
 			continue
 		}
@@ -178,6 +232,11 @@ func commandKeys(command string, exemptPiped bool) []string {
 	}
 	return keys
 }
+
+// quotedSpace stands in for a space inside a quoted run, so strings.Fields keeps the run
+// as a single token. It is a control character precisely because no real command word or
+// path can contain one, making the substitution unambiguous downstream.
+const quotedSpace = '\x00'
 
 // commandSegment is one simple-command candidate from a shell string, with
 // whether it consumes piped stdin (its preceding unquoted separator was a
@@ -214,9 +273,17 @@ func splitCommandSegments(command string) []commandSegment {
 	for i := 0; i < len(runes); i++ {
 		r := runes[i]
 		if quote != 0 {
-			if r == quote {
+			switch {
+			case r == quote:
 				quote = 0
-			} else {
+			case r == ' ' || r == '\t':
+				// Hold a quoted run together as ONE field. The quote characters
+				// themselves are dropped (so `sed -n '1,20p' f` still classifies), but
+				// without this a quoted argument fragments and its words become
+				// indistinguishable from real command words -- which is how
+				// `echo "use grep here"` came to look like a grep.
+				cur.WriteRune(quotedSpace)
+			default:
 				cur.WriteRune(r)
 			}
 			continue
@@ -263,10 +330,47 @@ func commandFields(segment string) []string {
 	if i >= len(fields) {
 		return nil
 	}
+	if j := wrappedCommandIndex(fields, i); j > i {
+		i = j
+	}
 	out := make([]string, 0, len(fields)-i)
 	out = append(out, baseName(fields[i]))
 	out = append(out, fields[i+1:]...)
 	return out
+}
+
+// wrappedCommandIndex handles the wrapper this guard has never heard of.
+//
+// isCommandWrapper knows the standard ones, but a benchmark run found a real read walking
+// straight through as `rtk proxy sed -n '1280,1400p' src/parse/parser.rs` -- a local
+// token-saving proxy that happens to be on PATH. Enumerating every such binary is a losing
+// game, so when the leading word means nothing to the classifier, look a little further
+// along for one that does.
+//
+// The scan is bounded to the words BEFORE the first flag. That is what keeps it honest:
+// `grep -rn "cat" .` never reaches here (grep is already known), and a wrapper's own
+// options cannot drag a filename that happens to be called `cat` into the command slot.
+func wrappedCommandIndex(fields []string, start int) int {
+	word := strings.ToLower(baseName(fields[start]))
+	if _, known := toolspec.ShellCommandKey(word); known {
+		return start
+	}
+	// `git` is not "unknown", it is deliberately unclassified so that `git grep` keeps
+	// working -- ShellCommandKeyForArgs handles its subcommands itself. Scanning past it
+	// would both resurrect the `git grep` refusal this design exists to avoid and, worse,
+	// match the revision `HEAD` as the pager `head`.
+	if word == "git" {
+		return start
+	}
+	for j := start + 1; j < len(fields); j++ {
+		if strings.HasPrefix(fields[j], "-") {
+			return start
+		}
+		if _, known := toolspec.ShellCommandKey(strings.ToLower(baseName(fields[j]))); known {
+			return j
+		}
+	}
+	return start
 }
 
 // commandWord returns just the base command name of a segment, or "" when it
@@ -296,10 +400,12 @@ func isEnvAssignment(tok string) bool {
 	return true
 }
 
-// Returns true if a token is a command wrapper like env, sudo, doas, command, nohup, time, exec, or builtin.
+// Returns true if a token is a command wrapper like env, sudo, doas, command, nohup, time,
+// exec, builtin, or one of the scheduling/buffering wrappers that prefix a real command.
 func isCommandWrapper(tok string) bool {
 	switch strings.ToLower(baseName(tok)) {
-	case "env", "sudo", "doas", "command", "nohup", "time", "exec", "builtin":
+	case "env", "sudo", "doas", "command", "nohup", "time", "exec", "builtin",
+		"timeout", "stdbuf", "nice", "ionice", "xargs", "watch":
 		return true
 	}
 	return false

@@ -13,6 +13,16 @@ type Options struct {
 	IncludeIncoming bool
 	// Unlimited disables the entry/byte budget. Used by tests and exports.
 	Unlimited bool
+	// State, when set, is the ledger this render shares with whoever BUILT the units.
+	//
+	// Bodies are assembled one unit at a time, before Render is ever called, so a fact only
+	// Render knows -- "this enclosing type was already inlined" -- reaches body construction
+	// too late unless the same ledger is threaded through both phases. Reading five methods
+	// of one struct emitted the struct five times for exactly that reason.
+	//
+	// Pass a State that a previous, unrelated render already used and its import ledger will
+	// suppress imports this response never showed; construct a fresh one per batch.
+	State *renderstate.State
 }
 
 // Render turns resolved units into the single document a `read` call returns.
@@ -29,7 +39,10 @@ func Render(units []Unit, opt Options) string {
 		return ""
 	}
 
-	st := renderstate.New()
+	st := opt.State
+	if st == nil {
+		st = renderstate.New()
+	}
 	if opt.Unlimited {
 		st.MaxEntries, st.MaxBytes = 0, 0
 	}

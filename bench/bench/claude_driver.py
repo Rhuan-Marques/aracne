@@ -11,9 +11,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
+from pathlib import Path
 
 PROMPT_TEMPLATE = """You are an experienced software engineer resolving a real GitHub \
 issue in the repository in your current working directory.
@@ -46,6 +48,8 @@ class RunResult:
     transcript: str = ""
 
 
+from . import netshim
+
 # Friendly benchmark model names ("opus-4.8") aren't valid `claude --model` strings; the CLI
 # wants an alias ("opus"/"sonnet"/"haiku") or a full id ("claude-opus-4-8").
 _FRIENDLY_MODEL_RE = re.compile(r"^(opus|sonnet|haiku|fable)-(\d+)(?:\.(\d+))?$")
@@ -63,7 +67,7 @@ def normalize_model(model: str) -> str:
     return "-".join(parts)
 
 
-def isolated_env() -> dict:
+def isolated_env(isolate_operator_config: bool = False, deny_repo: str | None = None) -> dict:
     """The environment an agent subprocess runs in, with the host's Python protected.
 
     WHY THIS EXISTS. The agent runs with `--dangerously-skip-permissions` and a shell, and
@@ -82,17 +86,63 @@ def isolated_env() -> dict:
 
     This is a guard rail, not a sandbox. An agent can still write anywhere the user can.
     Real isolation means running the agent in a container.
+
+    `isolate_operator_config` additionally points the agent at a scratch Claude config dir --
+    see _operator_free_config_dir for why that matters to any A/B claim this harness makes.
+
+    `deny_repo` ("org/repo") puts netshim's `curl`/`wget` wrappers on PATH so the agent can
+    still reach the whole web EXCEPT the repository whose PR diff is the answer to this task.
+    See bench/bench/netshim.py for the measurement that motivated it.
     """
     env = dict(os.environ)
     env["PYTHONUSERBASE"] = tempfile.mkdtemp(prefix="aracne-bench-userbase-")
     env["PYTHONNOUSERSITE"] = "1"
     env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
-    return env
+    if isolate_operator_config:
+        env["CLAUDE_CONFIG_DIR"] = _operator_free_config_dir()
+    return netshim.apply(env, deny_repo)
+
+
+# Cached so every cell in a run shares one scratch config dir rather than re-copying
+# credentials per subprocess.
+_ISOLATED_CONFIG_DIR: str | None = None
+
+
+def _operator_free_config_dir() -> str:
+    """A Claude config dir carrying credentials and nothing else.
+
+    WHY. The agent inherits HOME, so it reads the operator's `~/.claude/settings.json` and
+    `~/.claude/CLAUDE.md` -- in BOTH arms. In the compact-blocked-20260830c run that meant a
+    standing "prefer Bash `cat`/`grep` over the file tools" instruction was active throughout:
+    the baseline made 357 Bash calls and *zero* Read calls, and the aracne arm spent one guard
+    denial per run fighting the same instruction before it would touch the topology. Neither
+    arm was measuring what the run was asking about.
+
+    Credentials are copied because losing auth kills the entire matrix; everything that could
+    carry an instruction -- settings, memory, agents, commands -- is deliberately left behind.
+    """
+    global _ISOLATED_CONFIG_DIR
+    if _ISOLATED_CONFIG_DIR:
+        return _ISOLATED_CONFIG_DIR
+    scratch = tempfile.mkdtemp(prefix="aracne-bench-claude-cfg-")
+    source = Path(os.environ.get("CLAUDE_CONFIG_DIR") or (Path.home() / ".claude"))
+    for name in (".credentials.json", "credentials.json"):
+        src = source / name
+        if src.is_file():
+            try:
+                shutil.copy2(src, Path(scratch) / name)
+            except OSError:
+                pass
+    _ISOLATED_CONFIG_DIR = scratch
+    return scratch
 
 
 def run_raw(prompt: str, cwd, model: str, max_turns: int, timeout_s: int,
             extra_args: list[str] | None = None, stream: bool = False,
-            effort: str | None = None) -> RunResult:
+            effort: str | None = None, isolate_operator_config: bool = False,
+            allowed_tools: list[str] | None = None,
+            builtin_tools: list[str] | None = None,
+            deny_repo: str | None = None) -> RunResult:
     """Run one headless Claude Code session in `cwd`, feeding `prompt` verbatim on stdin
     (so it is never subject to argv length limits). `prompt` may be a slash command such
     as "/descriptions-generate".
@@ -112,11 +162,23 @@ def run_raw(prompt: str, cwd, model: str, max_turns: int, timeout_s: int,
         "--max-turns", str(max_turns),
         *(["--effort", effort] if effort else []),
         "--dangerously-skip-permissions",
+        # `--allowedTools` is a PERMISSION allow-list: it does not change which tools the
+        # model is OFFERED. Measured directly -- a smoke cell with it set still opened with a
+        # ToolSearch call, because all 26 built-ins were still in the list and the aracne
+        # tools were still deferred behind it.
+        *(["--allowedTools", ",".join(allowed_tools)] if allowed_tools else []),
+        # `--tools` is the flag that trims the built-in SURFACE, and that is what keeps the
+        # aracne MCP tools in the model's front tool list. ToolSearch calls made purely to
+        # discover tools the project's own CLAUDE.md had already named by their exact
+        # identifiers cost 28 calls across 24 of 27 cells in compact-blocked-20260830c and 26
+        # across 25 of 27 in compact-blocked-after-bs-20260830c.
+        *(["--tools", ",".join(builtin_tools)] if builtin_tools else []),
         *(extra_args or []),
     ]
     proc = subprocess.run(
         cmd, input=prompt, cwd=str(cwd), text=True,
-        capture_output=True, timeout=timeout_s, env=isolated_env(),
+        capture_output=True, timeout=timeout_s,
+        env=isolated_env(isolate_operator_config, deny_repo),
     )
     rr = parse_output(proc.stdout, proc.stderr, proc.returncode)
     if stream:
@@ -126,11 +188,17 @@ def run_raw(prompt: str, cwd, model: str, max_turns: int, timeout_s: int,
 
 def run_claude(problem: str, cwd, model: str, max_turns: int, timeout_s: int,
                extra_args: list[str] | None = None, stream: bool = False,
-               effort: str | None = None) -> RunResult:
+               effort: str | None = None, isolate_operator_config: bool = False,
+               allowed_tools: list[str] | None = None,
+               builtin_tools: list[str] | None = None,
+               deny_repo: str | None = None) -> RunResult:
     """Run one headless Claude Code session to solve a benchmark task (wraps the issue
     text in the task-solving template, then delegates to `run_raw`)."""
     return run_raw(PROMPT_TEMPLATE.format(problem=problem), cwd, model, max_turns,
-                   timeout_s, extra_args, stream=stream, effort=effort)
+                   timeout_s, extra_args, stream=stream, effort=effort,
+                   isolate_operator_config=isolate_operator_config,
+                   allowed_tools=allowed_tools, builtin_tools=builtin_tools,
+                   deny_repo=deny_repo)
 
 
 def parse_output(stdout: str, stderr: str, returncode: int) -> RunResult:

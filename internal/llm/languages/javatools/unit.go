@@ -41,7 +41,7 @@ func line(b *strings.Builder, st *renderstate.State, id, suffix, description str
 }
 
 // FunctionUnit decomposes a Java method or constructor read.
-func FunctionUnit(ctx *java.JavaFunctionContext) readunit.Unit {
+func FunctionUnit(ctx *java.JavaFunctionContext, st *renderstate.State) readunit.Unit {
 	u := readunit.Unit{
 		Kind:        domain.ResourceFunction,
 		Fence:       "java",
@@ -50,8 +50,16 @@ func FunctionUnit(ctx *java.JavaFunctionContext) readunit.Unit {
 	}
 	var body strings.Builder
 	inlinedParent := ctx.ParentStruct != nil
+	// A batch that asks for several members of one type used to inline the type once per
+	// member. st is nil for single-unit callers, where ParentSeen reports false.
+	elidedParent := inlinedParent && st.ParentSeen(ctx.ParentStruct.Cut)
 	if inlinedParent {
-		body.WriteString(ctx.ParentStruct.Cut)
+		if elidedParent {
+			body.WriteString(renderstate.ElisionMarker(string(ctx.ParentStruct.ID),
+				"enclosing type already shown in this response"))
+		} else {
+			body.WriteString(ctx.ParentStruct.Cut)
+		}
 	}
 	if ctx.Function != nil {
 		u.ID = string(ctx.Function.ID)
@@ -59,8 +67,8 @@ func FunctionUnit(ctx *java.JavaFunctionContext) readunit.Unit {
 		u.Line = ctx.Function.Loc.StartsAt
 		// A Java class cut is the whole class, so an inlined parent already contains the
 		// method; appending it again printed it twice.
-		if !inlinedParent || !ctx.ParentStruct.Loc.Contains(ctx.Function.Loc) {
-			if inlinedParent {
+		if !inlinedParent || elidedParent || !ctx.ParentStruct.Loc.Contains(ctx.Function.Loc) {
+			if inlinedParent && !elidedParent {
 				body.WriteString("\n\n")
 			}
 			body.WriteString(ctx.Function.Cut)

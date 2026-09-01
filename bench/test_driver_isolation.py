@@ -47,9 +47,12 @@ def test_python_actually_honours_the_redirect():
 
 def test_both_drivers_pass_the_isolated_env():
     # A driver that forgets `env=` silently reopens the hole.
+    # Matched on the call NAME, not on `isolated_env()` exactly: the claude driver passes it
+    # an argument now (operator-config isolation), and a test that pins the argument list
+    # fails for a reason that has nothing to do with what it is guarding.
     for mod, name in ((claude_driver, "claude_driver"), (opencode_driver, "opencode_driver")):
         src = open(mod.__file__, encoding="utf-8").read()
-        assert "isolated_env()" in src, f"{name} does not use isolated_env"
+        assert "isolated_env(" in src, f"{name} does not use isolated_env"
         run_call = src[src.index("subprocess.run("):]
         assert "env=" in run_call[:400], f"{name} calls subprocess.run without env="
 

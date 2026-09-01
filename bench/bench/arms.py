@@ -22,7 +22,32 @@ from . import fixtures
 from .gitutil import clone_at, ensure_repo_cache
 from .fixtures import ARACNE_ARTIFACTS  # noqa: F401 - re-exported for back-compat
 
-ARMS = ("baseline", "aracne")
+ARMS = ("baseline", "aracne", "aracne-open")
+
+
+def is_aracne_arm(arm: str) -> bool:
+    """Every arm except the control gets the topology, the MCP server and the contract.
+
+    Written as "not baseline" rather than a membership test on ARMS because the arm name is
+    also how a run selects its aracne config preset: `aracne` blocks the native read/edit/write
+    tools, `aracne-open` offers the same topology and blocks nothing. Keeping the split at one
+    predicate is what stops a new arm silently running against a stale topology, which is how
+    the `background_scanner` check read before the third arm existed.
+    """
+    return arm != "baseline"
+
+
+def aracne_config_for(arm: str, cfg: dict):
+    """The aracne config preset this arm runs under.
+
+    `arm_aracne_config` maps an arm name to a preset path, which is what lets two aracne-like
+    arms differ in the ONE thing under test -- whether the native tools are blocked -- while
+    sharing every other setting. Without it a run can only compare aracne against no-aracne,
+    which conflates "the topology helps" with "the guard hurts": in the
+    compact-blocked-20260830c run those two had opposite signs and cancelled.
+    """
+    per_arm = cfg.get("arm_aracne_config") or {}
+    return per_arm.get(arm) or cfg.get("aracne_config_path")
 
 
 def prepare_workdir(arm: str, task, cfg: dict, repos_dir: Path, ephemeral_dir: Path,
@@ -54,8 +79,9 @@ def prepare_workdir(arm: str, task, cfg: dict, repos_dir: Path, ephemeral_dir: P
     # Optionally overlay a benchmark-selected .aracne/config.json for this run (aracne arm only),
     # then regenerate the contract so what the agent is TOLD matches the tools it is GIVEN --
     # the overlay can rename the read tool and change the native-tool policy.
-    if cfg.get("aracne_config_path"):
-        fixtures.apply_aracne_config(wt, cfg["aracne_config_path"])
+    overlay = aracne_config_for(arm, cfg)
+    if overlay:
+        fixtures.apply_aracne_config(wt, overlay)
         fixtures.sync_agent_contract(wt, cfg.get("arac_bin", "arac"))
     return wt
 
@@ -83,7 +109,7 @@ def background_scanner(arm: str, workdir, cfg: dict):
     runs.
     """
     proc = None
-    if arm == "aracne":
+    if is_aracne_arm(arm):
         db = Path(workdir) / ".aracne" / "topology.db"
         if db.exists():
             try:

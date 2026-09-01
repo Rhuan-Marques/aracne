@@ -200,3 +200,25 @@ func TestContractMatchesBlockedTools(t *testing.T) {
 		t.Fatalf("blocked contract must not offer the native grep:\n%s", blockedMd)
 	}
 }
+
+// The batch hint exists because the measured cost of the MCP edit path was call COUNT, not the
+// topology sync: one edit per hunk against a baseline that batched ten replacements into a
+// single heredoc. A contract that never names the `edits` array leaves that on the table.
+func TestContractTellsTheAgentToBatchItsEdits(t *testing.T) {
+	eff := helper.AgentConfig{
+		MCPTools:     []string{"read", "grep", "edit", "write"},
+		BlockedTools: []string{"read", "grep", "edit", "write"},
+	}
+	got := editWriteSection(eff, "mcp__aracne__")
+	for _, want := range []string{"edits", "ONE", "rolls back as a unit"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("edit section does not mention %q:\n%s", want, got)
+		}
+	}
+
+	// No edit tool, no advice about its parameters.
+	readOnly := helper.AgentConfig{MCPTools: []string{"read", "grep"}}
+	if strings.Contains(editWriteSection(readOnly, "mcp__aracne__"), "edits") {
+		t.Error("a read-only contract must not advertise an edit parameter")
+	}
+}

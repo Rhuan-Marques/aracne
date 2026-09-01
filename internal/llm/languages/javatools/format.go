@@ -54,7 +54,7 @@ func joinComponents(vars []java.VariableDefinition) string {
 
 // Formats a Java method or constructor read.
 func FormatJavaFunctionContext(ctx *java.JavaFunctionContext) string {
-	return renderOne(FunctionUnit(ctx))
+	return renderOne(FunctionUnit(ctx, nil))
 }
 
 // Formats a Java class/enum/record read.

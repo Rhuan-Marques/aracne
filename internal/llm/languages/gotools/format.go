@@ -24,7 +24,7 @@ func desc(s string) string {
 
 // Formats a Go function or method read.
 func FormatGoFunctionContext(ctx *golang.GoFunctionContext) string {
-	return renderOne(FunctionUnit(ctx))
+	return renderOne(FunctionUnit(ctx, nil))
 }
 
 // Formats a Go struct read.

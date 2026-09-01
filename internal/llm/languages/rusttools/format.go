@@ -30,7 +30,7 @@ func writeCut(b *strings.Builder, cut string) {
 
 // Formats a Rust function or method read.
 func FormatRustFunctionContext(ctx *rust.RustFunctionContext) string {
-	return renderOne(FunctionUnit(ctx))
+	return renderOne(FunctionUnit(ctx, nil))
 }
 
 // Formats a Rust struct/enum/union read.

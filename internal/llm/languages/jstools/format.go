@@ -25,7 +25,7 @@ func FormatJavaScriptDependencyContext(ctx *javascript.JavaScriptDependencyConte
 
 // Formats a JS/TS function or method read.
 func FormatJavaScriptFunctionContext(ctx *javascript.JavaScriptFunctionContext) string {
-	return renderOne(FunctionUnit(ctx))
+	return renderOne(FunctionUnit(ctx, nil))
 }
 
 // Formats a TypeScript interface read.

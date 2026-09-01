@@ -103,32 +103,43 @@ func (r *Read) Parameters() []tools.Parameter {
 	if r.readsFiles() {
 		desc = "Resource IDs or file paths to read. Prefer resource IDs over file paths. Duplicates are ignored."
 	}
-	return []tools.Parameter{
+	params := []tools.Parameter{
 		{Name: "ids", Type: "array", Items: "string", Description: desc, Required: true},
 	}
+	// Only worth advertising when file reads are abridged; otherwise it is a no-op knob and
+	// every token spent describing it is wasted on every call.
+	if r.readsFiles() && r.cfg.EffectiveFileMode() == helper.FileModeSkeleton {
+		params = append(params, tools.Parameter{
+			Name: "full", Type: "boolean", Required: false,
+			Description: "Return whole file bodies verbatim instead of signatures with large " +
+				"bodies elided. Use when you need exact text to edit. No effect on non-file ids.",
+		})
+	}
+	return params
 }
 
 // readArgs accepts the documented list and also a bare string, because models emit a scalar
 // often enough that rejecting it would just buy a correction turn.
-func readArgs(args json.RawMessage) ([]string, error) {
+func readArgs(args json.RawMessage) ([]string, bool, error) {
 	var params struct {
-		IDs json.RawMessage `json:"ids"`
+		IDs  json.RawMessage `json:"ids"`
+		Full bool            `json:"full"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
-		return nil, fmt.Errorf("invalid arguments: %w", err)
+		return nil, false, fmt.Errorf("invalid arguments: %w", err)
 	}
 	if len(params.IDs) == 0 {
-		return nil, fmt.Errorf("missing required argument: ids")
+		return nil, false, fmt.Errorf("missing required argument: ids")
 	}
 	var list []string
 	if err := json.Unmarshal(params.IDs, &list); err == nil {
-		return list, nil
+		return list, params.Full, nil
 	}
 	var single string
 	if err := json.Unmarshal(params.IDs, &single); err == nil {
-		return []string{single}, nil
+		return []string{single}, params.Full, nil
 	}
-	return nil, fmt.Errorf("invalid arguments: ids must be a string or an array of strings")
+	return nil, false, fmt.Errorf("invalid arguments: ids must be a string or an array of strings")
 }
 
 // ReadIDsOptions lets a caller override what the tool reads. The CLI uses it: `arac read` is
@@ -139,15 +150,17 @@ type ReadIDsOptions struct {
 	Kinds []domain.ResourceKind
 	// ForcedKind narrows ID resolution to a single kind (the CLI's --kind).
 	ForcedKind domain.ResourceKind
+	// ForceFullFile returns whole file bodies verbatim even under read.file_mode "skeleton".
+	ForceFullFile bool
 }
 
 // Run is the tool entry point: parse the id list, then hand off to ReadIDs.
 func (r *Read) Run(args json.RawMessage) (string, error) {
-	ids, err := readArgs(args)
+	ids, full, err := readArgs(args)
 	if err != nil {
 		return "", err
 	}
-	return r.ReadIDs(ids, ReadIDsOptions{})
+	return r.ReadIDs(ids, ReadIDsOptions{ForceFullFile: full})
 }
 
 // ReadIDs resolves every id, renders the bodies grouped by declaring file, then ONE shared
@@ -172,10 +185,35 @@ func (r *Read) ReadIDs(rawIDs []string, opt ReadIDsOptions) (string, error) {
 
 	topo, topoErr := r.mgr.ReadAll()
 
+	// One ledger for the whole batch, shared with Render below. Bodies are assembled here,
+	// before Render runs, so an enclosing type inlined by the first method of a struct is
+	// only recognized as "already shown" by the second if both phases consult the same
+	// state. Without it, five methods of one struct emitted the struct five times.
+	st := renderstate.New()
+
+	// Resolved once for the batch. The per-call override exists because a model that has seen
+	// only a skeleton and now needs exact bytes to build an `edit` old_string must be able to
+	// ask for them without an admin changing the project config.
+	fileMode := cfg.EffectiveFileMode()
+	if opt.ForceFullFile {
+		fileMode = helper.FileModeFull
+	}
+	// Skeleton has its own threshold, deliberately not context_filter.small_function_threshold.
+	// Sharing them meant a project that (reasonably) set the context knob to 40 lines got a
+	// skeleton that elided almost nothing -- 2 of 39 reads, and a whole-file read still 1.00x
+	// the bytes on disk. See helper.DefaultSkeletonThreshold.
+	skeletonThreshold := cfg.EffectiveSkeletonThreshold()
+	// A symbol body over this many lines is abridged the same way. Disabled when the caller
+	// asked for exact bytes, since that request is usually about building an `edit` old_string.
+	maxSymbolLines := cfg.EffectiveMaxSymbolLines()
+	if opt.ForceFullFile {
+		maxSymbolLines = 0
+	}
+
 	var units []readunit.Unit
 	var problems []string
 	for _, id := range ids {
-		u, note, err := r.unitFor(topo, topoErr, id, allowed, kinds, filter, opt.ForcedKind)
+		u, note, err := r.unitFor(topo, topoErr, id, allowed, kinds, filter, opt.ForcedKind, st, fileMode, skeletonThreshold)
 		switch {
 		case err != nil:
 			problems = append(problems, fmt.Sprintf("- %s: %v", id, err))
@@ -183,11 +221,15 @@ func (r *Read) ReadIDs(rawIDs []string, opt ReadIDsOptions) (string, error) {
 			problems = append(problems, fmt.Sprintf("- %s: %s", id, note))
 		default:
 			u.Label = displayPath(topo, u.Path)
+			u.Body = abridgeSymbolBody(u, maxSymbolLines)
 			units = append(units, u)
 		}
 	}
 
-	out := readunit.Render(units, readunit.Options{IncludeIncoming: cfg.EffectiveIncludeIncoming()})
+	out := readunit.Render(units, readunit.Options{
+		IncludeIncoming: cfg.EffectiveIncludeIncoming(),
+		State:           st,
+	})
 
 	// A bad id in a batch must not throw away the good ones: the whole point of batching is
 	// that one call answers several questions, and failing all of them over one typo would
@@ -255,7 +297,8 @@ func kindNames(kinds []domain.ResourceKind) string {
 // unitFor resolves one id and builds its Unit. The middle return is a soft note (an ambiguity
 // list, say) that belongs in the output without being an error.
 func (r *Read) unitFor(topo *domain.Topology, topoErr error, id string, allowed map[domain.ResourceKind]bool,
-	kinds []domain.ResourceKind, filter topology.TopologyOption, forcedKind domain.ResourceKind) (readunit.Unit, string, error) {
+	kinds []domain.ResourceKind, filter topology.TopologyOption, forcedKind domain.ResourceKind,
+	st *renderstate.State, fileMode string, smallThreshold int) (readunit.Unit, string, error) {
 
 	if topoErr == nil {
 		match := func(res domain.Resource) bool {
@@ -264,7 +307,27 @@ func (r *Read) unitFor(topo *domain.Topology, topoErr error, id string, allowed 
 			}
 			return true
 		}
-		target, note, resolveErr := resolveReadTargetWith(r.mgr, id, match)
+
+		// `src/app.rs:build_app` and `src/app.rs:95-115` are both shapes a model invents when
+		// it wants part of a file, and both missed in the benchmark run. The first is a
+		// scoped symbol lookup and is served; the second is a line window and is answered
+		// with the id that covers it -- see nodesSpanning for why it is not served directly.
+		lookup := id
+		if base, kind, from, to, symbol := splitFileSuffix(id); kind != suffixNone {
+			switch kind {
+			case suffixRange:
+				return readunit.Unit{}, "", rangeRedirect(topo, id, base, from, to)
+			case suffixSymbol:
+				lookup = symbol
+				inner := match
+				// Scope during resolution, never after: idresolve counts its matches AFTER
+				// the filter, so a name that is ambiguous repo-wide but unique in this file
+				// resolves cleanly here and would come back "ambiguous" if filtered later.
+				match = func(res domain.Resource) bool { return inner(res) && declaredIn(base, res) }
+			}
+		}
+
+		target, note, resolveErr := resolveReadTargetWith(r.mgr, lookup, match)
 		if note != "" {
 			return readunit.Unit{}, note, nil
 		}
@@ -274,9 +337,9 @@ func (r *Read) unitFor(topo *domain.Topology, topoErr error, id string, allowed 
 					"resolves to a %s, which read.kinds does not allow (allowed: %s)",
 					target.res.Kind, kindNames(kinds))
 			}
-			u, buildNote, buildErr := r.buildUnit(topo, target, filter)
+			u, buildNote, buildErr := r.buildUnit(topo, target, filter, st, fileMode, smallThreshold)
 			if se, stale := topology.AsStaleIndex(buildErr); stale {
-				return r.healStale(se, id, match, allowed, filter, buildErr)
+				return r.healStale(se, id, match, allowed, filter, buildErr, st, fileMode, smallThreshold)
 			}
 			return u, buildNote, buildErr
 		}
@@ -321,7 +384,8 @@ func (r *Read) unitFor(topo *domain.Topology, topoErr error, id string, allowed 
 // Bounded on purpose: one file, one retry, no recursion. If it fails again the caller gets the
 // second error, which still says "not indexed".
 func (r *Read) healStale(se *topology.StaleIndexError, id string, match func(domain.Resource) bool,
-	allowed map[domain.ResourceKind]bool, filter topology.TopologyOption, original error) (readunit.Unit, string, error) {
+	allowed map[domain.ResourceKind]bool, filter topology.TopologyOption, original error,
+	st *renderstate.State, fileMode string, smallThreshold int) (readunit.Unit, string, error) {
 
 	if r.reg == nil || se.Path == "" {
 		return readunit.Unit{}, "", original
@@ -348,7 +412,7 @@ func (r *Read) healStale(se *topology.StaleIndexError, id string, match func(dom
 	if resolveErr != nil || !allowed[target.res.Kind] {
 		return readunit.Unit{}, "", original
 	}
-	return r.buildUnit(topo, target, filter)
+	return r.buildUnit(topo, target, filter, st, fileMode, smallThreshold)
 }
 
 // indexHealthNote is the line appended under "# UNRESOLVED:" when the database has drifted
@@ -377,9 +441,10 @@ func (r *Read) indexHealthNote() string {
 // buildUnit dispatches on the RESOURCE's language and kind. Files are language-neutral: the
 // body is the source and the context is a generic graph walk, so no per-language file
 // formatter is involved.
-func (r *Read) buildUnit(topo *domain.Topology, t readTarget, filter topology.TopologyOption) (readunit.Unit, string, error) {
+func (r *Read) buildUnit(topo *domain.Topology, t readTarget, filter topology.TopologyOption, st *renderstate.State,
+	fileMode string, smallThreshold int) (readunit.Unit, string, error) {
 	if t.res.Kind == domain.ResourceFile {
-		return r.fileUnit(topo, t)
+		return r.fileUnit(topo, t, fileMode, smallThreshold)
 	}
 
 	switch t.res.Kind {
@@ -387,19 +452,19 @@ func (r *Read) buildUnit(topo *domain.Topology, t readTarget, filter topology.To
 		switch t.res.Language {
 		case "go":
 			ctx, err := golang.NewGoManager(r.mgr).ReadFunction(t.id, filter)
-			return wrap(gotools.FunctionUnit, ctx, err)
+			return wrapStateful(gotools.FunctionUnit, ctx, err, st)
 		case "python":
 			ctx, err := python.NewPythonManager(r.mgr).ReadFunction(t.id, filter)
-			return wrap(pythontools.FunctionUnit, ctx, err)
+			return wrapStateful(pythontools.FunctionUnit, ctx, err, st)
 		case "javascript", "typescript":
 			ctx, err := javascript.NewJavaScriptManager(r.mgr).ReadFunction(t.id, filter)
-			return wrap(jstools.FunctionUnit, ctx, err)
+			return wrapStateful(jstools.FunctionUnit, ctx, err, st)
 		case "rust":
 			ctx, err := rust.NewRustManager(r.mgr).ReadFunction(t.id, filter)
-			return wrap(rusttools.FunctionUnit, ctx, err)
+			return wrapStateful(rusttools.FunctionUnit, ctx, err, st)
 		case "java":
 			ctx, err := java.NewJavaManager(r.mgr).ReadFunction(t.id, filter)
-			return wrap(javatools.FunctionUnit, ctx, err)
+			return wrapStateful(javatools.FunctionUnit, ctx, err, st)
 		}
 	case domain.ResourceStruct:
 		// A Python ABC/Protocol is a class, so it lands here rather than under interface --
@@ -487,15 +552,34 @@ func wrap[T any](build func(T) readunit.Unit, ctx T, err error) (readunit.Unit, 
 	return build(ctx), "", nil
 }
 
+// wrapStateful is wrap for the builders that need the batch's shared render state, so an
+// enclosing type inlined into one member's body is not inlined again into the next one's.
+func wrapStateful[T any](build func(T, *renderstate.State) readunit.Unit, ctx T, err error, st *renderstate.State) (readunit.Unit, string, error) {
+	if err != nil {
+		return readunit.Unit{}, "", err
+	}
+	return build(ctx, st), "", nil
+}
+
 // fileUnit builds a whole-file read with no language-specific code.
 //
 // Covers names every declaration in the file, which is what keeps them out of the context
 // section; Neighbors is what those declarations reach outside the file, which is what the
 // context section should have been showing all along.
-func (r *Read) fileUnit(topo *domain.Topology, t readTarget) (readunit.Unit, string, error) {
-	entry, err := r.mgr.Cut(domain.Location{Path: t.id})
-	if err != nil {
-		return readunit.Unit{}, "", err
+func (r *Read) fileUnit(topo *domain.Topology, t readTarget, fileMode string, smallThreshold int) (readunit.Unit, string, error) {
+	var body string
+	if fileMode == helper.FileModeSkeleton {
+		sk, skErr := skeletonBody(topo, r.mgr, t.id, smallThreshold)
+		if skErr != nil {
+			return readunit.Unit{}, "", skErr
+		}
+		body = sk
+	} else {
+		entry, err := r.mgr.Cut(domain.Location{Path: t.id})
+		if err != nil {
+			return readunit.Unit{}, "", err
+		}
+		body = entry.Cut
 	}
 	members := domain.FileMembers(topo, t.id)
 	neighbors := domain.OutgoingNeighbors(topo, members, map[string]bool{t.id: true})
@@ -506,7 +590,7 @@ func (r *Read) fileUnit(topo *domain.Topology, t readTarget) (readunit.Unit, str
 		Path:   t.id,
 		Line:   0,
 		Fence:  t.res.Language,
-		Body:   entry.Cut,
+		Body:   body,
 		Covers: members,
 	}
 	u.Context = neighborContext(neighbors)

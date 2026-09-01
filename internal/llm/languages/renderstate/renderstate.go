@@ -247,3 +247,20 @@ func BackRef(b *strings.Builder, comment string) {
 	b.WriteString(comment)
 	b.WriteString(" (shown above)\n\n")
 }
+
+// ElisionMarker is the one-line stand-in for source a body chose not to inline verbatim.
+//
+// Two rules make this text load-bearing rather than cosmetic:
+//
+// It must never read as source. `edit` matches old_string against the bytes on disk, so a
+// marker styled like a plausible comment invites a model to build old_string from text that
+// was never in the file and get a confusing "not found". The leading U+22EF opens no comment
+// in any language aracne scans, which is exactly why it was chosen.
+//
+// It must not claim a position. Bodies are built in the caller's request order but rendered
+// sorted by (path, line), so "shown above" — which BackRef can say safely inside the single
+// pass that builds the CONTEXT section — would be a lie here often enough to matter. Naming
+// the ID tells the model what to do next without asserting where anything sits.
+func ElisionMarker(id, reason string) string {
+	return fmt.Sprintf("⋯ %s not shown here (%s) — read %q for its source ⋯\n\n", id, reason, id)
+}

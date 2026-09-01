@@ -108,7 +108,9 @@ func (m *GoManager) applyFuncList(gt *GolangTopology, filter domain.ContextFilte
 func (m *GoManager) applyExtVars(gt *GolangTopology, filter domain.ContextFilter, vars []SimplifiedExtVar) []SimplifiedExtVar {
 	var out []SimplifiedExtVar
 	for _, v := range vars {
-		vis := filter.For(domain.ResourceVariable, 0, visHasDesc(v.Description))
+		// A constant whose value is shown IS described -- `MaxRetries = 3` needs no prose, and
+		// hiding it under hide_no_description would drop the one thing it had to say.
+		vis := filter.For(domain.ResourceVariable, 0, visHasDesc(v.Description) || v.Value != "")
 		if vis == domain.VisibilityHidden {
 			continue
 		}

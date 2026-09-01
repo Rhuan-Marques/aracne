@@ -25,7 +25,7 @@ func FormatPythonDependencyContext(ctx *python.PythonDependencyContext) string {
 
 // Formats a Python function or method read.
 func FormatPythonFunctionContext(ctx *python.PythonFunctionContext) string {
-	return renderOne(FunctionUnit(ctx))
+	return renderOne(FunctionUnit(ctx, nil))
 }
 
 // Formats a Python class read.
