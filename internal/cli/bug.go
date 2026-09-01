@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 
+	"aracne/internal/topology"
 	"aracne/internal/topology/domain"
 )
 
@@ -62,18 +64,40 @@ func RunBugReport(args []string) {
 	}
 
 	manager, _ := InitRegistry(dbPath)
-	bug, err := manager.CreateBug(nodeID, description)
+	// Same resolve-before-insert contract as the bug_report MCP tool: an id the topology
+	// does not hold would be silently deleted by the next scan's orphan cleanup.
+	resolved, err := manager.ResolveNodeID(nodeID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error reporting bug: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Bug reported: %s (state: %s)\n", bug.ID, bug.State)
+	bug, err := manager.CreateBug(resolved, description)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reporting bug: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Bug reported: %s (node: %s, state: %s)\n", bug.ID, bug.NodeID, bug.State)
+}
+
+// bugManager opens the topology database WITHOUT the scan-if-missing behaviour of
+// InitRegistry.
+//
+// The bug subcommands are the orchestration channel the generated slash commands drive
+// through Bash, so they run several times per fan-out round. InitRegistry runs a full
+// project scan and os.Exit(1)s when the database is absent, which is far too heavy — and
+// far too destructive of the agent's turn — for what is a single SELECT. Load is a pure
+// setter; the read paths need nothing else.
+func bugManager(dbPath string) *topology.TopologyManager {
+	mgr := topology.New()
+	mgr.Load(dbPath)
+	return mgr
 }
 
 // Lists topology bugs filtered by node ID and/or state.
 func RunBugList(args []string) {
 	dbPath := ".aracne/topology.db"
 	nodeID := ""
+	asJSON := false
 	var state domain.BugState
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -92,14 +116,30 @@ func RunBugList(args []string) {
 				state = domain.BugState(args[i+1])
 				i++
 			}
+		case "--json":
+			asJSON = true
 		}
 	}
 
-	manager, _ := InitRegistry(dbPath)
-	bugs, err := manager.ListBugs(nodeID, state)
+	bugs, err := bugManager(dbPath).ListBugs(nodeID, state)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error listing bugs: %v\n", err)
 		os.Exit(1)
+	}
+
+	if asJSON {
+		// Always an array, never "No bugs found." — this output is parsed by the agent
+		// orchestrating the fan-out, and an empty round must decode, not read as prose.
+		if bugs == nil {
+			bugs = []domain.KnownBug{}
+		}
+		out, err := json.MarshalIndent(bugs, "", "  ")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error encoding bugs: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println(string(out))
+		return
 	}
 
 	if len(bugs) == 0 {
@@ -138,8 +178,7 @@ func RunBugAcknowledge(args []string) {
 		os.Exit(1)
 	}
 
-	manager, _ := InitRegistry(dbPath)
-	if err := manager.AcknowledgeBug(bugID); err != nil {
+	if err := bugManager(dbPath).AcknowledgeBug(bugID); err != nil {
 		fmt.Fprintf(os.Stderr, "Error acknowledging bug: %v\n", err)
 		os.Exit(1)
 	}
@@ -169,8 +208,7 @@ func RunBugDismiss(args []string) {
 		os.Exit(1)
 	}
 
-	manager, _ := InitRegistry(dbPath)
-	if err := manager.DismissBug(bugID); err != nil {
+	if err := bugManager(dbPath).DismissBug(bugID); err != nil {
 		fmt.Fprintf(os.Stderr, "Error dismissing bug: %v\n", err)
 		os.Exit(1)
 	}
@@ -200,8 +238,7 @@ func RunBugDelete(args []string) {
 		os.Exit(1)
 	}
 
-	manager, _ := InitRegistry(dbPath)
-	if err := manager.DeleteBug(bugID); err != nil {
+	if err := bugManager(dbPath).DeleteBug(bugID); err != nil {
 		fmt.Fprintf(os.Stderr, "Error deleting bug: %v\n", err)
 		os.Exit(1)
 	}

@@ -485,6 +485,49 @@ func resourceLanguageColumnExists(db *sql.DB) (bool, error) {
 	return false, rows.Err()
 }
 
+// TrackedFiles reports, for each absolute file path, whether the topology holds any resource
+// for it.
+//
+// Deliberately a QUERY rather than a filter over ReadDb. The guard calls this inside a
+// PreToolUse hook on the agent's critical path, and materialising the whole graph to answer a
+// yes/no about two paths does not scale with the repository: measured on the benchmark
+// fixtures, ReadDb takes 13ms for fd (157 resources) but 3.5s for mui/material-ui (74,909) --
+// past any timeout a hook can justify, and precisely the large repositories where the answer
+// matters most.
+//
+// A file appears in the table twice over: a FILE resource is keyed by its absolute path, and
+// every symbol inside it carries that path in loc_path. Either is proof the topology models
+// the file.
+func TrackedFiles(dbPath string, paths []string) (map[string]bool, error) {
+	out := make(map[string]bool, len(paths))
+	if len(paths) == 0 {
+		return out, nil
+	}
+	err := withSQLiteRead(dbPath, func(db *sql.DB) error {
+		stmt, err := db.Prepare("SELECT 1 FROM resources WHERE id = ? OR loc_path = ? LIMIT 1")
+		if err != nil {
+			return err
+		}
+		defer stmt.Close()
+		for _, p := range paths {
+			var one int
+			switch err := stmt.QueryRow(p, p).Scan(&one); err {
+			case nil:
+				out[p] = true
+			case sql.ErrNoRows:
+				out[p] = false
+			default:
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // Loads the complete topology from a SQLite database, including resources, connections, and warnings.
 func ReadDb(path string) (*domain.Topology, error) {
 	var topo *domain.Topology
@@ -851,10 +894,24 @@ func UpdateBugState(dbPath string, bugID string, state domain.BugState) error {
 }
 
 // Deletes a single bug record from the SQLite database by ID.
+// A delete that matched nothing is an ERROR, not a success -- same contract as
+// UpdateBugState above. Reporting success for a bug that was not there made the bug-judge
+// fan-out's mutual-delete race invisible: two judges resolving the same duplicate pair both
+// reported "deleted" while one of them had removed a record the other had already taken.
 func DeleteBug(dbPath string, bugID string) error {
 	return withSQLiteWrite(dbPath, func(db *sql.DB) error {
-		_, err := db.Exec("DELETE FROM bugs WHERE id = ?", bugID)
-		return err
+		result, err := db.Exec("DELETE FROM bugs WHERE id = ?", bugID)
+		if err != nil {
+			return err
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected == 0 {
+			return fmt.Errorf("bug not found: %s", bugID)
+		}
+		return nil
 	})
 }
 

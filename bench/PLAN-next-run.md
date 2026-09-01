@@ -467,3 +467,128 @@ The turn regression is what `batched-20260901a` is meant to answer.
 The batch API existed after the previous session's work but nothing pointed at it, and the
 measured cost of the MCP edit path was call COUNT — one edit per hunk against a baseline that
 batched ten replacements into a single heredoc.
+
+---
+
+## Result: batched-20260901a
+
+25 repositories (2 dropped for a contaminated control), aracne arm measured against the same
+imported control as `netguard-20260831b`, which was rescored on the same 25 so the two are
+directly comparable.
+
+| endpoint | netguard (corrected) | batched-20260901a |
+|---|---|---|
+| context tokens | −32.8% *(sig)* | **−45.0%** *(sig)* [−52.7, −35.2] |
+| total tokens | −32.3% *(sig)* | **−44.5%** *(sig)* |
+| context / turn | −48.5% *(sig)* | −46.9% *(sig)* |
+| output tokens | +4.7% | −4.1% |
+| wall clock | +18.2% | **−8.4%** |
+| **turns** | **+30.6%** *(sig)* | **+3.5%** *(n.s.)* [−8.5, +18.0] |
+| solved | 19/25 | 19/25 (control 20) |
+
+The turn regression is gone and the saving deepened. In raw totals the arm went from 440 turns
+to 355 against an unchanged control at 360; of the 85 turns removed, **72 are edit calls**
+(110 → 38 for 110 → 101 replacements) and 6 are denials.
+
+Correctness is unchanged and still underpowered: one discordant pair, McNemar p = 1.0, rate
+difference −4pp [−12pp, 0], so non-inferiority at the 10pp margin is NOT established — a
+statement about a 25-repo task set, not about a decline. The discordant pair MOVED between runs
+(dayjs → clap), which is what one pair looks like when it is noise.
+
+### The next lever, measured
+
+Classifying the 35 remaining denials: 26 are source-file reads the guard should catch, 2 are
+directory listings, and **7 target files with no topology at all** — `CHANGELOG.md`,
+`doc/fd.1`, `HISTORY.rst`. That is the direct cause of the worst regression in the matrix:
+denied a plain read of `CHANGELOG.md`, the `fd` cell fell back to `grep` with the pattern `.`
+and then to `python3 -c "print(repr(open(...).read()[:400]))"` to see whitespace — four turns
+for a file the topology does not model.
+
+**Do not block reads of files with no topology nodes.** Same principle as the `/tmp` scoping,
+moved from location to file type.
+
+The standing caveat is unchanged and now four reports old: the control still predates
+`isolate_operator_config`, `--tools Bash` and the answer-key block. Every ratio above is against
+a control that ran under different conditions.
+
+Report: https://claude.ai/code/artifact/298970ff-9abe-47fe-9b54-d0047d0409ed
+
+---
+
+## Before the next run: the fixture pool needs re-preparing
+
+`features.bug_management` was added to `helper.DefaultConfig`, so **every newly prepared
+fixture's `.aracne/config.json` now contains a `features` key that frozen fixtures do not**.
+
+`config_fingerprint` (`bench/bench/fixtures.py:364`) hashes that file verbatim, and
+`check_config_uniformity` (`bench/run_benchmark.py:1241`) refuses a pool whose fixtures do not
+all share one fingerprint — which is exactly the protection that caught the four-distinct-configs
+problem in the scale40 pool. A pool mixing fixtures frozen before this change with any prepared
+after it will be refused.
+
+Options, best first:
+
+1. **Re-prepare and re-freeze the pool** so every fixture carries the same config. This is the
+   only option that keeps the guard meaningful.
+2. `BENCH_ALLOW_CONFIG_DRIFT=1` — proceeds, but the guard exists precisely because averaging
+   over two configs silently benchmarks two different products. Only reasonable if you have
+   confirmed the `features` key is the *sole* difference.
+
+The flag itself is inert for the current arms: it defaults to off, no bench arm runs a bug
+workflow, and the `bug_*` tools were already absent from `DefaultAgentMCPTools("main")`. The
+one real behaviour change for the aracne arm is that `sync_agent_contract`
+(`bench/bench/fixtures.py:165`) re-runs `arac init`, which with the flag off now also *prunes*
+any `bug-*.md` command/agent files a fixture happens to carry.
+
+Note also: the seven `bench/configs/aracne/*.json` overlays declare `llm.<any>.agents.bug-*`
+with `mcp_tools` but no `blocked_tools`, so they inherit main's and do **not** pick up the new
+read-only default (`blocked_tools: ["edit","write"]`) for the hunter and judge. If a future run
+is meant to exercise the hardened agents, those overlays need the field set explicitly.
+
+---
+
+## Applied: don't block reads of files with no topology nodes
+
+The follow-up the previous run's denial analysis pointed at. Blocking a read is a good trade
+only when aracne can answer it better; for a file the topology does not model it cannot answer
+it at all, because `Read.rawFileUnit` falls back to the same raw bytes `cat` would have
+produced — minus the line window the shell command asked for.
+
+**`internal/cli/guard_untracked.go`** — `readsOnlyUntrackedFiles` (Bash) and
+`readsOnlyUntrackedPath` (native Read). Gated on `read` being the ONLY denied key, so an edit
+still goes through the tool that re-syncs the topology whether or not the file is indexed
+today. Conservative in every direction: at least one operand must resolve to a real regular
+file; one tracked file among several keeps the block; an unresolvable path is ignored rather
+than assumed untracked; any failure to consult the topology keeps the block.
+
+**`helper.TrackedFiles`** — a targeted `SELECT 1 FROM resources WHERE id = ? OR loc_path = ?`
+rather than a filter over `ReadDb`. This runs in a PreToolUse hook on the agent's critical
+path, and materialising the graph does not scale: measured on the fixtures, `ReadDb` is 13ms
+for fd (157 resources) but **3.5s for mui/material-ui (74,909)** — past any timeout a hook can
+justify, and exactly the large repositories where the answer matters most. With the query the
+slowest check across all 35 real denials is **4ms**.
+
+### Replayed against the run's own denials
+
+10 of 35 freed, 25 still blocked. Every freed one is a file the topology has no nodes for:
+
+| freed | files |
+|---|---|
+| documentation | `CHANGELOG.md` ×2, `doc/fd.1`, `HISTORY.rst` |
+| test sources | `tests/builder/conflicts.rs`, `test/plugin/*.test.js`, `core/discov/subscriber_test.go`, `tests/css/samples/snippets/input.svelte` ×3 |
+
+**The scope is wider than the 7 documentation reads that motivated it.** These topologies index
+*no test files at all* — clap 121 indexed files (all non-test), fd 20, go-zero 686 — so shell
+reads of the entire test tree are no longer blocked. That is correct by the same principle
+(aracne would serve them as raw bytes too, and the shell can at least window them), but it is a
+larger behavioural change than "stop blocking changelogs" and should be watched in the next run.
+
+### Two things found on the way
+
+- The replay initially reported 12 freed including `lib/matplotlib/__init__.py`, a genuinely
+  indexed file. That was the harness picking the wrong fixture — two checkouts of matplotlib
+  exist at different commits and the mapping kept the last glob hit. Fixed by resolving the
+  fixture through the run's own manifest `base_commit`. The rule was correct throughout.
+- `TopologyManager.Write(path)` copies `m.dbPath` onto `path` with `os.Create`, so calling it
+  with the database's own path **truncates the database to zero bytes**. `FullScan` already
+  persists; the test fixture notes this.

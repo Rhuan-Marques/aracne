@@ -130,3 +130,22 @@ def background_scanner(arm: str, workdir, cfg: dict):
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait(timeout=10)
+
+
+def arm_tools(cfg: dict, arm: str, key: str):
+    """The tool surface for ONE arm: `arm_<key>` overrides the global `<key>`.
+
+    WHY PER-ARM. `builtin_tools` (claude --tools) exists to trim the built-in surface so the
+    aracne MCP tools stay in the model's front list instead of being deferred behind a
+    ToolSearch. Applied globally it also strips Read/Edit/Write from the CONTROL, which does
+    not isolate anything -- it just measures aracne against an agent that has no file tools at
+    all. The arms are supposed to differ in how files are read and written and in nothing else,
+    so each names its own surface.
+
+    Returns None (the driver's "pass no flag") rather than an empty list, so an arm that names
+    nothing keeps the CLI default.
+    """
+    per_arm = (cfg.get("arm_" + key) or {}).get(arm)
+    if per_arm is None:
+        per_arm = cfg.get(key)
+    return list(per_arm) if per_arm else None

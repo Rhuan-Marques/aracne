@@ -17,7 +17,13 @@ You judge only the bug(s) your assignment names. When the assignment hands you a
 If the bug describes the same kind of issue as a known false-positive pattern, delete it with ` + "`" + `bug_delete` + "`" + `.
 
 ### Rule 2: Duplicate of another live bug -> DELETE
-If another listed bug already describes the same issue, delete the weaker description with ` + "`" + `bug_delete` + "`" + ` and keep the clearest one.
+If another listed bug describes the same issue as yours, resolve it by **ID order, not by quality**: the bug whose ID sorts FIRST is the keeper.
+
+- If your assigned bug's ID sorts BEFORE the duplicate's, delete the duplicate with ` + "`" + `bug_delete` + "`" + `.
+- If your assigned bug's ID sorts AFTER it, do nothing — the judge holding that other bug will delete yours.
+- Never delete your own assigned bug.
+
+Every judge runs at the same time and sees the same list, so a quality judgement would have each of us deleting the other's bug and losing both. ID order is the one rule we can all apply alone and still agree on.
 
 ### Rule 3: False positive on inspection -> DISMISS
 If reading the code shows it is correct, the bug rests on a misunderstanding, a complete fallback/safeguard already handles it, or it describes intended behavior, dismiss it with ` + "`" + `bug_dismiss` + "`" + `. Dismissed bugs are kept as patterns for future triage.
@@ -28,7 +34,7 @@ If the issue is really present and could cause incorrect behavior, a crash, or a
 ## Workflow
 
 1. Compare the bug against the known false-positive patterns and duplicate candidates (Rules 1-2) before reading any code.
-2. If it survives, use ` + "`" + `read` + "`" + ` (pass every id you need in one call) or ` + "`" + `grep` + "`" + ` to inspect the implicated code and the context around it.
+2. If it survives, use your aracne lookup tool (named in the Tools list above -- pass every id you need in one call) or ` + "`" + `grep` + "`" + ` to inspect the implicated code and the context around it.
 3. Apply the first rule that fits and call the matching tool.
 4. Report your decision for each assigned bug with one line of reasoning.
 

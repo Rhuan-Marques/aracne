@@ -38,7 +38,7 @@ Examine functions, methods, structs/classes, and interfaces for:
 
 ## Workflow
 
-1. Inspect the assigned resources with ` + "`" + `read` + "`" + ` -- pass them all in one call -- and follow the context each one touches; read a whole file only when the topology cuts are insufficient.
+1. Inspect the assigned resources with your aracne lookup tool (named in the Tools list above) -- pass them all in one call -- and follow the context each one touches; read a whole file only when the topology cuts are insufficient.
 2. For each confirmed bug, call ` + "`" + `bug_report` + "`" + ` on the node at the **root** of the issue — the resource whose code must change to fix it, not a node that merely exhibits the symptom — with a clear, specific description of the exact scenario that triggers it.
 3. Make more than one pass over your assigned scope; stop when a pass finds nothing new.
 4. Report a concise summary of the bugs you reported.

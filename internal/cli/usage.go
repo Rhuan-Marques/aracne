@@ -1,10 +1,57 @@
 package cli
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+
+	"aracne/internal/helper"
+)
 
 // Prints the full CLI usage documentation for all aracne commands and flags.
+//
+// The bug-pipeline blocks are omitted unless features.bug_management is on. `arac bug`
+// stays dispatchable either way -- it is the orchestration channel the generated slash
+// commands use and the debugging path -- but an undocumented command is the "unlisted"
+// half of gating an unshipped feature.
 func PrintUsage() {
-	fmt.Println(`arac - Go/Python/JavaScript/TypeScript project topology analyzer
+	cfg := helper.LoadConfig(helper.ConfigPath(".aracne/topology.db"))
+	fmt.Println(gateBugUsage(usageText, cfg.BugManagementEnabled()))
+}
+
+// gateBugUsage removes the `arac bug` command lines and their two flag blocks from the
+// usage banner when the bug pipeline is off.
+func gateBugUsage(text string, bugManagement bool) string {
+	if bugManagement {
+		return text
+	}
+	var kept []string
+	skipBlock := false
+	for _, line := range strings.Split(text, "\n") {
+		trimmed := strings.TrimSpace(line)
+		// A `Flags for "bug ..."` heading opens a block that runs to the next blank line.
+		if strings.HasPrefix(trimmed, `Flags for "bug `) {
+			skipBlock = true
+			continue
+		}
+		if skipBlock {
+			if trimmed == "" {
+				skipBlock = false
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmed, "arac bug ") || strings.HasPrefix(trimmed, "Aracne bug ") {
+			continue
+		}
+		// `--tool-profile` names the servable agent profiles; the bug ones are not servable
+		// with the feature off (effectiveMCPToolSet strips their tools), so do not offer them.
+		line = strings.Replace(line, "(bug-hunter, bug-judge, bug-solver, descriptions-generation-executor)",
+			"(descriptions-generation-executor)", 1)
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
+}
+
+const usageText = `arac - Go/Python/JavaScript/TypeScript project topology analyzer
 
 Usage:
   Aracne scan    [flags]    Incremental scan (changed files only); --all for full re-scan, --hard for full rebuild
@@ -131,5 +178,4 @@ Flags for "analyze dead-code":
     Aracne descriptions clear --target function,type
     arac read internal/topology/golang.GoManager
     arac read internal/cli/read.go
-    arac read internal/cli.RunRead internal/cli.parseReadArgs`)
-}
+    arac read internal/cli.RunRead internal/cli.parseReadArgs`

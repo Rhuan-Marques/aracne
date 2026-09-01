@@ -132,8 +132,8 @@ def _run_cell(task: Task, arm: str, seed: int, cfg: dict, out_dir: Path,
                 workdir, cfg["model"], cfg["max_turns"], cfg["timeout_s"],
                 stream=True, effort=cfg.get("effort"),
                 isolate_operator_config=bool(cfg.get("isolate_operator_config")),
-                allowed_tools=cfg.get("allowed_tools") or None,
-                builtin_tools=cfg.get("builtin_tools") or None,
+                allowed_tools=arms.arm_tools(cfg, arm, "allowed_tools"),
+                builtin_tools=arms.arm_tools(cfg, arm, "builtin_tools"),
                 # The web stays open; the repository holding this task's answer does not.
                 deny_repo=(netshim.deny_target(task.clone_url)
                            if cfg.get("deny_answer_key", True) else None),

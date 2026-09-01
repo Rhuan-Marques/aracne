@@ -10,8 +10,11 @@ import (
 // (toolspec) for the given tool names — into an agent prompt body, right after
 // the opening paragraph. This keeps the per-tool descriptions in one place and
 // makes the listing reflect the agent's actually-configured tools.
-func WithToolsListing(prompt string, toolNames []string) string {
-	section := toolspec.ToolsSection(toolNames)
+//
+// toolNames are catalog names; nativeReadAvailable decides which runtime name the read
+// tool is listed under (see toolspec.ResolveToolNames).
+func WithToolsListing(prompt string, toolNames []string, nativeReadAvailable bool) string {
+	section := toolspec.ToolsSection(toolNames, nativeReadAvailable)
 	if section == "" {
 		return prompt
 	}

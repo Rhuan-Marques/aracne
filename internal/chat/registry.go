@@ -24,6 +24,15 @@ import (
 	"aracne/internal/topology/scanner/rustscanner"
 )
 
+// chatNativeReadAvailable is false because the proprietary chat harness has no read tool of
+// its own for aracne's to collide with, so the aracne tool keeps the short name `read`.
+//
+// This is NOT a placeholder: it is the same decision cli.NativeReadAvailable makes for the
+// synthetic "all" profile, and it must stay in step with the `## Tools` listing that
+// agent_registry.go renders into every generated chat agent file. A generated name that
+// does not match the registered one silently denies the agent the tool.
+const chatNativeReadAvailable = false
+
 // Registers scanners for Go, Python, JavaScript, TypeScript, Rust, and Java into a scanner registry.
 func NewScannerRegistry() *scanner.Registry {
 	reg := scanner.NewRegistry()
@@ -65,8 +74,7 @@ func BuildToolRegistry(manager *topology.TopologyManager, scannerReg *scanner.Re
 	add(tools.NewBugAcknowledge(manager))
 	add(tools.NewBugDismiss(manager))
 	add(tools.NewBugDelete(manager))
-	// Chat has no native read to collide with, so the tool keeps the short name.
-	add(universaltools.NewRead(manager, cfg, false, scannerReg))
+	add(universaltools.NewRead(manager, cfg, chatNativeReadAvailable, scannerReg))
 
 	registerLanguageMaintenanceTools(registry, allowed, manager, getLanguage(manager), configDescribeTargets(cfg), configDescriptionBatchSize(cfg))
 	return registry

@@ -232,3 +232,23 @@ def parse_output(stdout: str, stderr: str, returncode: int) -> RunResult:
             "returncode": returncode,
         },
     )
+
+
+def cli_version() -> dict:
+    """The `claude` binary this run will drive, and its version.
+
+    RECORDED, NOT ASSUMED. A paired comparison whose arms ran months apart also compares two
+    Claude Code releases, and nothing in the harness made that visible: the imported baseline
+    in every run through batched-20260901a came from `opus-medium` (19 August) while the
+    treatment arm ran on whatever was installed the day of the run. Both arms of a single run
+    invoke the same resolved binary, so recording it once per run is enough to prove it -- and
+    a stored version is what lets a LATER run tell whether it is comparable to this one.
+    """
+    import shutil
+    path = shutil.which("claude") or "claude"
+    try:
+        out = subprocess.run([path, "--version"], capture_output=True, text=True,
+                             timeout=30).stdout.strip()
+    except (OSError, subprocess.SubprocessError) as exc:
+        out = f"unavailable: {exc}"
+    return {"path": path, "version": out}

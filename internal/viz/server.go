@@ -121,6 +121,16 @@ func NewServer(dbPath string) *Server {
 	return &Server{dbPath: dbPath, ws: NewWebSocketManager()}
 }
 
+// bugManagementEnabled reports whether this project has the bug pipeline turned on.
+//
+// Read per call rather than cached at construction: the viz process is long-lived and
+// handleConfig can rewrite .aracne/config.json underneath it, so a cached flag would go
+// stale for the rest of the session. LoadConfig falls back to defaults (feature off) when
+// the file is missing or unparseable.
+func (s *Server) bugManagementEnabled() bool {
+	return helper.LoadConfig(helper.ConfigPath(s.dbPath)).BugManagementEnabled()
+}
+
 // Starts an HTTP server for topology visualization on the specified address and database path.
 func Listen(addr, dbPath string) error {
 	srv := &http.Server{
@@ -152,7 +162,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	mux.HandleFunc("/api/chat", s.handleChat)
 	mux.HandleFunc("/api/chat/", s.handleChat)
 	mux.HandleFunc("/api/warnings", s.handleWarnings)
-	mux.HandleFunc("/api/bugs", s.handleBugs)
+	// The bug pipeline ships behind features.bug_management; with it off the endpoint is
+	// absent (404 via the mux default) rather than serving an empty list, so the disabled
+	// state is verifiable from outside the process.
+	if s.bugManagementEnabled() {
+		mux.HandleFunc("/api/bugs", s.handleBugs)
+	}
 	mux.ServeHTTP(w, r)
 }
 
@@ -163,9 +178,15 @@ func (s *Server) loadIndex() (*graphIndex, error) {
 	if err != nil {
 		return nil, err
 	}
-	bugs, err := helper.ReadBugs(s.dbPath, "", "")
-	if err != nil {
-		return nil, err
+	// With bug management off, `bugs` stays nil and `bugCounts` stays empty, so
+	// Summary.BugCount, GraphNode.BugCount and nodeBugs all report zero/empty with no
+	// further gating. app.js tests `bug_count > 0`, so its red node stroke never fires.
+	var bugs []domain.KnownBug
+	if s.bugManagementEnabled() {
+		bugs, err = helper.ReadBugs(s.dbPath, "", "")
+		if err != nil {
+			return nil, err
+		}
 	}
 	idx := &graphIndex{
 		topo:          topo,

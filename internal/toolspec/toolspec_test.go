@@ -127,7 +127,7 @@ func TestWarningForRead_NamesTheToolTheAgentHas(t *testing.T) {
 }
 
 func TestToolsSection(t *testing.T) {
-	out := ToolsSection([]string{"read_function", "bug_report"})
+	out := ToolsSection([]string{"read_function", "bug_report"}, false)
 	if !strings.HasPrefix(out, "## Tools\n") {
 		t.Fatalf("missing header:\n%s", out)
 	}
@@ -137,8 +137,51 @@ func TestToolsSection(t *testing.T) {
 	if !strings.Contains(out, "- `bug_report` -- ") {
 		t.Fatalf("missing bug_report listing:\n%s", out)
 	}
-	if ToolsSection(nil) != "" {
+	if ToolsSection(nil, false) != "" {
 		t.Fatal("empty input should yield empty section")
+	}
+}
+
+// TestToolsSectionRendersRuntimeReadName pins that the listing names the tool the agent
+// actually has. The catalog key is "read", but an agent that kept its native read gets
+// "read_resource" -- telling it to call `read` costs a wasted turn.
+func TestToolsSectionRendersRuntimeReadName(t *testing.T) {
+	withNative := ToolsSection([]string{"read", "grep"}, true)
+	if !strings.Contains(withNative, "- `"+ReadResourceToolName+"` -- ") {
+		t.Fatalf("native read available: listing must name %q:\n%s", ReadResourceToolName, withNative)
+	}
+	if strings.Contains(withNative, "- `read` -- ") {
+		t.Fatalf("native read available: listing must not name the short form:\n%s", withNative)
+	}
+	// The description still comes from the catalog entry, which is keyed "read".
+	if !strings.Contains(withNative, Description(ReadToolName)) {
+		t.Fatalf("runtime rename lost the catalog description:\n%s", withNative)
+	}
+
+	blocked := ToolsSection([]string{"read", "grep"}, false)
+	if !strings.Contains(blocked, "- `"+ReadToolName+"` -- ") {
+		t.Fatalf("native read blocked: listing must name %q:\n%s", ReadToolName, blocked)
+	}
+	if strings.Contains(blocked, ReadResourceToolName) {
+		t.Fatalf("native read blocked: listing must not mention %q:\n%s", ReadResourceToolName, blocked)
+	}
+}
+
+// TestResolveToolNames pins that only the read tool is renamed, and order is preserved.
+func TestResolveToolNames(t *testing.T) {
+	in := []string{"read", "grep", "bug_report"}
+	got := ResolveToolNames(in, true)
+	want := []string{ReadResourceToolName, "grep", "bug_report"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("ResolveToolNames(%v, true)[%d] = %q, want %q", in, i, got[i], want[i])
+		}
+	}
+	if got := ResolveToolNames(in, false); got[0] != ReadToolName {
+		t.Fatalf("ResolveToolNames(%v, false)[0] = %q, want %q", in, got[0], ReadToolName)
+	}
+	if in[0] != "read" {
+		t.Fatal("ResolveToolNames must not mutate its input")
 	}
 }
 

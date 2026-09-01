@@ -49,7 +49,15 @@ func (b *BugReport) Run(args json.RawMessage) (string, error) {
 		return "", fmt.Errorf("missing required arguments: node_id, description")
 	}
 
-	bug, err := b.mgr.CreateBug(params.NodeID, params.Description)
+	// Resolve BEFORE inserting. An unresolvable node_id used to be stored happily and then
+	// silently reaped by the next scan's orphan cleanup, losing the finding; returning the
+	// ranked candidates instead lets the agent correct itself in the same turn.
+	nodeID, err := b.mgr.ResolveNodeID(params.NodeID)
+	if err != nil {
+		return "", err
+	}
+
+	bug, err := b.mgr.CreateBug(nodeID, params.Description)
 	if err != nil {
 		return "", fmt.Errorf("error reporting bug: %w", err)
 	}

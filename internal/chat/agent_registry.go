@@ -9,6 +9,7 @@ import (
 
 	"aracne/internal/helper"
 	"aracne/internal/prompts"
+	"aracne/internal/toolspec"
 )
 
 // defaultChatAgentDefs lists the proprietary-chat sub-agents and the prompt
@@ -38,7 +39,7 @@ func chatAgentTools(cfg *helper.Config, name string) []string {
 // chatAgentMarkdown assembles a chat sub-agent .md: frontmatter (with the
 // resolved tools) plus the prompt body with a dynamic "## Tools" listing.
 func chatAgentMarkdown(name, description string, tools []string, prompt string) string {
-	body := prompts.WithToolsListing(prompt, tools)
+	body := prompts.WithToolsListing(prompt, tools, chatNativeReadAvailable)
 	return "---\nname: " + name + "\ndescription: " + description + "\ntools: " + strings.Join(tools, ", ") + "\n---\n\n" + body
 }
 
@@ -50,7 +51,22 @@ func ensureDefaultAgentFiles(cfg *helper.Config, dir string) error {
 	for _, def := range defaultChatAgentDefs() {
 		path := filepath.Join(dir, def.name+".md")
 		if _, err := os.Stat(path); err == nil {
-			continue
+			// Write-once was not enough. These files are generated from Go prompts and tool
+			// lists, but nothing ever refreshed them, so a project initialised before the read
+			// family collapsed still names read_function / read_struct / read_file — tools the
+			// catalog no longer has. toolsForAgentKind treats an unservable name as a HARD
+			// ERROR ("references unavailable tool"), so those agents are permanently broken
+			// unless the config happens to override their tools.
+			//
+			// Rewrite exactly those: a file naming a tool that is no longer servable is stale
+			// by definition. A file the user has customised with valid tools is left alone.
+			stale, serr := agentFileNamesUnservableTool(path)
+			if serr != nil {
+				return serr
+			}
+			if !stale {
+				continue
+			}
 		} else if !os.IsNotExist(err) {
 			return err
 		}
@@ -60,6 +76,32 @@ func ensureDefaultAgentFiles(cfg *helper.Config, dir string) error {
 		}
 	}
 	return nil
+}
+
+// agentFileNamesUnservableTool reports whether a generated agent file's `tools:` frontmatter
+// names anything the chat surface can no longer serve.
+//
+// Scoped deliberately narrowly. A file that does not parse is left ALONE: it may be something
+// the user wrote, overwriting it would destroy their content, and loadAgentKinds already
+// reports a clear error naming the file. Only a file that parses cleanly and names a tool the
+// catalog dropped is treated as stale — that case is unambiguously our own generated output
+// gone out of date, and it is a hard failure (toolsForAgentKind rejects it) rather than a
+// preference.
+func agentFileNamesUnservableTool(path string) (bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	kind, err := parseAgentKindMarkdown(string(data), path)
+	if err != nil {
+		return false, nil
+	}
+	for _, tool := range kind.Tools {
+		if !toolspec.IsChatTool(tool) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // Loads and parses agent kind definitions from markdown files in a directory.

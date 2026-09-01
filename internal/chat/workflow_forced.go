@@ -353,7 +353,7 @@ func (m *Manager) bugJudgeWorkflowPrompt(assigned domain.KnownBug, nodeBugs []do
 		b.WriteString("- None\n")
 	}
 
-	b.WriteString("\nDuplicate candidates (other live bugs on this node) — if the assigned bug duplicates one, DELETE the weaker description (Rule 2):\n")
+	b.WriteString("\nDuplicate candidates (other live bugs on this node) — if the assigned bug duplicates one, resolve it by ID order (Rule 2):\n")
 	if len(dupCandidates) == 0 {
 		b.WriteString("- None\n")
 	} else {
@@ -367,7 +367,10 @@ func (m *Manager) bugJudgeWorkflowPrompt(assigned domain.KnownBug, nodeBugs []do
 	b.WriteString("\n```\n\n")
 	b.WriteString("Orders, in order:\n")
 	b.WriteString("\n1. Rule 1 — Dismissed pattern: if the assigned bug matches any known false-positive pattern above, delete it with bug_delete.")
-	b.WriteString("\n2. Rule 2 — Duplicate: if it duplicates a live duplicate candidate above, delete the weaker bug with bug_delete and keep the clearest description.")
+	// ID order, not quality: every judge runs concurrently over the same list, so a
+	// quality judgement has two judges on a duplicate pair each deleting the other's bug
+	// and losing both. Lowest ID wins is decidable alone and agreed on by all of them.
+	b.WriteString("\n2. Rule 2 — Duplicate: if it duplicates a live candidate above, compare IDs. Delete that candidate with bug_delete only if your assigned bug's ID sorts BEFORE it; if yours sorts after, do nothing and leave both to the other judge. Never delete your own assigned bug.")
 	b.WriteString("\n3. Rule 3 — False positive: read the resource and the context around it. If the code is correct, the bug is a misunderstanding, it describes intended behavior, or a complete fallback already handles it, dismiss it with bug_dismiss.")
 	b.WriteString("\n4. Rule 4 — Genuine: if it is really present and could cause incorrect behavior, a crash, or a security problem, acknowledge it with bug_acknowledge.")
 	b.WriteString("\n5. If genuinely unsure, take no action and report the bug as undecided.\n")

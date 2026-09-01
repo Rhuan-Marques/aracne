@@ -1,0 +1,65 @@
+# The two-arm rerun: both arms MEASURED, in one session, on one Claude Code release.
+#
+# WHY THIS CONFIG EXISTS. Every run from opus-medium-fixed through batched-20260901a compared a
+# freshly-measured aracne arm against an IMPORTED control from 19 August. That control predated
+# `isolate_operator_config`, predated the `--tools` trim, predated the answer-key block, and ran
+# on whatever Claude Code release was installed at the time. Four reports carried the same
+# caveat. This config removes it: no `--baseline-from`, so both arms run here, now, against the
+# same binary (recorded in run_meta.agent_cli).
+#
+# THE ARMS DIFFER IN ONE THING. The tool surface is per-arm, because applying a global
+# `--tools Bash` to the control does not isolate anything -- it measures aracne against an agent
+# with no file tools at all. Both arms get the same floor:
+#
+#     Bash, Glob, TodoWrite
+#
+# and then exactly one difference:
+#
+#     baseline   + Read, Edit, Write, Grep   (native file access)
+#     aracne     + the five aracne MCP tools (topology file access)
+#
+# Neither gets WebFetch or WebSearch. That is not only a contamination measure -- it keeps the
+# arms symmetric, since a difference in web access would show up as a difference in tokens.
+
+sample_id: scale40
+languages: [go, javascript, typescript, rust, python]
+
+samples: 8
+oversample: 4
+max_per_repo: 1
+sample_seed: 0
+max_describable_nodes: 8000
+
+seeds: 1
+arms: [baseline, aracne]
+
+run_harness: claude_code
+model: opus
+max_turns: 80
+timeout_s: 2400
+
+# Two arms of the SAME task share a canonical worktree and rewrite its config before each cell,
+# so they must not run concurrently. The per-fixture lock enforces that; 3 keeps the matrix
+# moving without leaning on it heavily.
+run_parallel: 3
+
+grade_timeout_s: 7200
+grade_stall_timeout_s: 1800
+ni_margin: 0.10
+
+# The operator's ~/.claude/CLAUDE.md is an RTK command-rewriting instruction on this machine,
+# and it manufactured a guard bypass in an earlier run. Reading an operator's shell preferences
+# into a measurement of a shell guard is not a measurement. Applies to BOTH arms here, which is
+# itself new -- the imported control never had it.
+isolate_operator_config: true
+
+# SWE-bench's answer is a URL derived from the instance id. Blocked in both arms, and audited
+# afterwards from the transcripts (bench/contamination.py).
+deny_answer_key: true
+
+arm_builtin_tools:
+  baseline: [Bash, Glob, TodoWrite, Read, Edit, Write, Grep]
+  aracne:   [Bash, Glob, TodoWrite]
+
+arm_aracne_config:
+  aracne: perf-guarded

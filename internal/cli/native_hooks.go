@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"aracne/internal/helper"
 	"aracne/internal/toolspec"
 )
 
@@ -132,14 +133,14 @@ func isGuardHookEntry(entry interface{}) bool {
 // settings.json so Claude Code does not prompt before each MCP call. It
 // preserves user-defined permissions and is idempotent: its own prior
 // mcp__aracne__* entries are replaced rather than duplicated on re-init.
-func writeClaudePermissions(settingsPath string) {
+func writeClaudePermissions(settingsPath string, cfg *helper.Config) {
 	settings := readJSONConfig(settingsPath)
 	permissions, _ := settings["permissions"].(map[string]interface{})
 	if permissions == nil {
 		permissions = make(map[string]interface{})
 	}
 	allow, _ := permissions["allow"].([]interface{})
-	permissions["allow"] = upsertAracneAllowRules(allow, claudeMCPPermissionRules())
+	permissions["allow"] = upsertAracneAllowRules(allow, claudeMCPPermissionRules(cfg))
 	settings["permissions"] = permissions
 	writeJSONConfig(settingsPath, settings)
 	fmt.Printf("[Claude Code] MCP tool permissions configured in %s\n", settingsPath)
@@ -153,10 +154,17 @@ func writeClaudePermissions(settingsPath string) {
 // Both runtime names of the read tool are listed. Which one an agent registers depends on its
 // blocked_tools, and agents in one project can differ; allowing only the resolved name would
 // leave the other prompting.
-func claudeMCPPermissionRules() []string {
+// The bug_* rules are omitted when features.bug_management is off, so the disabled state is
+// verifiably absent from the generated harness config rather than merely unserved.
+// upsertAracneAllowRules strips every mcp__aracne__* rule before re-adding, so flipping the
+// flag in either direction self-heals an existing settings.json on the next init.
+func claudeMCPPermissionRules(cfg *helper.Config) []string {
 	names := allMCPToolNames()
 	rules := make([]string, 0, len(names)+1)
 	for _, name := range names {
+		if toolspec.IsBugTool(name) && !cfg.BugManagementEnabled() {
+			continue
+		}
 		rules = append(rules, "mcp__aracne__"+name)
 	}
 	rules = append(rules, "mcp__aracne__"+toolspec.ReadResourceToolName)

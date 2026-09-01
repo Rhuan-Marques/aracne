@@ -11,6 +11,7 @@ import (
 	"aracne/internal/llm/languages/rusttools"
 	"aracne/internal/llm/languages/universaltools"
 	"aracne/internal/llm/tools"
+	"aracne/internal/toolspec"
 	"aracne/internal/topology"
 	"aracne/internal/topology/domain"
 	"aracne/internal/topology/golang"
@@ -135,6 +136,15 @@ func effectiveMCPToolSet(cfg *helper.Config, harness, agentName string) map[stri
 	}
 	set := make(map[string]bool, len(names))
 	for _, n := range names {
+		// The bug pipeline is gated as a whole. Filtering HERE rather than in
+		// mcpToolConstructors keeps the catalog bijection intact (see
+		// TestMCPConstructorsMatchToolspecCatalog) and covers every path into the registry:
+		// the synthetic "all" profile, and a hand-written mcp_tools that names a bug tool.
+		// A config that grants bug_report with the feature off gets nothing rather than
+		// half a pipeline.
+		if toolspec.IsBugTool(n) && !cfg.BugManagementEnabled() {
+			continue
+		}
 		set[n] = true
 	}
 	return set
@@ -146,16 +156,15 @@ func BuildToolRegistry(manager *topology.TopologyManager, scannerReg *scanner.Re
 	registry := tools.NewRegistry()
 	allowed := effectiveMCPToolSet(cfg, harness, agentName)
 	deps := toolDeps{
-		manager:           manager,
-		scannerReg:        scannerReg,
-		lang:              GetLanguage(manager),
-		targets:           cfg.Descriptions.Kinds,
-		batchSize:         cfg.AgentParam(harness, agentName, "max-batch-size", helper.DefaultDescriptionBatchSize),
-		filter:            cfg.EffectiveContextFilter(),
-		includeNotVisible: cfg.Descriptions.IncludeNotVisible,
-		cfg:               cfg,
-		// The synthetic "all" profile serves the chat MCP server, which has no native read.
-		nativeReadAvailable: agentName != "all" && !blocksNativeRead(cfg, harness, agentName),
+		manager:             manager,
+		scannerReg:          scannerReg,
+		lang:                GetLanguage(manager),
+		targets:             cfg.Descriptions.Kinds,
+		batchSize:           cfg.AgentParam(harness, agentName, "max-batch-size", helper.DefaultDescriptionBatchSize),
+		filter:              cfg.EffectiveContextFilter(),
+		includeNotVisible:   cfg.Descriptions.IncludeNotVisible,
+		cfg:                 cfg,
+		nativeReadAvailable: NativeReadAvailable(cfg, harness, agentName),
 	}
 	readScan := cfg.EffectiveReadScan()
 	for _, name := range allMCPToolNames() {
@@ -165,6 +174,19 @@ func BuildToolRegistry(manager *topology.TopologyManager, scannerReg *scanner.Re
 		}
 	}
 	return registry
+}
+
+// NativeReadAvailable reports whether the MCP server built for this (harness, agent) pair
+// still sees a native read tool it could be confused with -- which is the one input that
+// decides the aracne read tool's runtime name (toolspec.ResolveReadToolName).
+//
+// This is the single source of truth. It is exported because the generators that write
+// tool names into agent files and permission maps must reach the SAME answer as the server:
+// a generated name that does not match the registered one silently denies the agent the
+// tool rather than failing loudly.
+func NativeReadAvailable(cfg *helper.Config, harness, agentName string) bool {
+	// The synthetic "all" profile serves the chat MCP server, which has no native read.
+	return agentName != "all" && !blocksNativeRead(cfg, harness, agentName)
 }
 
 // blocksNativeRead reports whether the agent's blocked_tools denies the harness's own read

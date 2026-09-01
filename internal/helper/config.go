@@ -273,6 +273,21 @@ type VizSection struct {
 	Chat  VizChat  `json:"chat"`
 }
 
+// FeaturesSection gates optional surfaces that are not part of the default product. An
+// absent section means every feature is off, which is what an existing project's config
+// decodes to -- so adding a feature here never turns something on for an existing user.
+type FeaturesSection struct {
+	// BugManagement enables the bug pipeline as a whole: `arac init` writes the
+	// bug-hunter/judge/solver agents and their commands, the bug_* MCP tools become
+	// servable, the `arac bug` usage block prints, and viz exposes /api/bugs and bug
+	// counts. Off by default: the pipeline is unproven and its tool schemas are context
+	// cost on every request for a workflow most projects never run.
+	//
+	// `arac bug` itself stays dispatchable in both states -- it is the orchestration
+	// channel the generated commands use, and the debugging path.
+	BugManagement bool `json:"bug_management"`
+}
+
 // Root configuration struct holding scan, read, scanner, descriptions, LLM, and viz settings.
 type Config struct {
 	Scan         ScanSection         `json:"scan"`
@@ -282,6 +297,7 @@ type Config struct {
 	Grep         GrepSection         `json:"grep"`
 	LLM          LLMSection          `json:"llm"`
 	Viz          VizSection          `json:"viz"`
+	Features     FeaturesSection     `json:"features"`
 	// Paths marks directories/files (relative to the topology root) as hidden or
 	// visible. Hidden paths are skipped by the indexing and scan stages in every
 	// mode (default/all/hard). More specific (more internal) rules win, so a
@@ -724,6 +740,16 @@ func DefaultConfig() *Config {
 		if name == "descriptions-generation-executor" {
 			ac.Params = map[string]int{"max-batch-size": DefaultDescriptionBatchSize}
 		}
+		// The hunter and the judge only ever read and record a verdict; only the solver
+		// changes code. Leaving them the native Edit/Write contradicted their own prompts
+		// ("use only its restricted tools") and handed two read-only agents the ability to
+		// rewrite the codebase.
+		//
+		// Deliberately NOT "read": blocking read renames the aracne read tool
+		// (toolspec.ResolveReadToolName), which is a separate decision from privilege.
+		if name == "bug-hunter" || name == "bug-judge" {
+			ac.BlockedTools = []string{"edit", "write"}
+		}
 		return ac
 	}
 	return &Config{
@@ -906,8 +932,18 @@ func validConfig(c *Config) bool {
 		c.Read.MaxFileSize != 0 ||
 		len(c.Descriptions.Kinds) > 0 ||
 		c.Viz.Chat.MainAgent.Tools != nil ||
-		c.Scanner.UpdateFrequency != 0
+		c.Scanner.UpdateFrequency != 0 ||
+		// A features-only file is a legitimate new-schema config: turning a feature on is
+		// the one edit a user makes by hand. Without this line the file decodes to all-zero
+		// sentinels, is judged legacy, and EnsureConfig overwrites it with defaults -- so
+		// enabling the feature would silently turn it back off.
+		c.Features.BugManagement
 }
+
+// BugManagementEnabled reports whether the bug pipeline is turned on for this project.
+// Every gate reads it through this method rather than the field, so the flag can grow
+// siblings without a scattered rename.
+func (c *Config) BugManagementEnabled() bool { return c.Features.BugManagement }
 
 func normalizeConfig(c *Config) {
 	// Applies defaults to config fields for scan modes, file limits, visibility filters, descriptions, optimization rules, and LLM agents.

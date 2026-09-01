@@ -22,12 +22,18 @@ func AgentsMdContent() string {
 // config, describing each capability as an MCP tool or a native tool depending
 // on the agent's mcp_tools / blocked_tools.
 func ClaudeMdContentForAgent(eff helper.AgentConfig) string {
-	return agentInstructionsContent(eff, "mcp__aracne__")
+	// Claude Code gives every agent its own MCP server (--tool-profile <agent>), so the read
+	// tool's runtime name follows that agent's own blocked_tools.
+	return agentInstructionsContent(eff, "mcp__aracne__", nativeAllowed(eff, "read"))
 }
 
 // AgentsMdContentForAgent renders the OpenCode AGENTS.md guidance.
 func AgentsMdContentForAgent(eff helper.AgentConfig) string {
-	return agentInstructionsContent(eff, "aracne_")
+	// OpenCode runs ONE MCP server for every agent, started with --tool-profile all, and the
+	// "all" profile always registers the read tool under its short name regardless of any
+	// agent's blocked_tools (see cli.NativeReadAvailable). Deriving the name from
+	// blocked_tools here advertised `aracne_read_resource`, which that server never serves.
+	return agentInstructionsContent(eff, "aracne_", false)
 }
 
 // Wraps a string in backticks to format it as inline code.
@@ -56,13 +62,6 @@ func nativeAllowed(eff helper.AgentConfig, key string) bool { return !inList(eff
 // usesMCPRead reports whether the agent has aracne's read tool.
 func usesMCPRead(eff helper.AgentConfig) bool { return hasMCPTool(eff, "read") }
 
-// readToolName is the name the read tool actually registers under for this agent. It takes the
-// short name only when the harness's own read is blocked; otherwise the two would be
-// confusable in one session.
-func readToolName(eff helper.AgentConfig) string {
-	return toolspec.ResolveReadToolName(nativeAllowed(eff, "read"))
-}
-
 // agentInstructionsContent assembles the contract the agent sees on every turn.
 //
 // Every byte here is re-sent on each request, so the guiding rule is: say only
@@ -71,12 +70,12 @@ func readToolName(eff helper.AgentConfig) string {
 // bought nothing and was the bulk of the old 5.8 KB contract. What survives is
 // what no schema can express -- how the pieces fit together, how to spend
 // turns, and which native tools this project actually allows.
-func agentInstructionsContent(eff helper.AgentConfig, mcpToolPrefix string) string {
+func agentInstructionsContent(eff helper.AgentConfig, mcpToolPrefix string, nativeReadAvailable bool) string {
 	var b strings.Builder
 
 	b.WriteString(introductionSection())
 	b.WriteString(navigationModelSection(eff))
-	b.WriteString(lookupToolsSection(eff, mcpToolPrefix))
+	b.WriteString(lookupToolsSection(eff, mcpToolPrefix, nativeReadAvailable))
 	b.WriteString(grepSection(eff, mcpToolPrefix))
 	b.WriteString(resourceContextSection(eff))
 	b.WriteString(editWriteSection(eff, mcpToolPrefix))
@@ -139,7 +138,7 @@ func nativeGrepNote(eff helper.AgentConfig) string {
 // lookupToolsSection names the available lookup tools and the one thing their
 // schemas cannot state: how resource IDs resolve. Each tool's own description
 // already says what it reads, so it is not repeated per bullet.
-func lookupToolsSection(eff helper.AgentConfig, mcpToolPrefix string) string {
+func lookupToolsSection(eff helper.AgentConfig, mcpToolPrefix string, nativeReadAvailable bool) string {
 	if !usesMCPRead(eff) {
 		return ""
 	}
@@ -150,7 +149,7 @@ func lookupToolsSection(eff helper.AgentConfig, mcpToolPrefix string) string {
 	fmt.Fprintf(b, "%s takes a LIST of resource IDs -- functions, methods, types, interfaces, files. "+
 		"Pass every ID you need in one call: results are grouped by file under a single context "+
 		"section, so one batched call costs far less than one call per ID.\n\n",
-		bt(mcpToolPrefix+readToolName(eff)))
+		bt(mcpToolPrefix+toolspec.ResolveReadToolName(nativeReadAvailable)))
 
 	b.WriteString("IDs are forgiving: a unique trailing part (`Flask.register_blueprint`) is enough, " +
 		"and a miss returns the nearest candidates rather than an error.\n\n")

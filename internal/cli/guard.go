@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"aracne/internal/helper"
@@ -67,7 +68,14 @@ func runClaudeGuardHook(input io.Reader, output io.Writer) {
 		}
 		// The backstop for everything the classifier does not know how to refuse. Only Bash
 		// needs it: a native Edit/Write is already followed by the update-file hook.
-		if event.ToolName == "Bash" && mayHaveWrittenSource(keys) {
+		//
+		// `arac` itself is exempt: it is unclassified (not a shell read/edit command), so the
+		// backstop would otherwise run a full incremental scan after EVERY aracne call. That
+		// matters most for the bug pipeline, whose slash commands orchestrate through
+		// `arac bug list` several times per fan-out round -- and whose scans would each run
+		// the orphan-bug cleanup. Any arac subcommand that touches source already syncs the
+		// topology itself.
+		if event.ToolName == "Bash" && mayHaveWrittenSource(keys) && !isAracCommand(event.ToolInput) {
 			if msg := driftCheck(dbPath); msg != "" {
 				parts = append(parts, msg)
 			}
@@ -108,6 +116,26 @@ func decideGuard(toolName string, toolInput map[string]interface{}, blocked map[
 		}
 	}
 
+	// A read of a file the topology does not model is the same trade in a different currency:
+	// aracne would answer it with `rawFileUnit`, which is the identical raw bytes the shell
+	// command asked for, minus its line window. Blocking it removes a capability and offers
+	// nothing back -- 7 of the 35 denials in batched-20260901a were this, and they caused the
+	// worst regression in that matrix. Reads only, and only when READ is the sole thing
+	// denied: an edit must still go through the tool that re-syncs the topology, whether or
+	// not the file is indexed today.
+	if len(denied) == 1 && denied[0] == toolspec.ReadToolName {
+		switch toolName {
+		case "Bash":
+			if cmd, _ := toolInput["command"].(string); readsOnlyUntrackedFiles(cmd, dbPath) {
+				return guardDecision{}
+			}
+		default:
+			if path, _ := toolInput["file_path"].(string); readsOnlyUntrackedPath(path, dbPath) {
+				return guardDecision{}
+			}
+		}
+	}
+
 	reason := fmt.Sprintf("Blocked by aracne config (blocked_tools: %s). ", strings.Join(denied, ", "))
 
 	// A denied READ can be answered rather than merely refused: the model has already said
@@ -145,6 +173,31 @@ func implicatedKeys(toolName string, toolInput map[string]interface{}, exemptPip
 	return nil
 }
 
+// isAracCommand reports whether every command word in a Bash invocation is `arac`.
+//
+// The drift backstop treats an unclassified command as "might have written source", which is
+// right for an unknown tool and wrong for aracne's own CLI: `arac edit`/`arac write` already
+// sync the topology, and the read-only subcommands touch nothing. Requiring EVERY segment to
+// be arac keeps a chained `arac bug list && sed -i ...` classified normally.
+func isAracCommand(toolInput map[string]interface{}) bool {
+	cmd, _ := toolInput["command"].(string)
+	if strings.TrimSpace(cmd) == "" {
+		return false
+	}
+	sawArac := false
+	for _, seg := range splitCommandSegments(cmd) {
+		fields := commandFields(seg.text)
+		if len(fields) == 0 {
+			continue
+		}
+		if filepath.Base(strings.TrimSuffix(strings.ToLower(fields[0]), ".exe")) != "arac" {
+			return false
+		}
+		sawArac = true
+	}
+	return sawArac
+}
+
 // warningMessage joins the per-key guidance for the given keys, skipping keys
 // without an MCP equivalent (e.g. "bash") and de-duplicating. nativeReadAvailable
 // resolves the read tool's runtime name so the guidance never points at a name
@@ -168,6 +221,11 @@ func warningMessage(keys []string, nativeReadAvailable bool) string {
 // config: the blocked_tools set and whether piped read/grep commands are exempt
 // (read.pipe_passthrough). A missing/unparseable config fails open: no blocks
 // and the exemption on, so the session is never broken.
+//
+// Callers derive "is the native read still available" as !blocked[ReadToolName], which is
+// NativeReadAvailable(cfg, "claude_code", "main") spelled inline -- the guard only ever runs
+// for the Claude Code main agent, and the fail-open empty set yields the same `true`. Keep
+// the two in step: the warning must name the read tool the agent actually has.
 func loadGuardConfig(dbPath string) (blocked map[string]bool, exemptPiped bool) {
 	cfg, ok := helper.LoadConfigStrict(helper.ConfigPath(dbPath))
 	if !ok {

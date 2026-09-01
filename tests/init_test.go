@@ -9,8 +9,26 @@ import (
 	"testing"
 
 	"aracne/internal/cli"
+	"aracne/internal/helper"
 )
 
+// enableBugManagement writes a project config with features.bug_management on, so a test can
+// exercise the enabled half of the gate. It must be called BEFORE `arac init`.
+func enableBugManagement(t *testing.T, dir string) {
+	t.Helper()
+	cfgDir := filepath.Join(dir, ".aracne")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatalf("mkdir .aracne: %v", err)
+	}
+	cfg := helper.DefaultConfig()
+	cfg.Features.BugManagement = true
+	if err := helper.SaveConfig(cfg, filepath.Join(cfgDir, "config.json")); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+}
+
+// The bug pipeline ships behind features.bug_management, so the artifact counts differ by
+// flag state: 3 commands + 1 agent with it off, 6 + 4 with it on.
 func TestInitDefault_CreatesBothAgents(t *testing.T) {
 	dir := t.TempDir()
 	mustRun(t, dir, "init", "-y")
@@ -21,14 +39,8 @@ func TestInitDefault_CreatesBothAgents(t *testing.T) {
 	assertExists(t, dir, ".opencode/agents")
 	assertExists(t, dir, "AGENTS.md")
 
-	entries := readDir(t, dir, ".opencode/commands")
-	if len(entries) != 6 {
-		t.Fatalf("expected 6 commands in .opencode/commands, got %d", len(entries))
-	}
-	entries = readDir(t, dir, ".opencode/agents")
-	if len(entries) != 4 {
-		t.Fatalf("expected 4 agents in .opencode/agents, got %d", len(entries))
-	}
+	assertDirCount(t, dir, ".opencode/commands", 3)
+	assertDirCount(t, dir, ".opencode/agents", 1)
 
 	// Claude files
 	assertExists(t, dir, ".mcp.json")
@@ -36,13 +48,85 @@ func TestInitDefault_CreatesBothAgents(t *testing.T) {
 	assertExists(t, dir, ".claude/agents")
 	assertExists(t, dir, "CLAUDE.md")
 
-	entries = readDir(t, dir, ".claude/commands")
-	if len(entries) != 6 {
-		t.Fatalf("expected 6 commands in .claude/commands, got %d", len(entries))
+	assertDirCount(t, dir, ".claude/commands", 3)
+	assertDirCount(t, dir, ".claude/agents", 1)
+
+	for _, name := range []string{"bug-hunter.md", "bug-judge.md", "bug-solver.md"} {
+		assertMissing(t, dir, filepath.Join(".claude/commands", name))
+		assertMissing(t, dir, filepath.Join(".claude/agents", name))
+		assertMissing(t, dir, filepath.Join(".opencode/commands", name))
+		assertMissing(t, dir, filepath.Join(".opencode/agents", name))
 	}
-	entries = readDir(t, dir, ".claude/agents")
-	if len(entries) != 4 {
-		t.Fatalf("expected 4 agents in .claude/agents, got %d", len(entries))
+}
+
+func TestInitWithBugManagement_WritesBugAgents(t *testing.T) {
+	dir := t.TempDir()
+	enableBugManagement(t, dir)
+	mustRun(t, dir, "init", "-y")
+
+	assertDirCount(t, dir, ".opencode/commands", 6)
+	assertDirCount(t, dir, ".opencode/agents", 4)
+	assertDirCount(t, dir, ".claude/commands", 6)
+	assertDirCount(t, dir, ".claude/agents", 4)
+
+	// bug-judge and bug-solver must be PRIMARY OpenCode commands: they fan out one sub-agent
+	// per bug, and a subtask cannot spawn further subtasks. bug-hunter does its own scanning
+	// and stays a subtask.
+	for _, name := range []string{"bug-judge", "bug-solver"} {
+		body := readFile(t, dir, filepath.Join(".opencode/commands", name+".md"))
+		if !strings.Contains(body, "agent: build") {
+			t.Errorf("%s must run as the primary build agent to fan out:\n%s", name, body)
+		}
+		if strings.Contains(body, "subtask: true") {
+			t.Errorf("%s is a subtask and cannot spawn sub-agents:\n%s", name, body)
+		}
+	}
+	hunter := readFile(t, dir, filepath.Join(".opencode/commands", "bug-hunter.md"))
+	if !strings.Contains(hunter, "subtask: true") {
+		t.Errorf("bug-hunter should stay a subtask command:\n%s", hunter)
+	}
+}
+
+// TestInitBugManagementOffPrunesStaleArtifacts pins that turning the flag back off removes
+// files a previous enabled init wrote. A left-behind agent file names bug_* tools the server
+// no longer registers -- the same silent-denial drift the generator test guards against.
+func TestInitBugManagementOffPrunesStaleArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	enableBugManagement(t, dir)
+	mustRun(t, dir, "init", "-y")
+	assertExists(t, dir, ".claude/agents/bug-hunter.md")
+
+	cfg := helper.DefaultConfig()
+	cfg.Features.BugManagement = false
+	if err := helper.SaveConfig(cfg, filepath.Join(dir, ".aracne", "config.json")); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+	mustRun(t, dir, "init", "-y")
+
+	for _, name := range []string{"bug-hunter.md", "bug-judge.md", "bug-solver.md"} {
+		assertMissing(t, dir, filepath.Join(".claude/agents", name))
+		assertMissing(t, dir, filepath.Join(".claude/commands", name))
+		assertMissing(t, dir, filepath.Join(".opencode/agents", name))
+		assertMissing(t, dir, filepath.Join(".opencode/commands", name))
+	}
+}
+
+func assertDirCount(t *testing.T, dir, rel string, want int) {
+	t.Helper()
+	entries := readDir(t, dir, rel)
+	if len(entries) != want {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Fatalf("expected %d entries in %s, got %d: %v", want, rel, len(entries), names)
+	}
+}
+
+func assertMissing(t *testing.T, dir, rel string) {
+	t.Helper()
+	if _, err := os.Stat(filepath.Join(dir, rel)); err == nil {
+		t.Fatalf("expected %s to be absent", rel)
 	}
 }
 
@@ -212,6 +296,9 @@ func TestInitClaudeConfig_Structure(t *testing.T) {
 
 func TestInitCommandsAndAgents_Content(t *testing.T) {
 	dir := t.TempDir()
+	// Enabled, so the bug artifacts exist to assert on; the disabled shape is covered by
+	// TestInitDefault_CreatesBothAgents.
+	enableBugManagement(t, dir)
 	mustRun(t, dir, "init", "-y")
 
 	// OpenCode commands should have agent frontmatter

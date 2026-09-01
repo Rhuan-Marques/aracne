@@ -32,9 +32,13 @@ func TestBugSolverToolsIncludeWarningsList(t *testing.T) {
 // default surface.
 //
 // The main agent used to carry bug_report/bug_list so it could orchestrate the
-// hunter/judge/solver recipes. Those are a v2 feature (RELEASE_PLAN §1.3) that the shipped
-// binary does not run, and their schemas cost ~260 tokens on every request. A project that
-// uses the bug agents grants them explicitly via llm.<harness>.main_agent.mcp_tools.
+// hunter/judge/solver recipes. Their schemas cost ~260 tokens on EVERY request, for a
+// workflow most projects never run.
+//
+// It stays out even when features.bug_management is ON. The generated slash commands
+// orchestrate through `arac bug list --json` in the shell instead: a tool schema is
+// unconditional context cost, while a shell call costs nothing until the command that needs
+// it actually runs. See TestMainProfileNeverServesBugTools in internal/cli.
 func TestMainAgentMCPToolsExcludeBugTools(t *testing.T) {
 	has := func(xs []string, want string) bool {
 		for _, x := range xs {

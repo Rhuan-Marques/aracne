@@ -182,6 +182,38 @@ func IsReadToolName(name string) bool {
 	return name == ReadToolName || name == ReadResourceToolName
 }
 
+// ResolveToolName maps one catalog name to the name it registers under at runtime. Only the
+// read tool has two runtime names; every other catalog name is its own runtime name.
+func ResolveToolName(name string, nativeReadAvailable bool) string {
+	if name == ReadToolName {
+		return ResolveReadToolName(nativeReadAvailable)
+	}
+	return name
+}
+
+// ResolveToolNames maps a whole catalog-name list to runtime names, preserving order.
+//
+// Every generator that writes a tool name into a config or an agent file MUST go through
+// this. The catalog key is "read", but the registered tool answers to "read_resource"
+// whenever the harness keeps its own read -- and a generated allow-list naming a tool the
+// server never registers does not fail loudly, it just silently denies the agent the tool.
+// That is exactly how every generated Claude sub-agent lost the aracne read tool.
+func ResolveToolNames(names []string, nativeReadAvailable bool) []string {
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		out = append(out, ResolveToolName(n, nativeReadAvailable))
+	}
+	return out
+}
+
+// bugToolPrefix marks the tools belonging to the bug pipeline, which ships behind
+// features.bug_management. The naming convention IS the membership test: every tool in the
+// pipeline is bug_*, and nothing else is.
+const bugToolPrefix = "bug_"
+
+// IsBugTool reports whether name belongs to the bug pipeline.
+func IsBugTool(name string) bool { return strings.HasPrefix(name, bugToolPrefix) }
+
 // Lookup returns the spec for a tool name.
 func Lookup(name string) (Spec, bool) {
 	s, ok := registry[name]
@@ -376,7 +408,7 @@ func IsInterpreter(word string) bool {
 // what their inline program actually does to a source file.
 //
 // The bar is deliberately high: a benchmark run found the agent reaching for
-// `python3 -c "print(''.join(open('x.js').readlines()[600:760]))"` as its standing answer
+// `python3 -c "print(”.join(open('x.js').readlines()[600:760]))"` as its standing answer
 // once `sed` was refused, and rewriting files through `python3 - <<EOF … open(p,'w') … EOF`
 // in eight runs. But the same interpreters run build steps and test harnesses all day, so
 // the program text must name something that looks like source before this fires at all.
@@ -565,7 +597,11 @@ func ValidateNativeTools(names []string) error {
 
 // ToolsSection renders the "## Tools" markdown listing for an agent's tools,
 // preserving the given order. Unknown names are listed without a description.
-func ToolsSection(names []string) string {
+//
+// `names` are CATALOG names (descriptions are keyed by those), but each line is rendered
+// under the tool's RUNTIME name so the prose names the tool the agent actually has --
+// telling an agent to call `read` when its tool is `read_resource` costs a wasted turn.
+func ToolsSection(names []string, nativeReadAvailable bool) string {
 	if len(names) == 0 {
 		return ""
 	}
@@ -576,7 +612,7 @@ func ToolsSection(names []string) string {
 		if desc == "" {
 			desc = "(no description)"
 		}
-		fmt.Fprintf(&b, "- `%s` -- %s\n", n, desc)
+		fmt.Fprintf(&b, "- `%s` -- %s\n", ResolveToolName(n, nativeReadAvailable), desc)
 	}
 	return b.String()
 }

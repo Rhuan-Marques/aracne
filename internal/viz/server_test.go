@@ -96,6 +96,9 @@ func TestServerGraphModes(t *testing.T) {
 	if err := helper.CreateBug(dbPath, domain.KnownBug{ID: "b1", NodeID: "pkg/b.Second", Description: "test bug", State: domain.BugPending}); err != nil {
 		t.Fatalf("CreateBug: %v", err)
 	}
+	// Bug counts and /api/bugs are gated on features.bug_management; this test asserts the
+	// enabled behaviour, so the project config has to turn it on.
+	writeVizConfig(t, dbPath, true)
 
 	server := httptest.NewServer(NewServer(dbPath))
 	defer server.Close()
@@ -405,6 +408,56 @@ func TestConfigNeedDescriptionAPI(t *testing.T) {
 	}
 	if got := saved.AgentParam("claude_code", "descriptions-generation-executor", "max-batch-size", 0); got != 3 {
 		t.Fatalf("unexpected persisted executor batch size: %d", got)
+	}
+}
+
+// writeVizConfig writes a project config next to dbPath with features.bug_management set.
+func writeVizConfig(t *testing.T, dbPath string, bugManagement bool) {
+	t.Helper()
+	cfg := helper.DefaultConfig()
+	cfg.Features.BugManagement = bugManagement
+	if err := helper.SaveConfig(cfg, helper.ConfigPath(dbPath)); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+}
+
+// TestBugSurfaceIsGated pins the disabled half: the same database with the feature off
+// reports no bugs anywhere and does not serve /api/bugs at all.
+func TestBugSurfaceIsGated(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "topology.db")
+	topo := &domain.Topology{
+		Root:     dir,
+		Language: "go",
+		Resources: map[string]domain.Resource{
+			"pkg/a.Fn": {ID: "pkg/a.Fn", Kind: domain.ResourceFunction, Name: "Fn"},
+		},
+		Warnings: map[string]domain.TopologyWarning{},
+	}
+	if err := helper.WriteDb(topo, dbPath); err != nil {
+		t.Fatalf("WriteDb: %v", err)
+	}
+	if err := helper.CreateBug(dbPath, domain.KnownBug{ID: "b1", NodeID: "pkg/a.Fn", Description: "x", State: domain.BugPending}); err != nil {
+		t.Fatalf("CreateBug: %v", err)
+	}
+	writeVizConfig(t, dbPath, false)
+
+	server := httptest.NewServer(NewServer(dbPath))
+	defer server.Close()
+
+	var summary Summary
+	getJSON(t, server.URL+"/api/summary", &summary)
+	if summary.BugCount != 0 {
+		t.Fatalf("bug management off: BugCount = %d, want 0", summary.BugCount)
+	}
+
+	resp, err := http.Get(server.URL + "/api/bugs")
+	if err != nil {
+		t.Fatalf("GET /api/bugs: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		t.Fatal("bug management off: /api/bugs must not be registered")
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 
 	"aracne/internal/helper"
 	"aracne/internal/prompts"
+	"aracne/internal/toolspec"
 )
 
 // Prompts the user for confirmation before overwriting an existing file, returning true if they approve.
@@ -45,7 +46,8 @@ func RunInit(args []string) {
 		*opencode = true
 	}
 
-	cfg := helper.EnsureConfig(helper.ConfigPath(".aracne/topology.db"))
+	configPath := helper.ConfigPath(".aracne/topology.db")
+	cfg := helper.EnsureConfig(configPath)
 	if err := cfg.Validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "Invalid .aracne/config.json: %v\n", err)
 		os.Exit(1)
@@ -57,6 +59,7 @@ func RunInit(args []string) {
 	if *claude {
 		initClaudeCode(*global, cfg, *yes)
 	}
+	printBugManagementHint(cfg, configPath)
 }
 
 // Initializes OpenCode integration by configuring MCP servers, permissions, commands, agents, and plugins.
@@ -89,7 +92,7 @@ func initOpenCode(global bool, cfg *helper.Config, autoYes bool) {
 	permissionMap["bash"] = openCodeBashPermission(blocked)
 	delete(permissionMap, "write")
 	permissionMap["aracne_*"] = "deny"
-	for _, toolName := range mainEff.MCPTools {
+	for _, toolName := range toolspec.ResolveToolNames(mainEff.MCPTools, openCodeNativeRead) {
 		permissionMap["aracne_"+toolName] = "allow"
 	}
 	config["permission"] = permissionMap
@@ -105,14 +108,23 @@ func initOpenCode(global bool, cfg *helper.Config, autoYes bool) {
 	writeOpenCodePrimaryCommand(commandsDir, "descriptions-generate", "Generate descriptions for undocumented resources in the topology", "build", prompts.DescriptionsGenerateCommand("descriptions-generation-executor", batchSize), autoYes)
 	writeOpenCodeCommand(commandsDir, "descriptions-apply", "Write topology descriptions back into source files as doc comments", "build", prompts.DescriptionsApplyCommand(), autoYes)
 	writeOpenCodeCommand(commandsDir, "descriptions_clear", "Clear stored topology descriptions", "build", prompts.DescriptionsClearCommand(), autoYes)
-	writeOpenCodeCommand(commandsDir, "bug-hunter", "Scan the whole codebase for bugs", "bug-hunter", bugHunterOpenCodeCommand(), autoYes)
-	writeOpenCodeCommand(commandsDir, "bug-judge", "Triage every pending bug by fanning out Bug Judge sub-agents in parallel", "bug-judge", bugJudgeCommandForAgent("bug-judge"), autoYes)
-	writeOpenCodeCommand(commandsDir, "bug-solver", "Fix acknowledged bugs by launching Bug Solver sub-agents", "bug-solver", bugSolverCommandForAgent("bug-solver"), autoYes)
-
 	writeAgent(agentsDir, "descriptions-generation-executor", openCodeAgentContent("Generates descriptions for one assigned batch of undocumented topology resources", cfg.EffectiveAgent("opencode", "descriptions-generation-executor"), prompts.DescriptionsGenerationExecutorPrompt()), autoYes)
-	writeAgent(agentsDir, "bug-hunter", openCodeAgentContent("Scans the entire project topology looking for bugs", cfg.EffectiveAgent("opencode", "bug-hunter"), prompts.BugHunterPrompt()), autoYes)
-	writeAgent(agentsDir, "bug-judge", openCodeAgentContent("Triages pending bugs by comparing against dismissed bug patterns", cfg.EffectiveAgent("opencode", "bug-judge"), prompts.BugJudgePrompt()), autoYes)
-	writeAgent(agentsDir, "bug-solver", openCodeAgentContent("Fixes acknowledged bugs in the codebase and removes them", cfg.EffectiveAgent("opencode", "bug-solver"), prompts.BugSolverPrompt()), autoYes)
+
+	if cfg.BugManagementEnabled() {
+		// bug-hunter stays a subtask command: it does its own scanning and needs no fan-out.
+		// bug-judge and bug-solver are PRIMARY commands -- they must spawn one sub-agent per
+		// bug, and an OpenCode subtask cannot spawn further subtasks (the same reason
+		// descriptions-generate is primary).
+		writeOpenCodeCommand(commandsDir, "bug-hunter", "Scan the whole codebase for bugs", "bug-hunter", bugHunterOpenCodeCommand(), autoYes)
+		writeOpenCodePrimaryCommand(commandsDir, "bug-judge", "Triage every pending bug by fanning out Bug Judge sub-agents in parallel", "build", bugJudgeCommandForAgent("bug-judge"), autoYes)
+		writeOpenCodePrimaryCommand(commandsDir, "bug-solver", "Fix acknowledged bugs by launching Bug Solver sub-agents", "build", bugSolverCommandForAgent("bug-solver"), autoYes)
+
+		writeAgent(agentsDir, "bug-hunter", openCodeAgentContent("Scans the entire project topology looking for bugs", cfg.EffectiveAgent("opencode", "bug-hunter"), prompts.BugHunterPrompt()), autoYes)
+		writeAgent(agentsDir, "bug-judge", openCodeAgentContent("Triages pending bugs by comparing against dismissed bug patterns", cfg.EffectiveAgent("opencode", "bug-judge"), prompts.BugJudgePrompt()), autoYes)
+		writeAgent(agentsDir, "bug-solver", openCodeAgentContent("Fixes acknowledged bugs in the codebase and removes them", cfg.EffectiveAgent("opencode", "bug-solver"), prompts.BugSolverPrompt()), autoYes)
+	} else {
+		pruneBugArtifacts(commandsDir, agentsDir, "OpenCode")
+	}
 
 	writeOpenCodePlugins(mainEff.Plugins, configDir, autoYes)
 	writeMarkdownIntegrationFile(agentsMdPath, "OpenCode AGENTS.md", prompts.AgentsMdContentForAgent(mainEff))
@@ -147,14 +159,19 @@ func initClaudeCode(global bool, cfg *helper.Config, autoYes bool) {
 	writeCommand(commandsDir, "descriptions-generate", "Generate descriptions for undocumented resources in the topology", prompts.DescriptionsGenerateCommand("descriptions-generation-executor", batchSize), autoYes)
 	writeCommand(commandsDir, "descriptions-apply", "Write topology descriptions back into source files as doc comments", prompts.DescriptionsApplyCommand(), autoYes)
 	writeCommand(commandsDir, "descriptions_clear", "Clear stored topology descriptions", prompts.DescriptionsClearCommand(), autoYes)
-	writeCommand(commandsDir, "bug-hunter", "Fan out Bug Hunter sub-agents to scan the codebase in parallel", bugHunterCommandForAgent(".claude/agents/bug-hunter.md"), autoYes)
-	writeCommand(commandsDir, "bug-judge", "Triage every pending bug by fanning out Bug Judge sub-agents in parallel", bugJudgeCommandForAgent(".claude/agents/bug-judge.md"), autoYes)
-	writeCommand(commandsDir, "bug-solver", "Fix acknowledged bugs by launching Bug Solver sub-agents", bugSolverCommandForAgent(".claude/agents/bug-solver.md"), autoYes)
-
 	writeAgent(agentsDir, "descriptions-generation-executor", claudeAgentContent("descriptions-generation-executor", "Generates descriptions for one assigned batch of undocumented topology resources", cfg.EffectiveAgent("claude_code", "descriptions-generation-executor"), prompts.DescriptionsGenerationExecutorPrompt()), autoYes)
-	writeAgent(agentsDir, "bug-hunter", claudeAgentContent("bug-hunter", "Scans the entire project topology looking for bugs", cfg.EffectiveAgent("claude_code", "bug-hunter"), prompts.BugHunterPrompt()), autoYes)
-	writeAgent(agentsDir, "bug-judge", claudeAgentContent("bug-judge", "Triages pending bugs by comparing against dismissed bug patterns", cfg.EffectiveAgent("claude_code", "bug-judge"), prompts.BugJudgePrompt()), autoYes)
-	writeAgent(agentsDir, "bug-solver", claudeAgentContent("bug-solver", "Fixes acknowledged bugs in the codebase and removes them", cfg.EffectiveAgent("claude_code", "bug-solver"), prompts.BugSolverPrompt()), autoYes)
+
+	if cfg.BugManagementEnabled() {
+		writeCommand(commandsDir, "bug-hunter", "Fan out Bug Hunter sub-agents to scan the codebase in parallel", bugHunterCommandForAgent(".claude/agents/bug-hunter.md"), autoYes)
+		writeCommand(commandsDir, "bug-judge", "Triage every pending bug by fanning out Bug Judge sub-agents in parallel", bugJudgeCommandForAgent(".claude/agents/bug-judge.md"), autoYes)
+		writeCommand(commandsDir, "bug-solver", "Fix acknowledged bugs by launching Bug Solver sub-agents", bugSolverCommandForAgent(".claude/agents/bug-solver.md"), autoYes)
+
+		writeAgent(agentsDir, "bug-hunter", claudeAgentContent("bug-hunter", "Scans the entire project topology looking for bugs", cfg.EffectiveAgent("claude_code", "bug-hunter"), prompts.BugHunterPrompt()), autoYes)
+		writeAgent(agentsDir, "bug-judge", claudeAgentContent("bug-judge", "Triages pending bugs by comparing against dismissed bug patterns", cfg.EffectiveAgent("claude_code", "bug-judge"), prompts.BugJudgePrompt()), autoYes)
+		writeAgent(agentsDir, "bug-solver", claudeAgentContent("bug-solver", "Fixes acknowledged bugs in the codebase and removes them", cfg.EffectiveAgent("claude_code", "bug-solver"), prompts.BugSolverPrompt()), autoYes)
+	} else {
+		pruneBugArtifacts(commandsDir, agentsDir, "Claude Code")
+	}
 
 	writeClaudePlugins(mainEff.Plugins, claudeBaseDir, autoYes)
 	// The guard hook is installed unconditionally (independent of plugins): it
@@ -162,9 +179,52 @@ func initClaudeCode(global bool, cfg *helper.Config, autoYes bool) {
 	writeClaudeGuardHook(filepath.Join(claudeBaseDir, "settings.json"), filepath.Join(claudeBaseDir, "hooks"), autoYes)
 	// Pre-approve the aracne MCP tools so Claude Code does not prompt on every
 	// lookup/edit call in modes that would otherwise ask.
-	writeClaudePermissions(filepath.Join(claudeBaseDir, "settings.json"))
+	writeClaudePermissions(filepath.Join(claudeBaseDir, "settings.json"), cfg)
 	writeMarkdownIntegrationFile(claudeMdPath, "Claude Code CLAUDE.md", prompts.ClaudeMdContentForAgent(mainEff))
 	fmt.Println("[Claude Code] Restart Claude Code to activate the topology workflow.")
+}
+
+// bugArtifactFiles are the command and agent markdown files the bug pipeline owns. The two
+// sets happen to share their names; both directories get the same list.
+var bugArtifactFiles = []string{"bug-hunter.md", "bug-judge.md", "bug-solver.md"}
+
+// pruneBugArtifacts removes the generated bug commands and agents when
+// features.bug_management is off.
+//
+// Without this, `arac init` would not be idempotent with respect to the flag: a project that
+// once had the feature on would keep agent files whose `tools:` frontmatter names bug_* tools
+// the server no longer registers -- reintroducing exactly the silent-denial drift the
+// generator/server test exists to catch. Removing them makes the flag reversible without a
+// separate `arac disable`.
+func pruneBugArtifacts(commandsDir, agentsDir, label string) {
+	before := countExisting(commandsDir, bugArtifactFiles) + countExisting(agentsDir, bugArtifactFiles)
+	removeFiles(commandsDir, bugArtifactFiles)
+	removeFiles(agentsDir, bugArtifactFiles)
+	if before > 0 {
+		fmt.Printf("[%s] Removed %d stale bug-pipeline file(s); features.bug_management is off\n", label, before)
+	}
+}
+
+// countExisting reports how many of names exist in dir.
+func countExisting(dir string, names []string) int {
+	n := 0
+	for _, name := range names {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			n++
+		}
+	}
+	return n
+}
+
+// printBugManagementHint tells the user the pipeline exists and how to turn it on. A config
+// flag nobody can discover is a feature nobody enables, and nothing rewrites an existing
+// .aracne/config.json to reveal the key.
+func printBugManagementHint(cfg *helper.Config, configPath string) {
+	if cfg.BugManagementEnabled() {
+		return
+	}
+	fmt.Printf("Bug pipeline (bug-hunter/judge/solver) not installed. To enable it, set "+
+		"\"features\": {\"bug_management\": true} in %s and re-run arac init.\n", configPath)
 }
 
 // Converts a boolean permission flag to a string ("allow" or "deny").
@@ -277,7 +337,7 @@ func bugHunterCommandForAgent(agentRef string) string {
 		"",
 		"1. Partition the source tree into areas (top-level packages or directories; use ls/grep to enumerate them).",
 		"2. Launch the " + agentRef + " agent once per area, running as many concurrently as the platform allows. Each run reports every confirmed bug with bug_report on the root-cause node — the resource that must be fixed, not a downstream symptom (precise node_id + concrete scenario; no style issues or speculation).",
-		"3. Call bug_list to see what has already been reported, then run another parallel round telling each hunter not to re-report existing bugs — only new, distinct ones.",
+		"3. Run `arac bug list --json` in the shell to see what has already been reported, then run another parallel round telling each hunter not to re-report existing bugs — only new, distinct ones.",
 		"4. Repeat step 3 until a round adds no new bugs, or after a small number of rounds.",
 		"5. Report how many distinct bugs were reported in total.",
 	}, "\n")
@@ -288,10 +348,10 @@ func bugJudgeCommandForAgent(agentRef string) string {
 	return strings.Join([]string{
 		"Triage every pending bug by fanning out the " + agentRef + " agent — one run per pending bug, run in parallel.",
 		"",
-		"1. Call bug_list with state=pending to get the bugs to triage, and bug_list with state=dismissed to get the known false-positive patterns.",
+		"1. Run `arac bug list --state pending --json` in the shell to get the bugs to triage, and `arac bug list --state dismissed --json` to get the known false-positive patterns. If the shell is unavailable, ask the user to run both and paste the output.",
 		"2. Group the pending bugs by node_id.",
 		"3. Launch the " + agentRef + " agent once per pending bug, running as many concurrently as the platform allows (in a single batch). Give each run only its assigned bug plus, for context: the other live bugs on the same node (duplicate candidates) and the dismissed bug descriptions (false-positive patterns, same node first).",
-		"4. Each run applies, in order: (1) matches a dismissed pattern -> bug_delete; (2) duplicates another live bug -> bug_delete the weaker one; (3) false positive, intended, or fully guarded on inspection -> bug_dismiss; (4) genuine -> bug_acknowledge. If genuinely unsure, leave the bug untouched.",
+		"4. Each run applies, in order: (1) matches a dismissed pattern -> bug_delete; (2) duplicates another live bug -> bug_delete that duplicate ONLY if the assigned bug's ID sorts before it, otherwise leave both (the judge holding the lower ID resolves the pair); (3) false positive, intended, or fully guarded on inspection -> bug_dismiss; (4) genuine -> bug_acknowledge. If genuinely unsure, leave the bug untouched.",
 		"5. After all runs finish, report how many bugs were acknowledged, dismissed, deleted, and left undecided.",
 	}, "\n")
 }
@@ -301,7 +361,7 @@ func bugSolverCommandForAgent(agentRef string) string {
 	return strings.Join([]string{
 		"Fix every acknowledged bug by fanning out the " + agentRef + " agent — one run per acknowledged bug, run in parallel.",
 		"",
-		"1. Call bug_list with state=acknowledged to get the bugs to fix.",
+		"1. Run `arac bug list --state acknowledged --json` in the shell to get the bugs to fix. If the shell is unavailable, ask the user to run it and paste the output.",
 		"2. Launch the " + agentRef + " agent once per acknowledged bug, running as many concurrently as the platform allows. Give each run only its assigned bug.",
 		"3. Each run finds the root cause and makes the minimal correct change, then verifies: build and/or test the affected scope with Bash and clear any new topology warnings. If an edit fails because another agent changed the file, re-read the resource and retry.",
 		"4. Each run deletes its bug report with bug_delete once the fix is verified; if a bug cannot be fixed, it leaves the report in place and explains why.",
@@ -311,13 +371,13 @@ func bugSolverCommandForAgent(agentRef string) string {
 
 // Generates Claude agent YAML frontmatter with tools and MCP server configuration.
 func claudeAgentContent(name, description string, eff helper.AgentConfig, prompt string) string {
-	body := prompts.WithToolsListing(prompt, eff.MCPTools)
+	body := prompts.WithToolsListing(prompt, eff.MCPTools, claudeNativeReadAvailable(eff))
 	return fmt.Sprintf("---\nname: %s\ndescription: %s\ntools: %s\n%s%s---\n\n%s\n", name, description, strings.Join(claudeToolsForAgent(eff), ", "), agentModelFrontmatter(eff.Model), claudeMCPServersFrontmatter(name), body)
 }
 
 // Formats agent YAML frontmatter with description, model config, permissions, and tool listings.
 func openCodeAgentContent(description string, eff helper.AgentConfig, prompt string) string {
-	body := prompts.WithToolsListing(prompt, eff.MCPTools)
+	body := prompts.WithToolsListing(prompt, eff.MCPTools, openCodeNativeRead)
 	return fmt.Sprintf("---\ndescription: %s\nmode: subagent\n%spermission:\n%s---\n\n%s\n", description, agentModelFrontmatter(eff.Model), openCodePermissionsForAgent(eff), body)
 }
 
@@ -338,11 +398,43 @@ func claudeMCPServersFrontmatter(agentName string) string {
 	return fmt.Sprintf("mcpServers:\n  - aracne:\n      type: stdio\n      command: arac\n      args: [\"serve\", \"--tool-profile\", \"%s\", \"--harness\", \"claude_code\"]\n", agentName)
 }
 
+// serverToolProfile returns the --tool-profile value the generated harness config actually
+// starts the MCP server with for a given agent. This is the invariant every generator
+// depends on, so it lives in one named place rather than being re-derived:
+//
+//   - Claude Code gets a server per agent (see claudeMCPServersFrontmatter), so the profile
+//     is the agent's own name.
+//   - OpenCode gets ONE shared server for every agent (see initOpenCode), always "all".
+func serverToolProfile(harness, agentName string) string {
+	if harness == "opencode" {
+		return "all"
+	}
+	return agentName
+}
+
+// claudeNativeReadAvailable and openCodeNativeRead report, per harness, whether the MCP
+// server serving an agent still sees a native read tool -- which is what decides whether
+// aracne's read registers as "read" or "read_resource" (toolspec.ResolveReadToolName).
+// Every generated tool name goes through one of them; a generated name that does not match
+// the registered one is not an error, it is a silent denial.
+//
+// Claude Code gives each agent its OWN server (--tool-profile <agent>, see
+// claudeMCPServersFrontmatter), so the answer is that agent's own blocked_tools -- exactly
+// what cli.NativeReadAvailable computes for the same pair.
+func claudeNativeReadAvailable(eff helper.AgentConfig) bool {
+	return !toolNameSet(eff.BlockedTools)["read"]
+}
+
+// OpenCode runs ONE server for every agent (--tool-profile all, see initOpenCode), and
+// BuildToolRegistry forces nativeReadAvailable=false for the "all" profile regardless of
+// any agent's blocked_tools. So the short name always wins on this harness.
+const openCodeNativeRead = false
+
 // claudeToolsForAgent builds the Claude `tools:` allow-list: the agent's MCP
 // tools (prefixed) plus each native tool not present in blocked_tools.
 func claudeToolsForAgent(eff helper.AgentConfig) []string {
 	var result []string
-	for _, name := range eff.MCPTools {
+	for _, name := range toolspec.ResolveToolNames(eff.MCPTools, claudeNativeReadAvailable(eff)) {
 		result = append(result, "mcp__aracne__"+name)
 	}
 	blocked := toolNameSet(eff.BlockedTools)
@@ -365,7 +457,7 @@ func openCodePermissionsForAgent(eff helper.AgentConfig) string {
 	b.WriteString(fmt.Sprintf("  edit: %s\n", nativePermission(!blocked["edit"] && !blocked["write"])))
 	writeOpenCodeBashPermission(&b, blocked)
 	b.WriteString("  \"aracne_*\": deny\n")
-	for _, toolName := range eff.MCPTools {
+	for _, toolName := range toolspec.ResolveToolNames(eff.MCPTools, openCodeNativeRead) {
 		b.WriteString(fmt.Sprintf("  \"aracne_%s\": allow\n", toolName))
 	}
 	return b.String()

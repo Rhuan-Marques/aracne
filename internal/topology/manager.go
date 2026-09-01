@@ -14,6 +14,7 @@ import (
 
 	"aracne/internal/helper"
 	"aracne/internal/topology/domain"
+	"aracne/internal/topology/idresolve"
 	"aracne/internal/topology/scanner"
 )
 
@@ -1227,6 +1228,40 @@ func (m *TopologyManager) FindResourcesByName(name string, kinds ...domain.Resou
 		results = append(results, id)
 	}
 	return results, nil
+}
+
+// ResolveNodeID snaps a caller-supplied resource id to the canonical id the topology holds,
+// or returns an error carrying ranked candidates so the caller can retry in the same turn.
+//
+// WHY BUG REPORTING NEEDS THIS. A bug's node_id is a model-generated FQN string, and nothing
+// used to check it. An unknown id was accepted, stored, and then silently deleted by
+// CleanupOrphanedBugs at the next scan that touched the graph -- so a hunter that misspelled
+// one id lost that finding with no signal to anyone. Snapping also converges two hunters'
+// different spellings of the same node onto one id, which is what makes duplicate detection
+// work at all.
+//
+// It FAILS OPEN on an unreadable topology: a project that has not scanned yet can still file
+// bugs. This deliberately mirrors internal/llm/tools/read.go, which resolves the same way.
+//
+// Kept out of CreateBug on purpose: callers that legitimately mint bugs against ids outside
+// the topology (the chat workflow tests, and any synthetic fixture) must stay able to.
+func (m *TopologyManager) ResolveNodeID(raw string) (string, error) {
+	topo, err := m.ReadAll()
+	if err != nil {
+		return raw, nil
+	}
+	res := idresolve.Resolve(topo, raw, idresolve.Options{
+		Alias: func(old string) (string, bool) {
+			return helper.ResolveAlias(m.dbPath, old)
+		},
+	})
+	if res.Found() {
+		return res.ID, nil
+	}
+	if hint := idresolve.FormatCandidates(raw, res.Candidates); hint != "" {
+		return "", fmt.Errorf("resource %q not found in topology. %s", raw, hint)
+	}
+	return "", fmt.Errorf("resource %q not found in topology", raw)
 }
 
 // Creates and persists a new bug record with a generated ID, linked to a topology node.

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"aracne/internal/helper"
 )
 
 func TestClaudeNativeEditHookForOS(t *testing.T) {
@@ -144,9 +146,10 @@ func TestWriteClaudePermissions(t *testing.T) {
 		t.Fatalf("seed settings: %v", err)
 	}
 
+	cfg := helper.DefaultConfig()
 	writeClaudeGuardHook(settingsPath, hooksDir, true)
-	writeClaudePermissions(settingsPath)
-	writeClaudePermissions(settingsPath) // idempotent
+	writeClaudePermissions(settingsPath, cfg)
+	writeClaudePermissions(settingsPath, cfg) // idempotent
 
 	data, err := os.ReadFile(settingsPath)
 	if err != nil {
@@ -169,7 +172,7 @@ func TestWriteClaudePermissions(t *testing.T) {
 	}
 
 	// Every aracne MCP tool is allowed exactly once (idempotent across re-runs).
-	for _, want := range claudeMCPPermissionRules() {
+	for _, want := range claudeMCPPermissionRules(cfg) {
 		if counts[want] != 1 {
 			t.Fatalf("allow rule %q count = %d, want 1:\n%s", want, counts[want], data)
 		}

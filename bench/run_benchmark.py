@@ -41,8 +41,9 @@ from pathlib import Path
 # Allow running as `python bench/run_benchmark.py` from the repo root.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from bench import (agents, analysis, chunkgen, contamination, fixtures, grade,  # noqa: E402
-                   htmlreport, metrics, outcome, report, runner, sources, toolstats)
+from bench import (agents, analysis, chunkgen, claude_driver, contamination,  # noqa: E402
+                   fixtures, grade, htmlreport, metrics, outcome, report, runner, sources,
+                   toolstats)
 from bench.sources import ALL_LANGUAGES, load_tasks  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
@@ -127,6 +128,10 @@ DEFAULTS = {
     # the difference between measuring "does the topology help" and measuring it tangled with
     # "does the guard hurt".
     "arm_aracne_config": {},
+    # Per-arm tool surfaces. `arm_builtin_tools: {baseline: [...], aracne: [...]}` overrides
+    # the global lists below for that arm -- see arms.arm_tools for why this must be per-arm.
+    "arm_builtin_tools": {},
+    "arm_allowed_tools": {},
     # Point the agent at a scratch Claude config dir so it does not inherit the operator's
     # ~/.claude settings and memory. Off by default: it copies credentials into a temp dir,
     # and a run that silently loses auth is worse than one with a known confound.
@@ -1371,6 +1376,10 @@ def cmd_run(cfg: dict) -> int:
             "aracne_config": cfg.get("aracne_config"),
             "aracne_config_path": cfg.get("aracne_config_path"),
             "cli_args": sys.argv[1:],
+            # The agent binary both arms drive. A paired run whose arms ran months apart also
+            # compares two Claude Code releases; recording it makes that checkable instead of
+            # assumed. See claude_driver.cli_version.
+            "agent_cli": claude_driver.cli_version(),
             # What was dropped and why, so a reader of the results can tell a 25-task matrix
             # from a 27-task one without re-deriving it from transcripts.
             "skipped_contaminated_baseline": contaminated_notes,

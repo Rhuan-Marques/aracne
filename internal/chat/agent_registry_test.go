@@ -235,6 +235,45 @@ func TestEnsureDefaultAgentFiles_SkipsExisting(t *testing.T) {
 	}
 }
 
+// TestEnsureDefaultAgentFiles_RegeneratesStaleToolNames pins the self-healing case.
+//
+// These files are generated from Go tool lists but were only ever written when missing, so a
+// project initialised before the read family collapsed still names read_function/read_struct
+// — tools the catalog no longer has. toolsForAgentKind treats an unservable name as a hard
+// error, so those agents stay permanently broken. A file that names a dead tool is stale by
+// definition and gets rewritten; one with a valid custom tool list is left alone.
+func TestEnsureDefaultAgentFiles_RegeneratesStaleToolNames(t *testing.T) {
+	dir := t.TempDir()
+	stale := filepath.Join(dir, "bug-hunter.md")
+	os.WriteFile(stale, []byte("---\nname: bug-hunter\ndescription: d\ntools: read, read_function, grep, bug_report\n---\n\nbody\n"), 0644)
+
+	if err := ensureDefaultAgentFiles(nil, dir); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	data, err := os.ReadFile(stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "read_function") {
+		t.Errorf("stale tool name survived regeneration:\n%s", data)
+	}
+
+	// A valid customisation must survive: only dead tool names trigger a rewrite.
+	custom := filepath.Join(dir, "bug-judge.md")
+	body := "---\nname: bug-judge\ndescription: mine\ntools: read, grep\n---\n\nmy prompt\n"
+	os.WriteFile(custom, []byte(body), 0644)
+	if err := ensureDefaultAgentFiles(nil, dir); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got, err := os.ReadFile(custom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != body {
+		t.Errorf("a valid custom agent file was overwritten:\n%s", got)
+	}
+}
+
 func TestLoadAgentKinds_Valid(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "test-agent.md"), []byte(`---

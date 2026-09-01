@@ -8,7 +8,7 @@ func DescriptionsGenerateCommand(executorAgentRef string, batchSize int) string 
 		batchSize = 5
 	}
 	return "Generate descriptions for all targeted undocumented resources, orchestrated from the main session.\n\n" +
-		"You orchestrate; do not delegate orchestration to a subagent (subagents can't reliably spawn subagents). Batch size: " + fmt.Sprint(batchSize) +
+		"You orchestrate; do not delegate orchestration to a subagent (subagents can't reliably spawn subagents). Batch size: " + fmt.Sprint(batchSize) + "\n\n" +
 		"1. List targeted undocumented resources: prefer `node_list_no_description`, else run `arac resource list --no-description`.\n" +
 		"2. Split them into deterministic, non-overlapping batches of at most the batch size — every id in exactly one batch.\n" +
 		"3. Launch one `" + executorAgentRef + "` subagent per batch, all in a single concurrent wave. Give each only its assigned ids, names, and kinds.\n" +

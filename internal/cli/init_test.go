@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"aracne/internal/helper"
+	"aracne/internal/toolspec"
 )
 
 func TestNativePermission(t *testing.T) {
@@ -190,12 +191,17 @@ func TestClaudeToolsForAgent_DefaultMainAgent(t *testing.T) {
 	eff := helper.DefaultConfig().EffectiveAgent("claude_code", "main")
 	tools := claudeToolsForAgent(eff)
 
+	// The read entry must carry the RUNTIME name. Claude Code gives each agent its own
+	// server, and under the warn-only default that agent keeps its native Read -- so the
+	// aracne tool registers as `read_resource`. Emitting the catalog name `read` here named
+	// a tool the server never registers, which silently denied every generated sub-agent
+	// the aracne read tool.
 	want := map[string]bool{
-		"mcp__aracne__read":          true,
-		"mcp__aracne__warnings_list": true,
-		"mcp__aracne__edit":          true,
-		"mcp__aracne__write":         true,
-		"Bash":                       true,
+		"mcp__aracne__" + toolspec.ReadResourceToolName: true,
+		"mcp__aracne__warnings_list":                    true,
+		"mcp__aracne__edit":                             true,
+		"mcp__aracne__write":                            true,
+		"Bash":                                          true,
 	}
 	got := map[string]bool{}
 	for _, tool := range tools {
@@ -206,6 +212,9 @@ func TestClaudeToolsForAgent_DefaultMainAgent(t *testing.T) {
 			t.Fatalf("expected %q in tools: %v", name, tools)
 		}
 	}
+	if got["mcp__aracne__"+toolspec.ReadToolName] {
+		t.Fatalf("native read is available, so the short name is not what the server registers: %v", tools)
+	}
 	// The shipped default is WARN-ONLY: the guard names the matching aracne tool but
 	// denies nothing, so the native tools stay available. Denying them cost a wasted turn
 	// per denial and pushed the agent off a more capable native grep; the `arac update-file`
@@ -213,6 +222,35 @@ func TestClaudeToolsForAgent_DefaultMainAgent(t *testing.T) {
 	for _, native := range []string{"Read", "Edit", "Write", "Grep"} {
 		if !got[native] {
 			t.Fatalf("native %q should be available under the warn-only default: %v", native, tools)
+		}
+	}
+}
+
+// TestClaudeToolsForAgent_BlockedNativeReadUsesShortName is the other half: when the agent's
+// blocked_tools denies the harness's own read, the aracne tool takes the short name and the
+// allow-list must follow it there too.
+func TestClaudeToolsForAgent_BlockedNativeReadUsesShortName(t *testing.T) {
+	eff := helper.DefaultConfig().EffectiveAgent("claude_code", "main")
+	eff.BlockedTools = []string{"read"}
+	tools := claudeToolsForAgent(eff)
+
+	got := map[string]bool{}
+	for _, tool := range tools {
+		got[tool] = true
+	}
+	if !got["mcp__aracne__"+toolspec.ReadToolName] {
+		t.Fatalf("native read blocked: expected the short name in tools: %v", tools)
+	}
+	if got["mcp__aracne__"+toolspec.ReadResourceToolName] {
+		t.Fatalf("native read blocked: %q is not what the server registers: %v", toolspec.ReadResourceToolName, tools)
+	}
+	if got["Read"] {
+		t.Fatalf("blocked native read must not appear in the allow-list: %v", tools)
+	}
+	// Blocking read must not collaterally block the other native tools.
+	for _, native := range []string{"Edit", "Write", "Grep"} {
+		if !got[native] {
+			t.Fatalf("native %q should still be available: %v", native, tools)
 		}
 	}
 }
@@ -240,6 +278,28 @@ func TestOpenCodePermissionsForAgent_DefaultMainAgent(t *testing.T) {
 	// deny the direct shell read/grep forms, and nothing is denied any more.
 	if !strings.Contains(perms, `"aracne_read": allow`) {
 		t.Fatalf("expected aracne_read: allow:\n%s", perms)
+	}
+}
+
+// TestOpenCodePermissionsAlwaysUseShortReadName guards the INVERSE of the Claude drift.
+//
+// OpenCode runs one shared MCP server for every agent (--tool-profile all), and the "all"
+// profile always registers the read tool under its short name regardless of any agent's
+// blocked_tools. So `aracne_read` is right here even for an agent whose blocked_tools would
+// yield `read_resource` on Claude Code. A "cleanup" that unified the two harnesses on one
+// bool would silently deny OpenCode agents their read tool.
+func TestOpenCodePermissionsAlwaysUseShortReadName(t *testing.T) {
+	for _, blocked := range [][]string{nil, {"read"}, {"edit", "write"}} {
+		eff := helper.DefaultConfig().EffectiveAgent("opencode", "main")
+		eff.BlockedTools = blocked
+		perms := openCodePermissionsForAgent(eff)
+		if !strings.Contains(perms, `"aracne_`+toolspec.ReadToolName+`": allow`) {
+			t.Fatalf("blocked_tools=%v: OpenCode must grant the short read name:\n%s", blocked, perms)
+		}
+		if strings.Contains(perms, toolspec.ReadResourceToolName) {
+			t.Fatalf("blocked_tools=%v: the --tool-profile all server never registers %q:\n%s",
+				blocked, toolspec.ReadResourceToolName, perms)
+		}
 	}
 }
 
