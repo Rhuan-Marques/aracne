@@ -182,6 +182,19 @@ def _run_cell(task: Task, arm: str, seed: int, cfg: dict, out_dir: Path,
         row["has_patch"] = True
         row["patch_path"] = str(patch_path)
 
+    # Harvest whatever `descriptions.lazy` generated into the fixture snapshot, so the next
+    # cell (and the next RUN) starts from them instead of paying to describe the same nodes
+    # again. Scoped to files this run did not edit: a description written from already-patched
+    # source describes the solution, and persisting it would leak the fix forward.
+    if arms.is_aracne_arm(arm):
+        try:
+            n = fixtures.harvest_descriptions(task, cfg, fixtures_root,
+                                              fixtures.patch_paths(patch))
+            if n:
+                row["descriptions_harvested"] = n
+        except Exception as e:  # noqa: BLE001 - never fail a scored cell over bookkeeping
+            print(f"[runner] warning: description harvest failed for {task.key}: {e}")
+
     # Cleanup: ephemeral baseline checkouts only. NEVER delete the aracne canonical
     # worktree — it is path-pinned and reused across seeds/runs.
     if arm == "baseline" and not cfg.get("keep_workdir"):

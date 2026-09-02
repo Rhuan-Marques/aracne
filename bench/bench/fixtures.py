@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -432,6 +433,105 @@ def freeze(task, cfg: dict, fixtures_root) -> dict:
     }
     meta_path(fixtures_root, task).write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return meta
+
+
+# Files a lazily-generated description must never be harvested from: the diff regex below
+# names them, and _run_cell hands the set in.
+_DIFF_FILE_RE = re.compile(r"^\+\+\+ [ab]/(.+?)\s*$", re.M)
+
+
+def patch_paths(patch: str) -> set[str]:
+    """Repo-relative paths a unified diff writes to."""
+    return {p for p in _DIFF_FILE_RE.findall(patch or "") if p != "/dev/null"}
+
+
+def harvest_descriptions(task, cfg: dict, fixtures_root, changed_paths=None) -> int:
+    """Copy descriptions the run generated back into the fixture SNAPSHOT.
+
+    WHY. `descriptions.lazy` writes a description the moment a read or a search is about to
+    show one, straight into the worktree's topology DB. That DB is then thrown away: `restore`
+    copies `.aracne` from the snapshot over the worktree before every cell, so without this
+    the same nodes would be described again on every run, and every arm would pay the latency
+    of describing what the last arm already described. Harvesting makes the cost one-time per
+    node per repo, across runs, which is the whole point of generating lazily instead of
+    sweeping up front.
+
+    WHAT IS REFUSED. A description generated from source the agent had already edited
+    describes the SOLVED code, and persisting it would leak the fix into every later run of
+    that fixture -- the same poisoning `freeze` warns about under `reset_from_drift`, except
+    silent and permanent. So a resource is harvested only when its file is untouched by this
+    run's patch. Passing `changed_paths=None` means "nothing is known to be safe" and harvests
+    nothing, which is the conservative reading, not the convenient one.
+
+    Only fills HOLES: a description already in the snapshot wins, so a warm fixture's curated
+    prose is never overwritten by a lazy one-liner. Returns how many were written.
+    """
+    wt_db = worktree_path(fixtures_root, task) / ".aracne" / "topology.db"
+    snap_db = snapshot_path(fixtures_root, task) / ".aracne" / "topology.db"
+    if not wt_db.exists() or not snap_db.exists():
+        return 0
+    # None and the empty set are NOT the same claim. An empty set is a caller saying "this run
+    # edited nothing, all of it is safe"; None is a caller that does not know, and guessing
+    # "safe" there is how a description of patched source gets persisted forever.
+    if changed_paths is None:
+        return 0
+
+    try:
+        src = sqlite3.connect(f"file:{wt_db}?mode=ro", uri=True)
+        try:
+            rows = src.execute(
+                "SELECT id, kind, description, loc_path FROM resources "
+                "WHERE description IS NOT NULL AND TRIM(description) != ''"
+            ).fetchall()
+        finally:
+            src.close()
+
+        fresh = [(rid, kind, desc) for rid, kind, desc, path in rows
+                 if (path or "") not in changed_paths]
+        if not fresh:
+            return 0
+
+        dst = sqlite3.connect(str(snap_db))
+        try:
+            written = 0
+            for rid, _kind, desc in fresh:
+                cur = dst.execute(
+                    "UPDATE resources SET description = ? WHERE id = ? "
+                    "AND (description IS NULL OR TRIM(description) = '')",
+                    (desc, rid),
+                )
+                written += cur.rowcount
+            dst.commit()
+        finally:
+            dst.close()
+    except sqlite3.Error as e:  # noqa: BLE001 - a harvest failure must never fail the cell
+        print(f"[fixtures] warning: could not harvest descriptions for "
+              f"{fixture_key(task)}: {e}")
+        return 0
+
+    if written:
+        refresh_meta_coverage(task, cfg, fixtures_root)
+    return written
+
+
+def refresh_meta_coverage(task, cfg: dict, fixtures_root) -> None:
+    """Re-stamp described/total/coverage in meta.json from the snapshot DB.
+
+    Lazy harvesting moves coverage between runs, and `arms.prepare_workdir` reads exactly
+    these fields to decide whether a fixture is warm enough to run. Leaving them at their
+    freeze-time values would make a fixture that has since filled itself in look cold forever.
+    """
+    snap_db = snapshot_path(fixtures_root, task) / ".aracne" / "topology.db"
+    meta_file = meta_path(fixtures_root, task)
+    if not meta_file.exists():
+        return
+    described, total, cov = description_coverage(snap_db, _gen_kinds(cfg))
+    try:
+        meta = json.loads(meta_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    meta.update(described=described, total=total, coverage=round(cov, 3))
+    meta_file.write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
 
 def restore(task, cfg: dict, fixtures_root) -> Path:

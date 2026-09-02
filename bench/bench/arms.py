@@ -15,6 +15,7 @@ Measuring the shipped package as a whole (contract + tools + guard) is intention
 from __future__ import annotations
 
 import contextlib
+import json
 import subprocess
 from pathlib import Path
 
@@ -35,6 +36,30 @@ def is_aracne_arm(arm: str) -> bool:
     the `background_scanner` check read before the third arm existed.
     """
     return arm != "baseline"
+
+
+def lazy_descriptions(arm: str, cfg: dict) -> bool:
+    """Does this arm run with `descriptions.lazy` on?
+
+    Read from the arm's own aracne preset, because that is where the setting actually takes
+    effect -- the preset is copied over the worktree's .aracne/config.json by prepare_workdir.
+    A preset that says nothing inherits aracne's default, which is ON.
+    """
+    preset = aracne_config_for(arm, cfg)
+    if not preset:
+        return True                      # aracne's own default
+    # run_benchmark._resolve_aracne_config_path already resolved this to a path that exists.
+    try:
+        data = json.loads(Path(preset).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return True
+    lazy = (data.get("descriptions") or {}).get("lazy")
+    if lazy is None:
+        return True
+    if isinstance(lazy, bool):
+        return lazy
+    enabled = lazy.get("enabled")
+    return True if enabled is None else bool(enabled)
 
 
 def aracne_config_for(arm: str, cfg: dict):
@@ -69,7 +94,11 @@ def prepare_workdir(arm: str, task, cfg: dict, repos_dir: Path, ephemeral_dir: P
     # aracne arm: lazily freeze if needed, enforce coverage, then restore the warm worktree.
     meta = fixtures.ensure_snapshot(task, cfg, fixtures_root)
     cov = meta.get("coverage", 0.0) or 0.0
-    if cov < cfg["coverage_min"] and not cfg["allow_cold"]:
+    # `descriptions.lazy` makes a cold fixture legitimate: the run describes what it actually
+    # reads, and runner._run_cell harvests those back into the snapshot, so coverage climbs
+    # across runs instead of being paid up front. Gating on freeze-time coverage would refuse
+    # exactly the large repositories the feature exists to make affordable.
+    if cov < cfg["coverage_min"] and not cfg["allow_cold"] and not lazy_descriptions(arm, cfg):
         raise RuntimeError(
             f"aracne fixture for {task.key} has {cov:.0%} description coverage "
             f"(< {cfg['coverage_min']:.0%}); run prepare + your /descriptions-generate, "
