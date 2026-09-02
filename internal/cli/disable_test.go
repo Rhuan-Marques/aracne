@@ -203,6 +203,7 @@ func TestDisableOpenCode(t *testing.T) {
 	}
 
 	os.WriteFile(".opencode/plugins/arac-native-edit-sync.js", []byte("plugin"), 0644)
+	os.WriteFile(".opencode/plugins/arac-pre-tool-scan.js", []byte("plugin"), 0644)
 
 	agentsMd := "before\n\n# Aracne Project Integration\n\nsection\n\nGood Luck in your task.\n\nafter\n"
 	os.WriteFile("AGENTS.md", []byte(agentsMd), 0644)
@@ -231,6 +232,7 @@ func TestDisableOpenCode(t *testing.T) {
 	checkEmptyDir(t, ".opencode/commands", "OpenCode commands")
 	checkEmptyDir(t, ".opencode/agents", "OpenCode agents")
 	checkFileNotExist(t, ".opencode/plugins/arac-native-edit-sync.js", "OpenCode plugin")
+	checkFileNotExist(t, ".opencode/plugins/arac-pre-tool-scan.js", "OpenCode pre-tool scan plugin")
 
 	agentsMdData, _ := os.ReadFile("AGENTS.md")
 	if strings.Contains(string(agentsMdData), "Aracne Project Integration") {

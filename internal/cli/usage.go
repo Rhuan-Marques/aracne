@@ -67,6 +67,7 @@ Usage:
   arac read [--kind <kind>] [--full] <resource-id>...  Read one or more resources by ID; --kind forces exact kind (function, method, struct, named_type, interface, variable, file, package, dependency); --full returns whole file bodies under read.file_mode "skeleton"
   arac resource list [query] [--kind <kind>]... [--no-description]  List resources, optionally filtered by query, kind, or missing description
   arac grep [flags] <pattern> [path]  Search node names, node descriptions and file contents (ranked in that order)
+  arac cmd -- <command> [args...]  Run a shell read or search (cat/head/tail/sed -n/grep...), answered from the topology where aracne can and by the real command where it cannot
   arac update-file <path>  Re-parse a file and update the topology database (--db to specify db path)
   Aracne read-resource-and-cut <id> <kind>  Get a resource's source code cut (kind: Function, Struct, Interface, ExternalVar, File, Package)
   arac update-description <id> <kind> <desc>  Update a resource's description in the topology DB

@@ -62,7 +62,7 @@ run_name: null                                # unique id for this run; null -> 
 aracne_config: null                           # aracne arm's .aracne/config.json overlay: a name in
                                               #   bench/configs/aracne/ (e.g. strict-tools) or a path to a JSON file.
                                               #   Deep-merged onto the fixture config at run time (tools, guard
-                                              #   blocking, context_filter, read.scan take effect; scan.mode /
+                                              #   blocking, context_filter, scan.pre_tool take effect; scan.mode /
                                               #   described-content / paths are frozen at prepare). null -> fixture default.
 ni_margin: 0.10                               # PAIRED solve-rate non-inferiority margin: aracne passes
                                               #   when the paired rate-difference CI clears -0.10. The

@@ -39,6 +39,7 @@ func RunInit(args []string) {
 	opencode := fs.Bool("opencode", false, "Initialize OpenCode integration")
 	global := fs.Bool("global", false, "Install globally")
 	yes := fs.Bool("y", false, "Auto-confirm all replacement prompts")
+	withMCP := fs.Bool("mcp", false, "Also wire the MCP server (sets integration.mode to \"both\" for this run)")
 	fs.Parse(args)
 
 	if !*claude && !*opencode {
@@ -52,6 +53,16 @@ func RunInit(args []string) {
 		fmt.Fprintf(os.Stderr, "Invalid .aracne/config.json: %v\n", err)
 		os.Exit(1)
 	}
+	if *withMCP && !cfg.MCPEnabled() {
+		// Persisted, not just applied for this run. The guard and `arac serve` both read the
+		// mode from config at runtime, so a flag that only lived for one init would wire an
+		// MCP server the next plain `arac init` silently removes again.
+		cfg.Integration.Mode = helper.IntegrationBoth
+		if err := helper.SaveConfig(cfg, configPath); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not persist integration.mode: %v\n", err)
+		}
+	}
+	announceIntegrationMode(cfg)
 
 	if *opencode {
 		initOpenCode(*global, cfg, *yes)
@@ -69,17 +80,26 @@ func initOpenCode(global bool, cfg *helper.Config, autoYes bool) {
 	mainEff := cfg.EffectiveAgent("opencode", "main")
 
 	config := readJSONConfig(configPath)
-	if shouldWriteConfig(config, "mcp", configPath, "OpenCode", autoYes) {
-		mcpMap, _ := config["mcp"].(map[string]interface{})
-		if mcpMap == nil {
-			mcpMap = make(map[string]interface{})
+	if cfg.MCPEnabled() {
+		if shouldWriteConfig(config, "mcp", configPath, "OpenCode", autoYes) {
+			mcpMap, _ := config["mcp"].(map[string]interface{})
+			if mcpMap == nil {
+				mcpMap = make(map[string]interface{})
+			}
+			mcpMap["aracne"] = map[string]interface{}{
+				"type":    "local",
+				"command": []string{"arac", "serve", "--tool-profile", "all", "--harness", "opencode"},
+				"enabled": true,
+			}
+			config["mcp"] = mcpMap
 		}
-		mcpMap["aracne"] = map[string]interface{}{
-			"type":    "local",
-			"command": []string{"arac", "serve", "--tool-profile", "all", "--harness", "opencode"},
-			"enabled": true,
+	} else if mcpMap, ok := config["mcp"].(map[string]interface{}); ok {
+		delete(mcpMap, "aracne")
+		if len(mcpMap) == 0 {
+			delete(config, "mcp")
+		} else {
+			config["mcp"] = mcpMap
 		}
-		config["mcp"] = mcpMap
 	}
 
 	permissionMap, _ := config["permission"].(map[string]interface{})
@@ -92,8 +112,10 @@ func initOpenCode(global bool, cfg *helper.Config, autoYes bool) {
 	permissionMap["bash"] = openCodeBashPermission(blocked)
 	delete(permissionMap, "write")
 	permissionMap["aracne_*"] = "deny"
-	for _, toolName := range toolspec.ResolveToolNames(mainEff.MCPTools, openCodeNativeRead) {
-		permissionMap["aracne_"+toolName] = "allow"
+	if cfg.MCPEnabled() {
+		for _, toolName := range toolspec.ResolveToolNames(mainEff.MCPTools, openCodeNativeRead) {
+			permissionMap["aracne_"+toolName] = "allow"
+		}
 	}
 	config["permission"] = permissionMap
 	writeJSONConfig(configPath, config)
@@ -127,7 +149,11 @@ func initOpenCode(global bool, cfg *helper.Config, autoYes bool) {
 	}
 
 	writeOpenCodePlugins(mainEff.Plugins, configDir, autoYes)
-	writeMarkdownIntegrationFile(agentsMdPath, "OpenCode AGENTS.md", prompts.AgentsMdContentForAgent(mainEff))
+	// The pre-tool scan plugin is installed unconditionally (independent of plugins), the
+	// same way Claude Code's guard hook is: it is what keeps the graph current for the call
+	// that is about to read it, on whichever surface the project is on.
+	writeOpenCodePreToolScanPlugin(filepath.Join(configDir, "plugins"), autoYes)
+	writeMarkdownIntegrationFile(agentsMdPath, "OpenCode AGENTS.md", prompts.AgentsMdForConfig(cfg))
 	fmt.Println("[OpenCode] Restart OpenCode to activate the topology workflow.")
 }
 
@@ -137,19 +163,28 @@ func initClaudeCode(global bool, cfg *helper.Config, autoYes bool) {
 	claudeBaseDir := filepath.Dir(commandsDir)
 	mainEff := cfg.EffectiveAgent("claude_code", "main")
 
-	claudeConfig := readJSONConfig(mcpConfigPath)
-	if shouldWriteConfig(claudeConfig, "mcpServers", mcpConfigPath, "Claude Code", autoYes) {
-		mcpServers, _ := claudeConfig["mcpServers"].(map[string]interface{})
-		if mcpServers == nil {
-			mcpServers = make(map[string]interface{})
+	if cfg.MCPEnabled() {
+		claudeConfig := readJSONConfig(mcpConfigPath)
+		if shouldWriteConfig(claudeConfig, "mcpServers", mcpConfigPath, "Claude Code", autoYes) {
+			mcpServers, _ := claudeConfig["mcpServers"].(map[string]interface{})
+			if mcpServers == nil {
+				mcpServers = make(map[string]interface{})
+			}
+			mcpServers["aracne"] = map[string]interface{}{
+				"command": "arac",
+				"args":    []string{"serve", "--tool-profile", "main", "--harness", "claude_code"},
+			}
+			claudeConfig["mcpServers"] = mcpServers
+			writeJSONConfig(mcpConfigPath, claudeConfig)
+			fmt.Printf("[Claude Code] MCP server configured in %s\n", mcpConfigPath)
 		}
-		mcpServers["aracne"] = map[string]interface{}{
-			"command": "arac",
-			"args":    []string{"serve", "--tool-profile", "main", "--harness", "claude_code"},
-		}
-		claudeConfig["mcpServers"] = mcpServers
-		writeJSONConfig(mcpConfigPath, claudeConfig)
-		fmt.Printf("[Claude Code] MCP server configured in %s\n", mcpConfigPath)
+	} else if dropAracneMCPServer(mcpConfigPath) {
+		// Leaving a stale entry behind would start a server whose tools the contract no
+		// longer mentions -- the model pays for their schemas on every request and is told
+		// nothing about them. Init has to be able to move a project BETWEEN surfaces, not
+		// only onto one.
+		fmt.Printf("[Claude Code] Removed the aracne MCP server from %s (integration.mode: %s)\n",
+			mcpConfigPath, cfg.EffectiveIntegrationMode())
 	}
 
 	os.MkdirAll(commandsDir, 0755)
@@ -178,10 +213,59 @@ func initClaudeCode(global bool, cfg *helper.Config, autoYes bool) {
 	// must always warn on native/shell tool usage and block per blocked_tools.
 	writeClaudeGuardHook(filepath.Join(claudeBaseDir, "settings.json"), filepath.Join(claudeBaseDir, "hooks"), autoYes)
 	// Pre-approve the aracne MCP tools so Claude Code does not prompt on every
-	// lookup/edit call in modes that would otherwise ask.
-	writeClaudePermissions(filepath.Join(claudeBaseDir, "settings.json"), cfg)
-	writeMarkdownIntegrationFile(claudeMdPath, "Claude Code CLAUDE.md", prompts.ClaudeMdContentForAgent(mainEff))
+	// lookup/edit call in modes that would otherwise ask. Nothing to pre-approve on the
+	// terminal surface: the calls the agent makes there are ordinary Bash.
+	if cfg.MCPEnabled() {
+		writeClaudePermissions(filepath.Join(claudeBaseDir, "settings.json"), cfg)
+	}
+	writeMarkdownIntegrationFile(claudeMdPath, "Claude Code CLAUDE.md", prompts.ClaudeMdForConfig(cfg))
 	fmt.Println("[Claude Code] Restart Claude Code to activate the topology workflow.")
+}
+
+// announceIntegrationMode says which surface this project is on, because the answer changed.
+//
+// `integration.mode` defaults to "terminal", so a project that predates the field and re-runs
+// `arac init` loses its MCP server entry. That is the intended default, and it must never be a
+// silent one: an operator who wanted MCP would otherwise discover it as "the tools vanished".
+func announceIntegrationMode(cfg *helper.Config) {
+	switch cfg.EffectiveIntegrationMode() {
+	case helper.IntegrationTerminal:
+		fmt.Println("Integration mode: terminal — aracne answers the shell commands you already run.")
+		fmt.Println("  No MCP server is configured. For MCP tools, re-run with --mcp or set")
+		fmt.Println("  integration.mode to \"mcp\" or \"both\" in .aracne/config.json.")
+	case helper.IntegrationMCP:
+		fmt.Println("Integration mode: mcp — capabilities are served as MCP tools; shell commands are not intercepted.")
+	case helper.IntegrationBoth:
+		fmt.Println("Integration mode: both — MCP tools are served AND shell commands are intercepted.")
+	}
+}
+
+// dropAracneMCPServer removes an aracne entry from a Claude Code MCP config, reporting whether
+// anything changed. Mirrors the removal `arac disable` performs, so switching surfaces and
+// disabling entirely leave the file in the same shape.
+func dropAracneMCPServer(mcpConfigPath string) bool {
+	config := readJSONConfig(mcpConfigPath)
+	servers, ok := config["mcpServers"].(map[string]interface{})
+	if !ok {
+		return false
+	}
+	removed := false
+	for _, key := range []string{"aracne", "arac"} {
+		if _, exists := servers[key]; exists {
+			delete(servers, key)
+			removed = true
+		}
+	}
+	if !removed {
+		return false
+	}
+	if len(servers) == 0 {
+		delete(config, "mcpServers")
+	} else {
+		config["mcpServers"] = servers
+	}
+	writeJSONConfig(mcpConfigPath, config)
+	return true
 }
 
 // bugArtifactFiles are the command and agent markdown files the bug pipeline owns. The two

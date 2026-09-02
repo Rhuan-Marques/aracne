@@ -592,3 +592,60 @@ larger behavioural change than "stop blocking changelogs" and should be watched 
 - `TopologyManager.Write(path)` copies `m.dbPath` onto `path` with `os.Create`, so calling it
   with the database's own path **truncates the database to zero bytes**. `FullScan` already
   persists; the test fixture notes this.
+
+---
+
+## Result: fair-20260901a — the control, re-measured
+
+Both arms measured in one session on one Claude Code release (2.1.257, recorded in
+`run_meta.agent_cli`), 27 repositories, matched tool surfaces. No `--baseline-from`.
+
+| endpoint | batched-20260901a (imported control) | fair-20260901a |
+|---|---|---|
+| context tokens | −45.0% *(sig)* | **+6.2%** [−12.3, +27.5] *(n.s.)* |
+| total tokens | −44.5% *(sig)* | +5.8% *(n.s.)* |
+| turns | +3.5% | +0.7% [−15.1, +18.6] *(n.s.)* |
+| wall clock | −8.4% | −10.6% *(n.s.)* |
+| solved | 19/25 (control 20) | 19/27 (control 20) |
+
+**The saving did not survive a fair control, and aracne is not what changed.** Comparing each
+arm against its own previous result on the same repositories: aracne 1.12× context, control
+**0.60×** — at *more* turns (1.15×), so cost per turn halved. Three things changed for the
+control and all favour it: current Claude Code instead of an August release, a trimmed tool
+surface instead of all 26 built-ins, and operator-config isolation.
+
+### Size split (the question asked)
+
+| view | result |
+|---|---|
+| median split | smaller half +13.2%, larger half −0.4% |
+| buckets | small +23.1% (n=3), medium +7.0% (n=7), large +3.0% (n=16) |
+| slope | −0.068 per decade of nodes, CI [−0.225, +0.089], r = −0.18 |
+
+Direction is what the premise predicts; every interval crosses zero. **Confounded with
+language**: JavaScript is +67.4% at a median of 231 nodes, TypeScript −37.1% at 1,413 — so
+"small" and "JavaScript" are nearly the same set here. Go is the counter-example a pure size
+story cannot explain: +27.5% at a median of 3,546 nodes.
+
+### Corrections to earlier claims
+
+- **The control's Bash-only behaviour is not the RTK instruction.** Isolation verified by direct
+  probe (isolated: "no"; un-isolated: "yes, RTK.md"). With it provably gone the control still
+  made **462 Bash calls and zero** Read/Edit/Write/Grep/Glob calls across 27 cells, with all of
+  them available. The benchmark compares topology tools against **a shell**, not against native
+  file tools — and `sed -n '95,135p'` reads forty lines where a symbol read returns a whole
+  declaration plus context.
+- **`builtin_tools` was global.** Re-running the control under `scale40-guarded` would have given
+  it `--tools Bash` — no file tools at all. Fixed with per-arm surfaces (`arms.arm_tools`).
+- **Live and archival contamination counters disagreed.** `gh issue view … 2>/dev/null` with no
+  `gh` installed scored as a FETCH live (reads the content block) and as a clean attempt
+  archivally (reads the event payload), censoring a good pair. Fixed so both read the same
+  payload; regression test added.
+
+### Hygiene
+
+Zero answer-key fetches across 54 cells (9 attempts, all refused). Zero `rtk` occurrences in all
+54 transcripts. One pair unusable: the `sveltejs/svelte` control cell ran 581 events but the CLI
+emitted no terminal result event, so it has no metrics.
+
+Report: https://claude.ai/code/artifact/5f708f72-b4dc-438e-aef7-0ccf4dc9cca1

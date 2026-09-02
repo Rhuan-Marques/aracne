@@ -42,8 +42,10 @@ func TestInitDefault_CreatesBothAgents(t *testing.T) {
 	assertDirCount(t, dir, ".opencode/commands", 3)
 	assertDirCount(t, dir, ".opencode/agents", 1)
 
-	// Claude files
-	assertExists(t, dir, ".mcp.json")
+	// Claude files. No .mcp.json: the default surface is terminal, where aracne reaches the
+	// agent by answering the shell commands it already runs. Writing a server whose tools the
+	// contract never mentions would cost their schemas on every request for nothing.
+	assertNotExists(t, dir, ".mcp.json")
 	assertExists(t, dir, ".claude/commands")
 	assertExists(t, dir, ".claude/agents")
 	assertExists(t, dir, "CLAUDE.md")
@@ -144,10 +146,63 @@ func TestInitClaudeOnly(t *testing.T) {
 	dir := t.TempDir()
 	mustRun(t, dir, "init", "-y", "--claude")
 
-	assertExists(t, dir, ".mcp.json")
+	assertNotExists(t, dir, ".mcp.json") // terminal surface; see TestInitWithMCP_WiresTheServer
 	assertExists(t, dir, "CLAUDE.md")
 	assertNotExists(t, dir, ".opencode/opencode.json")
 	assertNotExists(t, dir, "AGENTS.md")
+}
+
+// --mcp is the opt-in, and it has to PERSIST: the guard and `arac serve` both read the mode
+// from config at run time, so a flag that lived only for one init would wire a server the next
+// plain `arac init` silently removes again.
+func TestInitWithMCP_WiresTheServerAndPersistsTheMode(t *testing.T) {
+	dir := t.TempDir()
+	mustRun(t, dir, "init", "-y", "--claude", "--mcp")
+
+	assertExists(t, dir, ".mcp.json")
+	raw := readFile(t, dir, ".mcp.json")
+	var mcpCfg struct {
+		MCPServers map[string]map[string]interface{} `json:"mcpServers"`
+	}
+	if err := json.Unmarshal([]byte(raw), &mcpCfg); err != nil {
+		t.Fatalf("parse .mcp.json: %v\n%s", err, raw)
+	}
+	if entry, ok := mcpCfg.MCPServers["aracne"]; !ok || entry["command"] != "arac" {
+		t.Fatalf(".mcp.json missing the aracne server: %s", raw)
+	}
+
+	cfg := helper.LoadConfig(filepath.Join(dir, ".aracne", "config.json"))
+	if !cfg.MCPEnabled() {
+		t.Fatalf("--mcp did not persist the mode: %+v", cfg.Integration)
+	}
+
+	// And the contract has to match: on this surface the MCP tools exist, so it may name them.
+	if body := readFile(t, dir, "CLAUDE.md"); !strings.Contains(body, "mcp__aracne__") {
+		t.Errorf("CLAUDE.md does not name the MCP tools it just wired:\n%s", body)
+	}
+}
+
+// Switching back removes the server rather than leaving it running unmentioned.
+func TestInitBackToTerminalRemovesTheServer(t *testing.T) {
+	dir := t.TempDir()
+	mustRun(t, dir, "init", "-y", "--claude", "--mcp")
+	assertExists(t, dir, ".mcp.json")
+
+	cfgPath := filepath.Join(dir, ".aracne", "config.json")
+	cfg := helper.LoadConfig(cfgPath)
+	cfg.Integration.Mode = helper.IntegrationTerminal
+	if err := helper.SaveConfig(cfg, cfgPath); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, dir, "init", "-y", "--claude")
+
+	raw := readFile(t, dir, ".mcp.json")
+	if strings.Contains(raw, "aracne") {
+		t.Fatalf("the aracne server survived the switch to terminal: %s", raw)
+	}
+	if body := readFile(t, dir, "CLAUDE.md"); strings.Contains(body, "mcp__aracne__") {
+		t.Errorf("CLAUDE.md still names MCP tools that are no longer served:\n%s", body)
+	}
 }
 
 func TestInitGlobal_CreatesFilesInHome(t *testing.T) {
@@ -165,8 +220,9 @@ func TestInitGlobal_CreatesFilesInHome(t *testing.T) {
 	assertExists(t, homeDir, ".config/opencode/opencode.json")
 	assertExists(t, homeDir, ".config/opencode/AGENTS.md")
 
-	// Claude global paths
-	assertExists(t, homeDir, ".claude.json")
+	// Claude global paths. ~/.claude.json is the global MCP config and is only written on a
+	// surface that serves MCP; --global alone is still the terminal default.
+	assertNotExists(t, homeDir, ".claude.json")
 	assertExists(t, homeDir, ".claude/commands")
 	assertExists(t, homeDir, ".claude/agents")
 	assertExists(t, homeDir, ".claude/CLAUDE.md")
@@ -184,6 +240,36 @@ func TestInitDefault_NoNativeHooks(t *testing.T) {
 	// hook/plugin (which only matters for native edits) is not written.
 	assertNotExists(t, dir, ".claude/hooks/arac-update-file.sh")
 	assertNotExists(t, dir, ".opencode/plugins/arac-native-edit-sync.js")
+}
+
+// The pre-tool scan is not a plugin: it ships on both surfaces by default, because
+// scan.pre_tool -- not the presence of a file init happened to write -- is what decides
+// whether the graph is re-synced before a tool call.
+func TestInitDefault_PreToolScanOnBothSurfaces(t *testing.T) {
+	dir := t.TempDir()
+	mustRun(t, dir, "init", "-y")
+
+	assertExists(t, dir, ".opencode/plugins/arac-pre-tool-scan.js")
+	plugin, err := os.ReadFile(filepath.Join(dir, ".opencode/plugins/arac-pre-tool-scan.js"))
+	if err != nil {
+		t.Fatalf("read pre-tool scan plugin: %v", err)
+	}
+	for _, want := range []string{"tool.execute.before", "guard", "--pre-scan"} {
+		if !strings.Contains(string(plugin), want) {
+			t.Fatalf("pre-tool scan plugin missing %q:\n%s", want, plugin)
+		}
+	}
+
+	// Claude Code gets the same thing through the guard hook, which is already registered
+	// on PreToolUse.
+	assertExists(t, dir, ".claude/hooks/arac-guard.sh")
+	settings, err := os.ReadFile(filepath.Join(dir, ".claude/settings.json"))
+	if err != nil {
+		t.Fatalf("read settings.json: %v", err)
+	}
+	if !strings.Contains(string(settings), "PreToolUse") {
+		t.Fatalf("settings.json has no PreToolUse hook:\n%s", settings)
+	}
 }
 
 func TestInitWithEditPlugin_CreatesNativeHooks(t *testing.T) {
@@ -224,18 +310,9 @@ func TestInitOpenCodeConfig_Structure(t *testing.T) {
 		t.Fatalf("parse opencode.json: %v\ncontent: %s", err, raw)
 	}
 
-	if cfg.MCP == nil {
-		t.Fatal("opencode.json missing 'mcp' section")
-	}
-	aracEntry, ok := cfg.MCP["aracne"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("opencode.json mcp section missing 'aracne' entry: %+v", cfg.MCP)
-	}
-	if aracEntry["type"] != "local" {
-		t.Fatalf("arac MCP type = %q, want local", aracEntry["type"])
-	}
-	if aracEntry["enabled"] != true {
-		t.Fatal("arac MCP entry not enabled")
+	// The permission block still belongs here on every surface; the MCP server does not.
+	if _, present := cfg.MCP["aracne"]; present {
+		t.Fatalf("terminal surface wrote an MCP server entry: %+v", cfg.MCP)
 	}
 
 	if cfg.Permission == nil {
@@ -260,6 +337,40 @@ func TestInitOpenCodeConfig_Structure(t *testing.T) {
 	if cfg.Permission["aracne_*"] != "deny" {
 		t.Fatalf("permission.aracne_* = %q, want deny", cfg.Permission["aracne_*"])
 	}
+	// On the terminal surface NO aracne_* tool is granted: none is served, and an allow-list
+	// naming tools that do not exist is the same drift in a different file.
+	for key, value := range cfg.Permission {
+		if strings.HasPrefix(key, "aracne_") && key != "aracne_*" && value == "allow" {
+			t.Errorf("terminal surface granted %s, but no MCP tool is served", key)
+		}
+	}
+}
+
+// The same file on the MCP surface: the wildcard deny stays and the granted tools are named.
+func TestInitOpenCodeConfig_MCPSurfaceGrantsItsTools(t *testing.T) {
+	dir := t.TempDir()
+	mustRun(t, dir, "init", "-y", "--mcp")
+
+	raw := readFile(t, dir, ".opencode/opencode.json")
+	var cfg struct {
+		MCP        map[string]map[string]interface{} `json:"mcp"`
+		Permission map[string]interface{}            `json:"permission"`
+	}
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		t.Fatalf("parse opencode.json: %v\ncontent: %s", err, raw)
+	}
+	entry, ok := cfg.MCP["aracne"]
+	if !ok {
+		t.Fatalf("opencode.json mcp section missing the 'aracne' entry: %+v", cfg.MCP)
+	}
+	if entry["type"] != "local" || entry["enabled"] != true {
+		t.Fatalf("aracne MCP entry = %+v, want a local enabled server", entry)
+	}
+	// The aracne_* wildcard deny withholds tools the profile does not grant; the granted ones
+	// are listed individually.
+	if cfg.Permission["aracne_*"] != "deny" {
+		t.Fatalf("permission.aracne_* = %q, want deny", cfg.Permission["aracne_*"])
+	}
 	if cfg.Permission["aracne_warnings_list"] != "allow" {
 		t.Fatalf("permission.aracne_warnings_list = %q, want allow", cfg.Permission["aracne_warnings_list"])
 	}
@@ -272,7 +383,7 @@ func TestInitOpenCodeConfig_Structure(t *testing.T) {
 
 func TestInitClaudeConfig_Structure(t *testing.T) {
 	dir := t.TempDir()
-	mustRun(t, dir, "init", "-y")
+	mustRun(t, dir, "init", "-y", "--mcp")
 
 	raw := readFile(t, dir, ".mcp.json")
 	var cfg struct {

@@ -35,6 +35,9 @@ type State struct {
 	parents  map[string]bool
 	entries  map[string]bool
 	excluded map[string]bool
+	// allowed, when non-nil, is the ONLY set of ids the context section may render. See
+	// RestrictTo.
+	allowed map[string]bool
 
 	bytes   int
 	shown   int
@@ -122,12 +125,46 @@ func (s *State) IsExcluded(id string) bool {
 	return s.excluded[id]
 }
 
+// RestrictTo narrows the CONTEXT section to a specific set of resource ids. Passing nil (the
+// default) restores the unrestricted behaviour.
+//
+// WHY. A windowed read shows a slice of a function, not the function. Its neighbours are the
+// neighbours of the WHOLE declaration, so rendering all of them answers a question the caller
+// did not ask -- `tail -2` on a 200-line function would come back with the context of all 200.
+// The caller computes which resources the shown lines actually mention and passes them here.
+//
+// It is enforced inside Renderable rather than at each call site on purpose: Renderable is
+// already the one check every language's renderer makes, so one condition here filters Go,
+// Python, JS/TS, Rust and Java at once, and a language added later inherits it for free.
+func (s *State) RestrictTo(ids map[string]bool) {
+	if s == nil {
+		return
+	}
+	s.allowed = ids
+}
+
+// permitted reports whether an id survives the RestrictTo filter.
+func (s *State) permitted(id string) bool {
+	if s == nil || s.allowed == nil {
+		return true
+	}
+	return s.allowed[id]
+}
+
 // Renderable reports whether a neighbour with this ID should be rendered in the CONTEXT
-// section: not already shown as source in the body, and not already listed here. It is the
-// single check every render* helper makes, so the two rules cannot drift apart.
+// section: within any active restriction, not already shown as source in the body, and not
+// already listed here. It is the single check every render* helper makes, so the rules cannot
+// drift apart.
+//
+// The restriction is tested BEFORE FirstTime, which has a side effect: marking an id rendered
+// when it was about to be filtered out would suppress it from a later, unrestricted section of
+// the same response.
 func (s *State) Renderable(id string) bool {
 	if s == nil {
 		return true
+	}
+	if !s.permitted(id) {
+		return false
 	}
 	return !s.IsExcluded(id) && s.FirstTime(id)
 }

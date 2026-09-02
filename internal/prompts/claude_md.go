@@ -8,6 +8,55 @@ import (
 	"aracne/internal/toolspec"
 )
 
+// ClaudeMdForConfig renders the contract for the surface this project is actually on.
+//
+// The surface, not the agent, decides the shape: a terminal-only project must never be handed
+// the MCP contract, which spends most of its bytes naming tools that are not in the agent's
+// list -- the single most reliable way to buy a wasted turn. On "both", the MCP contract leads
+// and the terminal behaviour is appended, because there the tools DO exist and the interception
+// is the addition.
+func ClaudeMdForConfig(cfg *helper.Config) string {
+	eff := cfg.EffectiveAgent("claude_code", "main")
+	if !cfg.MCPEnabled() {
+		return TerminalContractContent(cfg)
+	}
+	out := ClaudeMdContentForAgent(eff)
+	if cfg.EffectiveInterceptShell() {
+		out = insertBeforeEnding(out, terminalAlsoSection())
+	}
+	return out
+}
+
+// AgentsMdForConfig is ClaudeMdForConfig for OpenCode.
+func AgentsMdForConfig(cfg *helper.Config) string {
+	eff := cfg.EffectiveAgent("opencode", "main")
+	if !cfg.MCPEnabled() {
+		return TerminalContractContent(cfg)
+	}
+	return AgentsMdContentForAgent(eff)
+}
+
+// terminalAlsoSection is the "both" note: short, because everything else about navigating is
+// already stated above it.
+func terminalAlsoSection() string {
+	return "## Shell reads\n\n" +
+		"`cat`, `head`, `tail`, `sed -n` and `grep` on an indexed file are also answered from " +
+		"the topology -- the lines you asked for, framed by their enclosing declaration, with a " +
+		"`# CONTEXT:` block. **They take a resource ID where they take a path:**\n\n" +
+		"```\nhead -20 app.Flask             # the first 20 lines of the class body\n```\n\n" +
+		"Flags aracne does not model, and files it does not index, run as the plain command.\n\n"
+}
+
+// insertBeforeEnding splices a section in ahead of the closing line, so the contract keeps
+// reading as one document however it was assembled.
+func insertBeforeEnding(doc, section string) string {
+	ending := endingSection()
+	if idx := strings.LastIndex(doc, ending); idx >= 0 {
+		return doc[:idx] + section + doc[idx:]
+	}
+	return doc + section
+}
+
 // Returns CLAUDE.md content tailored to the effective agent configuration for claude_code.
 func ClaudeMdContent() string {
 	return ClaudeMdContentForAgent(helper.DefaultConfig().EffectiveAgent("claude_code", "main"))

@@ -1,3 +1,7 @@
+# HISTORICAL. This config measured the MCP surface (aracne tools behind `arac serve`).
+# The default surface is now terminal-first -- see scale40-fair.yaml. Kept so the runs that
+# cite it (guarded-20260831a, netguard-20260831b, batched-20260901a) stay reproducible.
+#
 # The sizing study: 40 tasks, ONE PER REPOSITORY, across all five languages.
 #
 # Why this shape. The paired analysis clusters on repository, so effective N is the REPO

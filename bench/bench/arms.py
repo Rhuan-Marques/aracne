@@ -22,7 +22,7 @@ from . import fixtures
 from .gitutil import clone_at, ensure_repo_cache
 from .fixtures import ARACNE_ARTIFACTS  # noqa: F401 - re-exported for back-compat
 
-ARMS = ("baseline", "aracne", "aracne-open")
+ARMS = ("baseline", "aracne", "aracne-open", "aracne-noprefer")
 
 
 def is_aracne_arm(arm: str) -> bool:
@@ -90,8 +90,8 @@ def prepare_workdir(arm: str, task, cfg: dict, repos_dir: Path, ephemeral_dir: P
 def background_scanner(arm: str, workdir, cfg: dict):
     """Run `arac scanner run` beside an aracne-arm cell; yield True if it started.
 
-    WHY. The alternative is `read.scan`, which re-indexes on the way into EVERY read and
-    grep -- freshness paid for per call, on the measured path, by the arm under test. The
+    WHY. The alternative is `scan.pre_tool`, which re-indexes on the way into EVERY guarded
+    tool call -- freshness paid for per call, on the measured path, by the arm under test. The
     watcher moves that work off the read path: it polls `scanner.update_frequency` ms and
     incrementally re-scans only what changed. It also covers the mutations the guard cannot
     see: `blocked_tools` classifies a shell command by its command WORD, so `sed -i` is an
@@ -102,7 +102,7 @@ def background_scanner(arm: str, workdir, cfg: dict):
     single difference the aracne package itself.
 
     Best-effort by design: if the watcher cannot start, the cell still runs (reads fall back
-    to whatever read.scan says) and the caller records that it did not, because a freshness
+    to whatever scan.pre_tool says) and the caller records that it did not, because a freshness
     mechanism that silently fails to run is exactly how a benchmark ends up measuring
     nothing. It is NOT detached, so an interrupt to the harness takes it down too, and it is
     always terminated -- a leaked poller would keep rewriting a fixture's topology between

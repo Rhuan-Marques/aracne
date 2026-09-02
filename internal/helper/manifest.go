@@ -43,13 +43,49 @@ func ReadManifest(path string) FileManifest {
 	return m
 }
 
-// Serializes FileManifest to JSON and writes it to disk.
+// WriteManifest serializes a FileManifest to JSON and replaces the file at path with it,
+// atomically: the JSON goes to a temp file in the same directory and is renamed over the
+// destination, so a reader either sees the whole old manifest or the whole new one.
+//
+// WHY ATOMIC. os.WriteFile truncates first and writes second, and this manifest can be tens of
+// megabytes on a large project -- a wide enough window that any interruption in between (a
+// Ctrl-C, a hook whose timeout fires and takes the process with it, an OOM kill) leaves a
+// ZERO-BYTE manifest. That state is silent and self-perpetuating: ReadManifest treats an
+// unparseable file as an empty one, so every later incremental scan sees an empty baseline,
+// re-parses the entire project, notices nothing was deleted, and takes long enough to be
+// interrupted again. This repo's own .aracne sat in exactly that state -- an empty manifest
+// beside a database that had grown to 2.5 GB because no scan ever completed to prune it.
+//
+// A failed rename leaves the previous manifest in place, which is the safe outcome: a stale
+// baseline costs one re-parse of the files it missed, an empty one costs a full scan forever.
 func WriteManifest(m FileManifest, path string) error {
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0644)
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // No-op once the rename succeeds; cleans up every path that fails.
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	// Flushed before the rename, so a crash right after it cannot leave the manifest pointing
+	// at bytes the filesystem has not committed.
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpName, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 // Synchronizes file manifest with current topology, updating timestamps and removing stale entries.

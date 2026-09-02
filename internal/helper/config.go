@@ -21,19 +21,26 @@ const (
 	ScanModeAll     ScanMode = "all"
 )
 
-// ReadScanMode controls whether a topology scan runs before read/grep
-// operations (CLI commands, MCP tools, and viz chat tools). "none" keeps the
-// current behavior (no scan); any other value triggers a scan first:
+// PreToolScanMode controls the topology scan the guard runs BEFORE a tool call
+// -- the PreToolUse hook in Claude Code, the `tool.execute.before` plugin in
+// OpenCode. It is what keeps the graph current for the call that is about to
+// happen, whichever surface that call arrives on.
+//
+// The default is "default": an incremental scan, which diffs the manifest and
+// re-parses only what changed, so the common case (nothing changed since the
+// previous tool call) is a no-op. The heavier modes exist for the same reason
+// `arac scan` has them, not because a hook should normally use them:
+// - "none"    = no scan (nothing keeps the graph fresh between tool calls)
 // - "default" = incremental scan (only changed files)
 // - "full"    = re-scan all files (preserves descriptions)
 // - "hard"    = rebuild from scratch (clears descriptions and bugs)
-type ReadScanMode string
+type PreToolScanMode string
 
 const (
-	ReadScanNone    ReadScanMode = "none"
-	ReadScanDefault ReadScanMode = "default"
-	ReadScanFull    ReadScanMode = "full"
-	ReadScanHard    ReadScanMode = "hard"
+	PreToolScanNone    PreToolScanMode = "none"
+	PreToolScanDefault PreToolScanMode = "default"
+	PreToolScanFull    PreToolScanMode = "full"
+	PreToolScanHard    PreToolScanMode = "hard"
 )
 
 const DefaultDescriptionBatchSize = 5
@@ -41,7 +48,8 @@ const DefaultDescriptionBatchSize = 5
 // InheritsModel is the sentinel a sub-agent uses to copy the main agent's model.
 const InheritsModel = "<inherits>"
 
-// Configuration for the one-shot `arac scan` command, specifying the default scan mode.
+// Configuration for the one-shot `arac scan` command and for the scan the guard
+// runs before each tool call.
 
 type ScanSection struct {
 	// Mode is the default mode for the one-shot `arac scan` command.
@@ -60,6 +68,10 @@ type ScanSection struct {
 	// terminal when the project has more than ProgressFileThreshold files),
 	// "always", or "never". The `--progress` flag overrides this per run.
 	Progress string `json:"progress"`
+	// PreTool is the scan the guard runs before every tool call it sees --
+	// Claude Code's PreToolUse hook and OpenCode's `tool.execute.before`
+	// plugin. Absent means "default" (incremental); see PreToolScanMode.
+	PreTool PreToolScanMode `json:"pre_tool"`
 }
 
 // ProgressFileThreshold is the file count above which an "auto" scan progress
@@ -73,10 +85,9 @@ const (
 	ProgressNever  = "never"
 )
 
-// Configuration for file read operations, including max file size, scan mode, context filtering, and shell command passthrough behavior.
+// Configuration for file read operations, including max file size, context filtering, and shell command passthrough behavior.
 type ReadSection struct {
-	MaxFileSize int64        `json:"max_file_size"`
-	Scan        ReadScanMode `json:"scan"`
+	MaxFileSize int64 `json:"max_file_size"`
 	// Kinds is the global allow-list of resource kinds the `read` tool will return.
 	//
 	// This replaced the per-agent read_function/read_struct/read_interface/... tool lists.
@@ -288,6 +299,78 @@ type FeaturesSection struct {
 	BugManagement bool `json:"bug_management"`
 }
 
+// Identification modes for Config.IdentificationMode.
+const (
+	// IdentifyLineRange addresses a resource the way the model already addresses code: by
+	// path and line span. It is the default.
+	IdentifyLineRange = "line_range"
+	// IdentifyID addresses a resource by its topology ID, which is what every surface did
+	// before this key existed.
+	IdentifyID = "id"
+)
+
+// Integration modes for IntegrationSection.Mode.
+const (
+	// IntegrationTerminal is the default: aracne reaches the agent by enriching the shell
+	// commands it already runs. `arac init` writes no MCP server.
+	IntegrationTerminal = "terminal"
+	// IntegrationMCP is the previous default: capabilities arrive as MCP tools.
+	IntegrationMCP = "mcp"
+	// IntegrationBoth serves both surfaces at once.
+	IntegrationBoth = "both"
+)
+
+// IntegrationSection selects HOW aracne reaches an agent.
+//
+// WHY THIS IS A MODE AND NOT A FLAG. The two surfaces are not additive by default: an MCP
+// `read` tool and an intercepted `cat` answer the same question, and offering both makes the
+// model choose -- which costs a tool-schema block on every request to advertise a capability
+// the terminal already has. Every artifact `arac init` writes (the MCP server entry, the
+// permission allow-list, the contract in CLAUDE.md) is derived from this one field so the
+// three can never disagree.
+//
+// ABSENT MEANS "terminal". That is a deliberate breaking default: a project upgrading across
+// this change and re-running `arac init` loses its MCP server entry unless it says
+// "mcp"/"both". `arac init` prints that plainly rather than doing it silently.
+type IntegrationSection struct {
+	Mode string `json:"mode"`
+}
+
+// TerminalSection tunes the terminal surface: which shell commands aracne answers, and how
+// much it is allowed to say in reply.
+type TerminalSection struct {
+	// Intercept is the master switch. Off, the guard never rewrites a command and the whole
+	// feature is inert -- the shipped escape hatch for a project that wants the topology
+	// without the interception.
+	Intercept *bool `json:"intercept"`
+	// EnhanceFiles decides Case 1: a read of a file the topology KNOWS. Off, such a read is
+	// served by the plain command, exactly as a read of an unindexed file already is.
+	EnhanceFiles *bool `json:"enhance_files"`
+	// EnhanceResources decides Case 2: whether a resource ID may stand where a path does
+	// (`head -20 app.Flask`).
+	EnhanceResources *bool `json:"enhance_resources"`
+	// Grep decides whether shell searches are answered by the topology-annotated grep.
+	Grep *bool `json:"grep"`
+	// PreferResourceIDs controls ONE sentence of the generated contract: the line telling the
+	// model to prefer a resource ID over a path.
+	//
+	// It exists to be A/B'd rather than argued about. The advice is plausible -- an ID is a
+	// narrower question and its answer carries the neighbours' descriptions -- but measured on
+	// the clap fixture a resource read is 3,159 bytes against 1,663 for a line window, so on
+	// bytes alone it points at the more expensive shape. Whether the context it buys removes
+	// enough follow-up reads to pay for that is a question about model behaviour, which no
+	// amount of reading the renderer can settle. Absent means the default (true, the shipped
+	// wording); the two arms of bench/configs/run/ab-prefer-ids.yaml differ in this key alone.
+	PreferResourceIDs *bool `json:"prefer_resource_ids"`
+	// MaxOverserve bounds the answer against what was asked for: past this multiple of the
+	// raw bytes the command would have printed, aracne runs the real command instead.
+	//
+	// It is the same trade guard_proxy.go makes, for the same reason. A window is a narrow
+	// question, and an answer disproportionate to it is not a cheaper read -- it is a way to
+	// spend the context window on one `head -1`. 0 or negative disables the check.
+	MaxOverserve *int `json:"max_overserve"`
+}
+
 // Root configuration struct holding scan, read, scanner, descriptions, LLM, and viz settings.
 type Config struct {
 	Scan         ScanSection         `json:"scan"`
@@ -298,6 +381,18 @@ type Config struct {
 	LLM          LLMSection          `json:"llm"`
 	Viz          VizSection          `json:"viz"`
 	Features     FeaturesSection     `json:"features"`
+	Integration  IntegrationSection  `json:"integration"`
+	Terminal     TerminalSection     `json:"terminal"`
+	// IdentificationMode decides how every surface NAMES a resource to the model: by
+	// topology ID, or by the path and line span the model already uses to address code.
+	//
+	// WHY THIS IS A MODE AND NOT A PREFERENCE. Measured over ab-prefer-ids-20260902a, the
+	// model used a resource ID as a command operand 0 times in 408 shell commands -- with
+	// the contract asking it to, and with intercepted greps printing the IDs above every
+	// hit. In the same run every one of those 408 commands addressed code as file+line.
+	// A resource ID is aracne's vocabulary; a line range is the shell's. Absent means
+	// line_range: the evidence for the ID form is a run of zeros.
+	IdentificationMode string `json:"identification_mode"`
 	// Paths marks directories/files (relative to the topology root) as hidden or
 	// visible. Hidden paths are skipped by the indexing and scan stages in every
 	// mode (default/all/hard). More specific (more internal) rules win, so a
@@ -313,25 +408,29 @@ func (c *Config) EffectiveMaxFileSize() int64 {
 	return c.Read.MaxFileSize
 }
 
-// normalizeReadScan coerces a raw read.scan string to a known ReadScanMode,
-// defaulting to ReadScanNone (which preserves the no-scan behavior).
-func normalizeReadScan(s string) ReadScanMode {
-	switch ReadScanMode(strings.ToLower(strings.TrimSpace(s))) {
-	case ReadScanDefault:
-		return ReadScanDefault
-	case ReadScanFull:
-		return ReadScanFull
-	case ReadScanHard:
-		return ReadScanHard
+// normalizePreToolScan coerces a raw scan.pre_tool string to a known
+// PreToolScanMode. Absent or unrecognized resolves to PreToolScanDefault: the
+// incremental scan is the behavior a project gets without asking, and it is
+// cheap enough to be the safe answer to a typo. "none" has to be spelled
+// correctly to switch the freshness guarantee off.
+func normalizePreToolScan(s string) PreToolScanMode {
+	switch PreToolScanMode(strings.ToLower(strings.TrimSpace(s))) {
+	case PreToolScanNone:
+		return PreToolScanNone
+	case PreToolScanFull:
+		return PreToolScanFull
+	case PreToolScanHard:
+		return PreToolScanHard
 	default:
-		return ReadScanNone
+		return PreToolScanDefault
 	}
 }
 
-// EffectiveReadScan resolves read.scan, defaulting to ReadScanNone. A non-none
-// value asks read/grep entry points to run a scan before serving results.
-func (c *Config) EffectiveReadScan() ReadScanMode {
-	return normalizeReadScan(string(c.Read.Scan))
+// EffectivePreToolScan resolves scan.pre_tool, defaulting to
+// PreToolScanDefault. A non-none value asks the guard to scan before the tool
+// call it is about to let through.
+func (c *Config) EffectivePreToolScan() PreToolScanMode {
+	return normalizePreToolScan(string(c.Scan.PreTool))
 }
 
 // EffectivePipePassthrough reports whether the tool guard should treat a
@@ -391,9 +490,28 @@ const (
 )
 
 // EffectiveFileMode resolves read.file_mode, defaulting to "full" for anything unrecognized
-// so a typo degrades to today's behaviour rather than to a surprising one.
+// so a typo degrades to today's behaviour rather than to a surprising one -- EXCEPT on the
+// terminal surface, where an unset value means "skeleton".
+//
+// WHY THE SURFACE CHANGES THE DEFAULT. Skeleton mode is opt-in on the MCP surface because a
+// model that has only seen signatures must not build an `edit` old_string from them, and that
+// risk was worth measuring first. On the terminal surface the same setting stops being an
+// experiment and becomes a correctness matter: `cat f` is a command the model ALREADY runs,
+// and answering it with the file verbatim plus a context block is strictly more expensive than
+// the `cat` it replaced. Measured on the clap fixture, a whole-file read is 0.21x the bytes of
+// `cat` under skeleton and above 1.0x under full -- so on this surface "full" makes aracne
+// worse than doing nothing, for the one shape it should win most easily.
+//
+// The edit risk is answered here rather than dodged: every byte a skeleton shows is verbatim
+// file text, and everything omitted carries an elision marker naming the id to read.
 func (c *Config) EffectiveFileMode() string {
-	if strings.ToLower(strings.TrimSpace(c.Read.FileMode)) == FileModeSkeleton {
+	switch strings.ToLower(strings.TrimSpace(c.Read.FileMode)) {
+	case FileModeSkeleton:
+		return FileModeSkeleton
+	case FileModeFull:
+		return FileModeFull
+	}
+	if c.TerminalEnabled() {
 		return FileModeSkeleton
 	}
 	return FileModeFull
@@ -546,6 +664,16 @@ func ConfigPath(dbPath string) string {
 func (c *Config) Validate() error {
 	if err := ValidateReadKinds(c.Read.Kinds); err != nil {
 		return fmt.Errorf("read.kinds: %w", err)
+	}
+	switch c.Integration.Mode {
+	case "", IntegrationTerminal, IntegrationMCP, IntegrationBoth:
+	default:
+		return fmt.Errorf("integration.mode: unknown mode %q (want terminal, mcp or both)", c.Integration.Mode)
+	}
+	switch strings.ToLower(strings.TrimSpace(c.IdentificationMode)) {
+	case "", IdentifyLineRange, IdentifyID:
+	default:
+		return fmt.Errorf("identification_mode: unknown mode %q (want line_range or id)", c.IdentificationMode)
 	}
 	checkAgent := func(path string, mcpTools, blockedTools []string) error {
 		if err := toolspec.ValidateMCPTools(mcpTools); err != nil {
@@ -753,11 +881,21 @@ func DefaultConfig() *Config {
 		return ac
 	}
 	return &Config{
-		Scan:  ScanSection{Mode: ScanModeDefault, Ignore: []string{}, Workers: 0, Progress: ProgressAuto},
+		Scan:  ScanSection{Mode: ScanModeDefault, Ignore: []string{}, Workers: 0, Progress: ProgressAuto, PreTool: PreToolScanDefault},
 		Paths: []domain.PathRule{},
+		// The terminal is the default surface; see IntegrationSection.
+		Integration:        IntegrationSection{Mode: IntegrationTerminal},
+		IdentificationMode: IdentifyLineRange,
+		Terminal: TerminalSection{
+			Intercept:         boolPtr(true),
+			EnhanceFiles:      boolPtr(true),
+			EnhanceResources:  boolPtr(true),
+			Grep:              boolPtr(true),
+			PreferResourceIDs: boolPtr(true),
+			MaxOverserve:      intPtr(DefaultTerminalMaxOverserve),
+		},
 		Read: ReadSection{
 			MaxFileSize:     512 * 1024,
-			Scan:            ReadScanNone,
 			Kinds:           DefaultReadKinds(),
 			PipePassthrough: boolPtr(true),
 			ContextFilter: ContextFilterSection{
@@ -937,7 +1075,101 @@ func validConfig(c *Config) bool {
 		// the one edit a user makes by hand. Without this line the file decodes to all-zero
 		// sentinels, is judged legacy, and EnsureConfig overwrites it with defaults -- so
 		// enabling the feature would silently turn it back off.
-		c.Features.BugManagement
+		c.Features.BugManagement ||
+		// Same reasoning for the terminal surface: `{"integration":{"mode":"mcp"}}` is a
+		// legitimate hand-written file, and treating it as legacy would overwrite it with
+		// defaults -- silently putting the project back on the mode it just opted out of.
+		c.Integration.Mode != "" ||
+		c.IdentificationMode != "" ||
+		c.Terminal.Intercept != nil
+}
+
+// Terminal-surface defaults. Interception ships ON: it is the product, and every branch it
+// takes is either an aracne answer or the command the caller typed.
+const (
+	// DefaultTerminalMaxOverserve mirrors guard_proxy.go's proxyOverServeFactor, which was
+	// calibrated against real runs rather than picked.
+	DefaultTerminalMaxOverserve = 4
+)
+
+// EffectiveIntegrationMode returns the configured surface, defaulting to terminal and
+// normalizing anything unrecognized to it rather than failing -- an unreadable mode must not
+// leave a project with no surface at all.
+func (c *Config) EffectiveIntegrationMode() string {
+	switch c.Integration.Mode {
+	case IntegrationMCP, IntegrationBoth, IntegrationTerminal:
+		return c.Integration.Mode
+	}
+	return IntegrationTerminal
+}
+
+// TerminalEnabled reports whether the terminal surface is served at all.
+func (c *Config) TerminalEnabled() bool {
+	m := c.EffectiveIntegrationMode()
+	return m == IntegrationTerminal || m == IntegrationBoth
+}
+
+// MCPEnabled reports whether `arac init` should wire the MCP server.
+func (c *Config) MCPEnabled() bool {
+	m := c.EffectiveIntegrationMode()
+	return m == IntegrationMCP || m == IntegrationBoth
+}
+
+// EffectiveInterceptShell reports whether the guard may rewrite a shell command. It folds in
+// the integration mode, so `mode: "mcp"` never intercepts however the terminal block reads.
+func (c *Config) EffectiveInterceptShell() bool {
+	return c.TerminalEnabled() && boolOr(c.Terminal.Intercept, true)
+}
+
+// EffectiveEnhanceFiles reports whether a read of a TRACKED file is answered by aracne.
+func (c *Config) EffectiveEnhanceFiles() bool { return boolOr(c.Terminal.EnhanceFiles, true) }
+
+// EffectiveEnhanceResources reports whether a resource ID may stand where a path does.
+func (c *Config) EffectiveEnhanceResources() bool {
+	return boolOr(c.Terminal.EnhanceResources, true)
+}
+
+// EffectiveIdentificationMode resolves how resources are named, defaulting to line_range and
+// normalizing anything unrecognized to it rather than failing.
+func (c *Config) EffectiveIdentificationMode() string {
+	if strings.ToLower(strings.TrimSpace(c.IdentificationMode)) == IdentifyID {
+		return IdentifyID
+	}
+	return IdentifyLineRange
+}
+
+// LineRangeIdentification reports whether resources are named by path and line span. Every
+// consumer reads the mode through this, so the two spellings cannot drift apart.
+func (c *Config) LineRangeIdentification() bool {
+	return c.EffectiveIdentificationMode() == IdentifyLineRange
+}
+
+// EffectiveTerminalGrep reports whether shell searches are answered by the annotated grep.
+func (c *Config) EffectiveTerminalGrep() bool { return boolOr(c.Terminal.Grep, true) }
+
+// EffectivePreferResourceIDs reports whether the contract should steer toward resource IDs.
+func (c *Config) EffectivePreferResourceIDs() bool {
+	return boolOr(c.Terminal.PreferResourceIDs, true)
+}
+
+// EffectiveTerminalMaxOverserve returns the over-serve factor; 0 means "no ceiling".
+func (c *Config) EffectiveTerminalMaxOverserve() int {
+	if c.Terminal.MaxOverserve == nil {
+		return DefaultTerminalMaxOverserve
+	}
+	if *c.Terminal.MaxOverserve < 0 {
+		return 0
+	}
+	return *c.Terminal.MaxOverserve
+}
+
+// boolOr reads an optional bool with a default, so an absent key and an explicit `false` stay
+// distinguishable in the JSON.
+func boolOr(p *bool, def bool) bool {
+	if p == nil {
+		return def
+	}
+	return *p
 }
 
 // BugManagementEnabled reports whether the bug pipeline is turned on for this project.
@@ -947,6 +1179,19 @@ func (c *Config) BugManagementEnabled() bool { return c.Features.BugManagement }
 
 func normalizeConfig(c *Config) {
 	// Applies defaults to config fields for scan modes, file limits, visibility filters, descriptions, optimization rules, and LLM agents.
+	switch strings.ToLower(strings.TrimSpace(c.IdentificationMode)) {
+	case IdentifyLineRange, IdentifyID:
+		c.IdentificationMode = strings.ToLower(strings.TrimSpace(c.IdentificationMode))
+	default:
+		c.IdentificationMode = IdentifyLineRange
+	}
+	switch c.Integration.Mode {
+	case IntegrationTerminal, IntegrationMCP, IntegrationBoth:
+	default:
+		// Absent or unrecognized resolves to the default surface, and is stamped so a
+		// re-saved config says which surface it is on rather than leaving it implicit.
+		c.Integration.Mode = IntegrationTerminal
+	}
 	switch c.Scan.Mode {
 	case ScanModeDefault, ScanModeHard, ScanModeAll:
 	default:
@@ -963,7 +1208,7 @@ func normalizeConfig(c *Config) {
 	if c.Read.MaxFileSize <= 0 {
 		c.Read.MaxFileSize = 512 * 1024
 	}
-	c.Read.Scan = normalizeReadScan(string(c.Read.Scan))
+	c.Scan.PreTool = normalizePreToolScan(string(c.Scan.PreTool))
 	c.Read.ContextFilter.ExternalVarsVisibility = normalizeVisibility(c.Read.ContextFilter.ExternalVarsVisibility)
 	c.Read.ContextFilter.SmallFunctionsVisibility = normalizeVisibility(c.Read.ContextFilter.SmallFunctionsVisibility)
 	if c.Read.Kinds == nil {

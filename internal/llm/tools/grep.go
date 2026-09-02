@@ -83,7 +83,7 @@ func (g *Grep) Run(args json.RawMessage) (string, error) {
 		Before:     params.Before,
 		After:      params.After,
 	}
-	opt.Ignore, opt.DescriptionKinds = grepConfig(g.mgr, topo)
+	opt.Ignore, opt.DescriptionKinds, opt.LineRange = grepConfig(g.mgr, topo)
 	if params.HeadLimit != nil {
 		opt.HeadLimit = *params.HeadLimit
 	}
@@ -105,17 +105,18 @@ func (g *Grep) Run(args json.RawMessage) (string, error) {
 // A nil kind slice means "not configured" and lets topogrep apply its defaults, so a
 // missing or unreadable config still gets description matching rather than silently
 // losing it.
-func grepConfig(mgr *topology.TopologyManager, topo *domain.Topology) (*domain.IgnoreMatcher, []domain.ResourceKind) {
+func grepConfig(mgr *topology.TopologyManager, topo *domain.Topology) (*domain.IgnoreMatcher, []domain.ResourceKind, bool) {
 	cfg := helper.LoadConfig(helper.ConfigPath(mgr.DbPath()))
 	if cfg == nil {
-		return nil, nil
+		return nil, nil, false
 	}
 	root := ""
 	if topo != nil {
 		root = topo.Root
 	}
 	if root == "" {
-		return nil, cfg.Grep.DescriptionKinds
+		return nil, cfg.Grep.DescriptionKinds, cfg.LineRangeIdentification()
 	}
-	return domain.BuildIgnoreMatcher(root, cfg.Scan.Ignore), cfg.Grep.DescriptionKinds
+	return domain.BuildIgnoreMatcher(root, cfg.Scan.Ignore), cfg.Grep.DescriptionKinds,
+		cfg.LineRangeIdentification()
 }

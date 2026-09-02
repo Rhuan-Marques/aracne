@@ -46,3 +46,13 @@ grade_timeout_s: 7200
 grade_stall_timeout_s: 1800
 
 ni_margin: 0.10         # correctness guardrail beside the efficiency claim
+
+# The aracne arm runs the TERMINAL surface: no MCP server, and the guard rewrites the shell
+# reads and searches the model already issues into `arac cmd`, which answers them from the
+# topology. See bench/configs/aracne/README.md.
+#
+# This makes the arm incomparable with any run before the switch (guarded-20260831a,
+# netguard-20260831b, batched-20260901a, fair-20260901a all measured the MCP surface). Do not
+# import a control or an aracne arm across that line -- re-measure both.
+arm_aracne_config:
+  aracne: terminal-first

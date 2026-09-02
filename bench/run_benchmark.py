@@ -1551,8 +1551,12 @@ def cmd_rescore(cfg: dict) -> int:
         # The run's OWN config decides which languages/arms its rows are grouped under; the
         # ambient config here is only carrying rescore flags.
         snap = meta.get("config") or {}
+        # `ab_arms` belongs here for the same reason as `arms`: it is a property of the RUN
+        # (which two arms it set out to compare), not a rescore flag. Left out, a rescore of an
+        # A/B run drops `paired_ab` from results.json without saying so, and the comparison the
+        # run existed to make silently disappears from its own output.
         for key in ("samples", "languages", "seeds", "sample_seed", "arms", "run_harness",
-                    "model", "effort", "max_turns", "sample_id"):
+                    "model", "effort", "max_turns", "sample_id", "ab_arms"):
             if key in snap:
                 cfg[key] = snap[key]
 

@@ -151,3 +151,144 @@ def test_unknown_tool_use_id_does_not_crash():
     stats, _ = toolstats.summarize(stream)
     assert stats["tool_result_bytes"]["?"] == 5
     assert stats["n_tool_calls"] == 0
+
+
+def _bash(tid, command):
+    return json.dumps({
+        "type": "assistant",
+        "message": {"content": [
+            {"type": "tool_use", "id": tid, "name": "Bash", "input": {"command": command}},
+        ]},
+    })
+
+
+def test_terminal_surface_is_visible_on_the_row():
+    """The terminal arm delivers aracne through Bash, so every name-keyed counter reads it as
+    a plain baseline. Without these two the report cannot tell a terminal arm from the control.
+    """
+    transcript = "\n".join([
+        _bash("1", "/usr/local/bin/arac cmd -- head -20 pkg/shapes.go"),
+        _result("1", "```pkg/shapes.go\nfunc Total() {}\n```\n\n# CONTEXT:\n## pkg.Shape: a shape\n"),
+        _bash("2", "go test ./..."),
+        _result("2", "ok  \tdemo\t0.1s\n"),
+    ]) + "\n"
+
+    stats, _ = toolstats.summarize(transcript, "org/repo")
+    assert stats["n_intercepted"] == 1, "an intercepted read must be counted"
+    assert stats["terminal_result_bytes"] > 0
+    assert stats["n_mcp_calls"] == 0, "the terminal surface serves no MCP tools"
+    row = toolstats.row_fields(stats)
+    assert "n_intercepted" in row and "terminal_result_bytes" in row
+
+
+def test_an_intercepted_call_counts_once_from_either_signature():
+    """The call form and the result form are two views of one exchange.
+
+    It is not settled whether a transcript records a Bash call's input before or after a
+    PreToolUse hook rewrites it, so both are matched -- and a transcript carrying both must
+    not double-count.
+    """
+    both = "\n".join([
+        _bash("1", "arac cmd -- tail -5 pkg/shapes.go"),
+        _result("1", "```pkg/shapes.go\nx\n```\n\n# CONTEXT:\n## pkg.Y: y\n"),
+    ]) + "\n"
+    call_only = "\n".join([
+        _bash("1", "arac cmd -- tail -5 pkg/shapes.go"),
+        _result("1", "x\n"),
+    ]) + "\n"
+    result_only = "\n".join([
+        _bash("1", "tail -5 pkg/shapes.go"),
+        _result("1", "```pkg/shapes.go\nx\n```\n\n# CONTEXT:\n## pkg.Y: y\n"),
+    ]) + "\n"
+
+    for label, transcript in (("both", both), ("call", call_only), ("result", result_only)):
+        stats, _ = toolstats.summarize(transcript, "org/repo")
+        assert stats["n_intercepted"] == 1, f"{label}: got {stats['n_intercepted']}"
+
+
+def test_an_ordinary_shell_command_is_not_counted_as_intercepted():
+    transcript = "\n".join([
+        _bash("1", "grep -rn TODO ."),
+        _result("1", "app.go:3:// TODO\n"),
+    ]) + "\n"
+    stats, _ = toolstats.summarize(transcript, "org/repo")
+    assert stats["n_intercepted"] == 0
+    assert stats["terminal_result_bytes"] == 0
+
+
+def test_an_enriched_answer_with_no_context_block_still_counts():
+    """The exact shape a live session produced, and the one that broke the first version.
+
+    `tail -4` on a function whose neighbours are all undocumented comes back framed by its
+    signature and an elision marker, with NO `# CONTEXT:` section at all. Keying interception
+    on the context block alone scored that run as zero interceptions while every read in it had
+    in fact been answered by aracne.
+
+    Note the tool_use input: it is the command the MODEL typed. A PreToolUse hook's
+    `updatedInput` changes what runs, not what the transcript records, so the call side cannot
+    be relied on.
+    """
+    result = (
+        "```pkg/shapes.go\n"
+        "func Total(shapes []Shape) float64 {\n"
+        "⋯ demo/pkg.Total not shown here (2 lines before this window) — "
+        'read "demo/pkg.Total" for its source ⋯\n'
+        "\t\tsum += s.Area()\n\t}\n\treturn sum\n}\n```\n"
+    )
+    transcript = "\n".join([
+        _bash("1", "tail -4 pkg/shapes.go"),
+        _result("1", result),
+    ]) + "\n"
+
+    stats, _ = toolstats.summarize(transcript, "org/repo")
+    assert stats["n_intercepted"] == 1, "an enriched answer without a context block must count"
+    assert stats["terminal_result_bytes"] > 0
+    assert stats["shell_read_result_bytes"] > 0, "and it is discovery cost, counted as such"
+
+
+def test_a_real_cat_is_not_mistaken_for_an_enriched_answer():
+    """The counters must not turn plain shell output into evidence of interception."""
+    transcript = "\n".join([
+        _bash("1", "cat NOTES.md"),
+        _result("1", "alpha\nbeta\ngamma\n"),
+        _bash("2", "grep -rn TODO ."),
+        _result("2", "app.go:3:// TODO\napp.go:9:// TODO\n"),
+    ]) + "\n"
+    stats, _ = toolstats.summarize(transcript, "org/repo")
+    assert stats["n_intercepted"] == 0
+    assert stats["terminal_result_bytes"] == 0
+    # Both are still discovery, and both are still counted as such.
+    assert stats["shell_read_result_bytes"] > 0
+    assert stats["shell_grep_result_bytes"] > 0
+
+
+def test_a_package_download_counts_as_reaching_outside_the_worktree():
+    """The gap that cost a result in linerange-20260902a.
+
+    That run's seaborn cell ran `pip download seaborn==0.13.2`, unzipped the wheel and diffed
+    the released module against the checkout, then patched the region the diff pointed at. A
+    later release of the package under test contains the fix, so this is the answer key
+    arriving through the package registry. The cell recorded n_network_calls=0 because the
+    pattern only knew about curl/wget/gh/git, and the solve was credited to aracne.
+    """
+    transcript = "\n".join([
+        _bash("1", "pip download seaborn==0.13.2 -d /tmp/sb --no-deps"),
+        _result("1", "Saved /tmp/sb/seaborn-0.13.2-py3-none-any.whl\n"),
+    ]) + "\n"
+    stats, _ = toolstats.summarize(transcript, "mwaskom/seaborn")
+    assert stats["n_network_calls"] == 1, "a pinned package download reaches outside the worktree"
+
+
+def test_ordinary_environment_setup_is_not_a_network_signal():
+    """The counter is only useful if it stays quiet for what nearly every cell does.
+
+    Installing a requirements file or unpinned dependencies is how a cell gets a runnable
+    environment; counting it would make n_network_calls fire everywhere and mean nothing.
+    """
+    for cmd in ("pip install -r requirements.txt",
+                "npm ci",
+                "pip install matplotlib pandas numpy",
+                "cargo build --all-features"):
+        transcript = _bash("1", cmd) + "\n" + _result("1", "ok\n") + "\n"
+        stats, _ = toolstats.summarize(transcript, "org/repo")
+        assert stats["n_network_calls"] == 0, f"{cmd!r} should not count as reaching outside"

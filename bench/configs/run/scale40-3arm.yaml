@@ -1,3 +1,6 @@
+# HISTORICAL. Three arms on the MCP surface. The default surface is now terminal-first --
+# see scale40-fair.yaml. Kept so the runs that cite it stay reproducible.
+#
 # The three-arm sizing study: the same 40 tasks as `scale40`, run under a control and TWO
 # aracne arms.
 #

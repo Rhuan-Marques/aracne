@@ -1,6 +1,7 @@
 package tests_test
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -54,7 +55,13 @@ const grepBlowupBudget = 1.5
 // proportionally large. The same measurement over real code (cli/cli, shipped default
 // config) is ~1.66x. The budget is therefore set for THIS corpus with modest headroom: it
 // is a regression tripwire, not a target. If you tighten the renderer, lower it.
-const readBudget = 3.0
+//
+// RAISED 3.0 -> 3.5 when identification_mode "line_range" became the default. Naming each
+// context entry by its span costs a FIXED ~25 bytes per entry: measured at +692 bytes over
+// these ten reads, 2.90x -> 3.38x (+16.5%). A fixed cost against this corpus's ~145-byte
+// functions is the worst case there is; against the real-code denominator above the same
+// bytes are ~1.6%. Recalibrated rather than removed -- it still catches a runaway renderer.
+const readBudget = 3.5
 
 // scanCorpus scans a copy of testing_ground/go and returns its directory.
 func scanCorpus(t *testing.T) string {
@@ -234,4 +241,57 @@ func tail(s string, n int) string {
 		return s
 	}
 	return "..." + s[len(s)-n:]
+}
+
+// terminalWindowBudget is the ceiling on an intercepted windowed read, as a multiple of the
+// bytes the plain command would have printed.
+//
+// WHY IT NEEDS ITS OWN NUMBER. readBudget above measures a RESOURCE read against the resource's
+// source span, where 2-3x is the price of the context block. A window is a much smaller
+// denominator -- `tail -2` asks for two lines -- so the same ratio would be meaningless: the
+// enclosing signature alone can exceed it. What must hold instead is the thing the surface is
+// for: asking for a slice must cost dramatically less than asking for the file. This is set
+// against the WHOLE FILE, which is what `cat` would have cost and what the old guard proxy
+// actually returned (measured at 5.8x the request on average, 41.9x at worst -- the regression
+// that made a window-aware answer necessary in the first place).
+const terminalWindowBudget = 0.5
+
+// A windowed read must be a window. The failure this pins is not hypothetical: mapping a line
+// range to the resources covering it and reading those whole -- which is what the read tool
+// does for a `file.go:10-20` id -- returns the enclosing declaration entire, and for a small
+// window inside a large function that is most of the file.
+func TestInterceptedWindowIsCheaperThanTheFile(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "go.mod"), "module big\n\ngo 1.21\n")
+
+	// One long function, so a two-line window sits deep inside a single declaration -- the
+	// shape where "read the covering resource" and "read the window" diverge most.
+	var body strings.Builder
+	body.WriteString("package big\n\n// Grow appends many lines.\nfunc Grow() int {\n\tn := 0\n")
+	for i := 0; i < 400; i++ {
+		fmt.Fprintf(&body, "\tn += %d // filler line %d\n", i, i)
+	}
+	body.WriteString("\treturn n\n}\n")
+	writeFile(t, filepath.Join(root, "big.go"), body.String())
+
+	mustRun(t, root, "scan", "--hard", "--root", ".", "--output", ".aracne/topology.db")
+
+	onDisk, err := os.ReadFile(filepath.Join(root, "big.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, argv := range [][]string{
+		{"tail", "-2", "big.go"},
+		{"head", "-6", "big.go"},
+		{"sed", "-n", "200,205p", "big.go"},
+	} {
+		out := mustRun(t, root, append([]string{"cmd", "--"}, argv...)...)
+		ratio := float64(len(out)) / float64(len(onDisk))
+		if ratio > terminalWindowBudget {
+			t.Errorf("`%s` returned %d bytes against a %d-byte file = %.2fx, budget %.2fx\n%s",
+				strings.Join(argv, " "), len(out), len(onDisk), ratio, terminalWindowBudget, out)
+			continue
+		}
+		t.Logf("`%s`: %d bytes, %.3fx the file", strings.Join(argv, " "), len(out), ratio)
+	}
 }

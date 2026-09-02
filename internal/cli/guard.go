@@ -7,21 +7,40 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"aracne/internal/helper"
 	"aracne/internal/toolspec"
 )
 
-// RunGuard is the `arac guard` entry point. It only supports the Claude Code
-// PreToolUse/PostToolUse hook invocation (`--claude-hook`), which reads the
-// hook event JSON on stdin and writes a decision on stdout.
+// RunGuard is the `arac guard` entry point. It supports the Claude Code
+// PreToolUse/PostToolUse hook invocation (`--claude-hook`), which reads the hook
+// event JSON on stdin and writes a decision on stdout, and `--pre-scan`, the
+// bare scan.pre_tool scan for harnesses whose plugin API hands the guard no
+// event -- OpenCode's `tool.execute.before`, which needs the freshness half of
+// the hook and has no decision to make.
 func RunGuard(args []string) {
-	if len(args) == 1 && args[0] == "--claude-hook" {
-		runClaudeGuardHook(os.Stdin, os.Stdout)
-		return
+	if len(args) == 1 {
+		switch args[0] {
+		case "--claude-hook":
+			runClaudeGuardHook(os.Stdin, os.Stdout)
+			return
+		case "--pre-scan":
+			runPreToolScanCommand()
+			return
+		}
 	}
-	fmt.Fprintln(os.Stderr, "Usage: arac guard --claude-hook")
+	fmt.Fprintln(os.Stderr, "Usage: arac guard --claude-hook | arac guard --pre-scan")
 	os.Exit(1)
+}
+
+// runPreToolScanCommand runs the configured pre-tool scan against the project the working
+// directory belongs to. It prints nothing and always exits 0: the caller is a plugin running
+// in front of an agent's tool call, and a scan that failed must not turn into a tool call that
+// failed.
+func runPreToolScanCommand() {
+	dbPath := guardDBPath("")
+	preToolScan(dbPath, helper.LoadConfig(helper.ConfigPath(dbPath)))
 }
 
 // runClaudeGuardHook reads a Claude Code hook event and either blocks the call
@@ -52,10 +71,35 @@ func runClaudeGuardHook(input io.Reader, output io.Writer) {
 	}
 
 	dbPath := guardDBPath(event.Cwd)
+	cfg := helper.LoadConfig(helper.ConfigPath(dbPath))
 	blocked, exemptPiped := loadGuardConfig(dbPath)
 	switch event.HookEventName {
 	case "PreToolUse":
-		if d := decideGuard(event.ToolName, event.ToolInput, blocked, exemptPiped, dbPath); d.Deny {
+		// Freshness first: everything below reads the topology -- interception asks whether
+		// the target is indexed, a proxied read serves its spans -- and answering from a
+		// stale graph is worse than not answering at all. A no-op when scan.pre_tool is
+		// "none", and an incremental diff otherwise.
+		preToolScan(dbPath, cfg)
+		// Interception comes first, and takes precedence over any denial the same command
+		// would have earned. A rewrite gives the model the aracne answer in the call it
+		// already made; a denial gives it a pointer and costs it another turn. When both
+		// could apply, the cheaper one wins.
+		if event.ToolName == "Bash" {
+			if command, _ := event.ToolInput["command"].(string); command != "" {
+				if rewritten, ok := interceptCommand(command, dbPath, cfg); ok {
+					emitPreToolRewrite(output, event.ToolInput, rewritten)
+					return
+				}
+			}
+		}
+		// blocked_tools stays a working knob on BOTH surfaces. What changes is where the
+		// refusal SENDS the model: naming `mcp__aracne__…` to an agent with no MCP server is
+		// the one failure mode guaranteed to cost a turn, so on the terminal surface the
+		// reason names the shell forms aracne does answer and the `arac` subcommands behind
+		// them. A denial reached here has already survived interception, which means aracne
+		// could not serve the command as written -- so telling the model which spelling it
+		// CAN serve is the whole value of the refusal.
+		if d := decideGuard(event.ToolName, event.ToolInput, blocked, exemptPiped, dbPath, !cfg.MCPEnabled()); d.Deny {
 			emitPreToolDeny(output, d.Message)
 		}
 		// Note: decideGuard already folded in the proxied content when it could, so the
@@ -63,8 +107,16 @@ func runClaudeGuardHook(input io.Reader, output io.Writer) {
 	case "PostToolUse":
 		keys := implicatedKeys(event.ToolName, event.ToolInput, exemptPiped)
 		parts := []string{}
-		if msg := warningMessage(keys, !blocked[toolspec.ReadToolName]); msg != "" {
-			parts = append(parts, msg)
+		// On the terminal surface a Bash read was either already answered by aracne (the
+		// PreToolUse rewrite) or is one aracne cannot answer at all; nudging it is bytes
+		// spent advertising something the agent just got, or something that does not exist.
+		// A NATIVE Read/Grep/Edit/Write is different: interception never sees it, so the
+		// nudge is the only place the model learns the shell forms are the cheaper question.
+		terminal := cfg.EffectiveInterceptShell()
+		if !terminal || event.ToolName != "Bash" {
+			if msg := warningMessage(keys, !blocked[toolspec.ReadToolName], terminal); msg != "" {
+				parts = append(parts, msg)
+			}
 		}
 		// The backstop for everything the classifier does not know how to refuse. Only Bash
 		// needs it: a native Edit/Write is already followed by the update-file hook.
@@ -93,7 +145,8 @@ type guardDecision struct {
 }
 
 // decideGuard reports whether a tool call must be blocked and the reason.
-func decideGuard(toolName string, toolInput map[string]interface{}, blocked map[string]bool, exemptPiped bool, dbPath string) guardDecision {
+func decideGuard(toolName string, toolInput map[string]interface{}, blocked map[string]bool,
+	exemptPiped bool, dbPath string, terminal bool) guardDecision {
 	keys := implicatedKeys(toolName, toolInput, exemptPiped)
 	var denied []string
 	for _, k := range keys {
@@ -151,8 +204,10 @@ func decideGuard(toolName string, toolInput map[string]interface{}, blocked map[
 		}
 	}
 
-	if warn := warningMessage(keys, !blocked[toolspec.ReadToolName]); warn != "" {
+	if warn := warningMessage(keys, !blocked[toolspec.ReadToolName], terminal); warn != "" {
 		reason += warn
+	} else if terminal {
+		reason += "Use the shell forms aracne answers, or an `arac` subcommand, instead of this command."
 	} else {
 		reason += "Use the aracne MCP tools instead of this native/shell command."
 	}
@@ -202,7 +257,7 @@ func isAracCommand(toolInput map[string]interface{}) bool {
 // without an MCP equivalent (e.g. "bash") and de-duplicating. nativeReadAvailable
 // resolves the read tool's runtime name so the guidance never points at a name
 // that is absent from this agent's tool list.
-func warningMessage(keys []string, nativeReadAvailable bool) string {
+func warningMessage(keys []string, nativeReadAvailable, terminal bool) string {
 	var parts []string
 	seen := make(map[string]bool, len(keys))
 	for _, k := range keys {
@@ -210,7 +265,7 @@ func warningMessage(keys []string, nativeReadAvailable bool) string {
 			continue
 		}
 		seen[k] = true
-		if w := toolspec.WarningFor(k, nativeReadAvailable); w != "" {
+		if w := toolspec.WarningForSurface(k, nativeReadAvailable, terminal); w != "" {
 			parts = append(parts, w)
 		}
 	}
@@ -302,6 +357,13 @@ const quotedSpace = '\x00'
 type commandSegment struct {
 	text      string
 	pipedInto bool
+	// start and end are this segment's byte offsets in the ORIGINAL command string.
+	//
+	// They exist so interception can rewrite one segment of a compound command in place and
+	// leave every other byte alone. `text` cannot serve: the scanner drops quote characters
+	// and substitutes a control byte for the spaces they held, so it is a classification
+	// input, not something that can be spliced back into a shell line.
+	start, end int
 	// redirectsOut records an unquoted `>` or `>>` in this segment. It is
 	// captured here, during the scan, because quoting is still known: by the
 	// time the segment text is re-split into fields the quotes are gone and a
@@ -317,16 +379,33 @@ type commandSegment struct {
 // separators, not pipes.
 func splitCommandSegments(command string) []commandSegment {
 	runes := []rune(command)
+	// Byte offset of each rune, so a segment can be located in the original string.
+	byteOf := make([]int, len(runes)+1)
+	pos := 0
+	for i, r := range runes {
+		byteOf[i] = pos
+		pos += utf8.RuneLen(r)
+	}
+	byteOf[len(runes)] = pos
+
 	var segs []commandSegment
 	var cur strings.Builder
 	var quote rune
 	curPiped := false    // is the segment currently accumulating downstream of a `|`?
 	curRedirect := false // has this segment redirected stdout to a file?
-	flush := func(nextPiped bool) {
-		segs = append(segs, commandSegment{text: cur.String(), pipedInto: curPiped, redirectsOut: curRedirect})
+	segStart := 0        // rune index where the current segment began
+	flush := func(endRune, nextStart int, nextPiped bool) {
+		segs = append(segs, commandSegment{
+			text:         cur.String(),
+			pipedInto:    curPiped,
+			redirectsOut: curRedirect,
+			start:        byteOf[segStart],
+			end:          byteOf[endRune],
+		})
 		cur.Reset()
 		curPiped = nextPiped
 		curRedirect = false
+		segStart = nextStart
 	}
 	for i := 0; i < len(runes); i++ {
 		r := runes[i]
@@ -351,13 +430,13 @@ func splitCommandSegments(command string) []commandSegment {
 			quote = r
 		case '|':
 			if i+1 < len(runes) && runes[i+1] == '|' {
-				i++ // `||` is logical OR, not a pipe
-				flush(false)
+				flush(i, i+2, false) // `||` is logical OR, not a pipe
+				i++
 			} else {
-				flush(true)
+				flush(i, i+1, true)
 			}
 		case ';', '&', '\n', '(', ')', '`', '{', '}':
-			flush(false)
+			flush(i, i+1, false)
 		case '>':
 			// `2>&1` duplicates a descriptor, it does not write a file.
 			if i+1 >= len(runes) || runes[i+1] != '&' {
@@ -368,7 +447,7 @@ func splitCommandSegments(command string) []commandSegment {
 			cur.WriteRune(r)
 		}
 	}
-	flush(false)
+	flush(len(runes), len(runes), false)
 	return segs
 }
 

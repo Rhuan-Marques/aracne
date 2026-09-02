@@ -32,7 +32,10 @@ LLM_INTEGRATION_CHARTER.md   Long-form spec of the three integration modes
 .claude/ .opencode/          Harness integrations: agents, slash commands, hooks, plugins, MCP config
 internal/
   cli/            Every `arac <cmd>` entry point (scan, serve, viz, agent, init, read, grep,
-                  edit, write, descriptions, bug, analyze, guard, update-file, …) + tool-registry wiring
+                  cmd, edit, write, descriptions, bug, analyze, guard, update-file, …) + tool-registry wiring
+  shellcmd/       Pure argv→request parser for the terminal surface: decides whether a shell
+                  read/search is one aracne models, and what window it asked for. Anything with
+                  a flag it does not model is KindPassthrough — see §7E.
   topology/       The engine
     domain/         Pure model: Resource, Topology, ResourceKind, TopologyWarning, KnownBug, Location, Visibility, Cut
     scanner/        Registry + LanguageScanner/PartialUpdater interfaces
@@ -102,10 +105,38 @@ testing_ground/   Hand-built multi-language corpus of edge cases (see its README
 A free-form schema (a clean break from older formats — invalid/old files are
 overwritten with defaults). Top-level sections:
 
+- **`integration`** — `mode`: `terminal` (default) | `mcp` | `both`. Which surface aracne
+  reaches an agent through, and the one field every generated artifact derives from: `arac
+  init` writes `.mcp.json` and the `mcp__aracne__*` permission allow-list only when the mode
+  includes MCP, and picks the short terminal contract or the MCP contract to match. **Absent
+  means `terminal`**, so a project predating this field loses its MCP server entry on the next
+  `arac init` unless it says otherwise — init prints that rather than doing it silently, and
+  `arac init --mcp` persists `both`.
+- **`identification_mode`** — `line_range` (default) | `id`. How every surface NAMES a resource
+  to the model. Under `line_range` a context entry reads
+  `## pkg.Foo (src/x.go:120-160): description` and a grep header reads
+  `# src/x.go:120-160 — description`; under `id` both keep the bare topology ID. The default
+  is evidence-driven: over `ab-prefer-ids-20260902a` the model used a resource ID as a command
+  operand **0 times in 408 shell commands** while addressing code as file+line in all 408.
+  `line_range` also carries a promise the slice reader enforces — reading an advertised span
+  returns byte-for-byte what the resource read would have, imports and context included
+  (`whollyContained` in `universaltools/slice.go`).
+- **`terminal`** — the terminal surface: `intercept` (may the guard rewrite a shell command at
+  all), `enhance_files` (a read of an indexed FILE; off makes it behave like an unindexed one),
+  `enhance_resources` (may a resource ID stand where a path does), `grep` (route shell searches
+  through the annotated grep), `prefer_resource_ids` (whether the contract carries the one
+  sentence steering toward IDs — isolated behind a key so it can be A/B'd; see
+  `bench/configs/run/ab-prefer-ids.yaml`), and `max_overserve` (the answer must stay within this multiple
+  of the bytes the real command would have printed, or `arac cmd` passes through instead).
+
 - **`scan`** / **`scanner`** — default mode (`default`/`hard`/`all`) for the
-  one-shot `arac scan` and the live scanner; `update_frequency`.
-- **`read`** — `max_file_size`; **`scan`** (`none`/`default`/`full`/`hard` — run a
-  topology scan *before* every read/grep); **`kinds`** (project-wide allow-list of
+  one-shot `arac scan` and the live scanner; `update_frequency`; and
+  **`scan.pre_tool`** (`default` (the default) / `none` / `full` / `hard`) — the scan
+  the guard runs *before* every tool call it sees, on both harnesses. `default` is
+  an incremental scan, so the usual case (nothing changed since the last call) is a
+  no-op; `none` switches the freshness guarantee off for projects that keep the
+  topology current another way (e.g. `arac scanner run`).
+- **`read`** — `max_file_size`; **`kinds`** (project-wide allow-list of
   resource kinds `read` will return — default `file`, `function`, `struct`,
   `interface`; also accepts `named_type`, `package`, `dependency`, `variable`);
   **`context_filter`** (how verbosely the `# CONTEXT:` block renders neighbors,
@@ -160,7 +191,8 @@ use the **universal** implementations, and only `update_description` /
 
 ## 7. User-facing surfaces (the harnesses)
 
-There are **four** ways to use aracne, all over the same topology engine:
+There are **five** ways to use aracne, all over the same topology engine. The default is
+**E, the terminal surface**; MCP (B) is opt-in via `integration.mode`:
 
 ### A. CLI (`arac <subcommand>`) — `internal/cli`, dispatched from `main.go`
 Direct, no LLM. Key commands (full list in `usage.go` / `PrintUsage`):
@@ -169,6 +201,25 @@ Direct, no LLM. Key commands (full list in `usage.go` / `PrintUsage`):
 dismiss|delete>`, `descriptions <generate|apply|clear>`, `update-file`,
 `update-description`, `edit`/`write` (stdin JSON), `analyze dead-code`,
 `check-updates`, `init`, `disable`, `guard`, `serve`, `viz serve`, `agent`.
+
+### E. Terminal surface (the default) — `internal/cli/cmd.go` + `internal/shellcmd`
+The shell IS the tool surface. `arac cmd -- <command…>` runs a shell read or search and answers
+it from the topology when it can: the exact lines the command asked for, framed by the
+signature of whatever declaration they sit inside (with an elision marker for what was left
+out), and a `# CONTEXT:` block restricted to the resources those lines actually mention. A
+resource ID stands wherever a path does, so `head -20 app.Flask` is the first twenty lines of
+the class body.
+
+Anything else runs for real. `internal/shellcmd` returns `KindPassthrough` for every flag it
+does not model (`head -c`, `tail -f`, `grep -o`, `sed` substitutions) and for the readers that
+transform rather than window (`nl`, `tac`, `xxd`, `od`, `hexdump`, `strings`); `arac cmd` also
+passes through for an unindexed file, an over-budget answer or a missing database, and execs
+the real binary with its exit status. That fidelity is what makes interception safe on by
+default — `tests/terminal_e2e_test.go` asserts byte-identical output for those cases.
+
+The agent never types `arac cmd` itself. The `arac guard` PreToolUse hook rewrites its Bash
+call via `hookSpecificOutput.updatedInput` (`internal/cli/guard_intercept.go`), so the model
+writes `head -40 file.go` and reads real stdout. See §9.
 
 ### B. MCP server (`arac serve`) — `internal/mcp`
 JSON-RPC 2.0 over **stdio** (`initialize`, `tools/list`, `tools/call`). This is
@@ -224,18 +275,52 @@ a project: generates the injected **CLAUDE.md / AGENTS.md**, the MCP config
 (`.mcp.json` / `opencode.json`), agent + command markdown, and harness hooks/
 plugins. Two hooks ship for Claude Code:
 
-- **`arac-guard.sh`** → `arac guard --claude-hook`: the **Tool Guard**. Watches
-  tool calls; reminds the model to use the aracne MCP tool whenever it reaches
-  for a native `Read`/`Grep`/`Edit`/`Write` or a shell equivalent
-  (`cat`/`grep`/`sed`/PowerShell …). Tools listed in a harness's `blocked_tools`
-  are blocked outright (blocking `grep` also blocks `rg`/`Select-String` run via
-  Bash; blocking `bash` blocks the Bash tool entirely). Piped reads
-  (`cmd | grep`) are exempt unless `read.pipe_passthrough:false`.
+- **`arac-guard.sh`** → `arac guard --claude-hook`: the **Tool Guard**. What it does depends
+  on `integration.mode`:
+  - **terminal** (default) — it **rewrites**. A single, unpiped, unredirected Bash command
+    that `shellcmd` models, on a target the topology knows, comes back as
+    `<arac> cmd -- <the original text>` through `updatedInput`. The original text is reused
+    verbatim so the shell re-splits it exactly as it would have. Guard rails: never a second
+    time (`isAracCommand` stops the recursion), never across a pipe, a redirect, a heredoc,
+    an `&&`, an env prefix or a wrapper, never a mutation, and never a file with no topology
+    nodes. `blocked_tools` still applies to what interception declined, but the refusal names
+    the **shell** surface -- the spellings aracne does answer, plus `arac read`/`arac grep` --
+    never an `mcp__aracne__*` tool, since sending a model to a tool that is not in its list is
+    the reliable way to buy a wasted turn. Interception is tried first, so a command aracne can
+    serve is answered rather than refused however `blocked_tools` reads.
+  - **mcp** — the previous behaviour, unchanged: no rewriting; native `Read`/`Grep`/`Edit`/
+    `Write` and their shell equivalents are nudged toward the MCP tool, and anything in
+    `blocked_tools` is denied outright (blocking `grep` also blocks `rg`/`Select-String` run
+    via Bash; blocking `bash` blocks the Bash tool entirely). A denied read is answered with
+    its content where it can be (`guard_proxy.go`). Piped reads (`cmd | grep`) are exempt
+    unless `read.pipe_passthrough:false`.
+  - **both** — rewrite first, then the denial path for whatever was not rewritten.
+
+  Note that `integration.mode` governs the **main agent's** surface only. Generated sub-agents
+  (`descriptions-generation-executor`, `bug-*`) declare their own scoped MCP server inline in
+  their frontmatter (`mcpServers:` → `arac serve --tool-profile <agent>`), so the descriptions
+  and bug pipelines keep working on the terminal surface. That is the right split: those agents
+  exist to call `update_description` / `bug_*`, which have no shell equivalent worth teaching,
+  and their schema cost is paid inside a short-lived sub-agent instead of on every request to
+  the main one.
 - **`arac-update-file.sh`** → `arac update-file --claude-hook`: re-parses a file
   into the topology after a **native** edit, keeping the graph current even when
-  the change bypassed the MCP `edit`/`write` tools.
+  the change bypassed the MCP `edit`/`write` tools. Installed only when the main
+  agent lists the `edit-update-db-plugin` plugin.
 - OpenCode additionally gets `arac-native-edit-sync.js` (a plugin doing the same
-  topology sync on native edits).
+  topology sync on native edits), under the same plugin flag.
+
+Freshness itself is not a plugin. **Before** every tool call the guard sees, it runs the
+`scan.pre_tool` scan (default: incremental) so the call is answered from a graph that
+matches the code on disk — including changes nothing in the session made, like a
+`git checkout`, a rebase or an editor save. Claude Code gets this from the PreToolUse
+guard hook itself; OpenCode gets `arac-pre-tool-scan.js`, a plugin installed
+unconditionally by `arac init` whose `tool.execute.before` runs `arac guard --pre-scan`.
+Both read the same config key at call time, so `scan.pre_tool: "none"` disables it on
+both surfaces without re-running init. The pre-call scan reports nothing (a PreToolUse
+hook cannot address the model without blocking it); the warnings it finds are persisted
+in the topology and surface through `warnings_list` / `arac warnings list`, and the
+**post**-call drift check still reports the ones a shell write causes.
 
 ## 10. Languages & known quirks
 
@@ -260,6 +345,10 @@ plugins. Two hooks ship for Claude Code:
   `lucide-react` for icon assets.
 - **Tests**: `go test ./...`. Notable: `tests/atscale_*` run a 3-scan-mode
   (full / incremental / hard) **topology-consistency** suite across languages;
+  `internal/shellcmd/shellcmd_test.go` is the executable spec of which shell commands are
+  modelled — and, just as importantly, which are not; `internal/cli/guard_intercept_test.go`
+  pins what the hook may and may not rewrite; `tests/terminal_e2e_test.go` drives `arac cmd`
+  against a real scanned project including the byte-identical passthrough cases;
   per-scanner tests under `tests/` and each `*scanner/`; `internal/**/_test.go`.
 - **`testing_ground/`** is a deliberately edge-case-dense corpus (one topology
   per language family) used to exercise live edit/scan; see

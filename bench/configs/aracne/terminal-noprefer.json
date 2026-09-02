@@ -1,0 +1,170 @@
+{
+  "integration": {
+    "mode": "terminal"
+  },
+  "terminal": {
+    "intercept": true,
+    "enhance_files": true,
+    "enhance_resources": true,
+    "grep": true,
+    "max_overserve": 4,
+    "prefer_resource_ids": false
+  },
+  "scan": {
+    "mode": "default",
+    "pre_tool": "none"
+  },
+  "read": {
+    "max_file_size": 33554432,
+    "pipe_passthrough": true,
+    "context_filter": {
+      "include_incoming": true,
+      "external_vars_visibility": "normal",
+      "small_functions_visibility": "full",
+      "small_function_threshold": 7
+    },
+    "file_mode": "skeleton",
+    "skeleton_threshold": 12,
+    "max_symbol_lines": 160
+  },
+  "scanner": {
+    "mode": "default",
+    "update_frequency": 200
+  },
+  "descriptions": {
+    "kinds": [
+      "function",
+      "method",
+      "struct",
+      "interface"
+    ],
+    "style_exemplars": 1
+  },
+  "llm": {
+    "<any>": {
+      "main_agent": {
+        "mcp_tools": [],
+        "blocked_tools": []
+      },
+      "agents": {
+        "bug-hunter": {
+          "model": "<inherits>",
+          "mcp_tools": []
+        },
+        "bug-judge": {
+          "model": "<inherits>",
+          "mcp_tools": []
+        },
+        "bug-solver": {
+          "model": "<inherits>",
+          "mcp_tools": []
+        },
+        "descriptions-generation-executor": {
+          "model": "<inherits>",
+          "mcp_tools": [],
+          "params": {
+            "max-batch-size": 5
+          }
+        }
+      }
+    },
+    "opencode": {
+      "main_agent": {},
+      "agents": {}
+    },
+    "claude_code": {
+      "main_agent": {
+        "mcp_tools": [],
+        "blocked_tools": []
+      },
+      "agents": {
+        "descriptions-generation-executor": {
+          "model": "haiku"
+        }
+      }
+    }
+  },
+  "viz": {
+    "graph": {
+      "optimization_rules": ".aracne/optimization_rules.json"
+    },
+    "chat": {
+      "main_agent": {
+        "tools": [
+          "ls",
+          "bash",
+          "glob",
+          "ask_user_question",
+          "CreateTasks",
+          "grep",
+          "read",
+          "edit",
+          "write",
+          "warnings_list",
+          "bug_report",
+          "bug_list",
+          "bug_acknowledge",
+          "bug_dismiss",
+          "bug_delete",
+          "update_description",
+          "node_list_no_description"
+        ]
+      },
+      "agents": {
+        "bug-hunter": {
+          "tools": [
+            "read",
+            "grep",
+            "bug_report"
+          ],
+          "params": {
+            "thinking": 4096
+          }
+        },
+        "bug-judge": {
+          "tools": [
+            "read",
+            "grep",
+            "bug_list",
+            "bug_acknowledge",
+            "bug_dismiss",
+            "bug_delete"
+          ],
+          "params": {
+            "thinking": 4096
+          }
+        },
+        "bug-solver": {
+          "tools": [
+            "read",
+            "edit",
+            "write",
+            "grep",
+            "warnings_list",
+            "bug_delete"
+          ],
+          "params": {
+            "thinking": 4096
+          }
+        },
+        "descriptions-generation-executor": {
+          "tools": [
+            "read",
+            "grep",
+            "update_description"
+          ],
+          "params": {
+            "max-batch-size": 5
+          }
+        },
+        "explorer": {
+          "tools": [
+            "read",
+            "grep"
+          ]
+        }
+      }
+    }
+  },
+  "paths": []
+}

@@ -61,6 +61,8 @@ func main() {
 		cli.RunUpdateFile(os.Args[2:])
 	case "guard":
 		cli.RunGuard(os.Args[2:])
+	case "cmd":
+		cli.RunCmd(os.Args[2:])
 	case "read":
 		cli.RunRead()
 	case "grep":

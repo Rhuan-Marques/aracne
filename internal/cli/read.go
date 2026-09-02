@@ -30,7 +30,6 @@ func RunRead() {
 	}
 
 	manager, reg := InitRegistry(".aracne/topology.db")
-	runReadScan(manager, reg)
 
 	cfg := helper.EnsureConfig(helper.ConfigPath(manager.DbPath()))
 	// The CLI is the human/bash surface, so it reads every kind regardless of read.kinds --

@@ -135,23 +135,23 @@ func TestDecideGuardLetsThroughOnlyUnmodelledReads(t *testing.T) {
 
 	bash := func(cmd string) map[string]interface{} { return map[string]interface{}{"command": cmd} }
 
-	if d := decideGuard("Bash", bash("cat "+filepath.Join(root, "CHANGELOG.md")), blocked, false, dbPath); d.Deny {
+	if d := decideGuard("Bash", bash("cat "+filepath.Join(root, "CHANGELOG.md")), blocked, false, dbPath, false); d.Deny {
 		t.Errorf("read of an unmodelled file denied: %s", d.Message)
 	}
-	if d := decideGuard("Bash", bash("cat "+filepath.Join(root, "app.go")), blocked, false, dbPath); !d.Deny {
+	if d := decideGuard("Bash", bash("cat "+filepath.Join(root, "app.go")), blocked, false, dbPath, false); !d.Deny {
 		t.Error("read of indexed source was not denied")
 	}
 	// An EDIT must go through the tool that re-syncs the topology whether or not the file is
 	// indexed today -- writing to an unmodelled path is one way it becomes indexed. The
 	// exemption is gated on read being the ONLY thing denied, which is what keeps this so.
-	if d := decideGuard("Bash", bash("sed -i s/a/b/ "+filepath.Join(root, "CHANGELOG.md")), blocked, false, dbPath); !d.Deny {
+	if d := decideGuard("Bash", bash("sed -i s/a/b/ "+filepath.Join(root, "CHANGELOG.md")), blocked, false, dbPath, false); !d.Deny {
 		t.Error("an in-place edit of an unmodelled file must still be denied")
 	}
 	// A read that also implicates a second blocked key keeps its denial, even on an
 	// unmodelled file: the exemption answers "can aracne read this", not "is any of this
 	// command harmless".
 	mixed := bash("cat " + filepath.Join(root, "CHANGELOG.md") + " && sed -i s/a/b/ " + filepath.Join(root, "CHANGELOG.md"))
-	if d := decideGuard("Bash", mixed, blocked, false, dbPath); !d.Deny {
+	if d := decideGuard("Bash", mixed, blocked, false, dbPath, false); !d.Deny {
 		t.Error("a command that also edits must stay denied")
 	}
 }

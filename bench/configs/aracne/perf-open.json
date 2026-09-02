@@ -1,10 +1,10 @@
 {
   "scan": {
-    "mode": "default"
+    "mode": "default",
+    "pre_tool": "none"
   },
   "read": {
     "max_file_size": 33554432,
-    "scan": "none",
     "pipe_passthrough": true,
     "context_filter": {
       "include_incoming": true,

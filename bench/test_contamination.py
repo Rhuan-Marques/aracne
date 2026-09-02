@@ -15,7 +15,7 @@ import json
 
 import pytest
 
-from bench import contamination, paired
+from bench import contamination, paired, toolstats
 
 REPO = "sveltejs/svelte"
 INST = "sveltejs__svelte-14456"
@@ -151,3 +151,33 @@ def test_efficiency_excludes_contaminated_pairs_too():
     assert clean["n_pairs"] == 1 and clean["ratio"] is not None
     assert dirty["n_pairs"] == 0 and dirty["ratio"] is None, \
         "a 10x 'saving' bought by curl'ing the diff must not enter the ratio"
+
+
+def test_the_live_counter_and_the_archival_reader_agree(tmp_path):
+    """Two implementations of one question must not answer it differently.
+
+    `gh issue view ... 2>/dev/null` on a host without `gh` returns an empty result: the binary
+    is missing and its error goes to the void. Nothing came back, so it is an ATTEMPT and not
+    contamination. The archival reader scored it correctly because it reads the event's
+    `tool_use_result`; the live counter read the content BLOCK, which for a Bash result is the
+    rendering shown to the model, and scored it as a fetch -- censoring a clean pair out of
+    fair-20260901a.
+    """
+    cmd = f"gh issue view 1 --repo {REPO} 2>/dev/null | head -60"
+    call = {"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": "1", "name": "Bash", "input": {"command": cmd}}]}}
+    # The shape that broke it: a block rendering that is neither empty nor a stdout payload,
+    # beside an event payload that plainly says nothing came back.
+    res = {"type": "user",
+           "tool_use_result": {"stdout": "", "stderr": "", "interrupted": False},
+           "message": {"content": [
+               {"type": "tool_result", "tool_use_id": "1", "content": "(no content)"}]}}
+    transcript = json.dumps(call) + "\n" + json.dumps(res) + "\n"
+
+    live, _ = toolstats.summarize(transcript, REPO)
+    path = tmp_path / "t.jsonl"
+    path.write_text(transcript)
+    archival = contamination.scan(path, REPO)
+
+    assert (live["n_answer_key_attempts"], live["n_answer_key_fetches"]) == archival
+    assert live["n_answer_key_fetches"] == 0, "an empty result is not contamination"

@@ -46,14 +46,15 @@ func (m *TopologyManager) DbPath() string {
 	return m.dbPath
 }
 
-// RunReadScan runs the topology scan requested by the read.scan config before a
-// read/grep operation. ReadScanNone (or an empty mode / nil registry) is a
-// no-op that preserves the existing behavior. The scan root is taken from the
-// stored topology, falling back to the working directory. It mirrors the modes
-// of `arac scan`: default => incremental, full => re-scan all files, hard =>
-// rebuild from scratch and clear bugs.
-func (m *TopologyManager) RunReadScan(reg *scanner.Registry, mode helper.ReadScanMode) error {
-	if reg == nil || mode == "" || mode == helper.ReadScanNone {
+// RunPreToolScan runs the topology scan requested by the scan.pre_tool config
+// before a tool call. PreToolScanNone (or an empty mode / nil registry) is a
+// no-op. The scan root is taken from the stored topology, falling back to the
+// working directory -- which matters here, because the hook runs wherever the
+// agent last cd'd to. It mirrors the modes of `arac scan`: default =>
+// incremental, full => re-scan all files, hard => rebuild from scratch and
+// clear bugs.
+func (m *TopologyManager) RunPreToolScan(reg *scanner.Registry, mode helper.PreToolScanMode) error {
+	if reg == nil || mode == "" || mode == helper.PreToolScanNone {
 		return nil
 	}
 	root := "."
@@ -61,10 +62,10 @@ func (m *TopologyManager) RunReadScan(reg *scanner.Registry, mode helper.ReadSca
 		root = topo.Root
 	}
 	switch mode {
-	case helper.ReadScanFull:
+	case helper.PreToolScanFull:
 		_, err := m.FullReScan(root, reg)
 		return err
-	case helper.ReadScanHard:
+	case helper.PreToolScanHard:
 		if err := m.FullScan(root, reg); err != nil {
 			return err
 		}

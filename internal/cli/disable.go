@@ -94,6 +94,8 @@ func disableOpenCode(global bool, autoYes bool) {
 
 	removeFile(filepath.Join(configDir, "plugins", "arac-native-edit-sync.js"),
 		"OpenCode native edit sync plugin")
+	removeFile(filepath.Join(configDir, "plugins", "arac-pre-tool-scan.js"),
+		"OpenCode pre-tool scan plugin")
 
 	removeAracneIntegrationSection(agentsMdPath, "OpenCode AGENTS.md")
 

@@ -212,6 +212,13 @@ def aggregate(rows: list[dict], cfg: dict, prep: list[dict] | None = None) -> di
     agg["paired_by_arm_by_language"] = {
         t: paired.analyse_by_language(rows, languages, margin, t) for t in treatments
     }
+    # A/B between two treatment arms. `paired_by_arm` already reports each against the control,
+    # but reading a difference off two overlapping intervals is not the same test: when both
+    # arms ran here, on the same tasks, they pair directly and the cluster bootstrap sees the
+    # per-task difference instead of the difference of two noisy estimates.
+    ab = cfg.get("ab_arms") or []
+    if len(ab) == 2 and all(a in {r.get("arm") for r in rows} for a in ab):
+        agg["paired_ab"] = paired.analyse(rows, margin, treatment=ab[1], control=ab[0])
     for lang, block in per_lang.items():
         block["paired"] = agg["paired_by_language"].get(lang)
     if prep is not None:

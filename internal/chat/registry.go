@@ -49,12 +49,12 @@ func NewScannerRegistry() *scanner.Registry {
 func BuildToolRegistry(manager *topology.TopologyManager, scannerReg *scanner.Registry, cfg *helper.Config, workspace string) *tools.Registry {
 	registry := tools.NewRegistry()
 	allowed := chatMainAgentToolSet(cfg)
-	readScan := helper.ReadScanNone
-	if cfg != nil {
-		readScan = cfg.EffectiveReadScan()
-	}
+	// No pre-tool scan here. scan.pre_tool is a GUARD setting: it belongs to the surfaces
+	// where an outside harness runs the tools and nothing else keeps the graph current. The
+	// chat owns its own loop -- its bash tool re-scans after every command and its
+	// edit/write tools sync the file they touched -- so a scan on the way IN would re-walk
+	// the project for a change the loop has already applied.
 	add := func(t tools.Tool) {
-		t = tools.WrapWithReadScan(t, manager, scannerReg, readScan)
 		if allowed == nil || allowed[t.Name()] {
 			registry.Register(t)
 		}
@@ -104,12 +104,10 @@ func configDescribeTargets(cfg *helper.Config) []domain.ResourceKind {
 // Constructs a full tool registry for agent threads with topology, scanning, and language-specific tools.
 func BuildAgentToolRegistry(manager *topology.TopologyManager, scannerReg *scanner.Registry, cfg *helper.Config, workspace string) *tools.Registry {
 	registry := tools.NewRegistry()
-	readScan := helper.ReadScanNone
-	if cfg != nil {
-		readScan = cfg.EffectiveReadScan()
-	}
+	// See BuildToolRegistry: the chat loop keeps itself fresh, so scan.pre_tool does not
+	// apply to it.
 	add := func(t tools.Tool) {
-		registry.Register(tools.WrapWithReadScan(t, manager, scannerReg, readScan))
+		registry.Register(t)
 	}
 	add(&tools.Ls{})
 	add(NewBashTool(workspace, manager, scannerReg))

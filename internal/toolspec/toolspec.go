@@ -146,6 +146,30 @@ var nativeWarnings = map[string]string{
 	"write": "aracne: `mcp__aracne__write` updates the topology inline.",
 }
 
+// terminalWarnings is the same guidance for the TERMINAL surface, where there is no MCP tool
+// to name. Keyed by aracne tool key.
+//
+// WHY A SECOND TABLE RATHER THAN A SUBSTITUTION. The two surfaces do not merely spell the same
+// capability differently -- on the terminal the read capability has no name at all, because it
+// arrives as the shell command the model already typed. So the read entry cannot say "call X";
+// it has to say which spellings are answered and what makes them cheaper. A find-and-replace of
+// the tool name over the MCP text would produce advice that is grammatical and useless.
+//
+// Same length discipline as nativeWarnings: this text is injected on every matching call.
+var terminalWarnings = map[string]string{
+	"read": "aracne: `cat`, `head -N`, `tail -N` and `sed -n 'A,Bp'` on an indexed file are " +
+		"answered from the topology, and take a resource ID where they take a path. " +
+		"`arac read <id> <id>` reads several at once.",
+	"grep": "aracne: `arac grep <pattern>` also searches node names and descriptions, which no plain grep can reach.",
+	"edit": "aracne: `echo '{\"file_path\":…,\"old_string\":…,\"new_string\":…}' | arac edit` " +
+		"updates the topology inline (the update-file hook covers a plain edit too).",
+	"write": "aracne: `echo '{\"file_path\":…,\"content\":…}' | arac write` updates the topology inline.",
+}
+
+// TerminalWarningFor returns the terminal-surface guidance for an aracne tool key, or "" when
+// there is none (bash has no equivalent on either surface).
+func TerminalWarningFor(key string) string { return terminalWarnings[key] }
+
 // readWarning is the read tool's guidance, named for the tool the agent actually has. A
 // static name is wrong half the time: blocking the harness's own read is exactly what makes
 // the aracne tool register as "read", and that is also the case where the guidance arrives
@@ -567,6 +591,16 @@ func WarningFor(key string, nativeReadAvailable bool) string {
 		return readWarning(nativeReadAvailable)
 	}
 	return nativeWarnings[key]
+}
+
+// WarningForSurface picks the guidance for the surface the project is actually on. Naming an
+// `mcp__aracne__*` tool to an agent that has no MCP server is the one failure mode guaranteed
+// to cost a turn, and it is invisible until the model tries the call.
+func WarningForSurface(key string, nativeReadAvailable, terminal bool) string {
+	if terminal {
+		return TerminalWarningFor(key)
+	}
+	return WarningFor(key, nativeReadAvailable)
 }
 
 // Validates a list of tool names against an allowed set, returning an error for any unknown tools.

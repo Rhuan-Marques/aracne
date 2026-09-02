@@ -78,7 +78,17 @@ const AnnotateOverheadBudget = 0.25
 // The ratio test alone punishes exactly the case annotation is FOR: one hit with one
 // header is a poor ratio and a trivial absolute cost. Below this floor the overhead cannot
 // matter; above it, annotation has to justify itself proportionally.
-const AnnotateFreeBytes = 4096
+//
+// LOWERED FROM 4096 AFTER MEASUREMENT. Four kilobytes is not "cannot matter": on the clap
+// fixture, `grep -rn 'pub struct' src/` returns 730 bytes from a plain grep and came back at
+// 2,211 -- 3.03x -- of which 1,481 bytes were headers. The matched ROWS were 1.00x native, so
+// the entire blow-up was annotation waved through by this floor. A narrow search is precisely
+// where a header per resource approaches a header per line, which is the shape
+// AnnotateOverheadBudget exists to catch; the floor was letting it past unmeasured.
+//
+// 512 keeps the case the floor was written for -- a handful of hits with a handful of headers
+// is still free -- while making anything larger earn its annotation proportionally.
+const AnnotateFreeBytes = 512
 
 // MatchSource says why a row is in the result, and its values are ordered by
 // priority: a node named after the query outranks one merely described by it,
@@ -119,13 +129,17 @@ const maxLineBytes = 8 * 1024 * 1024
 
 // Match is a single hit.
 type Match struct {
-	Path        string   `json:"path"`
-	Line        int      `json:"line"`
-	Text        string   `json:"text"`
-	ResourceID  string   `json:"resource_id,omitempty"`
-	Description string   `json:"description,omitempty"`
-	Before      []string `json:"before,omitempty"`
-	After       []string `json:"after,omitempty"`
+	Path       string `json:"path"`
+	Line       int    `json:"line"`
+	Text       string `json:"text"`
+	ResourceID string `json:"resource_id,omitempty"`
+	// ResourceStart and ResourceEnd are the enclosing resource's span. Carried so the
+	// renderer can name a hit by the lines the caller can read rather than by an id.
+	ResourceStart int      `json:"resource_start,omitempty"`
+	ResourceEnd   int      `json:"resource_end,omitempty"`
+	Description   string   `json:"description,omitempty"`
+	Before        []string `json:"before,omitempty"`
+	After         []string `json:"after,omitempty"`
 	// MatchedOn is why this row ranked where it did. It is a property of the
 	// enclosing resource, so every row of one resource shares it -- which is what
 	// keeps a resource's matches contiguous after the tiered sort.
@@ -150,6 +164,10 @@ type Options struct {
 	// Ignore applies the project's scan.ignore rules. Build it with
 	// domain.BuildIgnoreMatcher(root, cfg.Scan.Ignore); nil disables the check.
 	Ignore *domain.IgnoreMatcher
+	// LineRange names each annotated hit by "path:start-end" instead of by resource id.
+	// See helper.IdentifyLineRange: the id is aracne's vocabulary, the span is the shell's,
+	// and a search result is precisely where the caller decides what to read next.
+	LineRange bool
 	// DescriptionKinds limits which resource kinds may match on their stored
 	// description. nil means the caller did not choose and gets
 	// DefaultDescriptionKinds(); an explicit empty slice disables description
@@ -452,7 +470,7 @@ func FormatResult(res *Result, opt Options) string {
 		// without the header it renders as an unexplained declaration line.
 		if (annotate || m.NodeHit) && m.ResourceID != "" && m.ResourceID != lastResource {
 			b.WriteString("# ")
-			b.WriteString(m.ResourceID)
+			b.WriteString(resourceLabel(m, opt))
 			if m.Description != "" {
 				b.WriteString(" — ")
 				b.WriteString(m.Description)
@@ -696,6 +714,7 @@ func searchFile(path string, re *regexp.Regexp, index map[string][]resourceLocat
 			m := Match{Path: display, Line: lineNo, Text: strings.TrimLeft(line, " \t"), MatchedOn: MatchContent}
 			if resource := bestResource(resources, lineNo); resource != nil {
 				m.ResourceID = resource.id
+				m.ResourceStart, m.ResourceEnd = resource.startsAt, resource.endsAt
 				m.Description = resource.description
 				// A line inside a node the pattern also named or described is that
 				// node's hit: promote it rather than emitting a second row for the
@@ -731,13 +750,15 @@ func searchFile(path string, re *regexp.Regexp, index map[string][]resourceLocat
 			continue
 		}
 		matches = append(matches, Match{
-			Path:        display,
-			Line:        declarationLine(resource),
-			Text:        text,
-			ResourceID:  resource.id,
-			Description: resource.description,
-			MatchedOn:   tiers[resource.id],
-			NodeHit:     true,
+			Path:          display,
+			Line:          declarationLine(resource),
+			Text:          text,
+			ResourceID:    resource.id,
+			ResourceStart: resource.startsAt,
+			ResourceEnd:   resource.endsAt,
+			Description:   resource.description,
+			MatchedOn:     tiers[resource.id],
+			NodeHit:       true,
 		})
 	}
 	return matches, nil
@@ -821,6 +842,18 @@ func bestResource(resources []resourceLocation, line int) *resourceLocation {
 		}
 	}
 	return fallback
+}
+
+// resourceLabel names a hit's enclosing resource for the header line.
+//
+// Under LineRange it is "path:start-end", which is directly runnable: the caller's next move is
+// a read of exactly those lines, and aracne answers that read with the whole declaration. The
+// id form is kept for identification_mode "id" and whenever a span is unavailable.
+func resourceLabel(m Match, opt Options) string {
+	if opt.LineRange && m.ResourceStart > 0 && m.ResourceEnd >= m.ResourceStart {
+		return fmt.Sprintf("%s:%d-%d", m.Path, m.ResourceStart, m.ResourceEnd)
+	}
+	return m.ResourceID
 }
 
 func span(resource resourceLocation) int {

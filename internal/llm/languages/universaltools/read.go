@@ -229,6 +229,7 @@ func (r *Read) ReadIDs(rawIDs []string, opt ReadIDsOptions) (string, error) {
 	out := readunit.Render(units, readunit.Options{
 		IncludeIncoming: cfg.EffectiveIncludeIncoming(),
 		State:           st,
+		Locate:          locator(topo, cfg),
 	})
 
 	// A bad id in a batch must not throw away the good ones: the whole point of batching is
@@ -249,6 +250,41 @@ func (r *Read) ReadIDs(rawIDs []string, opt ReadIDsOptions) (string, error) {
 		return "", fmt.Errorf("no readable resources for the given ids")
 	}
 	return out, nil
+}
+
+// locator returns the function that names a resource by span, or nil under identification_mode
+// "id" -- where nil makes the whole rewrite a no-op and every existing surface is untouched.
+func locator(topo *domain.Topology, cfg *helper.Config) func(string) string {
+	if topo == nil || cfg == nil || !cfg.LineRangeIdentification() {
+		return nil
+	}
+	return func(id string) string { return SpanOf(topo, id) }
+}
+
+// SpanOf renders a resource's location as "path:start-end", relative to the topology root, or
+// "" when the id is unknown or carries no usable span.
+//
+// The empty return is load-bearing: it is what tells the context rewriter to leave a line
+// alone, which is how section headings survive a pass that only wants to touch resource ids.
+func SpanOf(topo *domain.Topology, id string) string {
+	if topo == nil || id == "" {
+		return ""
+	}
+	res, ok := topo.Resources[id]
+	if !ok {
+		if res, ok = topo.Resources[helper.NormalizeResourceID(id)]; !ok {
+			return ""
+		}
+	}
+	loc := res.Location
+	if loc.Path == "" {
+		return ""
+	}
+	path := displayPath(topo, loc.Path)
+	if res.Kind == domain.ResourceFile || loc.StartsAt < 1 || loc.EndsAt < loc.StartsAt {
+		return path
+	}
+	return fmt.Sprintf("%s:%d-%d", path, loc.StartsAt, loc.EndsAt)
 }
 
 // normalizeIDs canonicalizes and de-duplicates the input, preserving first-seen order so the

@@ -6,13 +6,86 @@ import (
 	"strings"
 	"time"
 
+	"aracne/internal/helper"
 	"aracne/internal/topology"
 	"aracne/internal/topology/domain"
+	"aracne/internal/topology/scanner"
 )
 
-// driftScanTimeout bounds the backstop. A hook that hangs is worse than a hook that misses:
-// the agent is blocked behind it on every shell call.
-const driftScanTimeout = 20 * time.Second
+// guardScanTimeout bounds every scan a hook runs. A hook that hangs is worse than a hook that
+// misses: the agent is blocked behind it on every tool call.
+const guardScanTimeout = 20 * time.Second
+
+// runGuardScan opens the topology and runs scan inside a bounded, panic-proof goroutine,
+// reporting the warnings it produced. Every failure -- no database, a load error, a scan
+// error, a panic, a timeout -- returns nil, because a hook that breaks the agent's tool call
+// is worse than a hook that skips a scan.
+//
+// Deliberately NOT InitRegistry: that helper scans-on-missing and calls os.Exit on failure,
+// which is correct for a CLI command and catastrophic inside a hook -- it would take the
+// agent's tool call down with it. A hook with no topology has nothing to do, so bail rather
+// than build one.
+func runGuardScan(dbPath string, scan func(*topology.TopologyManager, *scanner.Registry) ([]domain.TopologyWarning, error)) []domain.TopologyWarning {
+	if _, err := os.Stat(dbPath); err != nil {
+		return nil
+	}
+	mgr := topology.New()
+	if err := mgr.Load(dbPath); err != nil {
+		return nil
+	}
+	reg := NewScannerRegistry()
+
+	type result struct {
+		warnings []domain.TopologyWarning
+		err      error
+	}
+	done := make(chan result, 1)
+	go func() {
+		defer func() {
+			// A panic in a scanner must not take down the agent's tool call either.
+			if r := recover(); r != nil {
+				done <- result{err: fmt.Errorf("scan panicked: %v", r)}
+			}
+		}()
+		w, err := scan(mgr, reg)
+		done <- result{warnings: w, err: err}
+	}()
+
+	select {
+	case res := <-done:
+		if res.err != nil {
+			return nil
+		}
+		return res.warnings
+	case <-time.After(guardScanTimeout):
+		return nil
+	}
+}
+
+// preToolScan runs the scan.pre_tool scan BEFORE the tool call the guard is about to let
+// through, so the graph the call is answered from describes the code as it is now.
+//
+// WHY BEFORE AND NOT ONLY AFTER. The post-call drift check (below) covers writes the guard
+// saw. It cannot cover what happened OUTSIDE the session -- a `git checkout`, a rebase, a
+// teammate's edit, an editor save, a build step run in another terminal -- and those land on
+// the very next read, which is answered from spans that no longer line up. An incremental scan
+// diffs the manifest and re-parses only what changed, so the common case (nothing moved since
+// the last tool call) costs one directory walk and writes nothing.
+//
+// Nothing is REPORTED here on purpose. A PreToolUse hook cannot address the model without
+// blocking the call, and a warning surfaced on the way into an unrelated call would be
+// attributed to that call rather than to the change that produced it. The warnings are not
+// lost: the scan persists them in the topology, where `warnings_list` / `arac warnings list`
+// still finds them, and the post-call check reports the ones a shell write causes.
+func preToolScan(dbPath string, cfg *helper.Config) {
+	mode := cfg.EffectivePreToolScan()
+	if mode == helper.PreToolScanNone {
+		return
+	}
+	runGuardScan(dbPath, func(mgr *topology.TopologyManager, reg *scanner.Registry) ([]domain.TopologyWarning, error) {
+		return nil, mgr.RunPreToolScan(reg, mode)
+	})
+}
 
 // driftCheck re-syncs the topology after a shell command that may have written source, and
 // returns any warnings the re-scan produced.
@@ -31,44 +104,10 @@ const driftScanTimeout = 20 * time.Second
 // It is deliberately cheap to skip and safe to fail: an unreadable topology, a scan error or a
 // timeout all return nothing, exactly like the rest of this hook.
 func driftCheck(dbPath string) string {
-	type result struct {
-		warnings []domain.TopologyWarning
-		err      error
-	}
-	// Deliberately NOT InitRegistry: that helper scans-on-missing and calls os.Exit on
-	// failure, which is correct for a CLI command and catastrophic inside a hook -- it would
-	// take the agent's shell call down with it. A hook with no topology to check has nothing
-	// to say, so bail rather than build one.
-	if _, err := os.Stat(dbPath); err != nil {
-		return ""
-	}
-	mgr := topology.New()
-	if err := mgr.Load(dbPath); err != nil {
-		return ""
-	}
-	reg := NewScannerRegistry()
-
-	done := make(chan result, 1)
-	go func() {
-		defer func() {
-			// A panic in a scanner must not take down the agent's shell call either.
-			if r := recover(); r != nil {
-				done <- result{err: fmt.Errorf("scan panicked: %v", r)}
-			}
-		}()
-		w, err := mgr.IncrementalScan(".", reg)
-		done <- result{warnings: w, err: err}
-	}()
-
-	select {
-	case res := <-done:
-		if res.err != nil {
-			return ""
-		}
-		return formatDriftWarnings(res.warnings)
-	case <-time.After(driftScanTimeout):
-		return ""
-	}
+	warnings := runGuardScan(dbPath, func(mgr *topology.TopologyManager, reg *scanner.Registry) ([]domain.TopologyWarning, error) {
+		return mgr.IncrementalScan(".", reg)
+	})
+	return formatDriftWarnings(warnings)
 }
 
 // formatDriftWarnings renders the re-scan's warnings the same way edit/write already render

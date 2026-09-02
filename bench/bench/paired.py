@@ -78,7 +78,7 @@ def pair_key(row: dict) -> tuple:
     return (row.get("instance_id"), str(row.get("seed")))
 
 
-def build_pairs(rows: list[dict], treatment: str = ARACNE) -> list[dict]:
+def build_pairs(rows: list[dict], treatment: str = ARACNE, control: str = BASELINE) -> list[dict]:
     """Collapse result rows into matched pairs, dropping any task missing an arm.
 
     An unmatched row is silently unusable for a paired analysis (there is nothing to
@@ -88,26 +88,30 @@ def build_pairs(rows: list[dict], treatment: str = ARACNE) -> list[dict]:
     by_key: dict[tuple, dict] = defaultdict(dict)
     for row in rows:
         arm = row.get("arm")
-        if arm in (BASELINE, treatment):
+        if arm in (control, treatment):
             by_key[pair_key(row)][arm] = row
     pairs = []
     for key, arms in sorted(by_key.items(), key=lambda kv: str(kv[0])):
-        if BASELINE in arms and treatment in arms:
+        if control in arms and treatment in arms:
             pairs.append({
                 "key": key,
-                "cluster": cluster_id(arms[BASELINE]),
-                "language": arms[BASELINE].get("language"),
+                "cluster": cluster_id(arms[control]),
+                "language": arms[control].get("language"),
                 # Stored under the canonical slot, whichever arm supplied it.
-                BASELINE: arms[BASELINE],
+                # Keyed by the SLOT, not by the arm name: every computation below reads the
+                # control from BASELINE and the treatment from ARACNE, so an A/B between two
+                # aracne variants slots one of them into the control position and nothing
+                # downstream needs to know.
+                BASELINE: arms[control],
                 ARACNE: arms[treatment],
             })
     return pairs
 
 
-def _unpaired_count(rows: list[dict], treatment: str = ARACNE) -> int:
+def _unpaired_count(rows: list[dict], treatment: str = ARACNE, control: str = BASELINE) -> int:
     by_key: dict[tuple, set] = defaultdict(set)
     for row in rows:
-        if row.get("arm") in (BASELINE, treatment):
+        if row.get("arm") in (control, treatment):
             by_key[pair_key(row)].add(row["arm"])
     return sum(1 for arms in by_key.values() if len(arms) < 2)
 
@@ -363,14 +367,21 @@ def treatment_arms(rows: list[dict]) -> list[str]:
     return sorted({r.get("arm") for r in rows if r.get("arm") and r.get("arm") != BASELINE})
 
 
-def analyse(rows: list[dict], margin: float = DEFAULT_MARGIN, treatment: str = ARACNE) -> dict:
-    """Full paired analysis of a row set: solve rate + every efficiency endpoint."""
-    pairs = build_pairs(rows, treatment)
+def analyse(rows: list[dict], margin: float = DEFAULT_MARGIN, treatment: str = ARACNE,
+            control: str = BASELINE) -> dict:
+    """Full paired analysis of a row set: solve rate + every efficiency endpoint.
+
+    `control` defaults to the baseline arm, which is every existing caller. Naming a different
+    one turns this into an A/B between two treatments -- both measured in the same session, on
+    the same tasks, so the pairing is tighter than comparing each of their intervals against a
+    shared control and eyeballing the overlap.
+    """
+    pairs = build_pairs(rows, treatment, control)
     clusters = sorted({p["cluster"] for p in pairs})
     return {
-        "arms": {"control": BASELINE, "treatment": treatment},
+        "arms": {"control": control, "treatment": treatment},
         "n_pairs": len(pairs),
-        "n_unpaired": _unpaired_count(rows, treatment),
+        "n_unpaired": _unpaired_count(rows, treatment, control),
         "effective_n": len(clusters),
         "clusters": clusters,
         "solve": solve_analysis(pairs, margin),

@@ -2,6 +2,7 @@ package helper
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -164,6 +165,54 @@ func TestDiffScanFilesRefusesMassDeleteWhenNoCurrentFiles(t *testing.T) {
 	}
 	if len(deleted) != 0 {
 		t.Fatalf("expected no deleted files on guard error, got %v", deleted)
+	}
+}
+
+// A manifest write must never be able to leave a truncated file behind. The empty-manifest
+// state is silent -- ReadManifest returns an empty map for it -- and it turns every later
+// incremental scan into a full re-parse of the project, which is how a topology grows without
+// ever being pruned.
+func TestWriteManifestReplacesAtomically(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "file_manifest.json")
+
+	previous := FileManifest{"/proj/a.go": "2026-09-02T00:00:00Z"}
+	if err := WriteManifest(previous, manifestPath); err != nil {
+		t.Fatalf("WriteManifest: %v", err)
+	}
+
+	// A big manifest is the one that takes long enough to be interrupted mid-write, so write
+	// one and assert the file is never observed in a partial state.
+	large := FileManifest{}
+	for i := 0; i < 5000; i++ {
+		large[filepath.Join("/proj", "pkg", "file", "deep", "path", fmt.Sprintf("f%d.go", i))] = "2026-09-02T00:00:00Z"
+	}
+	if err := WriteManifest(large, manifestPath); err != nil {
+		t.Fatalf("WriteManifest large: %v", err)
+	}
+	if got := ReadManifest(manifestPath); len(got) != len(large) {
+		t.Fatalf("manifest has %d entries, want %d", len(got), len(large))
+	}
+
+	// The temp file the atomic write uses must not survive it: a directory littered with
+	// half-written manifests is its own kind of confusing.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != "file_manifest.json" {
+			t.Fatalf("stray file left beside the manifest: %s", e.Name())
+		}
+	}
+
+	// The mode has to survive the rename too -- the temp file starts at 0600.
+	info, err := os.Stat(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0644 {
+		t.Fatalf("manifest mode = %v, want 0644", perm)
 	}
 }
 
@@ -902,23 +951,23 @@ func TestLoadConfigNewSchema(t *testing.T) {
 	}
 }
 
-func TestEffectiveReadScan(t *testing.T) {
-	if got := DefaultConfig().EffectiveReadScan(); got != ReadScanNone {
-		t.Fatalf("default EffectiveReadScan = %q, want none", got)
+func TestEffectivePreToolScan(t *testing.T) {
+	if got := DefaultConfig().EffectivePreToolScan(); got != PreToolScanDefault {
+		t.Fatalf("default EffectivePreToolScan = %q, want default", got)
 	}
-	cases := map[string]ReadScanMode{
-		"":          ReadScanNone,
-		"none":      ReadScanNone,
-		"None":      ReadScanNone,
-		" default ": ReadScanDefault,
-		"FULL":      ReadScanFull,
-		"Hard":      ReadScanHard,
-		"bogus":     ReadScanNone,
+	cases := map[string]PreToolScanMode{
+		"":          PreToolScanDefault,
+		"none":      PreToolScanNone,
+		"None":      PreToolScanNone,
+		" default ": PreToolScanDefault,
+		"FULL":      PreToolScanFull,
+		"Hard":      PreToolScanHard,
+		"bogus":     PreToolScanDefault,
 	}
 	for in, want := range cases {
-		c := &Config{Read: ReadSection{Scan: ReadScanMode(in)}}
-		if got := c.EffectiveReadScan(); got != want {
-			t.Fatalf("EffectiveReadScan(%q) = %q, want %q", in, got, want)
+		c := &Config{Scan: ScanSection{PreTool: PreToolScanMode(in)}}
+		if got := c.EffectivePreToolScan(); got != want {
+			t.Fatalf("EffectivePreToolScan(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
@@ -941,31 +990,49 @@ func TestEffectivePipePassthrough(t *testing.T) {
 	}
 }
 
-func TestLoadConfigReadScan(t *testing.T) {
+func TestLoadConfigPreToolScan(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 
-	// A valid read.scan value survives loading.
-	if err := os.WriteFile(path, []byte(`{"scan":{"mode":"default"},"read":{"scan":"full"}}`), 0644); err != nil {
+	// A valid scan.pre_tool value survives loading.
+	if err := os.WriteFile(path, []byte(`{"scan":{"mode":"default","pre_tool":"full"}}`), 0644); err != nil {
 		t.Fatalf("WriteFile config: %v", err)
 	}
 	cfg, ok := LoadConfigStrict(path)
 	if !ok {
-		t.Fatal("config with read.scan should parse cleanly")
+		t.Fatal("config with scan.pre_tool should parse cleanly")
 	}
-	if cfg.Read.Scan != ReadScanFull {
-		t.Fatalf("Read.Scan = %q, want full", cfg.Read.Scan)
+	if cfg.Scan.PreTool != PreToolScanFull {
+		t.Fatalf("Scan.PreTool = %q, want full", cfg.Scan.PreTool)
 	}
 
-	// An invalid read.scan value normalizes to none (preserving current behavior).
-	if err := os.WriteFile(path, []byte(`{"scan":{"mode":"default"},"read":{"scan":"bogus"}}`), 0644); err != nil {
+	// An absent or invalid value normalizes to the incremental scan, so a project that
+	// never heard of the field still gets a fresh graph before each tool call.
+	for _, body := range []string{
+		`{"scan":{"mode":"default","pre_tool":"bogus"}}`,
+		`{"scan":{"mode":"default"}}`,
+	} {
+		if err := os.WriteFile(path, []byte(body), 0644); err != nil {
+			t.Fatalf("WriteFile config: %v", err)
+		}
+		cfg2, ok2 := LoadConfigStrict(path)
+		if !ok2 {
+			t.Fatalf("config %s should parse cleanly", body)
+		}
+		if cfg2.Scan.PreTool != PreToolScanDefault {
+			t.Fatalf("Scan.PreTool for %s = %q, want default", body, cfg2.Scan.PreTool)
+		}
+	}
+
+	// "none" is the one way to switch the freshness guarantee off.
+	if err := os.WriteFile(path, []byte(`{"scan":{"mode":"default","pre_tool":"none"}}`), 0644); err != nil {
 		t.Fatalf("WriteFile config: %v", err)
 	}
-	cfg2, ok2 := LoadConfigStrict(path)
-	if !ok2 {
-		t.Fatal("config should parse cleanly")
+	cfg3, ok3 := LoadConfigStrict(path)
+	if !ok3 {
+		t.Fatal("config with pre_tool none should parse cleanly")
 	}
-	if cfg2.Read.Scan != ReadScanNone {
-		t.Fatalf("invalid Read.Scan normalized to %q, want none", cfg2.Read.Scan)
+	if cfg3.Scan.PreTool != PreToolScanNone {
+		t.Fatalf("Scan.PreTool = %q, want none", cfg3.Scan.PreTool)
 	}
 }
 

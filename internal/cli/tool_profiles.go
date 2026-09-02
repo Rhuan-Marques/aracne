@@ -166,11 +166,9 @@ func BuildToolRegistry(manager *topology.TopologyManager, scannerReg *scanner.Re
 		cfg:                 cfg,
 		nativeReadAvailable: NativeReadAvailable(cfg, harness, agentName),
 	}
-	readScan := cfg.EffectiveReadScan()
 	for _, name := range allMCPToolNames() {
 		if allowed[name] {
-			t := tools.WrapWithReadScan(mcpToolConstructors[name](deps), manager, scannerReg, readScan)
-			registry.Register(t)
+			registry.Register(mcpToolConstructors[name](deps))
 		}
 	}
 	return registry

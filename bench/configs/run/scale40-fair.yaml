@@ -16,10 +16,22 @@
 # and then exactly one difference:
 #
 #     baseline   + Read, Edit, Write, Grep   (native file access)
-#     aracne     + the five aracne MCP tools (topology file access)
+#     aracne     nothing                     (topology access through the shell it already has)
 #
 # Neither gets WebFetch or WebSearch. That is not only a contamination measure -- it keeps the
 # arms symmetric, since a difference in web access would show up as a difference in tokens.
+#
+# THE ARACNE ARM IS NOW TERMINAL-FIRST, AND THIS BREAKS COMPARABILITY WITH EVERY EARLIER RUN.
+# It has no MCP server: `integration.mode: "terminal"` makes `arac init` write no `.mcp.json`,
+# ship the short terminal contract instead of the MCP one, and leave the guard to REWRITE the
+# shell reads the model already issues into `arac cmd`, which answers them from the topology.
+#
+# Why this is the arm worth measuring now. Two runs measured 26-28 `ToolSearch` calls across
+# ~25 of 27 cells, spent discovering MCP tools the contract had already named -- the cost of
+# putting tools in a list at all. On this surface there is no list: the model types `head -40 f`
+# and gets the lines it asked for with their enclosing signature and a context block. The
+# baseline is unchanged, so the comparison is still the one that matters; it is the aracne arm
+# that cannot be compared to guarded-20260831a and its siblings.
 
 sample_id: scale40
 languages: [go, javascript, typescript, rust, python]
@@ -62,4 +74,4 @@ arm_builtin_tools:
   aracne:   [Bash, Glob, TodoWrite]
 
 arm_aracne_config:
-  aracne: perf-guarded
+  aracne: terminal-first

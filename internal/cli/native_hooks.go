@@ -263,6 +263,61 @@ func claudeUpdateFileHookShellScript() string {
 	}, "\n")
 }
 
+// writeOpenCodePreToolScanPlugin installs the OpenCode counterpart of the Claude Code
+// PreToolUse guard hook: a plugin that runs the scan.pre_tool scan before each tool call.
+//
+// It is installed unconditionally, like the Claude guard hook, and NOT listed under
+// `plugins` in the config. Which scan runs -- including none at all -- is decided at call
+// time by `scan.pre_tool`, so flipping that knob takes effect without re-running init, and a
+// project cannot end up with a fresh graph on one harness and a stale one on the other.
+func writeOpenCodePreToolScanPlugin(pluginsDir string, autoYes bool) {
+	os.MkdirAll(pluginsDir, 0755)
+	writeMarkdownFile(filepath.Join(pluginsDir, "arac-pre-tool-scan.js"), "OpenCode pre-tool scan plugin", openCodePreToolScanPlugin(), autoYes)
+}
+
+// openCodePreToolScanPlugin returns the OpenCode plugin that re-syncs the topology before a
+// tool call. It mirrors the Claude guard hook's matcher (Read|Grep|Edit|Write|Bash) in
+// OpenCode's tool names, and defers the whole decision to `arac guard --pre-scan`, which reads
+// the project config and does nothing when scan.pre_tool is "none".
+func openCodePreToolScanPlugin() string {
+	return strings.TrimPrefix(`
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
+
+const run = promisify(execFile)
+
+// The tools whose answer depends on the topology being current, matching the Claude Code
+// guard hook's matcher plus OpenCode's own spellings of a native edit.
+const SCANNED_TOOLS = new Set([
+  "read",
+  "grep",
+  "edit",
+  "write",
+  "bash",
+  "patch",
+  "apply_patch",
+  "multi_edit",
+  "multiedit",
+])
+
+export const AracPreToolScan = async ({ directory, worktree }) => {
+  const root = worktree ?? directory ?? process.cwd()
+
+  return {
+    "tool.execute.before": async (input) => {
+      if (!SCANNED_TOOLS.has(input?.tool)) return
+      try {
+        // Awaited on purpose: the scan is only worth running if it lands BEFORE the tool
+        // reads the graph. Bounded and swallowed, like the Claude hook -- a scan that failed
+        // must never turn into a tool call that failed.
+        await run("arac", ["guard", "--pre-scan"], { cwd: root, timeout: 30000 })
+      } catch {}
+    },
+  }
+}
+`, "\n")
+}
+
 // Writes the OpenCode native edit sync plugin JavaScript file to the plugins directory.
 func writeOpenCodeNativeEditPlugin(pluginsDir string, autoYes bool) {
 	os.MkdirAll(pluginsDir, 0755)

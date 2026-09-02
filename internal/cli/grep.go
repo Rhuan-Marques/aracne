@@ -38,8 +38,7 @@ func RunGrep(args []string) {
 		*before, *after = *context, *context
 	}
 
-	manager, reg := InitRegistry(*dbPath)
-	runReadScan(manager, reg)
+	manager, _ := InitRegistry(*dbPath)
 	topo, err := manager.ReadAll()
 	if err != nil {
 		topo = nil
@@ -51,8 +50,10 @@ func RunGrep(args []string) {
 	// configured" and lets topogrep apply its defaults.
 	var ignore *domain.IgnoreMatcher
 	var descriptionKinds []domain.ResourceKind
+	lineRange := false
 	if cfg := helper.LoadConfig(helper.ConfigPath(*dbPath)); cfg != nil {
 		descriptionKinds = cfg.Grep.DescriptionKinds
+		lineRange = cfg.LineRangeIdentification()
 		if topo != nil && topo.Root != "" {
 			ignore = domain.BuildIgnoreMatcher(topo.Root, cfg.Scan.Ignore)
 		}
@@ -69,6 +70,7 @@ func RunGrep(args []string) {
 		Before:     *before,
 		After:      *after,
 		Ignore:     ignore,
+		LineRange:  lineRange,
 
 		DescriptionKinds: descriptionKinds,
 	}

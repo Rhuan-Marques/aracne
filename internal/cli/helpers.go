@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"aracne/internal/helper"
 	"aracne/internal/topology"
 	"aracne/internal/topology/domain"
 	"aracne/internal/topology/scanner"
@@ -40,20 +39,6 @@ func GetLanguage(manager *topology.TopologyManager) string {
 		return topo.Language
 	}
 	return "go"
-}
-
-// runReadScan runs the read.scan pre-scan for the CLI read/grep commands. It is
-// a no-op when read.scan is "none" (the default), preserving existing behavior.
-// A scan failure is reported as a warning but does not abort the command.
-func runReadScan(manager *topology.TopologyManager, reg *scanner.Registry) {
-	cfg := helper.EnsureConfig(helper.ConfigPath(manager.DbPath()))
-	mode := cfg.EffectiveReadScan()
-	if mode == helper.ReadScanNone {
-		return
-	}
-	if err := manager.RunReadScan(reg, mode); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: read.scan (%s) failed: %v\n", mode, err)
-	}
 }
 
 // Initializes topology manager and scanner registry, performing initial scan if needed.

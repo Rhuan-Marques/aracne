@@ -134,7 +134,7 @@ func TestDecideGuard(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			d := decideGuard(tt.tool, tt.input, tt.blocked, tt.exempt, "")
+			d := decideGuard(tt.tool, tt.input, tt.blocked, tt.exempt, "", false)
 			if d.Deny != tt.wantDeny {
 				t.Fatalf("decideGuard(%q) Deny = %v, want %v (msg: %q)", tt.tool, d.Deny, tt.wantDeny, d.Message)
 			}
@@ -169,7 +169,11 @@ func withConfig(t *testing.T, configJSON string, fn func()) {
 	fn()
 }
 
-const blocksGrepConfig = `{"scan":{"mode":"default"},"llm":{"claude_code":{"main_agent":{"blocked_tools":["grep"]}}}}`
+// mcpSurfaceConfig is the minimum config that puts a project on the MCP surface, where
+// blocked_tools denials and the MCP-tool nudges apply.
+const mcpSurfaceConfig = `{"scan":{"mode":"default"},"integration":{"mode":"mcp"}}`
+
+const blocksGrepConfig = `{"scan":{"mode":"default"},"integration":{"mode":"mcp"},"llm":{"claude_code":{"main_agent":{"blocked_tools":["grep"]}}}}`
 
 func TestRunClaudeGuardHook_PreToolDeny(t *testing.T) {
 	withConfig(t, blocksGrepConfig, func() {
@@ -186,8 +190,8 @@ func TestRunClaudeGuardHook_PreToolDeny(t *testing.T) {
 	})
 }
 
-const blocksReadConfig = `{"scan":{"mode":"default"},"llm":{"claude_code":{"main_agent":{"blocked_tools":["read"]}}}}`
-const blocksReadStrictConfig = `{"scan":{"mode":"default"},"read":{"pipe_passthrough":false},"llm":{"claude_code":{"main_agent":{"blocked_tools":["read"]}}}}`
+const blocksReadConfig = `{"scan":{"mode":"default"},"integration":{"mode":"mcp"},"llm":{"claude_code":{"main_agent":{"blocked_tools":["read"]}}}}`
+const blocksReadStrictConfig = `{"scan":{"mode":"default"},"integration":{"mode":"mcp"},"read":{"pipe_passthrough":false},"llm":{"claude_code":{"main_agent":{"blocked_tools":["read"]}}}}`
 
 func TestRunClaudeGuardHook_PipedReadExempt(t *testing.T) {
 	// Default pipe_passthrough (true): a read command fed by a pipe is exempt.
@@ -225,8 +229,11 @@ func TestRunClaudeGuardHook_PreToolFailOpen(t *testing.T) {
 	})
 }
 
+// The PostToolUse nudge names an MCP tool, so it only fires on a surface that serves one.
+// On the terminal surface the same command has already BEEN answered by aracne, and the
+// reminder would advertise a tool the agent does not have.
 func TestRunClaudeGuardHook_PostToolWarning(t *testing.T) {
-	withConfig(t, "", func() {
+	withConfig(t, mcpSurfaceConfig, func() {
 		var out bytes.Buffer
 		in := strings.NewReader(`{"hook_event_name":"PostToolUse","tool_name":"Grep","tool_input":{"pattern":"x"}}`)
 		runClaudeGuardHook(in, &out)

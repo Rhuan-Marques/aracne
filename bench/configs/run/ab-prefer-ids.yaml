@@ -1,0 +1,116 @@
+# A/B: does telling the model to "prefer an ID over a path" actually pay?
+#
+# THE QUESTION. The generated terminal contract ends its Resource IDs section with:
+#
+#     **Prefer an ID over a path**: it is the narrower question, and it comes back with the
+#     neighbours' descriptions attached -- which usually answers the follow-up you were
+#     about to ask.
+#
+# Plausible, and unmeasured. Against it: on the clap fixture a resource read costs 3,159 bytes
+# against 1,663 for a 40-line window, so on bytes alone the sentence points at the MORE
+# expensive shape. For it: 66% of the control arm's file reads in fair-20260901a followed a
+# search within three calls, and 19% re-read a file already read -- both costs a resource read
+# does not have, because it needs no line range and cannot be the wrong window. Which effect
+# is larger is a question about model behaviour, and no amount of reading the renderer settles
+# it.
+#
+# THE DESIGN. Two aracne arms whose configs differ in exactly ONE key
+# (`terminal.prefer_resource_ids`), which changes exactly ONE sentence of the contract -- 182
+# bytes, ~0.2% of a cell's tokens. Anything that moves is behaviour, not prompt size.
+#
+#   aracne           terminal-first.json      the shipped wording, steer ON
+#   aracne-noprefer  terminal-noprefer.json   identical, steer OFF
+#
+# The control is IMPORTED from fair-20260901a rather than re-measured, and that is sound here.
+# Every historical reason an imported control was unfair has been checked against that run:
+# same Claude Code build (2.1.257), isolate_operator_config on, the baseline's own tool surface
+# unchanged (the row is reused wholesale, never re-run), deny_answer_key on, and model /
+# max_turns / effort agreeing -- which _import_prior_rows enforces rather than assumes.
+# Structurally the baseline arm loads no aracne at all: no contract, no hook, no topology, so
+# nothing in this change can move it. Re-running it would buy noise and spend, not fairness.
+#
+# It is a reference point regardless, not the comparison: the comparison is `paired_ab`, which
+# pairs the two aracne arms against each other on tasks both measured in this session.
+#
+# ONE REAL CAVEAT. The toolstats counters added after that run -- n_intercepted,
+# terminal_result_bytes, shell_read_result_bytes, shell_grep_result_bytes -- do not exist on
+# imported rows and read as 0. They are not in TELEMETRY_FIELDS so they never become paired
+# ratios, but do not eyeball them against the baseline in runs.jsonl: that arm did roughly
+# 600 KB of shell reads and will show zero.
+#
+# READ THE RESULT HERE:
+#   results.json -> paired_ab            the A/B (control: aracne, treatment: aracne-noprefer)
+#   results.json -> paired_by_arm        each arm against the imported baseline
+# A ratio BELOW 1.0 in paired_ab means the arm WITHOUT the steer spent less.
+#
+# Run:
+#   python bench/run_benchmark.py run --config ab-prefer-ids
+# Cost: 2 aracne arms x 27 tasks. The baseline costs nothing (imported).
+
+sample_id: scale40
+languages: [go, javascript, typescript, rust, python]
+
+samples: 8
+oversample: 4
+max_per_repo: 1
+sample_seed: 0
+max_describable_nodes: 8000
+
+seeds: 1
+arms: [baseline, aracne, aracne-noprefer]
+
+run_harness: claude_code
+model: opus
+# effort must match the imported run or --baseline-from is refused outright. fair-20260901a
+# recorded effort=medium; it came from a CLI flag there, and is pinned here so the config is
+# self-contained.
+effort: medium
+max_turns: 80
+timeout_s: 2400
+
+# Both arms of a task share one canonical worktree and rewrite its config before each cell, so
+# they must not run concurrently. The per-fixture lock enforces it; 3 keeps the matrix moving.
+run_parallel: 3
+
+grade_timeout_s: 7200
+grade_stall_timeout_s: 1800
+ni_margin: 0.10
+
+# The control must now be RE-MEASURED, not imported: fair-20260901a ran it with six tools, and
+# the whole point of the change above is that the tool surface dominates the result. Importing a
+# control measured under a different prefix is exactly the error this config just made.
+# baseline_from: fair-20260901a
+skip_contaminated_baseline: true
+
+isolate_operator_config: true
+deny_answer_key: true
+
+# IDENTICAL SURFACES ON ALL THREE ARMS. This is not cosmetic -- getting it wrong produced the
+# only "result" the first run of this config had.
+#
+# It previously read `baseline: [Bash, Glob, TodoWrite, Read, Edit, Write, Grep]`, inherited from
+# scale40-fair.yaml where it was a fair trade: the control got native file tools, the aracne arm
+# got five MCP tools. Moving aracne to the terminal surface removed ITS side of that trade and
+# left the control's in place. Measured directly (two one-turn sessions differing only in
+# --tools): those four extra schemas cost 2,468 prefix tokens on EVERY turn, against ~598 for
+# aracne's CLAUDE.md -- a 1,870 tok/turn head start before any work happens. The advantage
+# actually observed in ab-prefer-ids-20260902a was 1,567-1,809 tok/turn. The entire "21% cheaper
+# than baseline" was that asymmetry.
+#
+# The control never used them: 462 Bash calls and ZERO Read/Edit/Write/Grep calls across 27
+# transcripts. So trimming it to the aracne surface costs the control nothing it was using, and
+# makes the comparison measure aracne instead of the tool list.
+#
+# NOTE: `TodoWrite` does not exist in Claude Code 2.1.258 -- naming it is a silent no-op. The
+# arms actually receive [Bash, Glob], which the run's own init event confirms.
+arm_builtin_tools:
+  baseline:        [Bash, Glob]
+  aracne:          [Bash, Glob]
+  aracne-noprefer: [Bash, Glob]
+
+arm_aracne_config:
+  aracne:          terminal-first
+  aracne-noprefer: terminal-noprefer
+
+# Pairs these two directly, in this order: control first, treatment second.
+ab_arms: [aracne, aracne-noprefer]
