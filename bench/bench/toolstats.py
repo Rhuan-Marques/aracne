@@ -172,6 +172,22 @@ _NETWORK_RE = re.compile(
 # package and the worktree is not debugging, it is reading the answer.
 UPSTREAM_DIFF_RE = re.compile(r"\bdiff\b[^|;]*\b(?:site-packages|dist-packages|node_modules/\.?[a-z]|/tmp/\w+/(?:ext|pkg|upstream))")
 
+# Commands that reach for repository history BEYOND the task's base commit -- where the fix
+# lives. `git log --all` enumerates every ref, and a fixture built with a plain `git clone`
+# carried them: for casbin__casbin-1512 that meant 342 refs and 108 later commits, one of which
+# was the PR the task asks the agent to reproduce. `git show <sha> | git apply -` then solves it
+# without reading any code, and deny_answer_key never fires because nothing crosses the network.
+#
+# gitutil.clone_at now fetches the base commit by SHA, so descendants are absent rather than
+# merely unreferenced and these commands fail. The counter stays as the regression alarm: if it
+# is non-zero AND the run still resolves, look at the transcript before believing the number.
+_FUTURE_HISTORY_RE = re.compile(
+    r"git\s+(?:log|rev-list|branch|tag)\b[^|;&]*--all\b"
+    r"|git\s+show\s+[0-9a-f]{7,40}\b"
+    r"|git\s+cherry-pick\b"
+    r"|git\s+(?:fetch|pull)\b"
+)
+
 MCP_PREFIX = "mcp__aracne__"
 
 
@@ -240,6 +256,7 @@ def empty_stats() -> dict:
         # cost is the sum of the pair.
         "shell_read_result_bytes": 0,
         "shell_grep_result_bytes": 0,
+        "n_future_history": 0,
         "has_transcript": False,
     }
 
@@ -336,6 +353,8 @@ def summarize(stdout: str, answer_key: str = "") -> tuple[dict, str]:
                     command = (block.get("input") or {}).get("command", "")
                     if isinstance(command, str) and _NETWORK_RE.search(command):
                         stats["n_network_calls"] += 1
+                    if isinstance(command, str) and _FUTURE_HISTORY_RE.search(command):
+                        stats["n_future_history"] += 1
                     if isinstance(command, str) and _INTERCEPT_RE.search(command):
                         intercepted.add(block.get("id"))
                     kind = _shell_discovery_kind(command)

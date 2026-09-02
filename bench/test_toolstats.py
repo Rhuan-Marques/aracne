@@ -292,3 +292,31 @@ def test_ordinary_environment_setup_is_not_a_network_signal():
         transcript = _bash("1", cmd) + "\n" + _result("1", "ok\n") + "\n"
         stats, _ = toolstats.summarize(transcript, "org/repo")
         assert stats["n_network_calls"] == 0, f"{cmd!r} should not count as reaching outside"
+
+
+def test_reaching_past_the_base_commit_is_counted():
+    """The contamination that outranked every other one in this harness.
+
+    A fixture built with a plain `git clone` carries every ref, so `git log --all` reaches the
+    commits AFTER the task's base -- including the PR the task asks the agent to reproduce.
+    Observed in hard9-20260902b: the agent ran `git log --all`, found
+    a2a6c3a "feat: add BLP (Bell-LaPadula) model support and test (#1512)" for
+    casbin__casbin-1512, and applied it with `git show <sha> | git apply -`. deny_answer_key
+    never fires, because the answer never crosses the network.
+    """
+    transcript = "\n".join([
+        _bash("1", "git log --all --oneline | head -20"),
+        _result("1", "a2a6c3a feat: add BLP support (#1512)\n"),
+        _bash("2", "git show a2a6c3a -- model/function.go | git apply -"),
+        _result("2", ""),
+    ]) + "\n"
+    stats, _ = toolstats.summarize(transcript, "casbin/casbin")
+    assert stats["n_future_history"] == 2, "both history reaches should be counted"
+
+
+def test_ordinary_git_use_is_not_counted():
+    """`git log` and `git diff` on the checked-out history are how anyone reads a repo."""
+    for cmd in ("git log --oneline -8", "git status", "git diff --stat", "git show HEAD"):
+        transcript = _bash("1", cmd) + "\n" + _result("1", "ok\n") + "\n"
+        stats, _ = toolstats.summarize(transcript, "org/repo")
+        assert stats["n_future_history"] == 0, f"{cmd!r} should not count"

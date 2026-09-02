@@ -33,21 +33,33 @@ def ensure_repo_cache(task: Task, repos_dir: Path) -> Path:
 
 
 def clone_at(task: Task, cache: Path, dest: Path, base_commit: str) -> None:
-    """Create a fresh local clone of `cache` at `dest`, pinned to `base_commit`.
+    """Create a working copy at `dest` containing `base_commit` and its ANCESTORS ONLY.
 
-    `dest` is removed first if it exists; the clone uses --no-hardlinks so the working
-    copy is fully independent of the cache, then is hard-reset to the base commit.
+    WHY NOT `git clone` + `git checkout`. That is what this did, and it shipped the answer with
+    the task. A clone carries every ref, so the fixture for casbin__casbin-1512 held 342 refs
+    and 108 commits AFTER the base -- including a2a6c3a, "feat: add BLP (Bell-LaPadula) model
+    support and test (#1512)", which is the PR the task asks the agent to reproduce. An agent
+    that types `git log --all` finds it, and `git show <sha> | git apply -` solves the task
+    without reading any code. That was observed, not hypothesised, in hard9-20260902b, and
+    `git log --all` / `git show <sha>` appear in the transcripts of every prior run in this
+    repository. `deny_answer_key` does not touch it: the answer never crosses the network.
+
+    Fetching the base commit by SHA gets its whole ancestry and nothing else -- git fetches a
+    commit's parents, never its children -- so the agent keeps the real history a developer
+    would have while the future becomes unreachable AND absent: `git show` on a descendant
+    fails with "unknown revision", because the object was never transferred.
+
+    The fetch is local (from the shared `_repos` cache), so this costs an object copy, not a
+    network round trip.
     """
-    # Resolve both paths before running git. The clone runs with cwd=dest.parent, so a
-    # RELATIVE dest (which is what a relative --out produces) would be re-resolved against
-    # that cwd and the repo would land in a nested path -- the clone reports success and the
-    # checkout below then fails with a bare ENOENT on a directory git never created.
-    cache = Path(cache).resolve()
-    dest = Path(dest).resolve()
     if dest.exists():
         shutil.rmtree(dest)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    run_git(["clone", "--quiet", "--no-hardlinks", str(cache), str(dest)], cwd=dest.parent)
-    run_git(["checkout", "--quiet", base_commit], cwd=dest)
-    run_git(["reset", "--hard", base_commit], cwd=dest)
+    cache = Path(cache).resolve()
+    dest = Path(dest).resolve()
+    dest.mkdir(parents=True, exist_ok=True)
+    run_git(["init", "--quiet"], cwd=dest)
+    # --no-tags matters: a tag pointing at a later release would drag its history back in.
+    run_git(["fetch", "--quiet", "--no-tags", str(cache), base_commit], cwd=dest)
+    run_git(["checkout", "--quiet", "--detach", "FETCH_HEAD"], cwd=dest)
+    run_git(["reset", "--hard", "--quiet", base_commit], cwd=dest)
     run_git(["clean", "-ffdxq"], cwd=dest)
