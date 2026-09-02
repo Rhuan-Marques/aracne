@@ -38,6 +38,12 @@ def clone_at(task: Task, cache: Path, dest: Path, base_commit: str) -> None:
     `dest` is removed first if it exists; the clone uses --no-hardlinks so the working
     copy is fully independent of the cache, then is hard-reset to the base commit.
     """
+    # Resolve both paths before running git. The clone runs with cwd=dest.parent, so a
+    # RELATIVE dest (which is what a relative --out produces) would be re-resolved against
+    # that cwd and the repo would land in a nested path -- the clone reports success and the
+    # checkout below then fails with a bare ENOENT on a directory git never created.
+    cache = Path(cache).resolve()
+    dest = Path(dest).resolve()
     if dest.exists():
         shutil.rmtree(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)

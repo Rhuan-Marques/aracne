@@ -31,6 +31,7 @@ import os
 import shutil
 import subprocess
 import sys
+import traceback
 import threading
 import time
 import uuid
@@ -663,7 +664,13 @@ def _run_matrix(matrix: list, done: set, all_rows: list, runs_path: Path, cfg: d
             row, _patch = runner.run_one(task, arm, seed, cfg, out_dir, repos_dir,
                                          work_dir, fixtures_root)
         except Exception as e:  # noqa: BLE001
-            row = runner.error_row(task, arm, seed, f"runner crash: {e}")
+            # Keep the traceback: a bare "runner crash: <str(e)>" names the symptom (often a
+            # path) but not the call site, which is unactionable when a whole matrix fails.
+            tb = traceback.format_exc()
+            with io_lock:
+                print(tb, file=sys.stderr)
+            frame = tb.strip().splitlines()[-2].strip() if tb.strip() else ""
+            row = runner.error_row(task, arm, seed, f"runner crash: {e} @ {frame}")
         with io_lock:
             _append(runs_path, row)
             all_rows.append(row)
