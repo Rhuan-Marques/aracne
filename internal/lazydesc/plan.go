@@ -148,6 +148,12 @@ func ReadTargets(topo *domain.Topology, ids []string, opt PlanOptions) []Target 
 // generation can never widen grep's description tier -- but a node found by its NAME or by a
 // line in its BODY is about to be printed with a "# <id> — <description>" header, and that
 // header is the part of a search result that answers the question without a follow-up read.
+//
+// It applies the SAME gate a read does, including the read-context visibility one, even though
+// a grep header is printed whatever that filter says. A project that has configured small
+// functions or external vars out of its context blocks has told `descriptions generate` not to
+// write prose for them; a search that quietly wrote it anyway would put descriptions in the
+// database that `node_list_no_description` and the sweep both consider out of scope.
 func NodeTargets(topo *domain.Topology, ids []string, opt PlanOptions) []Target {
 	if topo == nil || len(ids) == 0 {
 		return nil
