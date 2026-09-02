@@ -456,6 +456,16 @@ def build_config(args: argparse.Namespace) -> dict:
     cfg["config_path"] = str(config_path) if (config_path and config_path.exists()) else None
     # Runtime-only: the resolved aracne-config overlay (from the YAML or --aracne-config).
     cfg["aracne_config_path"] = _resolve_aracne_config_path(cfg.get("aracne_config"))
+    # `--aracne-config` is a FALLBACK, not an override: arms.aracne_config_for reads
+    # `arm_aracne_config[arm] or aracne_config_path`. The banner printed at run start echoes
+    # the CLI value either way, so a run configured with both silently used the YAML's while
+    # claiming otherwise -- that cost two smoke runs on 2026-09-02, both of which reported the
+    # mode they were NOT running. Say so instead.
+    _per_arm_presets = cfg.get("arm_aracne_config") or {}
+    if cfg.get("aracne_config_path") and _per_arm_presets:
+        print(f"NOTE: --aracne-config {cfg.get('aracne_config')!r} is OVERRIDDEN for "
+              f"{sorted(_per_arm_presets)} by arm_aracne_config in the run config; it applies "
+              f"only to arms absent from that map. Remove arm_aracne_config to use the flag.")
     # Same resolution for the per-arm overlays, so a YAML can name presets rather than paths.
     cfg["arm_aracne_config"] = {
         arm: _resolve_aracne_config_path(value)

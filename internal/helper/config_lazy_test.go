@@ -180,3 +180,17 @@ func TestLazyDescriptionsNilConfig(t *testing.T) {
 		t.Fatal("a nil config should resolve to disabled")
 	}
 }
+
+// claude_cli must validate, or `arac init` rejects the whole config and writes nothing --
+// which is how a benchmark run silently lost its .mcp.json and its regenerated contract while
+// still reporting a mode it was not running.
+func TestLazyProviderAcceptsClaudeCLI(t *testing.T) {
+	for _, p := range []string{"claude_cli", "CLAUDE_CLI", "anthropic", "openai", "deepseek", ""} {
+		if err := ValidateLazyDescriptions(LazyDescriptions{Provider: p}); err != nil {
+			t.Errorf("provider %q should validate, got %v", p, err)
+		}
+	}
+	if err := ValidateLazyDescriptions(LazyDescriptions{Provider: "nope"}); err == nil {
+		t.Error("an unknown provider must still be rejected")
+	}
+}

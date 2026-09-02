@@ -50,7 +50,9 @@ type LazyDescriptions struct {
 	// for the descriptions-generation-executor agent, which is where a project already says
 	// what it wants descriptions written by.
 	Model string `json:"model,omitempty"`
-	// Provider names the API to call ("anthropic", "openai", "deepseek"). Absent is inferred
+	// Provider names the API to call ("anthropic", "openai", "deepseek"), or "claude_cli" to
+	// generate through the Claude Code CLI on the user's subscription instead of an API key
+	// (see lazydesc.ProviderClaudeCLI). Absent is inferred
 	// from the model, so naming a model is normally enough.
 	Provider string `json:"provider,omitempty"`
 	// BaseURL points the provider at a different endpoint -- a gateway, a proxy, or a
@@ -198,9 +200,10 @@ const DefaultLazyHarness = "claude_code"
 // would conclude the feature does not work.
 func ValidateLazyDescriptions(l LazyDescriptions) error {
 	switch strings.ToLower(strings.TrimSpace(l.Provider)) {
-	case "", "anthropic", "openai", "deepseek":
+	case "", "anthropic", "openai", "deepseek", "claude_cli":
 		return nil
 	default:
-		return fmt.Errorf("descriptions.lazy.provider: unknown provider %q (want anthropic, openai or deepseek)", l.Provider)
+		return fmt.Errorf("descriptions.lazy.provider: unknown provider %q "+
+			"(want anthropic, openai, deepseek or claude_cli)", l.Provider)
 	}
 }

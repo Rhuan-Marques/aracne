@@ -1,0 +1,49 @@
+# A small taste: line_range aracne against a fair control, on the nine tasks the navigation
+# screen found HARDEST to localize.
+#
+# WHY THESE NINE. Across 103 screened baseline cells, these are the only tasks in repos of
+# <=5k describable nodes where the control needed 7+ shell commands to first touch a gold-patch
+# file, or never found it inside ten. On SWE-bench-Lite the equivalent set is empty: 81% of its
+# cells touch the patch file within two commands and none ever fail to. If a topology cannot
+# help here it cannot help anywhere, so this is the smallest honest test of the thesis.
+#
+# STRUCTURE ONLY, AND SAID PLAINLY. These fixtures are NOT description-swept, and lazy
+# generation cannot run in this environment (the only provider key present returns
+# "Insufficient Balance"), so a lazy fill is a silent no-op. `hide_no_description: false` is
+# therefore load-bearing: without it an undescribed neighbour is absent from the "# CONTEXT:"
+# block entirely and the aracne arm would ship an empty contract while claiming to be aracne.
+# With it, the block still names each neighbour by id and line range -- which is the part of
+# the line_range thesis under test anyway ("where do I look next"), just without the prose.
+# Read the result as a floor on aracne, not a measure of it.
+#
+# EQUAL SURFACES. Both arms get [Bash, Glob] and nothing else. Every earlier "win" in this
+# project was an artifact of unequal tool lists (-45% and -21%, both explained entirely by
+# prefix tokens the control paid for tools it never called), so this is not negotiable.
+
+sample_id: pilot1
+languages: [go, rust, typescript, javascript]
+
+seeds: 1
+arms: [baseline, aracne]
+
+run_harness: claude_code
+model: opus
+effort: medium
+max_turns: 80
+timeout_s: 2400
+run_parallel: 3
+
+grade_timeout_s: 7200
+grade_stall_timeout_s: 1800
+ni_margin: 0.10
+
+isolate_operator_config: true
+deny_answer_key: true
+allow_cold: true
+
+arm_builtin_tools:
+  baseline: [Bash, Glob]
+  aracne:   [Bash, Glob]
+
+arm_aracne_config:
+  aracne: pilot-aracne-read
