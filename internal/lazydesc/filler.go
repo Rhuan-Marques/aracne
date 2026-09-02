@@ -299,6 +299,20 @@ func (f *Filler) source(topo *domain.Topology, id string) string {
 	if !ok {
 		return ""
 	}
+	// Benchmark escape hatch: with ARACNE_DESCRIBE_FROM_COMMIT set, describe the resource as
+	// it stood at that commit rather than as it stands on disk. OFF by default and meant to
+	// stay off outside a harness -- see CleanSourceEnv in cleansource.go for why a normal user
+	// must be described from their working tree. A miss (file created during the run, range
+	// shifted past the committed bytes, cut that no longer contains the declaration) yields no
+	// description at all rather than a description of the wrong code.
+	if ref := cleanSourceRef(); ref != "" {
+		cut, ok := cutFromCommit(ref, res.Location.Path, res.Name,
+			res.Location.StartsAt, res.Location.EndsAt)
+		if !ok {
+			return ""
+		}
+		return cut
+	}
 	entry, err := f.mgr.Cut(res.Location)
 	if err != nil || entry == nil {
 		return ""

@@ -91,6 +91,7 @@ DEFAULTS = {
     # on a fixture you intend to describe from scratch.
     "scan_mode": "all",
     "coverage_min": 0.95,
+    "describe_from_commit": True,
     "allow_cold": False,
     "force_prepare": False,
     # --- description generation (the prep step) ---
@@ -1324,6 +1325,17 @@ def cmd_run(cfg: dict) -> int:
             "them anyway (paired analysis will still censor them).")
     if any(a != "baseline" for a in cfg["arms"]):
         _check_fixture_configs(tasks, fixtures_root, cfg)
+        # Tell aracne it is running inside a benchmark, so `descriptions.lazy` describes a
+        # resource as it stood at the fixture's base commit rather than as the agent has just
+        # rewritten it. Without this, a description generated after an edit describes the
+        # SOLVED code, and runner._run_cell would rightly refuse to harvest it -- so the nodes
+        # in exactly the files the task is about would never accumulate a description.
+        # Set process-wide rather than threaded through the driver because only aracne arms
+        # ever start an aracne process: a baseline cell has no topology, no guard hook and no
+        # filler, so the variable reaches nothing there. `describe_from_commit: false` in the
+        # run config opts out. See internal/lazydesc/cleansource.go.
+        if cfg.get("describe_from_commit", True):
+            os.environ["ARACNE_DESCRIBE_FROM_COMMIT"] = "HEAD"
 
     matrix = [(t, arm, seed)
               for t in tasks
