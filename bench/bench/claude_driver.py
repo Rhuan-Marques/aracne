@@ -203,15 +203,30 @@ def run_claude(problem: str, cwd, model: str, max_turns: int, timeout_s: int,
 
 def parse_output(stdout: str, stderr: str, returncode: int) -> RunResult:
     """Parse the JSON result object emitted by `claude --output-format json`."""
+    # Take the terminal {"type":"result"} event, NOT simply the last JSON line. When the
+    # session spawns a background task the CLI can emit a {"type":"system","subtype":
+    # "task_notification"} object AFTER the result, and parsing that as the result yields
+    # num_turns=0, an empty result_text and a bogus is_error -- the whole cell is then
+    # recorded as `agent_error: {"type":"system","subtype":"task_notification",...}` and,
+    # because a hard error stops scheduling, one such cell strands the entire matrix.
+    # Falls back to the last parseable object so a truncated stream still reports something.
     data: dict = {}
+    fallback: dict = {}
     for line in reversed((stdout or "").strip().splitlines()):
         line = line.strip()
-        if line.startswith("{"):
-            try:
-                data = json.loads(line)
-                break
-            except json.JSONDecodeError:
-                continue
+        if not line.startswith("{"):
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict) and obj.get("type") == "result":
+            data = obj
+            break
+        if not fallback and isinstance(obj, dict):
+            fallback = obj
+    if not data:
+        data = fallback
 
     usage = data.get("usage") or {}
     cache = int(usage.get("cache_creation_input_tokens", 0) or 0) + \
