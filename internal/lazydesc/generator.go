@@ -49,11 +49,22 @@ type Request struct {
 // unconfigured project is simply a project where lazy generation does nothing, and reporting
 // it as a failure on every read would turn a switched-off feature into noise.
 var GeneratorFactory = func(cfg helper.ResolvedLazyDescriptions) (Generator, error) {
-	provider, model, ok := resolveProvider(cfg)
-	if !ok {
-		return nil, nil
+	// An explicit `provider: "claude_cli"` skips the key probe entirely.
+	if strings.EqualFold(strings.TrimSpace(cfg.Provider), ProviderClaudeCLI) {
+		if !claudeCLIAvailable() {
+			return nil, nil
+		}
+		return &cliGenerator{bin: claudeCLIBinary(), model: claudeCLIModel(cfg.Model)}, nil
 	}
-	return &llmGenerator{provider: provider, model: model}, nil
+	if provider, model, ok := resolveProvider(cfg); ok {
+		return &llmGenerator{provider: provider, model: model}, nil
+	}
+	// Deliberately NOT a fallback. `provider: "claude_cli"` has to be asked for, because it
+	// spends the user's interactive Claude Code quota and adds a process launch to a read --
+	// surprising a project that simply has no API key with both, on every cold read, is worse
+	// than the feature staying off. TestGeneratorFactoryReturnsNothingWhenUnconfigured pins
+	// that contract.
+	return nil, nil
 }
 
 // llmGenerator is the production generator: one completion per batch, no tools.

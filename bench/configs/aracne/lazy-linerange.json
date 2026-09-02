@@ -1,10 +1,13 @@
 {
   "mode": "line_range",
+  "read": { "context_filter": { "hide_no_description": false } },
   "descriptions": {
     "lazy": {
       "enabled": true,
+      "provider": "claude_cli",
+      "model": "haiku",
       "max_nodes": 40,
-      "timeout_seconds": 120,
+      "timeout_seconds": 180,
       "batch_size": 12,
       "parallel": 4
     }
