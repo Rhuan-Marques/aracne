@@ -90,13 +90,26 @@ func (r *Read) ReadSlice(path string, from, to int) (string, error) {
 
 	body := sliceBody(r, covering, entry.Cut, from, to, locator(topo, r.cfgOrLoad()))
 
+	// A window's context section is restricted to the resources the window MENTIONS
+	// (RestrictTo below), so the fill is restricted to the same set: describing what the
+	// enclosing declaration reaches but this window never names would be paying for lines
+	// that are about to be filtered out. The body is unaffected by descriptions, so it is
+	// computed once and kept across the refresh.
+	mentioned := mentionedResourceIDs(topo, body)
+	if r.lazy.FillForReadIn(topo, coveringIDs(covering), mentioned) {
+		if refreshed, rErr := r.mgr.ReadAll(); rErr == nil {
+			topo = refreshed
+			covering = nodesCovering(topo, fileID, from, to)
+		}
+	}
+
 	unit := r.sliceUnit(topo, fileID, covering, body)
 	unit.Label = displayPath(topo, unit.Path)
 	unit.Imports = dropImportsAlreadyShown(unit.Imports, body)
 	unit.Deps = dropImportsAlreadyShown(unit.Deps, body)
 
 	st := renderstate.New()
-	st.RestrictTo(mentionedResourceIDs(topo, body))
+	st.RestrictTo(mentioned)
 	// Bound the context against the WINDOW, not against the response.
 	//
 	// renderstate's default budget (24 KB) is sized for a resource read, where the body is a

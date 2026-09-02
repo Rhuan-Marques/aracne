@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"aracne/internal/helper"
+	"aracne/internal/lazydesc"
 	"aracne/internal/topogrep"
 	"aracne/internal/topology/domain"
 )
@@ -51,7 +52,8 @@ func RunGrep(args []string) {
 	var ignore *domain.IgnoreMatcher
 	var descriptionKinds []domain.ResourceKind
 	lineRange := false
-	if cfg := helper.LoadConfig(helper.ConfigPath(*dbPath)); cfg != nil {
+	cfg := helper.LoadConfig(helper.ConfigPath(*dbPath))
+	if cfg != nil {
 		descriptionKinds = cfg.Grep.DescriptionKinds
 		lineRange = cfg.LineRangeIdentification()
 		if topo != nil && topo.Root != "" {
@@ -79,5 +81,8 @@ func RunGrep(args []string) {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+	// Same lazy fill the MCP grep tool runs: the CLI and the tool answer the same question,
+	// so they must answer it with the same descriptions.
+	lazydesc.New(manager, cfg, "").FillSearch(topo, res)
 	fmt.Println(topogrep.FormatResult(res, opt))
 }

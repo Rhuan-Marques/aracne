@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"aracne/internal/helper"
+	"aracne/internal/lazydesc"
 	"aracne/internal/llm/languages/gotools"
 	"aracne/internal/llm/languages/javatools"
 	"aracne/internal/llm/languages/jstools"
@@ -49,6 +50,10 @@ type Read struct {
 	// span no longer fits it, instead of handing the model a dead end. Optional: a nil
 	// registry only costs the self-heal, never correctness.
 	reg *scanner.Registry
+	// lazy fills in the descriptions this response is about to show and does not have. A nil
+	// Filler is the switched-off state and every call on it is a no-op, so there is no
+	// second code path for descriptions.lazy being false.
+	lazy *lazydesc.Filler
 }
 
 // NewRead builds the read tool. nativeReadAvailable comes from the agent's blocked_tools; reg
@@ -57,7 +62,17 @@ func NewRead(mgr *topology.TopologyManager, cfg *helper.Config, nativeReadAvaila
 	if cfg == nil {
 		cfg = helper.LoadConfig(helper.ConfigPath(mgr.DbPath()))
 	}
-	return &Read{mgr: mgr, nativeReadAvailable: nativeReadAvailable, cfg: cfg, reg: reg}
+	return &Read{
+		mgr: mgr, nativeReadAvailable: nativeReadAvailable, cfg: cfg, reg: reg,
+		lazy: lazydesc.New(mgr, cfg, ""),
+	}
+}
+
+// WithFiller replaces the lazy-description filler, which is how a test installs a generator
+// that does not need an API key. Returns the receiver so it can be chained onto NewRead.
+func (r *Read) WithFiller(f *lazydesc.Filler) *Read {
+	r.lazy = f
+	return r
 }
 
 // Name is "read" when the harness's own read is blocked, "read_resource" otherwise. Two tools
@@ -210,19 +225,39 @@ func (r *Read) ReadIDs(rawIDs []string, opt ReadIDsOptions) (string, error) {
 		maxSymbolLines = 0
 	}
 
-	var units []readunit.Unit
-	var problems []string
-	for _, id := range ids {
-		u, note, err := r.unitFor(topo, topoErr, id, allowed, kinds, filter, opt.ForcedKind, st, fileMode, skeletonThreshold)
-		switch {
-		case err != nil:
-			problems = append(problems, fmt.Sprintf("- %s: %v", id, err))
-		case note != "":
-			problems = append(problems, fmt.Sprintf("- %s: %s", id, note))
-		default:
-			u.Label = displayPath(topo, u.Path)
-			u.Body = abridgeSymbolBody(u, maxSymbolLines)
-			units = append(units, u)
+	build := func(topo *domain.Topology, topoErr error, st *renderstate.State) ([]readunit.Unit, []string) {
+		var units []readunit.Unit
+		var problems []string
+		for _, id := range ids {
+			u, note, err := r.unitFor(topo, topoErr, id, allowed, kinds, filter, opt.ForcedKind, st, fileMode, skeletonThreshold)
+			switch {
+			case err != nil:
+				problems = append(problems, fmt.Sprintf("- %s: %v", id, err))
+			case note != "":
+				problems = append(problems, fmt.Sprintf("- %s: %s", id, note))
+			default:
+				u.Label = displayPath(topo, u.Path)
+				u.Body = abridgeSymbolBody(u, maxSymbolLines)
+				units = append(units, u)
+			}
+		}
+		return units, problems
+	}
+
+	units, problems := build(topo, topoErr, st)
+
+	// The neighbours this response is about to name are only known once the units exist, so
+	// the fill happens between building them and rendering them -- and a fill that writes
+	// anything invalidates the units, which were assembled against the topology as it was a
+	// moment ago. Rebuilding is the cheap half of a step whose other half was a provider
+	// call, and it is the only way the render can see prose that did not exist when the
+	// bodies were cut. The state has to be fresh too: replaying the old ledger would suppress
+	// every enclosing type it already recorded as inlined.
+	if r.lazy.FillForRead(topo, unitIDs(units)) {
+		if refreshed, err := r.mgr.ReadAll(); err == nil {
+			topo, topoErr = refreshed, nil
+			st = renderstate.New()
+			units, problems = build(topo, topoErr, st)
 		}
 	}
 
@@ -250,6 +285,23 @@ func (r *Read) ReadIDs(rawIDs []string, opt ReadIDsOptions) (string, error) {
 		return "", fmt.Errorf("no readable resources for the given ids")
 	}
 	return out, nil
+}
+
+// unitIDs is the canonical ids a response will show as source: the seeds a read fill plans
+// from, and the set it must never describe (their bodies are the answer, not their prose).
+func unitIDs(units []readunit.Unit) []string {
+	out := make([]string, 0, len(units))
+	for _, u := range units {
+		if u.ID != "" {
+			out = append(out, u.ID)
+		}
+		// A whole-file read covers every declaration inside it. Those declarations are
+		// printed as source, so like the file itself they need no description of their own --
+		// but what they REACH is exactly what the file's context section lists, and none of
+		// it is reachable from the file node alone.
+		out = append(out, u.Covers...)
+	}
+	return out
 }
 
 // locator returns the function that names a resource by span, or nil under identification_mode

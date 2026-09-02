@@ -4,6 +4,7 @@ import (
 	"sort"
 
 	"aracne/internal/helper"
+	"aracne/internal/lazydesc"
 	"aracne/internal/llm/languages/gotools"
 	"aracne/internal/llm/languages/javatools"
 	"aracne/internal/llm/languages/jstools"
@@ -35,6 +36,11 @@ type toolDeps struct {
 	// nativeReadAvailable reports whether this agent still has the harness's own read tool,
 	// which decides whether the aracne one registers as "read" or "read_resource".
 	nativeReadAvailable bool
+	// lazy is the descriptions.lazy filler this profile's read and grep share. ONE per
+	// registry on purpose: the two tools then share an attempted-set and a mutex, so a
+	// long-lived `arac serve` cannot have a read and a search describing the same node twice.
+	// Nil for the description executor itself -- see lazyFillerFor.
+	lazy *lazydesc.Filler
 }
 
 // mcpToolConstructors maps each MCP tool name to its constructor. It is the
@@ -46,9 +52,10 @@ var mcpToolConstructors = map[string]func(toolDeps) tools.Tool{
 	// build time from the agent's blocked_tools, so the catalog key "read" and the runtime
 	// name can differ -- see BuildToolRegistry.
 	"read": func(d toolDeps) tools.Tool {
-		return universaltools.NewRead(d.manager, d.cfg, d.nativeReadAvailable, d.scannerReg)
+		return universaltools.NewRead(d.manager, d.cfg, d.nativeReadAvailable, d.scannerReg).
+			WithFiller(d.lazy)
 	},
-	"grep":                     func(d toolDeps) tools.Tool { return tools.NewGrep(d.manager) },
+	"grep":                     func(d toolDeps) tools.Tool { return tools.NewGrep(d.manager).WithFiller(d.lazy) },
 	"edit":                     func(d toolDeps) tools.Tool { return tools.NewEdit(d.manager, d.scannerReg) },
 	"write":                    func(d toolDeps) tools.Tool { return tools.NewWrite(d.manager, d.scannerReg) },
 	"warnings_list":            func(d toolDeps) tools.Tool { return tools.NewWarningsList(d.manager) },
@@ -168,6 +175,7 @@ func BuildToolRegistry(manager *topology.TopologyManager, scannerReg *scanner.Re
 		includeNotVisible:   cfg.Descriptions.IncludeNotVisible,
 		cfg:                 cfg,
 		nativeReadAvailable: NativeReadAvailable(cfg, harness, agentName),
+		lazy:                lazyFillerFor(manager, cfg, harness, agentName),
 	}
 	for _, name := range allMCPToolNames() {
 		if allowed[name] {
@@ -175,6 +183,22 @@ func BuildToolRegistry(manager *topology.TopologyManager, scannerReg *scanner.Re
 		}
 	}
 	return registry
+}
+
+// lazyFillerFor builds the descriptions.lazy filler for a tool profile, or nil for the
+// description executor.
+//
+// The executor is excluded because it is the ONE agent whose reads exist in order to write
+// descriptions. Letting its `read` lazily describe the neighbours of every resource it was
+// assigned would have a description run generate descriptions for resources it was not asked
+// about, on a second model, while the run that was asked about them is still going -- paying
+// twice for the same work and racing itself for the writes.
+func lazyFillerFor(manager *topology.TopologyManager, cfg *helper.Config, harness, agentName string) *lazydesc.Filler {
+	switch agentName {
+	case helper.DescriptionsExecutorAgent, "descriptions-executor":
+		return nil
+	}
+	return lazydesc.New(manager, cfg, harness)
 }
 
 // NativeReadAvailable reports whether the MCP server built for this (harness, agent) pair

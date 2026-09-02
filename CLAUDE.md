@@ -166,7 +166,16 @@ overwritten with defaults). Top-level sections:
   incoming "USED BY" edges, small-fn threshold, hide-undocumented,
   `max_inline_parent_lines`); **`pipe_passthrough`** (whether the guard
   exempts piped reads like `cmd | tail`).
-- **`descriptions`** — which `kinds` to document + `style_exemplars` count.
+- **`descriptions`** — which `kinds` to document + `style_exemplars` count, and
+  **`lazy`** (default **true**): generate a missing description at the moment a read or a
+  search is about to show it, instead of only in an `arac descriptions generate` sweep. The
+  read plans the nodes its `# CONTEXT:` / `# USED BY:` sections will name, generates the
+  missing ones with the description-executor's model (`haiku` by default), waits for them to
+  land in the DB, and re-renders; a search does the same for the nodes it found by name or by
+  content. Reads get slower on a cold repo and converge on the old speed as it warms up. It
+  accepts `true`/`false` or an object (`enabled`, `max_nodes`, `timeout_seconds`,
+  `batch_size`, `parallel`, `model`, `provider`), and is a no-op with no provider API key in
+  the environment. See `internal/lazydesc` and `PLAN-lazy-descriptions.md`.
 - **`llm`** — per-harness agent config under `<any>` / `opencode` / `claude_code`,
   each with `main_agent` + named `agents`. Fields: `model`, `mcp_tools`,
   `blocked_tools`, `plugins`, `params`. Resolution: per-harness block beats

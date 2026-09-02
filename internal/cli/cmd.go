@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"aracne/internal/helper"
+	"aracne/internal/lazydesc"
 	"aracne/internal/llm/languages/universaltools"
 	"aracne/internal/shellcmd"
 	"aracne/internal/topogrep"
@@ -285,6 +286,9 @@ func serveGrep(mgr *topology.TopologyManager, cfg *helper.Config, req shellcmd.R
 	if restrict != nil {
 		restrictResultToRange(res, restrict.StartsAt, restrict.EndsAt)
 	}
+	// After the range restriction, not before: a node the window dropped is a node this
+	// answer will never print, and describing it would be paying for a line nobody sees.
+	lazydesc.New(mgr, cfg, "").FillSearch(topo, res)
 	status := 0
 	if len(res.Matches) == 0 {
 		status = 1

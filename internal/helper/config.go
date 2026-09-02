@@ -167,6 +167,10 @@ type DescriptionsSection struct {
 	// read context filter would not render as a normal line (small functions /
 	// external vars configured full or hidden).
 	IncludeNotVisible bool `json:"include_not_visible,omitempty"`
+	// Lazy generates a missing description at the moment a read or a search is about to
+	// show it, instead of only in an `arac descriptions generate` sweep. On by default.
+	// See config_lazy.go; it accepts `true`/`false` or an object of tuning knobs.
+	Lazy LazyDescriptions `json:"lazy"`
 }
 
 // GrepSection tunes `grep` / `arac grep`.
@@ -691,6 +695,9 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("mode: unknown mode %q (want %s, %s, %s or %s)",
 			c.Mode, ModeMCP, ModeAracneRead, ModeInterceptID, ModeLineRange)
 	}
+	if err := ValidateLazyDescriptions(c.Descriptions.Lazy); err != nil {
+		return err
+	}
 	switch c.Integration.Mode {
 	case "", IntegrationTerminal, IntegrationMCP, IntegrationBoth:
 	default:
@@ -1134,6 +1141,10 @@ func validConfig(c *Config) bool {
 		// sentinels, is judged legacy, and EnsureConfig overwrites it with defaults -- so
 		// enabling the feature would silently turn it back off.
 		c.Features.BugManagement ||
+		// A `{"descriptions": {"lazy": false}}` file is the other edit a user makes by
+		// hand, and for the same reason it has to be recognised: judged legacy, it would be
+		// overwritten with defaults and silently turn the feature back on.
+		c.Descriptions.Lazy.Enabled != nil ||
 		// Same reasoning for the mode: `{"mode":"mcp"}` is a legitimate hand-written file,
 		// and treating it as legacy would overwrite it with defaults -- silently putting the
 		// project back on the mode it just opted out of. The two retired keys stay on this

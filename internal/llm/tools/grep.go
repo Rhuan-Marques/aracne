@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"aracne/internal/helper"
+	"aracne/internal/lazydesc"
 	"aracne/internal/topogrep"
 	"aracne/internal/topology"
 	"aracne/internal/topology/domain"
@@ -13,11 +14,21 @@ import (
 // LLM tool to search code contents and return topology resource matches.
 type Grep struct {
 	mgr *topology.TopologyManager
+	// lazy describes the nodes a search found and could not describe. Nil is the
+	// switched-off state and every call on it is a no-op.
+	lazy *lazydesc.Filler
 }
 
 // Creates a Grep tool for searching topology content with regex patterns.
 func NewGrep(mgr *topology.TopologyManager) *Grep {
-	return &Grep{mgr: mgr}
+	return &Grep{mgr: mgr, lazy: lazydesc.New(mgr, helper.LoadConfig(helper.ConfigPath(mgr.DbPath())), "")}
+}
+
+// WithFiller replaces the lazy-description filler, which is how a test installs a generator
+// that does not need an API key.
+func (g *Grep) WithFiller(f *lazydesc.Filler) *Grep {
+	g.lazy = f
+	return g
 }
 
 // Returns the tool name "grep".
@@ -92,6 +103,9 @@ func (g *Grep) Run(args json.RawMessage) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// A node found by its name or by a line in its body gets its description written now, so
+	// the header this result is about to print carries one. See lazydesc.Filler.FillSearch.
+	g.lazy.FillSearch(topo, res)
 	// Always a message, never "": an empty tool result reads as a broken tool rather than
 	// as an honest "nothing matched".
 	return topogrep.FormatResult(res, opt), nil
