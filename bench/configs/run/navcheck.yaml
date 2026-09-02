@@ -1,0 +1,43 @@
+# Navigation check: does this task set have any navigation headroom AT ALL?
+#
+# WHY THIS RUN EXISTS. Every aracne measurement to date was flat, and the linerange-20260902a
+# post-mortem found why: 81% of control cells touched a gold-patch file within their first two
+# shell commands (median position 1, 100% found it eventually). SWE-bench-Lite hands the model
+# the fix location -- 100% of its patches touch exactly ONE non-test file, and ~47% of its
+# issues name the file, a symbol, or carry a traceback. A topology tool cannot improve a search
+# that never happens.
+#
+# So before paying for descriptions on a new task set, MEASURE the new set the same way:
+# run the CONTROL only, cap the turns, and score first-touch with bench/first_touch.py.
+#
+# This run is deliberately cheap and deliberately not a comparison:
+#   - one arm (baseline). The control needs only a git clone -- no topology, no descriptions,
+#     no Docker images (arms.py:prepare_workdir), which is the whole point of screening first.
+#   - max_turns 10. We are measuring WHEN the patch file is first touched, not whether the task
+#     is solved, and the linerange data puts every first touch at position <= 10. A task that
+#     has not found it by then is exactly the "hard to navigate" case we are hunting.
+#   - --no-grade. Grading would pull one 1-3.5 GB eval image PER INSTANCE; first-touch is read
+#     straight off the transcripts.
+#
+# READ THE RESULT AS A GO/NO-GO: if first-touch is again concentrated at position 1-2, this task
+# set cannot show a navigation effect either, and no amount of aracne tuning will change that.
+
+sample_id: navcheck
+languages: [go, rust, typescript, javascript, java]
+
+seeds: 1
+arms: [baseline]
+
+run_harness: claude_code
+model: opus
+effort: medium
+max_turns: 10
+timeout_s: 900
+run_parallel: 4
+
+# Same surface the real comparison will use, so first-touch here predicts first-touch there.
+arm_builtin_tools:
+  baseline: [Bash, Glob]
+
+isolate_operator_config: true
+deny_answer_key: true
