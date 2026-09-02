@@ -59,7 +59,17 @@ DEFAULTS = {
     "sample_seed": 0,
     "sample_id": "default",
     "samples_dir": str(HERE / "samples"),
-    "fixtures_dir": str(HERE / "fixtures"),
+    # Agent working directories live OUTSIDE the repository on purpose. Claude Code discovers
+    # CLAUDE.md by walking UP from the cell's cwd, so a fixture nested under bench/ silently
+    # loaded this project's own CLAUDE.md into every cell of BOTH arms -- measured 2026-09-02:
+    # the same prompt answered "does your context mention rtk" NO from /tmp and YES from
+    # bench/fixtures/<repo>/worktree. That handed both arms the operator's RTK instructions
+    # ("always prefix commands with rtk"), which the models followed -- and a command whose
+    # first word is `rtk` is not a command shellcmd models, so aracne's interception never
+    # fired. n_intercepted was 0 in most aracne cells of hard9-20260902a.
+    # CLAUDE_CONFIG_DIR isolation does not help: it governs ~/.claude, not ancestor discovery.
+    "bench_workroot": str(Path.home() / ".cache" / "aracne-bench"),
+    "fixtures_dir": str(Path.home() / ".cache" / "aracne-bench" / "fixtures"),
     "oversample": 3,             # sample N x this, then prune oversized repos in `prepare`
     "max_describable_nodes": 600,  # drop candidate repos with more describable nodes than this
     "arms": ["baseline", "aracne"],
@@ -494,6 +504,38 @@ def _default_run_id() -> str:
 
 # Runtime-only / ephemeral keys excluded from the config snapshot saved in run_meta.json.
 _SNAPSHOT_SKIP = {"config_path", "aracne_config_path", "continue_run", "dry_run", "resume", "out"}
+
+
+def assert_no_ancestor_claude_md(path: Path, what: str) -> None:
+    """Refuse to run if any ANCESTOR of an agent working directory carries a CLAUDE.md.
+
+    WHY THIS IS FATAL RATHER THAN A WARNING. Claude Code discovers project memory by walking
+    up from the session's cwd, so a benchmark cell nested under a repository inherits that
+    repository's CLAUDE.md -- in BOTH arms, invisibly, with no marker in the transcript beyond
+    the model suddenly behaving as that file instructs.
+
+    Measured on 2026-09-02: with cells running under bench/fixtures/, the operator's RTK
+    section ("always prefix commands with rtk") reached every cell. Both arms then typed
+    `rtk grep` / `rtk git`, and `rtk` is not a command internal/shellcmd models, so the guard
+    passed it straight through -- aracne's interception fired 0 times in most aracne cells
+    while the run still reported a 0.57x context ratio in aracne's favour. A silent confound
+    that flatters the thing under test is exactly the failure this harness keeps re-learning,
+    so the check aborts instead of printing something a reader can scroll past.
+
+    The walk stops at the filesystem root. `~/.claude/CLAUDE.md` is NOT an ancestor of anything
+    under ~/.cache and is separately handled by CLAUDE_CONFIG_DIR isolation.
+    """
+    path = Path(path).resolve()
+    for parent in [path, *path.parents]:
+        candidate = parent / "CLAUDE.md"
+        if candidate.is_file():
+            raise SystemExit(
+                f"refusing to run: {what} {path} inherits {candidate}.\n"
+                f"Claude Code walks UP from a cell's cwd, so that file would be injected into "
+                f"every cell of BOTH arms and silently steer them.\n"
+                f"Point `bench_workroot` / `fixtures_dir` at a directory with no CLAUDE.md "
+                f"above it (default: ~/.cache/aracne-bench)."
+            )
 
 
 def _cfg_snapshot(cfg: dict) -> dict:
@@ -1415,7 +1457,11 @@ def cmd_run(cfg: dict) -> int:
     run_id = cfg["run_name"]
     runs_path = out_dir / "runs.jsonl"
     repos_dir = fixtures_root / "_repos"   # shared with prepare's cache
-    work_dir = out_dir / "work"
+    # Under bench_workroot, never under out_dir: out_dir lives in the repo, and a cell whose
+    # cwd sits below a CLAUDE.md inherits it. See "bench_workroot" in DEFAULTS.
+    work_dir = Path(cfg["bench_workroot"]) / "work" / out_dir.name
+    assert_no_ancestor_claude_md(work_dir, "baseline work dir")
+    assert_no_ancestor_claude_md(Path(cfg["fixtures_dir"]), "fixtures dir")
     work_dir.mkdir(parents=True, exist_ok=True)
 
     # Decide which matrix cells are already done (and shouldn't be re-run).

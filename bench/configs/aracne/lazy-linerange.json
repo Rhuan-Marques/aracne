@@ -1,14 +1,12 @@
 {
-  "integration": { "mode": "terminal" },
-  "identification_mode": "line_range",
+  "mode": "line_range",
   "descriptions": {
     "lazy": {
       "enabled": true,
       "max_nodes": 40,
       "timeout_seconds": 120,
       "batch_size": 12,
-      "parallel": 4,
-      "model": "claude-haiku-4-5"
+      "parallel": 4
     }
   },
   "mcp_tools": [],

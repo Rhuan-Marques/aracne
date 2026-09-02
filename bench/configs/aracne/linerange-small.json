@@ -1,0 +1,11 @@
+{
+  "mode": "line_range",
+  "read": {
+    "context_filter": {
+      "hide_no_description": false
+    }
+  },
+  "descriptions": { "lazy": false },
+  "mcp_tools": [],
+  "blocked_tools": []
+}
