@@ -46,4 +46,4 @@ arm_builtin_tools:
   aracne:   [Bash, Glob]
 
 arm_aracne_config:
-  aracne: linerange-small
+  aracne: lazy-linerange

@@ -152,7 +152,8 @@ def _terminate(proc: subprocess.Popen) -> None:
             continue
 
 
-def _run_harness(cmd: list[str], cwd: Path, cfg: dict, watch, label: str) -> None:
+def _run_harness(cmd: list[str], cwd: Path, cfg: dict, watch, label: str,
+                 env: dict | None = None) -> None:
     """Run a grading harness under two clocks, raising GradeTimeout when either fires.
 
     total  — `grade_timeout_s`: an absolute cap on the whole grading call.
@@ -171,7 +172,8 @@ def _run_harness(cmd: list[str], cwd: Path, cfg: dict, watch, label: str) -> Non
     # start_new_session so the whole harness process group can be signalled at once. It also
     # detaches the harness from the terminal, so Ctrl-C no longer reaches it on its own —
     # hence the KeyboardInterrupt handler below, which must kill it explicitly.
-    proc = subprocess.Popen(cmd, cwd=str(cwd), start_new_session=True)
+    proc = subprocess.Popen(cmd, cwd=str(cwd), start_new_session=True,
+                            env={**os.environ, **(env or {})} if env else None)
     try:
         while True:
             try:
@@ -301,6 +303,8 @@ def _grade_batch(source: str, arm: str, tag: str, items: list[tuple],
     try:
         if source == "swe_bench":
             resolved = _grade_swe(items, arm, cfg, out_dir, tag)
+        elif source == "swe_bench_live":
+            resolved = _grade_live(items, arm, cfg, out_dir, tag)
         else:
             resolved = _grade_multi(items, arm, cfg, out_dir, tag)
     except GradeTimeout as e:
@@ -381,6 +385,107 @@ def _grade_swe(items: list[tuple], arm: str, cfg: dict, out_dir: Path,
     data = json.loads(report.read_text(encoding="utf-8"))
     resolved_ids = set(data.get("resolved_ids", []))
     return {task.key: (task.key in resolved_ids) for row, task, _arm, patch in items}
+
+
+# Where the SWE-bench-Live harness lives. It is NOT pip-installed on purpose: its pyproject
+# declares `name = "swebench"`, so installing it would shadow the real swebench package the
+# SWE-bench path depends on (it in fact depends on that package itself). Running it from its
+# source tree keeps both usable at once.
+LIVE_HARNESS_DIR = Path(
+    os.environ.get("ARACNE_SWE_LIVE_DIR")
+    or Path.home() / ".cache" / "aracne-bench" / "tools" / "SWE-bench-Live"
+)
+
+
+def _grade_live(items: list[tuple], arm: str, cfg: dict, out_dir: Path,
+                tag: str = "") -> dict[str, bool]:
+    """Grade one SWE-bench-Live batch (`SWE-bench-Live/*`, including MultiLang).
+
+    Its harness differs from SWE-bench's in three ways that matter here:
+
+      dataset      it accepts a LOCAL .jsonl as --dataset, so the batch's own rows are handed
+                   over directly. That is what lets a hand-picked, cross-language sample be
+                   graded in one call -- via Hugging Face it would need one call per language
+                   split, because MultiLang stores each language as its own split.
+      predictions  --patch_dir is a single JSON object {instance_id: {"model_patch": diff}},
+                   not SWE-bench's JSONL of prediction records.
+      verdicts     no aggregate report file is guaranteed; the per-instance truth is
+                   <output_dir>/<instance_id>/report.json with a "resolved" boolean.
+
+    Each instance builds its own Docker image (1-3.5 GB compressed), so the stall clock in
+    _run_harness is doing real work here.
+    """
+    src = (cfg.get("sources") or {}).get("swe_bench_live") or {}
+    harness = Path(src.get("harness_dir") or LIVE_HARNESS_DIR)
+    if not (harness / "evaluation" / "evaluation.py").is_file():
+        raise SystemExit(
+            f"SWE-bench-Live harness not found at {harness}.\n"
+            f"  git clone https://github.com/microsoft/SWE-bench-Live {harness}\n"
+            f"  git -C {harness} submodule update --init --depth 1   # RepoLaunch\n"
+            f"Do NOT `pip install` it: its pyproject is named 'swebench' and would shadow the "
+            f"real package. Set ARACNE_SWE_LIVE_DIR to override the location."
+        )
+
+    suffix = f"-{tag}" if tag else ""
+    dataset = out_dir / f"live_dataset_{arm}{suffix}.jsonl"
+    preds = out_dir / f"live_preds_{arm}{suffix}.json"
+    logs = out_dir / f"live_logs_{arm}{suffix}"
+    logs.mkdir(parents=True, exist_ok=True)
+
+    # The harness reads every eval column off the row (docker_image, rebuild_cmds, test_cmds,
+    # log_parser, FAIL_TO_PASS, PASS_TO_PASS), which is exactly what task.raw preserved.
+    with dataset.open("w", encoding="utf-8") as f:
+        for _row, task, _arm, _patch in items:
+            f.write(json.dumps(task.raw) + "\n")
+    preds.write_text(json.dumps(
+        {task.key: {"model_patch": patch} for _row, task, _arm, patch in items},
+        indent=1), encoding="utf-8")
+
+    label = f"swe_bench_live/{arm}" + (f"/{tag}" if tag else "")
+    cmd = [_harness_python("swebench"), "-m", "evaluation.evaluation",
+           "--dataset", str(dataset),
+           "--patch_dir", str(preds),
+           "--platform", src.get("platform", "linux"),
+           "--output_dir", str(logs),
+           "--workers", str(src.get("max_workers", 2)),
+           "--overwrite", "0"]
+    try:
+        # cwd is the harness root because evaluation.py does
+        # sys.path.insert(0, os.getcwd()/"launch") to reach its RepoLaunch submodule.
+        _run_harness(cmd, harness, cfg, watch=[logs], label=label,
+                     env={"PYTHONPATH": str(harness)})
+    except GradeTimeout as e:
+        raise GradeTimeout(str(e), _parse_live_logs(logs, items)) from None
+    except subprocess.CalledProcessError:
+        partial = _parse_live_logs(logs, items)
+        if not partial:
+            raise
+        print(f"[grade] {label} harness aborted; keeping {len(partial)} verdict(s) "
+              f"it had already written.")
+        return partial
+
+    return _parse_live_logs(logs, items)
+
+
+def _parse_live_logs(logs: Path, items: list[tuple]) -> dict[str, bool]:
+    """Per-instance verdicts from <logs>/<instance_id>/report.json.
+
+    An instance with no report, or a report whose "resolved" is null, is left OUT of the
+    result rather than recorded as a failure: the harness never judged it, and calling that a
+    failure would quietly charge the arm for a build that did not run.
+    """
+    out: dict[str, bool] = {}
+    for _row, task, _arm, _patch in items:
+        report = logs / task.key / "report.json"
+        if not report.is_file():
+            continue
+        try:
+            resolved = json.loads(report.read_text(encoding="utf-8")).get("resolved")
+        except (OSError, ValueError):
+            continue
+        if resolved is not None:
+            out[task.key] = bool(resolved)
+    return out
 
 
 def _parse_swe_logs(out_dir: Path, run_id: str, model: str, items: list[tuple]) -> dict[str, bool]:
