@@ -21,3 +21,15 @@ import pytest
 def tmp(tmp_path: Path) -> Path:
     """A per-test temporary directory (alias for pytest's `tmp_path`)."""
     return tmp_path
+
+
+@pytest.fixture
+def root(tmp_path: Path) -> Path:
+    """Same thing under the name `test_fixturehygiene.py` uses.
+
+    That file was written to run as a standalone script (`python3 bench/test_fixturehygiene.py`),
+    so its cases take a `root` directory its own `main()` supplies. pytest collects them anyway
+    -- they are named `test_*` -- and errored on the missing fixture, so all five had never run
+    here either.
+    """
+    return tmp_path

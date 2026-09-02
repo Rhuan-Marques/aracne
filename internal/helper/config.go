@@ -299,69 +299,82 @@ type FeaturesSection struct {
 	BugManagement bool `json:"bug_management"`
 }
 
-// Identification modes for Config.IdentificationMode.
+// The four modes of Config.Mode.
+//
+// WHY FOUR MODES AND NOT A CROSS-PRODUCT. These used to be two independent keys --
+// `integration.mode` (terminal/mcp/both) and `identification_mode` (id/line_range) -- plus five
+// booleans under `terminal`. Nothing folded them together, so combinations existed that made no
+// sense and shipped anyway: `mcp` + `line_range` advertised spans in every grep header while the
+// only reader available was an MCP `read` that takes ids and nothing else, and the contract for
+// that project never mentioned a line range at all. The surfaces are not independent axes; they
+// are four coherent products, and naming them as four is what stops the incoherent fifth from
+// being reachable.
+//
+// Each mode answers three questions at once: which tools exist, which shell commands aracne
+// answers, and what vocabulary the contract teaches. Nothing else may re-decide any of them.
 const (
-	// IdentifyLineRange addresses a resource the way the model already addresses code: by
-	// path and line span. It is the default.
+	// ModeMCP serves capabilities as MCP tools: a single `read`, plus the non-read tools the
+	// project enables. Shell READS are left alone; shell grep is still intercepted, and
+	// blocked_tools may block or redirect a native/bash read into aracne -- the only mode in
+	// which blocked_tools does anything at all.
+	ModeMCP = "mcp"
+	// ModeAracneRead ships no MCP tools. The contract points at `arac read <id>` for symbols
+	// and asks the model to prefer it over opening files. Shell reads are left alone; shell
+	// grep is intercepted. It is the default.
+	ModeAracneRead = "aracne_read"
+	// ModeInterceptID intercepts the shell reads the model already types (`cat`, `head`,
+	// `tail`, `sed -n`) and answers them from the topology, addressing declarations by
+	// resource ID -- which those commands then accept where they accept a path.
+	ModeInterceptID = "intercept_id"
+	// ModeLineRange intercepts the same commands and answers them the same way, but addresses
+	// declarations by `path:start-end`: the vocabulary the model already uses for code.
+	ModeLineRange = "line_range"
+)
+
+// DefaultMode is what a config with no mode key -- and no legacy key to migrate -- resolves to.
+const DefaultMode = ModeAracneRead
+
+// Identification modes for the legacy Config.IdentificationMode key.
+//
+// Deprecated: superseded by Config.Mode. Kept because an existing config still decodes into it
+// and legacyMode() maps it forward.
+const (
+	// IdentifyLineRange addressed a resource by path and line span.
 	IdentifyLineRange = "line_range"
-	// IdentifyID addresses a resource by its topology ID, which is what every surface did
-	// before this key existed.
+	// IdentifyID addressed a resource by its topology ID.
 	IdentifyID = "id"
 )
 
-// Integration modes for IntegrationSection.Mode.
+// Integration modes for the legacy IntegrationSection.Mode key.
+//
+// Deprecated: superseded by Config.Mode. Read only by legacyMode().
 const (
-	// IntegrationTerminal is the default: aracne reaches the agent by enriching the shell
-	// commands it already runs. `arac init` writes no MCP server.
+	// IntegrationTerminal enriched the shell commands the agent already runs.
 	IntegrationTerminal = "terminal"
-	// IntegrationMCP is the previous default: capabilities arrive as MCP tools.
+	// IntegrationMCP served capabilities as MCP tools.
 	IntegrationMCP = "mcp"
-	// IntegrationBoth serves both surfaces at once.
+	// IntegrationBoth served both surfaces at once.
 	IntegrationBoth = "both"
 )
 
-// IntegrationSection selects HOW aracne reaches an agent.
+// IntegrationSection is the legacy surface selector.
 //
-// WHY THIS IS A MODE AND NOT A FLAG. The two surfaces are not additive by default: an MCP
-// `read` tool and an intercepted `cat` answer the same question, and offering both makes the
-// model choose -- which costs a tool-schema block on every request to advertise a capability
-// the terminal already has. Every artifact `arac init` writes (the MCP server entry, the
-// permission allow-list, the contract in CLAUDE.md) is derived from this one field so the
-// three can never disagree.
-//
-// ABSENT MEANS "terminal". That is a deliberate breaking default: a project upgrading across
-// this change and re-running `arac init` loses its MCP server entry unless it says
-// "mcp"/"both". `arac init` prints that plainly rather than doing it silently.
+// Deprecated: superseded by Config.Mode. An existing config still decodes into it and
+// legacyMode() maps it forward -- "mcp" becomes ModeMCP, and "terminal"/"both" become
+// ModeInterceptID or ModeLineRange depending on the old identification_mode. Nothing reads
+// this field except that mapping.
 type IntegrationSection struct {
 	Mode string `json:"mode"`
 }
 
-// TerminalSection tunes the terminal surface: which shell commands aracne answers, and how
-// much it is allowed to say in reply.
+// TerminalSection is what is left of the terminal knobs once the mode owns the decisions.
+//
+// It held five booleans -- intercept, enhance_files, enhance_resources, grep,
+// prefer_resource_ids -- and every one of them has become a fact about the mode instead. A
+// project does not want "interception on, files off": it wants one of the four products.
+// MaxOverserve survives because it is genuinely orthogonal, a numeric ceiling that means the
+// same thing whichever mode is answering.
 type TerminalSection struct {
-	// Intercept is the master switch. Off, the guard never rewrites a command and the whole
-	// feature is inert -- the shipped escape hatch for a project that wants the topology
-	// without the interception.
-	Intercept *bool `json:"intercept"`
-	// EnhanceFiles decides Case 1: a read of a file the topology KNOWS. Off, such a read is
-	// served by the plain command, exactly as a read of an unindexed file already is.
-	EnhanceFiles *bool `json:"enhance_files"`
-	// EnhanceResources decides Case 2: whether a resource ID may stand where a path does
-	// (`head -20 app.Flask`).
-	EnhanceResources *bool `json:"enhance_resources"`
-	// Grep decides whether shell searches are answered by the topology-annotated grep.
-	Grep *bool `json:"grep"`
-	// PreferResourceIDs controls ONE sentence of the generated contract: the line telling the
-	// model to prefer a resource ID over a path.
-	//
-	// It exists to be A/B'd rather than argued about. The advice is plausible -- an ID is a
-	// narrower question and its answer carries the neighbours' descriptions -- but measured on
-	// the clap fixture a resource read is 3,159 bytes against 1,663 for a line window, so on
-	// bytes alone it points at the more expensive shape. Whether the context it buys removes
-	// enough follow-up reads to pay for that is a question about model behaviour, which no
-	// amount of reading the renderer can settle. Absent means the default (true, the shipped
-	// wording); the two arms of bench/configs/run/ab-prefer-ids.yaml differ in this key alone.
-	PreferResourceIDs *bool `json:"prefer_resource_ids"`
 	// MaxOverserve bounds the answer against what was asked for: past this multiple of the
 	// raw bytes the command would have printed, aracne runs the real command instead.
 	//
@@ -381,17 +394,20 @@ type Config struct {
 	LLM          LLMSection          `json:"llm"`
 	Viz          VizSection          `json:"viz"`
 	Features     FeaturesSection     `json:"features"`
-	Integration  IntegrationSection  `json:"integration"`
 	Terminal     TerminalSection     `json:"terminal"`
-	// IdentificationMode decides how every surface NAMES a resource to the model: by
-	// topology ID, or by the path and line span the model already uses to address code.
+	// Mode is the one dial: which tools exist, which shell commands aracne answers, and what
+	// vocabulary the contract teaches. See the Mode* constants for what each one is.
 	//
-	// WHY THIS IS A MODE AND NOT A PREFERENCE. Measured over ab-prefer-ids-20260902a, the
-	// model used a resource ID as a command operand 0 times in 408 shell commands -- with
-	// the contract asking it to, and with intercepted greps printing the IDs above every
-	// hit. In the same run every one of those 408 commands addressed code as file+line.
-	// A resource ID is aracne's vocabulary; a line range is the shell's. Absent means
-	// line_range: the evidence for the ID form is a run of zeros.
+	// Absent, it resolves to whatever the legacy integration.mode/identification_mode pair
+	// said, and to DefaultMode when neither is set. EffectiveMode() is the only reader.
+	Mode string `json:"mode"`
+	// Integration is the legacy surface key.
+	//
+	// Deprecated: set Mode instead. Read only by legacyMode().
+	Integration IntegrationSection `json:"integration"`
+	// IdentificationMode is the legacy addressing key.
+	//
+	// Deprecated: set Mode instead. Read only by legacyMode().
 	IdentificationMode string `json:"identification_mode"`
 	// Paths marks directories/files (relative to the topology root) as hidden or
 	// visible. Hidden paths are skipped by the indexing and scan stages in every
@@ -511,7 +527,11 @@ func (c *Config) EffectiveFileMode() string {
 	case FileModeFull:
 		return FileModeFull
 	}
-	if c.TerminalEnabled() {
+	// Skeleton everywhere the read arrives as a whole-file request the model did not have to
+	// think about -- an intercepted `cat`, or `arac read <file>`. ModeMCP keeps "full": there
+	// a file read is an explicit tool call against a named id, which is already the deliberate
+	// choice skeleton mode exists to make the model make.
+	if c.EffectiveMode() != ModeMCP {
 		return FileModeSkeleton
 	}
 	return FileModeFull
@@ -665,15 +685,23 @@ func (c *Config) Validate() error {
 	if err := ValidateReadKinds(c.Read.Kinds); err != nil {
 		return fmt.Errorf("read.kinds: %w", err)
 	}
+	switch strings.ToLower(strings.TrimSpace(c.Mode)) {
+	case "", ModeMCP, ModeAracneRead, ModeInterceptID, ModeLineRange:
+	default:
+		return fmt.Errorf("mode: unknown mode %q (want %s, %s, %s or %s)",
+			c.Mode, ModeMCP, ModeAracneRead, ModeInterceptID, ModeLineRange)
+	}
 	switch c.Integration.Mode {
 	case "", IntegrationTerminal, IntegrationMCP, IntegrationBoth:
 	default:
-		return fmt.Errorf("integration.mode: unknown mode %q (want terminal, mcp or both)", c.Integration.Mode)
+		return fmt.Errorf("integration.mode: unknown mode %q (want terminal, mcp or both). "+
+			"This key is superseded by the top-level \"mode\"", c.Integration.Mode)
 	}
 	switch strings.ToLower(strings.TrimSpace(c.IdentificationMode)) {
 	case "", IdentifyLineRange, IdentifyID:
 	default:
-		return fmt.Errorf("identification_mode: unknown mode %q (want line_range or id)", c.IdentificationMode)
+		return fmt.Errorf("identification_mode: unknown mode %q (want line_range or id). "+
+			"This key is superseded by the top-level \"mode\"", c.IdentificationMode)
 	}
 	checkAgent := func(path string, mcpTools, blockedTools []string) error {
 		if err := toolspec.ValidateMCPTools(mcpTools); err != nil {
@@ -744,22 +772,28 @@ func DefaultGrepDescriptionKinds() []domain.ResourceKind {
 // read_interface, read_named_type, read_file, read_package, read_dependency) are gone:
 // listing an agent's readable KINDS is now read.kinds, which is a project-wide setting, and
 // "read" here only says whether this agent may read at all.
+//
+// grep, edit and write are gone too, for a different reason: their shell forms are intercepted
+// and answered by aracne in every mode, so a tool for them offered a second way to ask one
+// question and charged a schema block per request for the privilege. See
+// toolspec.IsShellServedTool. A config that still lists one is not an error -- ServableMCPTools
+// drops it -- but a config aracne writes should not.
 func DefaultAgentMCPTools(agentName string) []string {
 	switch agentName {
 	case "descriptions-generation-executor", "descriptions-executor":
-		return []string{"read", "grep", "update_description"}
+		return []string{"read", "update_description"}
 	case "bug-hunter":
-		return []string{"read", "grep", "bug_report"}
+		return []string{"read", "bug_report"}
 	case "bug-judge":
-		return []string{"read", "grep", "bug_list", "bug_acknowledge", "bug_dismiss", "bug_delete"}
+		return []string{"read", "bug_list", "bug_acknowledge", "bug_dismiss", "bug_delete"}
 	case "bug-solver":
-		return []string{"read", "grep", "edit", "write", "warnings_list", "bug_delete"}
+		return []string{"read", "warnings_list", "bug_delete"}
 	default:
 		// The bug pipeline is a v2 feature and is not part of the default surface, so
 		// `bug_report`/`bug_list` are NOT here: their schemas cost roughly 260 tokens on
 		// every single request for a workflow the shipped binary does not run. Projects
 		// using the bug agents add them back via llm.<harness>.main_agent.mcp_tools.
-		return []string{"read", "grep", "edit", "write", "warnings_list"}
+		return []string{"read", "warnings_list"}
 	}
 }
 
@@ -883,16 +917,11 @@ func DefaultConfig() *Config {
 	return &Config{
 		Scan:  ScanSection{Mode: ScanModeDefault, Ignore: []string{}, Workers: 0, Progress: ProgressAuto, PreTool: PreToolScanDefault},
 		Paths: []domain.PathRule{},
-		// The terminal is the default surface; see IntegrationSection.
-		Integration:        IntegrationSection{Mode: IntegrationTerminal},
-		IdentificationMode: IdentifyLineRange,
+		// Stamped explicitly rather than left to the default: a written config should say
+		// which of the four products it is, not make the reader know what absence means.
+		Mode: DefaultMode,
 		Terminal: TerminalSection{
-			Intercept:         boolPtr(true),
-			EnhanceFiles:      boolPtr(true),
-			EnhanceResources:  boolPtr(true),
-			Grep:              boolPtr(true),
-			PreferResourceIDs: boolPtr(true),
-			MaxOverserve:      intPtr(DefaultTerminalMaxOverserve),
+			MaxOverserve: intPtr(DefaultTerminalMaxOverserve),
 		},
 		Read: ReadSection{
 			MaxFileSize:     512 * 1024,
@@ -984,7 +1013,9 @@ func (c *Config) EffectiveAgent(harness, agentName string) AgentConfig {
 	hb := harnessBlock(c, harness)
 	main := mergeAgent(c.LLM.Any.MainAgent, hb.MainAgent)
 	if agentName == "" || agentName == "main" || agentName == "default" {
-		return resolveInherits(main, main)
+		out := resolveInherits(main, main)
+		out.MCPTools = c.ServableMCPTools(out.MCPTools)
+		return out
 	}
 	var anyAg, hAg AgentConfig
 	if c.LLM.Any.Agents != nil {
@@ -994,7 +1025,34 @@ func (c *Config) EffectiveAgent(harness, agentName string) AgentConfig {
 		hAg = hb.Agents[agentName]
 	}
 	merged := mergeAgent(anyAg, hAg)
-	return resolveInherits(merged, main)
+	out := resolveInherits(merged, main)
+	out.MCPTools = c.ServableMCPTools(out.MCPTools)
+	return out
+}
+
+// ServableMCPTools narrows a configured mcp_tools list to what this mode's server actually
+// registers, preserving order.
+//
+// EVERY consumer goes through it -- the server registry, the generated agent markdown, the
+// Claude permission rules, the OpenCode permission block. That is the whole point: a name in
+// one of those that the server does not register denies the agent a tool SILENTLY, which is the
+// drift TestGeneratorMatchesServer exists to catch, and the cheapest way to never have it is to
+// give the two one answer rather than two that agree today.
+//
+// Outside ModeMCP the answer is "none", which is what "no MCP tools" has to mean in the three
+// modes that do not have them.
+func (c *Config) ServableMCPTools(names []string) []string {
+	if !c.MCPEnabled() || len(names) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		if toolspec.IsShellServedTool(n) {
+			continue
+		}
+		out = append(out, n)
+	}
+	return out
 }
 
 func mergeAgent(base, over AgentConfig) AgentConfig {
@@ -1076,12 +1134,14 @@ func validConfig(c *Config) bool {
 		// sentinels, is judged legacy, and EnsureConfig overwrites it with defaults -- so
 		// enabling the feature would silently turn it back off.
 		c.Features.BugManagement ||
-		// Same reasoning for the terminal surface: `{"integration":{"mode":"mcp"}}` is a
-		// legitimate hand-written file, and treating it as legacy would overwrite it with
-		// defaults -- silently putting the project back on the mode it just opted out of.
+		// Same reasoning for the mode: `{"mode":"mcp"}` is a legitimate hand-written file,
+		// and treating it as legacy would overwrite it with defaults -- silently putting the
+		// project back on the mode it just opted out of. The two retired keys stay on this
+		// list for exactly as long as they are still mapped forward.
+		c.Mode != "" ||
 		c.Integration.Mode != "" ||
 		c.IdentificationMode != "" ||
-		c.Terminal.Intercept != nil
+		c.Terminal.MaxOverserve != nil
 }
 
 // Terminal-surface defaults. Interception ships ON: it is the product, and every branch it
@@ -1092,65 +1152,114 @@ const (
 	DefaultTerminalMaxOverserve = 4
 )
 
-// EffectiveIntegrationMode returns the configured surface, defaulting to terminal and
-// normalizing anything unrecognized to it rather than failing -- an unreadable mode must not
-// leave a project with no surface at all.
-func (c *Config) EffectiveIntegrationMode() string {
-	switch c.Integration.Mode {
-	case IntegrationMCP, IntegrationBoth, IntegrationTerminal:
-		return c.Integration.Mode
+// EffectiveMode resolves the one dial, in three tiers: the explicit key, then the legacy
+// integration.mode/identification_mode pair, then DefaultMode.
+//
+// An unrecognized value falls through to the same resolution rather than failing. A config
+// aracne cannot read must never leave a project with no surface at all; Validate() is where a
+// typo is reported, loudly and once.
+func (c *Config) EffectiveMode() string {
+	switch strings.ToLower(strings.TrimSpace(c.Mode)) {
+	case ModeMCP:
+		return ModeMCP
+	case ModeAracneRead:
+		return ModeAracneRead
+	case ModeInterceptID:
+		return ModeInterceptID
+	case ModeLineRange:
+		return ModeLineRange
 	}
-	return IntegrationTerminal
-}
-
-// TerminalEnabled reports whether the terminal surface is served at all.
-func (c *Config) TerminalEnabled() bool {
-	m := c.EffectiveIntegrationMode()
-	return m == IntegrationTerminal || m == IntegrationBoth
-}
-
-// MCPEnabled reports whether `arac init` should wire the MCP server.
-func (c *Config) MCPEnabled() bool {
-	m := c.EffectiveIntegrationMode()
-	return m == IntegrationMCP || m == IntegrationBoth
-}
-
-// EffectiveInterceptShell reports whether the guard may rewrite a shell command. It folds in
-// the integration mode, so `mode: "mcp"` never intercepts however the terminal block reads.
-func (c *Config) EffectiveInterceptShell() bool {
-	return c.TerminalEnabled() && boolOr(c.Terminal.Intercept, true)
-}
-
-// EffectiveEnhanceFiles reports whether a read of a TRACKED file is answered by aracne.
-func (c *Config) EffectiveEnhanceFiles() bool { return boolOr(c.Terminal.EnhanceFiles, true) }
-
-// EffectiveEnhanceResources reports whether a resource ID may stand where a path does.
-func (c *Config) EffectiveEnhanceResources() bool {
-	return boolOr(c.Terminal.EnhanceResources, true)
-}
-
-// EffectiveIdentificationMode resolves how resources are named, defaulting to line_range and
-// normalizing anything unrecognized to it rather than failing.
-func (c *Config) EffectiveIdentificationMode() string {
-	if strings.ToLower(strings.TrimSpace(c.IdentificationMode)) == IdentifyID {
-		return IdentifyID
+	if m, ok := c.legacyMode(); ok {
+		return m
 	}
-	return IdentifyLineRange
+	return DefaultMode
 }
 
-// LineRangeIdentification reports whether resources are named by path and line span. Every
-// consumer reads the mode through this, so the two spellings cannot drift apart.
-func (c *Config) LineRangeIdentification() bool {
-	return c.EffectiveIdentificationMode() == IdentifyLineRange
+// legacyMode maps a pre-Mode config forward, reporting false when neither legacy key is set.
+//
+// The mapping preserves what those projects actually got, which is why "both" lands on an
+// intercepting mode rather than on ModeMCP: on "both" the shell WAS intercepted, and that is
+// the behaviour the project is running today. The MCP tools it also had are the part being
+// dropped, and dropping them is the point -- "both" is the combination that made the model
+// choose between two answers to the same question.
+func (c *Config) legacyMode() (string, bool) {
+	integration := strings.ToLower(strings.TrimSpace(c.Integration.Mode))
+	identification := strings.ToLower(strings.TrimSpace(c.IdentificationMode))
+	if integration == "" && identification == "" {
+		return "", false
+	}
+	if integration == IntegrationMCP {
+		return ModeMCP, true
+	}
+	if identification == IdentifyID {
+		return ModeInterceptID, true
+	}
+	return ModeLineRange, true
 }
 
-// EffectiveTerminalGrep reports whether shell searches are answered by the annotated grep.
-func (c *Config) EffectiveTerminalGrep() bool { return boolOr(c.Terminal.Grep, true) }
+// MCPEnabled reports whether the MCP server is wired and its tools served.
+func (c *Config) MCPEnabled() bool { return c.EffectiveMode() == ModeMCP }
 
-// EffectivePreferResourceIDs reports whether the contract should steer toward resource IDs.
-func (c *Config) EffectivePreferResourceIDs() bool {
-	return boolOr(c.Terminal.PreferResourceIDs, true)
+// InterceptReads reports whether a shell read (`cat`, `head`, `tail`, `sed -n`) is answered
+// from the topology instead of by the real command.
+//
+// Only the two intercepting modes do this. In ModeMCP the read capability is a tool, and in
+// ModeAracneRead it is `arac read` -- in both, rewriting the model's `cat` as well would be a
+// second answer to a question that already has one.
+func (c *Config) InterceptReads() bool {
+	m := c.EffectiveMode()
+	return m == ModeInterceptID || m == ModeLineRange
 }
+
+// InterceptGrep reports whether a shell search is answered by the topology-annotated grep.
+//
+// True in every mode, which is why it takes no config. Search is the one capability with no
+// competing surface: the annotated grep finds node names and stored descriptions, which no
+// plain grep reaches and no read tool answers, so there is never a reason to hand a search
+// back to the real binary.
+func (c *Config) InterceptGrep() bool { return true }
+
+// InterceptShell reports whether the guard may rewrite a shell command at all.
+func (c *Config) InterceptShell() bool { return c.InterceptReads() || c.InterceptGrep() }
+
+// AdvertiseResourceIDs reports whether the contract teaches resource IDs as the way to address
+// a declaration. Only ModeInterceptID does; ModeLineRange deliberately stops advertising them
+// (it still accepts them), and the two toolful modes name a tool instead.
+func (c *Config) AdvertiseResourceIDs() bool { return c.EffectiveMode() == ModeInterceptID }
+
+// LineRangeIdentification reports whether resources are NAMED by path and line span. Every
+// consumer reads the mode through this, so the spellings cannot drift apart.
+//
+// It is deliberately not true in ModeMCP. A span is only worth printing where reading it is a
+// move the model can make: the MCP `read` tool takes ids and has no line-range argument, and
+// with shell reads unintercepted there is nothing to answer a `sed` with either. Printing a
+// span there replaced the id in every grep header with a coordinate no available tool accepts.
+func (c *Config) LineRangeIdentification() bool { return c.EffectiveMode() == ModeLineRange }
+
+// GuardBlocksNativeReads reports whether blocked_tools may deny a native or bash read and
+// redirect it into aracne.
+//
+// ModeMCP only. It is the one mode where a denial has somewhere to send the model: an MCP tool
+// that is present in its tool list. In the other three the capability arrives as the command
+// the model already typed (or as `arac read`), so a block would refuse a call that aracne was
+// about to answer -- which is how the guard used to spend two turns on a question asked
+// correctly the first time.
+func (c *Config) GuardBlocksNativeReads() bool { return c.EffectiveMode() == ModeMCP }
+
+// Surface maps the mode onto the guidance table the guard's warnings come from.
+func (c *Config) Surface() toolspec.Surface {
+	switch c.EffectiveMode() {
+	case ModeMCP:
+		return toolspec.SurfaceMCP
+	case ModeAracneRead:
+		return toolspec.SurfaceAracneRead
+	case ModeInterceptID:
+		return toolspec.SurfaceInterceptID
+	default:
+		return toolspec.SurfaceLineRange
+	}
+}
+
 
 // EffectiveTerminalMaxOverserve returns the over-serve factor; 0 means "no ceiling".
 func (c *Config) EffectiveTerminalMaxOverserve() int {
@@ -1179,19 +1288,11 @@ func (c *Config) BugManagementEnabled() bool { return c.Features.BugManagement }
 
 func normalizeConfig(c *Config) {
 	// Applies defaults to config fields for scan modes, file limits, visibility filters, descriptions, optimization rules, and LLM agents.
-	switch strings.ToLower(strings.TrimSpace(c.IdentificationMode)) {
-	case IdentifyLineRange, IdentifyID:
-		c.IdentificationMode = strings.ToLower(strings.TrimSpace(c.IdentificationMode))
-	default:
-		c.IdentificationMode = IdentifyLineRange
-	}
-	switch c.Integration.Mode {
-	case IntegrationTerminal, IntegrationMCP, IntegrationBoth:
-	default:
-		// Absent or unrecognized resolves to the default surface, and is stamped so a
-		// re-saved config says which surface it is on rather than leaving it implicit.
-		c.Integration.Mode = IntegrationTerminal
-	}
+	// Resolve the mode once and stamp it, so a re-saved config states its surface instead of
+	// leaving it implicit. The legacy keys are deliberately NOT stamped: stamping them would
+	// make every bare config look like a migrated one, and legacyMode() would then answer for
+	// a project that never set either key.
+	c.Mode = c.EffectiveMode()
 	switch c.Scan.Mode {
 	case ScanModeDefault, ScanModeHard, ScanModeAll:
 	default:

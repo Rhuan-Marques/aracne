@@ -39,7 +39,7 @@ func RunInit(args []string) {
 	opencode := fs.Bool("opencode", false, "Initialize OpenCode integration")
 	global := fs.Bool("global", false, "Install globally")
 	yes := fs.Bool("y", false, "Auto-confirm all replacement prompts")
-	withMCP := fs.Bool("mcp", false, "Also wire the MCP server (sets integration.mode to \"both\" for this run)")
+	withMCP := fs.Bool("mcp", false, "Wire the MCP server (sets mode to \"mcp\")")
 	fs.Parse(args)
 
 	if !*claude && !*opencode {
@@ -57,12 +57,17 @@ func RunInit(args []string) {
 		// Persisted, not just applied for this run. The guard and `arac serve` both read the
 		// mode from config at runtime, so a flag that only lived for one init would wire an
 		// MCP server the next plain `arac init` silently removes again.
-		cfg.Integration.Mode = helper.IntegrationBoth
+		//
+		// It sets ModeMCP outright rather than adding MCP to what is already there. There is
+		// no additive option any more, and that is the point: the mode a project is in has to
+		// be one of the four, and "the tools AND the interception" was the combination that
+		// made the model choose between two answers to the same question.
+		cfg.Mode = helper.ModeMCP
 		if err := helper.SaveConfig(cfg, configPath); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: could not persist integration.mode: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Warning: could not persist mode: %v\n", err)
 		}
 	}
-	announceIntegrationMode(cfg)
+	announceMode(cfg)
 
 	if *opencode {
 		initOpenCode(*global, cfg, *yes)
@@ -106,7 +111,14 @@ func initOpenCode(global bool, cfg *helper.Config, autoYes bool) {
 	if permissionMap == nil {
 		permissionMap = make(map[string]interface{})
 	}
-	blocked := toolNameSet(mainEff.BlockedTools)
+	// blocked_tools only bites in ModeMCP (see Config.GuardBlocksNativeReads), and OpenCode's
+	// permission block is the same decision spelled for a different harness. Denying a native
+	// read here in a mode whose guard would never deny it is how the two enforcement paths
+	// drift apart -- and the one the operator notices is this one, because it refuses silently.
+	blocked := map[string]bool{}
+	if cfg.GuardBlocksNativeReads() {
+		blocked = toolNameSet(mainEff.BlockedTools)
+	}
 	permissionMap["read"] = nativePermission(!blocked["read"])
 	permissionMap["edit"] = nativePermission(!blocked["edit"] && !blocked["write"])
 	permissionMap["bash"] = openCodeBashPermission(blocked)
@@ -184,7 +196,7 @@ func initClaudeCode(global bool, cfg *helper.Config, autoYes bool) {
 		// nothing about them. Init has to be able to move a project BETWEEN surfaces, not
 		// only onto one.
 		fmt.Printf("[Claude Code] Removed the aracne MCP server from %s (integration.mode: %s)\n",
-			mcpConfigPath, cfg.EffectiveIntegrationMode())
+			mcpConfigPath, cfg.EffectiveMode())
 	}
 
 	os.MkdirAll(commandsDir, 0755)
@@ -222,21 +234,28 @@ func initClaudeCode(global bool, cfg *helper.Config, autoYes bool) {
 	fmt.Println("[Claude Code] Restart Claude Code to activate the topology workflow.")
 }
 
-// announceIntegrationMode says which surface this project is on, because the answer changed.
+// announceMode says which of the four modes this project is in, because the answer decides
+// everything else `arac init` just wrote.
 //
-// `integration.mode` defaults to "terminal", so a project that predates the field and re-runs
-// `arac init` loses its MCP server entry. That is the intended default, and it must never be a
-// silent one: an operator who wanted MCP would otherwise discover it as "the tools vanished".
-func announceIntegrationMode(cfg *helper.Config) {
-	switch cfg.EffectiveIntegrationMode() {
-	case helper.IntegrationTerminal:
-		fmt.Println("Integration mode: terminal — aracne answers the shell commands you already run.")
-		fmt.Println("  No MCP server is configured. For MCP tools, re-run with --mcp or set")
-		fmt.Println("  integration.mode to \"mcp\" or \"both\" in .aracne/config.json.")
-	case helper.IntegrationMCP:
-		fmt.Println("Integration mode: mcp — capabilities are served as MCP tools; shell commands are not intercepted.")
-	case helper.IntegrationBoth:
-		fmt.Println("Integration mode: both — MCP tools are served AND shell commands are intercepted.")
+// It must never be silent. The default is ModeAracneRead, so a project that predates the mode
+// key and set neither legacy key loses nothing but gains no interception either -- and an
+// operator who wanted one of the intercepting modes would otherwise discover that as "aracne
+// stopped answering my reads".
+func announceMode(cfg *helper.Config) {
+	switch cfg.EffectiveMode() {
+	case helper.ModeMCP:
+		fmt.Println("Mode: mcp — aracne serves a single `read` MCP tool; shell reads run as themselves.")
+		fmt.Println("  `grep` and edits are still answered by aracne. blocked_tools applies in this mode only.")
+	case helper.ModeAracneRead:
+		fmt.Println("Mode: aracne_read — no MCP tools; the contract points at `arac read <id>` for symbols.")
+		fmt.Println("  Shell reads run as themselves; `grep` and edits are answered by aracne.")
+		fmt.Println("  For intercepted reads, set \"mode\" to \"line_range\" or \"intercept_id\" in .aracne/config.json.")
+	case helper.ModeInterceptID:
+		fmt.Println("Mode: intercept_id — `cat`/`head`/`tail`/`sed -n` are answered from the topology")
+		fmt.Println("  and take a resource ID where they take a path.")
+	case helper.ModeLineRange:
+		fmt.Println("Mode: line_range — `cat`/`head`/`tail`/`sed -n` are answered from the topology,")
+		fmt.Println("  and every declaration is named by the exact lines it spans.")
 	}
 }
 

@@ -99,7 +99,7 @@ func runClaudeGuardHook(input io.Reader, output io.Writer) {
 		// them. A denial reached here has already survived interception, which means aracne
 		// could not serve the command as written -- so telling the model which spelling it
 		// CAN serve is the whole value of the refusal.
-		if d := decideGuard(event.ToolName, event.ToolInput, blocked, exemptPiped, dbPath, !cfg.MCPEnabled()); d.Deny {
+		if d := decideGuard(event.ToolName, event.ToolInput, blocked, exemptPiped, dbPath, cfg.Surface()); d.Deny {
 			emitPreToolDeny(output, d.Message)
 		}
 		// Note: decideGuard already folded in the proxied content when it could, so the
@@ -112,9 +112,13 @@ func runClaudeGuardHook(input io.Reader, output io.Writer) {
 		// spent advertising something the agent just got, or something that does not exist.
 		// A NATIVE Read/Grep/Edit/Write is different: interception never sees it, so the
 		// nudge is the only place the model learns the shell forms are the cheaper question.
-		terminal := cfg.EffectiveInterceptShell()
-		if !terminal || event.ToolName != "Bash" {
-			if msg := warningMessage(keys, !blocked[toolspec.ReadToolName], terminal); msg != "" {
+		// Where reads are intercepted, a Bash read was either already answered by aracne (the
+		// PreToolUse rewrite) or is one aracne cannot answer at all; nudging it is bytes spent
+		// advertising something the agent just got, or something that does not exist. A NATIVE
+		// Read/Grep/Edit/Write is different: interception never sees it, so the nudge is the
+		// only place the model learns which spelling is the cheaper question.
+		if !cfg.InterceptReads() || event.ToolName != "Bash" {
+			if msg := warningMessage(keys, !blocked[toolspec.ReadToolName], cfg.Surface()); msg != "" {
 				parts = append(parts, msg)
 			}
 		}
@@ -146,7 +150,7 @@ type guardDecision struct {
 
 // decideGuard reports whether a tool call must be blocked and the reason.
 func decideGuard(toolName string, toolInput map[string]interface{}, blocked map[string]bool,
-	exemptPiped bool, dbPath string, terminal bool) guardDecision {
+	exemptPiped bool, dbPath string, surface toolspec.Surface) guardDecision {
 	keys := implicatedKeys(toolName, toolInput, exemptPiped)
 	var denied []string
 	for _, k := range keys {
@@ -204,12 +208,12 @@ func decideGuard(toolName string, toolInput map[string]interface{}, blocked map[
 		}
 	}
 
-	if warn := warningMessage(keys, !blocked[toolspec.ReadToolName], terminal); warn != "" {
+	if warn := warningMessage(keys, !blocked[toolspec.ReadToolName], surface); warn != "" {
 		reason += warn
-	} else if terminal {
-		reason += "Use the shell forms aracne answers, or an `arac` subcommand, instead of this command."
-	} else {
+	} else if surface == toolspec.SurfaceMCP {
 		reason += "Use the aracne MCP tools instead of this native/shell command."
+	} else {
+		reason += "Use the shell forms aracne answers, or an `arac` subcommand, instead of this command."
 	}
 	return guardDecision{Deny: true, Message: strings.TrimSpace(reason)}
 }
@@ -257,7 +261,7 @@ func isAracCommand(toolInput map[string]interface{}) bool {
 // without an MCP equivalent (e.g. "bash") and de-duplicating. nativeReadAvailable
 // resolves the read tool's runtime name so the guidance never points at a name
 // that is absent from this agent's tool list.
-func warningMessage(keys []string, nativeReadAvailable, terminal bool) string {
+func warningMessage(keys []string, nativeReadAvailable bool, surface toolspec.Surface) string {
 	var parts []string
 	seen := make(map[string]bool, len(keys))
 	for _, k := range keys {
@@ -265,7 +269,7 @@ func warningMessage(keys []string, nativeReadAvailable, terminal bool) string {
 			continue
 		}
 		seen[k] = true
-		if w := toolspec.WarningForSurface(k, nativeReadAvailable, terminal); w != "" {
+		if w := toolspec.WarningForSurface(k, nativeReadAvailable, surface); w != "" {
 			parts = append(parts, w)
 		}
 	}
@@ -285,6 +289,13 @@ func loadGuardConfig(dbPath string) (blocked map[string]bool, exemptPiped bool) 
 	cfg, ok := helper.LoadConfigStrict(helper.ConfigPath(dbPath))
 	if !ok {
 		return map[string]bool{}, true
+	}
+	// blocked_tools does something in ModeMCP and nothing anywhere else, and this is the one
+	// place that has to be true -- every denial, every proxied read and every warning that
+	// names a tool flows from this set. In the other three modes a block would refuse a call
+	// aracne was about to answer itself, and send the model to a tool that is not in its list.
+	if !cfg.GuardBlocksNativeReads() {
+		return map[string]bool{}, cfg.EffectivePipePassthrough()
 	}
 	return toolNameSet(cfg.EffectiveAgent("claude_code", "main").BlockedTools), cfg.EffectivePipePassthrough()
 }

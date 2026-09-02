@@ -36,8 +36,17 @@ _RESULTS: list[tuple[str, bool]] = []
 
 
 def check(name: str, cond) -> None:
-    _RESULTS.append((name, bool(cond)))
-    print(("PASS  " if cond else "FAIL  ") + name)
+    """Record the result AND raise on failure.
+
+    The recording is what `main()` reports; the raise is what makes the case fail under pytest.
+    Without it every assertion here was a print statement: pytest collected the cases, ran them,
+    and reported success no matter what `check` was handed. `main()` catches the AssertionError
+    per case so the standalone run still reports every failure rather than stopping at the first.
+    """
+    ok = bool(cond)
+    _RESULTS.append((name, ok))
+    print(("PASS  " if ok else "FAIL  ") + name)
+    assert ok, name
 
 
 def git(args, cwd):
@@ -167,7 +176,11 @@ def main() -> int:
     ]
     for case in cases:
         with tempfile.TemporaryDirectory(prefix="aracne-fixture-hygiene-") as td:
-            case(Path(td))
+            try:
+                case(Path(td))
+            except AssertionError:
+                # Already recorded by check(); keep going so one failure does not hide the rest.
+                pass
 
     failed = [name for name, passed in _RESULTS if not passed]
     print("\n" + "=" * 66)

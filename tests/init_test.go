@@ -173,12 +173,21 @@ func TestInitWithMCP_WiresTheServerAndPersistsTheMode(t *testing.T) {
 
 	cfg := helper.LoadConfig(filepath.Join(dir, ".aracne", "config.json"))
 	if !cfg.MCPEnabled() {
-		t.Fatalf("--mcp did not persist the mode: %+v", cfg.Integration)
+		t.Fatalf("--mcp did not persist the mode: %q", cfg.EffectiveMode())
+	}
+	if cfg.Mode != helper.ModeMCP {
+		t.Errorf("--mcp should stamp the new key, got %q", cfg.Mode)
 	}
 
-	// And the contract has to match: on this surface the MCP tools exist, so it may name them.
-	if body := readFile(t, dir, "CLAUDE.md"); !strings.Contains(body, "mcp__aracne__") {
-		t.Errorf("CLAUDE.md does not name the MCP tools it just wired:\n%s", body)
+	// The contract says the capabilities arrive as tools and stops there: each tool's own
+	// description says how to call it, and naming one in prose is how the contract and the
+	// registered tool list drift apart.
+	body := readFile(t, dir, "CLAUDE.md")
+	if !strings.Contains(body, "arrive as MCP tools") {
+		t.Errorf("CLAUDE.md is not the mcp contract:\n%s", body)
+	}
+	if strings.Contains(body, "mcp__aracne__") {
+		t.Errorf("CLAUDE.md names an MCP tool by identifier:\n%s", body)
 	}
 }
 
@@ -190,7 +199,7 @@ func TestInitBackToTerminalRemovesTheServer(t *testing.T) {
 
 	cfgPath := filepath.Join(dir, ".aracne", "config.json")
 	cfg := helper.LoadConfig(cfgPath)
-	cfg.Integration.Mode = helper.IntegrationTerminal
+	cfg.Mode = helper.ModeLineRange
 	if err := helper.SaveConfig(cfg, cfgPath); err != nil {
 		t.Fatal(err)
 	}
@@ -198,10 +207,14 @@ func TestInitBackToTerminalRemovesTheServer(t *testing.T) {
 
 	raw := readFile(t, dir, ".mcp.json")
 	if strings.Contains(raw, "aracne") {
-		t.Fatalf("the aracne server survived the switch to terminal: %s", raw)
+		t.Fatalf("the aracne server survived the switch away from mcp: %s", raw)
 	}
-	if body := readFile(t, dir, "CLAUDE.md"); strings.Contains(body, "mcp__aracne__") {
-		t.Errorf("CLAUDE.md still names MCP tools that are no longer served:\n%s", body)
+	body := readFile(t, dir, "CLAUDE.md")
+	if strings.Contains(body, "arrive as MCP tools") {
+		t.Errorf("CLAUDE.md is still the mcp contract:\n%s", body)
+	}
+	if !strings.Contains(body, "## Line ranges") {
+		t.Errorf("CLAUDE.md was not rewritten for the new mode:\n%s", body)
 	}
 }
 

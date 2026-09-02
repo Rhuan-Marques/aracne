@@ -43,7 +43,7 @@ import (
 // Splicing a prefix into the one segment that is a read leaves every other byte of the line,
 // including its quoting and its redirects, exactly as the model wrote it.
 func interceptCommand(command, dbPath string, cfg *helper.Config) (string, bool) {
-	if !cfg.EffectiveInterceptShell() {
+	if !cfg.InterceptShell() {
 		return "", false
 	}
 	original := strings.TrimSpace(command)
@@ -112,10 +112,14 @@ func interceptableSegment(segments []commandSegment, i int, original, dbPath str
 	req := shellcmd.Parse(argv)
 	switch req.Kind {
 	case shellcmd.KindRead:
-	case shellcmd.KindGrep:
-		if !cfg.EffectiveTerminalGrep() {
+		// Only the intercepting modes rewrite a read. In ModeMCP the read capability is a
+		// tool and in ModeAracneRead it is `arac read`; rewriting the model's `cat` on top of
+		// either would be a second answer to a question that already has one.
+		if !cfg.InterceptReads() {
 			return 0, false
 		}
+	case shellcmd.KindGrep:
+		// Every mode. See Config.InterceptGrep.
 	default:
 		return 0, false
 	}

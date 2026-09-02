@@ -1,5 +1,5 @@
 {
-  "mode": "line_range",
+  "mode": "aracne_read",
   "terminal": {
     "max_overserve": 4
   },

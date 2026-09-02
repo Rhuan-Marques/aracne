@@ -187,8 +187,36 @@ func TestBugSolverCommandForAgent(t *testing.T) {
 
 // --- new config-driven generation -----------------------------------------
 
+// mcpModeConfig is the shipped default put into ModeMCP. Every test below is about the names
+// that reach a harness allow-list, and only ModeMCP has MCP tools to name -- in the other three
+// EffectiveAgent correctly reports none, and each assertion would go vacuous rather than fail.
+func mcpModeConfig() *helper.Config {
+	cfg := helper.DefaultConfig()
+	cfg.Mode = helper.ModeMCP
+	return cfg
+}
+
+// grep, edit and write are answered by shell interception in every mode, so no allow-list may
+// name an MCP tool for them: the harness would route a call to a tool the server never
+// registered, and nothing would fail loudly.
+func TestNoAllowListNamesAShellServedTool(t *testing.T) {
+	cfg := mcpModeConfig()
+	for _, agent := range []string{"main", "descriptions-generation-executor", "bug-solver"} {
+		claude := strings.Join(claudeToolsForAgent(cfg.EffectiveAgent("claude_code", agent)), ",")
+		opencode := openCodePermissionsForAgent(cfg.EffectiveAgent("opencode", agent))
+		for _, key := range []string{"grep", "edit", "write"} {
+			if strings.Contains(claude, "mcp__aracne__"+key) {
+				t.Errorf("claude %s allow-list names mcp__aracne__%s: %s", agent, key, claude)
+			}
+			if strings.Contains(opencode, `"aracne_`+key+`"`) {
+				t.Errorf("opencode %s permissions name aracne_%s:\n%s", agent, key, opencode)
+			}
+		}
+	}
+}
+
 func TestClaudeToolsForAgent_DefaultMainAgent(t *testing.T) {
-	eff := helper.DefaultConfig().EffectiveAgent("claude_code", "main")
+	eff := mcpModeConfig().EffectiveAgent("claude_code", "main")
 	tools := claudeToolsForAgent(eff)
 
 	// The read entry must carry the RUNTIME name. Claude Code gives each agent its own
@@ -199,8 +227,6 @@ func TestClaudeToolsForAgent_DefaultMainAgent(t *testing.T) {
 	want := map[string]bool{
 		"mcp__aracne__" + toolspec.ReadResourceToolName: true,
 		"mcp__aracne__warnings_list":                    true,
-		"mcp__aracne__edit":                             true,
-		"mcp__aracne__write":                            true,
 		"Bash":                                          true,
 	}
 	got := map[string]bool{}
@@ -230,7 +256,7 @@ func TestClaudeToolsForAgent_DefaultMainAgent(t *testing.T) {
 // blocked_tools denies the harness's own read, the aracne tool takes the short name and the
 // allow-list must follow it there too.
 func TestClaudeToolsForAgent_BlockedNativeReadUsesShortName(t *testing.T) {
-	eff := helper.DefaultConfig().EffectiveAgent("claude_code", "main")
+	eff := mcpModeConfig().EffectiveAgent("claude_code", "main")
 	eff.BlockedTools = []string{"read"}
 	tools := claudeToolsForAgent(eff)
 
@@ -256,7 +282,7 @@ func TestClaudeToolsForAgent_BlockedNativeReadUsesShortName(t *testing.T) {
 }
 
 func TestOpenCodePermissionsForAgent_DefaultMainAgent(t *testing.T) {
-	eff := helper.DefaultConfig().EffectiveAgent("opencode", "main")
+	eff := mcpModeConfig().EffectiveAgent("opencode", "main")
 	perms := openCodePermissionsForAgent(eff)
 
 	// Warn-only default: no NATIVE tool is denied and bash needs no glob-pattern map.
@@ -290,7 +316,7 @@ func TestOpenCodePermissionsForAgent_DefaultMainAgent(t *testing.T) {
 // bool would silently deny OpenCode agents their read tool.
 func TestOpenCodePermissionsAlwaysUseShortReadName(t *testing.T) {
 	for _, blocked := range [][]string{nil, {"read"}, {"edit", "write"}} {
-		eff := helper.DefaultConfig().EffectiveAgent("opencode", "main")
+		eff := mcpModeConfig().EffectiveAgent("opencode", "main")
 		eff.BlockedTools = blocked
 		perms := openCodePermissionsForAgent(eff)
 		if !strings.Contains(perms, `"aracne_`+toolspec.ReadToolName+`": allow`) {

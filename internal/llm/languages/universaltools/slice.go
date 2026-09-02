@@ -370,10 +370,16 @@ func identifierTokens(text string) map[string]bool {
 // Go's `pkg.(Recv).Method`, Python's dotted module path, Rust's `crate::mod::Type`, Java's
 // `Owner.name(sig)`.
 func lastIDSegment(id string) string {
-	if i := strings.IndexByte(id, '('); i > 0 {
-		id = id[:i] // drop a Java signature before splitting
+	// A Java id carries its signature at the END (`com.Foo.bar(int,int)`); a Go or Python
+	// method id carries its receiver in the MIDDLE (`pkg.(Circle).Area`). Cutting at the FIRST
+	// '(' handled the Java case and destroyed the other: it left `pkg.`, which then split to
+	// the empty string, and the marker read `⋯ +1 lines of  ⋯`. Anchoring the strip to a
+	// trailing ')' keeps both.
+	if strings.HasSuffix(id, ")") {
+		if i := strings.LastIndexByte(id, '('); i > 0 {
+			id = id[:i]
+		}
 	}
-	id = strings.TrimSuffix(id, ")")
 	for _, sep := range []string{"::", ".", "/", "#", "$"} {
 		if i := strings.LastIndex(id, sep); i >= 0 {
 			id = id[i+len(sep):]

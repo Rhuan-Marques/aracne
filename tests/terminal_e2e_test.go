@@ -1,6 +1,7 @@
 package tests_test
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -73,7 +74,34 @@ func Total(shapes []Shape) float64 {
 	// An unindexed file, to exercise the out-of-scope branch against a real read.
 	writeFile(t, filepath.Join(root, "NOTES.md"), "alpha\nbeta\ngamma\ndelta\nepsilon\n")
 	mustRun(t, root, "scan", "--hard", "--root", ".", "--output", ".aracne/topology.db")
+	// `arac scan` writes the shipped default, which is ModeAracneRead -- searches intercepted,
+	// reads not. These tests are about the read half, so the project has to say which of the
+	// two intercepting modes it is in rather than lean on a default that is neither.
+	setMode(t, root, "line_range")
 	return root
+}
+
+// setMode rewrites the project's mode in place. It edits the file rather than regenerating it
+// so everything else `arac scan` decided about this project survives.
+func setMode(t *testing.T, root, mode string) {
+	t.Helper()
+	path := filepath.Join(root, ".aracne", "config.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg["mode"] = mode
+	out, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, out, 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // aracCmd runs `arac cmd -- ...` in dir and returns its combined output.

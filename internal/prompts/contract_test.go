@@ -1,0 +1,123 @@
+package prompts
+
+import (
+	"strings"
+	"testing"
+
+	"aracne/internal/helper"
+)
+
+// allModes is every mode a project can be in. A test that loops over it fails when a fifth is
+// added without deciding what its contract says, which is the failure mode that produced the
+// rework: a combination nobody wrote a contract for still rendered one.
+var allModes = []string{
+	helper.ModeMCP,
+	helper.ModeAracneRead,
+	helper.ModeInterceptID,
+	helper.ModeLineRange,
+}
+
+func contractFor(mode string) string {
+	cfg := helper.DefaultConfig()
+	cfg.Mode = mode
+	return ContractContent(cfg)
+}
+
+// The intro and the closing rules hold in every mode: what the graph IS does not depend on how
+// it reaches the agent.
+func TestEveryContractIsAWholeDocument(t *testing.T) {
+	for _, mode := range allModes {
+		got := contractFor(mode)
+		for _, want := range []string{"# Aracne", ".aracne/topology.db", "## Behavioral Rules", "Good Luck"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("mode %q: contract is missing %q\n%s", mode, want, got)
+			}
+		}
+	}
+}
+
+// No contract may name an MCP tool: in the three non-MCP modes there is no server to call, and
+// in ModeMCP each tool's own description says how to call it. Naming one in prose is how the
+// contract and the tool list drift.
+func TestNoContractNamesAnMCPTool(t *testing.T) {
+	for _, mode := range allModes {
+		if got := contractFor(mode); strings.Contains(got, "mcp__aracne__") || strings.Contains(got, "aracne_read_resource") {
+			t.Errorf("mode %q: contract names an MCP tool by identifier\n%s", mode, got)
+		}
+	}
+}
+
+// Only the two intercepting modes may promise an enriched shell read. The `arac read` modes say
+// the opposite -- that ordinary reads run as themselves -- and a contract that says both would
+// leave the model testing which is true.
+func TestOnlyInterceptingModesPromiseEnrichedShellReads(t *testing.T) {
+	const promise = "the answer comes back enriched"
+	for _, mode := range allModes {
+		want := mode == helper.ModeInterceptID || mode == helper.ModeLineRange
+		if got := strings.Contains(contractFor(mode), promise); got != want {
+			t.Errorf("mode %q: promises enriched shell reads = %v, want %v", mode, got, want)
+		}
+	}
+}
+
+// ModeLineRange dropped the resource-ID vocabulary on measured evidence: the model used an ID as
+// a command operand 0 times in 408 commands. Re-adding a mention anywhere in its contract --
+// including the `arac read <id>` bullet under "Other" -- spends bytes re-teaching exactly what
+// the mode exists to retire.
+func TestLineRangeContractNeverTeachesResourceIDs(t *testing.T) {
+	got := contractFor(helper.ModeLineRange)
+	for _, forbidden := range []string{"Resource ID", "resource ID", "arac read <id>"} {
+		if strings.Contains(got, forbidden) {
+			t.Errorf("line_range contract mentions %q\n%s", forbidden, got)
+		}
+	}
+	if !strings.Contains(got, "src/parser.rs:940-1080") {
+		t.Errorf("line_range contract does not show a span to read:\n%s", got)
+	}
+}
+
+// The guard note is per-request cost for a guard that fires in one mode. blocked_tools does
+// nothing outside ModeMCP, so a paragraph explaining a denial belongs nowhere else.
+func TestTheGuardNoteAppearsOnlyWhereAGuardCanFire(t *testing.T) {
+	for _, mode := range allModes {
+		cfg := helper.DefaultConfig()
+		cfg.Mode = mode
+		cfg.LLM.Any.MainAgent.BlockedTools = []string{"read", "grep"}
+
+		want := mode == helper.ModeMCP
+		if got := strings.Contains(ContractContent(cfg), "## Tool Guard"); got != want {
+			t.Errorf("mode %q: carries a Tool Guard note = %v, want %v", mode, got, want)
+		}
+	}
+
+	// And not even there when nothing is actually blocked.
+	cfg := helper.DefaultConfig()
+	cfg.Mode = helper.ModeMCP
+	cfg.LLM.Any.MainAgent.BlockedTools = nil
+	if strings.Contains(ContractContent(cfg), "## Tool Guard") {
+		t.Error("mcp contract explains a guard that denies nothing")
+	}
+}
+
+// Every mode has to say how a search is answered, because the annotated grep is the one
+// capability all four share and the only one that finds a node by its description.
+func TestEveryContractExplainsTheAnnotatedGrep(t *testing.T) {
+	for _, mode := range allModes {
+		if !strings.Contains(contractFor(mode), "node names and stored descriptions") {
+			t.Errorf("mode %q: contract never explains what grep additionally searches\n%s",
+				mode, contractFor(mode))
+		}
+	}
+}
+
+// An unrecognized mode must still render a whole contract. Config.EffectiveMode normalizes it,
+// and a contract builder that returned "" for a typo would strip the project's guidance without
+// saying anything.
+func TestAnUnknownModeStillRendersAContract(t *testing.T) {
+	cfg := helper.DefaultConfig()
+	cfg.Mode = "wat"
+	got := ContractContent(cfg)
+	if !strings.Contains(got, "# Aracne") || !strings.Contains(got, "Good Luck") {
+		t.Errorf("an unknown mode rendered a partial contract:\n%s", got)
+	}
+}

@@ -130,7 +130,10 @@ func ValidAgentProfile(cfg *helper.Config, name string) bool {
 func effectiveMCPToolSet(cfg *helper.Config, harness, agentName string) map[string]bool {
 	var names []string
 	if agentName == "all" {
-		names = allMCPToolNames()
+		// The synthetic profile is the whole universe, so it needs the mode filter applied
+		// explicitly -- it never passes through EffectiveAgent, and OpenCode's single server
+		// runs on exactly this profile.
+		names = cfg.ServableMCPTools(allMCPToolNames())
 	} else {
 		names = cfg.EffectiveAgent(harness, agentName).MCPTools
 	}

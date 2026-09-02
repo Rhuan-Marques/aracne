@@ -1038,6 +1038,10 @@ func TestLoadConfigPreToolScan(t *testing.T) {
 
 func TestEffectiveAgentInheritanceAndOverride(t *testing.T) {
 	cfg := DefaultConfig()
+	// MCP tools only exist in ModeMCP -- EffectiveAgent returns the SERVABLE list, so asking
+	// about mcp_tools in any other mode correctly answers "none". Inheritance is what this
+	// test is about, so it runs in the mode where there is something to inherit.
+	cfg.Mode = ModeMCP
 	hunter := cfg.EffectiveAgent("claude_code", "bug-hunter")
 	if !containsConfigString(hunter.MCPTools, "bug_report") {
 		t.Fatalf("bug-hunter should have bug_report: %v", hunter.MCPTools)

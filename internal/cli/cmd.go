@@ -65,7 +65,11 @@ func serveCommand(argv []string) (string, int, bool) {
 		return "", 0, false
 	}
 	cfg := helper.LoadConfig(helper.ConfigPath(dbPath))
-	if !cfg.TerminalEnabled() {
+	// Reads are answered only in the two intercepting modes. Searches are answered in all
+	// four: the annotated grep reaches node names and stored descriptions, which no other
+	// surface offers and no plain grep can find, so there is never a mode in which handing a
+	// search back to the real binary is the better answer.
+	if req.Kind == shellcmd.KindRead && !cfg.InterceptReads() {
 		return "", 0, false
 	}
 
@@ -146,7 +150,7 @@ func resolveReadOperand(rd *universaltools.Read, cfg *helper.Config, req shellcm
 	operand, dbPath string) (path string, from, to int, ok bool) {
 
 	if info, err := os.Stat(operand); err == nil {
-		if info.IsDir() || !cfg.EffectiveEnhanceFiles() {
+		if info.IsDir() {
 			return "", 0, 0, false
 		}
 		abs, absErr := filepath.Abs(operand)
@@ -167,11 +171,13 @@ func resolveReadOperand(rd *universaltools.Read, cfg *helper.Config, req shellcm
 		return abs, f, t, wOK
 	}
 
-	// Not a path on disk. It may be a resource ID -- which is the form the contract pushes
-	// the model toward, and the one a plain shell command could never answer at all.
-	if !cfg.EffectiveEnhanceResources() {
-		return "", 0, 0, false
-	}
+	// Not a path on disk. It may be a resource ID -- the one operand a plain shell command
+	// could never answer at all.
+	//
+	// Deliberately ungated by mode. Whether aracne ADVERTISES ids is a contract decision that
+	// ModeLineRange answers differently from ModeInterceptID; whether it ACCEPTS one, having
+	// already decided to answer this command, is not a decision at all. Refusing an id here
+	// would refuse a question aracne can answer, in favour of a `cat` that will fail.
 	rPath, bodyFrom, bodyTo, err := rd.BodyBounds(operand)
 	if err != nil || rPath == "" {
 		return "", 0, 0, false
@@ -225,9 +231,6 @@ func resolveWindow(w shellcmd.Window, lo, hi int) (from, to int, ok bool) {
 // serveGrep answers a search with the topology-annotated grep, which finds what a plain grep
 // cannot: node names and stored descriptions.
 func serveGrep(mgr *topology.TopologyManager, cfg *helper.Config, req shellcmd.Request) (string, int, bool) {
-	if !cfg.EffectiveTerminalGrep() {
-		return "", 0, false
-	}
 	topo, err := mgr.ReadAll()
 	if err != nil || topo == nil {
 		return "", 0, false
@@ -295,9 +298,8 @@ func grepScope(mgr *topology.TopologyManager, operand string, cfg *helper.Config
 	if _, err := os.Stat(operand); err == nil {
 		return operand, nil, true
 	}
-	if !cfg.EffectiveEnhanceResources() {
-		return "", nil, false
-	}
+	// Same reasoning as resolveReadOperand: an operand that is not a path may still be a
+	// resource, and scoping a search to one declaration is a question no plain grep has.
 	topo, err := mgr.ReadAll()
 	if err != nil {
 		return "", nil, false

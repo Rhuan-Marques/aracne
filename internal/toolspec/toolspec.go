@@ -140,35 +140,70 @@ var powershellCmdToKey = map[string]string{
 //
 // The read key is absent here on purpose: its tool answers to two names depending on the
 // agent's blocked_tools, so its guidance is built at call time by readWarning.
-var nativeWarnings = map[string]string{
-	"grep":  "aracne: `mcp__aracne__grep` also searches node names and descriptions, which no plain grep can reach.",
-	"edit":  "aracne: `mcp__aracne__edit` updates the topology inline (the update-file hook covers this one too).",
-	"write": "aracne: `mcp__aracne__write` updates the topology inline.",
-}
+//
+// grep, edit and write are absent for a different reason -- they are not MCP tools in ANY mode
+// since the rework (IsShellServedTool), so their guidance is the shell form on every surface
+// and lives in sharedShellWarnings. Naming `mcp__aracne__grep` here pointed a ModeMCP agent at
+// a tool its own server does not register, which is the one failure guaranteed to cost a turn.
+var nativeWarnings = map[string]string{}
 
-// terminalWarnings is the same guidance for the TERMINAL surface, where there is no MCP tool
-// to name. Keyed by aracne tool key.
+// The per-mode guidance tables, keyed by aracne tool key.
 //
-// WHY A SECOND TABLE RATHER THAN A SUBSTITUTION. The two surfaces do not merely spell the same
-// capability differently -- on the terminal the read capability has no name at all, because it
-// arrives as the shell command the model already typed. So the read entry cannot say "call X";
-// it has to say which spellings are answered and what makes them cheaper. A find-and-replace of
-// the tool name over the MCP text would produce advice that is grammatical and useless.
+// Only the READ entry varies: it is the one capability the four modes put in genuinely
+// different places. Search and mutation are answered by the same `arac` subcommands in all
+// four, so all four share sharedShellWarnings for those -- including ModeMCP, which has no
+// tool for them either.
 //
-// Same length discipline as nativeWarnings: this text is injected on every matching call.
-var terminalWarnings = map[string]string{
-	"read": "aracne: `cat`, `head -N`, `tail -N` and `sed -n 'A,Bp'` on an indexed file are " +
-		"answered from the topology, and take a resource ID where they take a path. " +
-		"`arac read <id> <id>` reads several at once.",
+// WHY SEPARATE TABLES RATHER THAN ONE WITH SUBSTITUTIONS. The modes do not spell the same
+// read capability differently -- they put it in different places. Under ModeAracneRead the read
+// capability is a subcommand; under the intercepting modes it has no name at all, because it
+// arrives as the shell command the model already typed. Text that says "call X" cannot be
+// find-and-replaced into text that says "the command you just ran is answered"; the result is
+// grammatical and useless.
+//
+// Same length discipline throughout: this text is injected on every matching call.
+//
+// The mutation and search entries are shared, because those two capabilities ARE the same in
+// all three: `arac grep` and the piped `arac edit`/`arac write` exist in every mode.
+var sharedShellWarnings = map[string]string{
 	"grep": "aracne: `arac grep <pattern>` also searches node names and descriptions, which no plain grep can reach.",
-	"edit": "aracne: `echo '{\"file_path\":…,\"old_string\":…,\"new_string\":…}' | arac edit` " +
-		"updates the topology inline (the update-file hook covers a plain edit too).",
+	"edit": "aracne: `echo '{\"edits\":[…]}' | arac edit` applies several replacements in ONE " +
+		"call, under one file lock, rolling back as a unit -- and updates the topology inline.",
 	"write": "aracne: `echo '{\"file_path\":…,\"content\":…}' | arac write` updates the topology inline.",
 }
 
-// TerminalWarningFor returns the terminal-surface guidance for an aracne tool key, or "" when
-// there is none (bash has no equivalent on either surface).
-func TerminalWarningFor(key string) string { return terminalWarnings[key] }
+// aracneReadWarnings point at the subcommand, because in that mode nothing intercepts a read.
+var aracneReadWarnings = withShellWarnings(map[string]string{
+	"read": "aracne: `arac read <id> <id>` returns those declarations with their connected " +
+		"context, for a fraction of the file they sit in. Prefer it over opening the file.",
+})
+
+// interceptIDWarnings name the spellings aracne answers and the ids they take.
+var interceptIDWarnings = withShellWarnings(map[string]string{
+	"read": "aracne: `cat`, `head -N`, `tail -N` and `sed -n 'A,Bp'` on an indexed file are " +
+		"answered from the topology, and take a resource ID where they take a path. " +
+		"`arac read <id> <id>` reads several at once.",
+})
+
+// lineRangeWarnings name the same spellings without the id vocabulary that mode exists to stop
+// advertising -- the ranges to read come back in the output itself.
+var lineRangeWarnings = withShellWarnings(map[string]string{
+	"read": "aracne: `cat`, `head -N`, `tail -N` and `sed -n 'A,Bp'` on an indexed file are " +
+		"answered from the topology -- the lines you asked for, framed by their declaration, " +
+		"with the exact range of everything they touch.",
+})
+
+// withShellWarnings layers a mode's own entries over the ones every non-MCP mode shares.
+func withShellWarnings(own map[string]string) map[string]string {
+	out := make(map[string]string, len(own)+len(sharedShellWarnings))
+	for k, v := range sharedShellWarnings {
+		out[k] = v
+	}
+	for k, v := range own {
+		out[k] = v
+	}
+	return out
+}
 
 // readWarning is the read tool's guidance, named for the tool the agent actually has. A
 // static name is wrong half the time: blocking the harness's own read is exactly what makes
@@ -590,17 +625,57 @@ func WarningFor(key string, nativeReadAvailable bool) string {
 	if key == ReadToolName {
 		return readWarning(nativeReadAvailable)
 	}
-	return nativeWarnings[key]
+	if w, ok := nativeWarnings[key]; ok {
+		return w
+	}
+	return sharedShellWarnings[key]
 }
 
-// WarningForSurface picks the guidance for the surface the project is actually on. Naming an
+// shellServedTools are the capabilities that stopped being MCP tools when the modes were
+// unscrambled: in ModeMCP the shell forms of all three are intercepted and answered by aracne,
+// so registering a tool for them served the same question twice and cost a schema block per
+// request to let the model pick.
+//
+// They stay in the catalog, and stay valid in a config's mcp_tools, so an existing config that
+// names one is not a validation error -- it is simply not registered. Config.ServableMCPTools
+// is the filter every consumer goes through.
+var shellServedTools = map[string]bool{"grep": true, "edit": true, "write": true}
+
+// IsShellServedTool reports whether a capability is served by shell interception rather than by
+// an MCP tool.
+func IsShellServedTool(name string) bool { return shellServedTools[strings.TrimSpace(name)] }
+
+// Surface is the mode's guidance table, named here rather than in helper so this package can
+// pick a warning without importing the config it would then be imported by.
+type Surface int
+
+const (
+	// SurfaceMCP names `mcp__aracne__*` tools, which exist only in that mode.
+	SurfaceMCP Surface = iota
+	// SurfaceAracneRead names the `arac` subcommands, the only aracne surface that mode has.
+	SurfaceAracneRead
+	// SurfaceInterceptID names the shell commands aracne answers and the ids they accept.
+	SurfaceInterceptID
+	// SurfaceLineRange names the same commands, addressed by span.
+	SurfaceLineRange
+)
+
+// WarningForSurface picks the guidance for the mode the project is actually in. Naming an
 // `mcp__aracne__*` tool to an agent that has no MCP server is the one failure mode guaranteed
-// to cost a turn, and it is invisible until the model tries the call.
-func WarningForSurface(key string, nativeReadAvailable, terminal bool) string {
-	if terminal {
-		return TerminalWarningFor(key)
+// to cost a turn, and it is invisible until the model tries the call -- and pointing at an
+// intercepted `cat` in a mode that does not intercept reads is the same mistake spelled the
+// other way.
+func WarningForSurface(key string, nativeReadAvailable bool, surface Surface) string {
+	switch surface {
+	case SurfaceMCP:
+		return WarningFor(key, nativeReadAvailable)
+	case SurfaceAracneRead:
+		return aracneReadWarnings[key]
+	case SurfaceInterceptID:
+		return interceptIDWarnings[key]
+	default:
+		return lineRangeWarnings[key]
 	}
-	return WarningFor(key, nativeReadAvailable)
 }
 
 // Validates a list of tool names against an allowed set, returning an error for any unknown tools.

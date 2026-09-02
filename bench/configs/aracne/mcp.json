@@ -1,5 +1,5 @@
 {
-  "mode": "line_range",
+  "mode": "mcp",
   "terminal": {
     "max_overserve": 4
   },
@@ -36,7 +36,10 @@
   "llm": {
     "<any>": {
       "main_agent": {
-        "mcp_tools": [],
+        "mcp_tools": [
+          "read",
+          "warnings_list"
+        ],
         "blocked_tools": []
       },
       "agents": {
@@ -67,7 +70,10 @@
     },
     "claude_code": {
       "main_agent": {
-        "mcp_tools": [],
+        "mcp_tools": [
+          "read",
+          "warnings_list"
+        ],
         "blocked_tools": []
       },
       "agents": {

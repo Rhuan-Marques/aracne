@@ -10,14 +10,20 @@ import (
 	"aracne/internal/helper"
 )
 
-// terminalConfig is the shipped default: the terminal surface, interception on.
-func terminalConfig() *helper.Config { return helper.DefaultConfig() }
+// interceptingConfig is a project in a mode that rewrites shell READS. The shipped default is
+// ModeAracneRead, which intercepts searches only, so a read-interception test has to say which
+// mode it is testing rather than lean on the default.
+func interceptingConfig() *helper.Config {
+	cfg := helper.DefaultConfig()
+	cfg.Mode = helper.ModeLineRange
+	return cfg
+}
 
 // rewriteOf runs interceptCommand against a real scanned project and returns the rewritten
 // command, or "" when the call was left alone.
 func rewriteOf(t *testing.T, dbPath, command string) string {
 	t.Helper()
-	out, ok := interceptCommand(command, dbPath, terminalConfig())
+	out, ok := interceptCommand(command, dbPath, interceptingConfig())
 	if !ok {
 		return ""
 	}
@@ -166,14 +172,34 @@ func TestQuotingSurvivesTheRewrite(t *testing.T) {
 	}
 }
 
-// Interception is off on the MCP surface, so a project that opted out keeps the denial
-// behaviour it configured, unchanged.
-func TestMCPModeNeverIntercepts(t *testing.T) {
+// READ interception is off in the two toolful modes -- there the read capability already has a
+// surface, and rewriting the model's `cat` on top of it would answer one question twice.
+//
+// SEARCH interception stays on in all four, which is the half that is easy to get wrong: the
+// annotated grep reaches node names and stored descriptions, and no read tool and no `arac read`
+// answers that, so there is no mode in which handing a search back to the real binary is right.
+func TestReadInterceptionFollowsTheModeButSearchNeverStops(t *testing.T) {
 	root, dbPath := scannedProject(t)
-	cfg := helper.DefaultConfig()
-	cfg.Integration.Mode = helper.IntegrationMCP
-	if _, ok := interceptCommand("head -20 "+filepath.Join(root, "app.go"), dbPath, cfg); ok {
-		t.Fatal("intercepted on the mcp surface")
+	app := filepath.Join(root, "app.go")
+
+	for _, tc := range []struct {
+		mode      string
+		wantReads bool
+	}{
+		{helper.ModeMCP, false},
+		{helper.ModeAracneRead, false},
+		{helper.ModeInterceptID, true},
+		{helper.ModeLineRange, true},
+	} {
+		cfg := helper.DefaultConfig()
+		cfg.Mode = tc.mode
+
+		if _, ok := interceptCommand("head -20 "+app, dbPath, cfg); ok != tc.wantReads {
+			t.Errorf("mode %q: read intercepted = %v, want %v", tc.mode, ok, tc.wantReads)
+		}
+		if _, ok := interceptCommand("grep -n Serve "+app, dbPath, cfg); !ok {
+			t.Errorf("mode %q: a search was not intercepted", tc.mode)
+		}
 	}
 }
 
@@ -223,10 +249,10 @@ func TestQuoteForShell(t *testing.T) {
 	}
 }
 
-// blockedIn returns a config on the given surface with `keys` denied.
+// blockedIn returns a config in the given mode with `keys` denied.
 func blockedIn(mode string, keys ...string) *helper.Config {
 	cfg := helper.DefaultConfig()
-	cfg.Integration.Mode = mode
+	cfg.Mode = mode
 	agent := cfg.LLM.ClaudeCode.MainAgent
 	agent.BlockedTools = keys
 	cfg.LLM.ClaudeCode.MainAgent = agent
@@ -271,36 +297,29 @@ func denyReason(t *testing.T, cfg *helper.Config, dir, command string) string {
 	return got.HookSpecificOutput.Reason
 }
 
-// blocked_tools has to keep working on the terminal surface. What changes is where the refusal
-// SENDS the model: an `mcp__aracne__*` name is worse than useless to an agent with no MCP
-// server, so the reason names the shell forms aracne answers and the `arac` subcommands.
-func TestTerminalDenialsRedirectToTheShellSurface(t *testing.T) {
+// blocked_tools does nothing outside ModeMCP, and this is where that has to be true end to end.
+//
+// It used to deny on every surface, with the refusal text rewritten to name shell forms instead
+// of MCP tools. That was the wrong half to fix: in an intercepting mode the command was about to
+// be ANSWERED, so the denial spent a turn refusing a question asked correctly, and in
+// ModeAracneRead it refused a `cat` for which the only alternative -- `arac read` -- the model
+// had already been told about in the contract. The knob now bites in the one mode where a
+// refusal has an MCP tool to send the model to.
+func TestBlockedToolsDenyNothingOutsideMCPMode(t *testing.T) {
 	root, _ := scannedProject(t)
-	cfg := blockedIn(helper.IntegrationTerminal, "read", "grep")
 	app := filepath.Join(root, "app.go")
 
-	// `od -c` over two files: a read aracne models no spelling of and cannot proxy either,
-	// so it is refused rather than served -- and the refusal is the only place the model
-	// learns which spelling WOULD work.
-	reason := denyReason(t, cfg, root, "od -c "+app+" "+filepath.Join(root, "CHANGELOG.md"))
-	if reason == "" {
-		t.Fatal("a blocked read was not denied on the terminal surface")
-	}
-	if strings.Contains(reason, "mcp__aracne__") {
-		t.Errorf("terminal denial names an MCP tool that is not served:\n%s", reason)
-	}
-	for _, want := range []string{"arac read", "resource ID"} {
-		if !strings.Contains(reason, want) {
-			t.Errorf("terminal read denial does not mention %q:\n%s", want, reason)
-		}
-	}
+	for _, mode := range []string{helper.ModeAracneRead, helper.ModeInterceptID, helper.ModeLineRange} {
+		cfg := blockedIn(mode, "read", "grep", "edit", "write")
 
-	greason := denyReason(t, cfg, root, "grep -o Serve "+app)
-	if greason == "" {
-		t.Fatal("a blocked grep was not denied on the terminal surface")
-	}
-	if strings.Contains(greason, "mcp__aracne__") || !strings.Contains(greason, "arac grep") {
-		t.Errorf("terminal grep denial should point at `arac grep`:\n%s", greason)
+		// `od -c` is a read aracne models no spelling of, so nothing else can be suppressing
+		// the denial -- if blocked_tools were live here, this would be refused.
+		if reason := denyReason(t, cfg, root, "od -c "+app); reason != "" {
+			t.Errorf("mode %q denied a read that blocked_tools should no longer gate:\n%s", mode, reason)
+		}
+		if reason := denyReason(t, cfg, root, "sed -i s/a/b/ "+app); reason != "" {
+			t.Errorf("mode %q denied an edit that blocked_tools should no longer gate:\n%s", mode, reason)
+		}
 	}
 }
 
@@ -308,21 +327,37 @@ func TestTerminalDenialsRedirectToTheShellSurface(t *testing.T) {
 // already made; a denial costs it another turn for the same information.
 func TestInterceptionBeatsADenialForTheSameCommand(t *testing.T) {
 	root, _ := scannedProject(t)
-	cfg := blockedIn(helper.IntegrationTerminal, "read", "grep")
+	cfg := blockedIn(helper.ModeLineRange, "read", "grep")
 
 	if reason := denyReason(t, cfg, root, "head -20 "+filepath.Join(root, "app.go")); reason != "" {
 		t.Fatalf("a command aracne can serve was denied instead of rewritten:\n%s", reason)
 	}
 }
 
-// The MCP surface keeps naming MCP tools -- that is where they exist.
-func TestMCPDenialsStillNameTheMCPTool(t *testing.T) {
+// ModeMCP still denies, and its refusal still names the tool that exists -- which since the
+// rework is the read tool and only the read tool. A denial for grep must point at `arac grep`,
+// because no mode registers an MCP grep any more.
+func TestMCPDenialsNameOnlyToolsThatExist(t *testing.T) {
 	root, _ := scannedProject(t)
-	cfg := blockedIn(helper.IntegrationMCP, "grep")
+	app := filepath.Join(root, "app.go")
 
-	reason := denyReason(t, cfg, root, "grep -o Serve "+filepath.Join(root, "app.go"))
-	if !strings.Contains(reason, "mcp__aracne__grep") {
-		t.Errorf("mcp denial should name the MCP tool:\n%s", reason)
+	// `od -c` over TWO files: a read aracne models no spelling of and cannot proxy either, so
+	// it reaches the denial rather than being answered with the file's content.
+	readReason := denyReason(t, blockedIn(helper.ModeMCP, "read"), root,
+		"od -c "+app+" "+filepath.Join(root, "CHANGELOG.md"))
+	if !strings.Contains(readReason, "mcp__aracne__") {
+		t.Errorf("mcp read denial should name the MCP read tool:\n%s", readReason)
+	}
+
+	grepReason := denyReason(t, blockedIn(helper.ModeMCP, "grep"), root, "grep -o Serve "+app)
+	if grepReason == "" {
+		t.Fatal("a blocked grep was not denied in mcp mode")
+	}
+	if strings.Contains(grepReason, "mcp__aracne__grep") {
+		t.Errorf("mcp grep denial names a tool no mode registers:\n%s", grepReason)
+	}
+	if !strings.Contains(grepReason, "arac grep") {
+		t.Errorf("mcp grep denial should point at `arac grep`:\n%s", grepReason)
 	}
 }
 
@@ -348,15 +383,39 @@ func TestNativeToolNudgeFollowsTheSurface(t *testing.T) {
 		return out.String()
 	}
 
-	terminal := helper.DefaultConfig()
-	got := nudge(terminal, "Read", map[string]interface{}{"file_path": filepath.Join(root, "app.go")})
+	app := filepath.Join(root, "app.go")
+
+	// ModeAracneRead: nothing intercepts a read, so the nudge names the subcommand that does.
+	aracneRead := helper.DefaultConfig()
+	aracneRead.Mode = helper.ModeAracneRead
+	got := nudge(aracneRead, "Read", map[string]interface{}{"file_path": app})
 	if !strings.Contains(got, "arac read") || strings.Contains(got, "mcp__aracne__") {
-		t.Errorf("native Read nudge should point at the shell surface:\n%s", got)
+		t.Errorf("aracne_read nudge should point at the subcommand:\n%s", got)
 	}
 
-	// A Bash read on this surface was either already answered by the rewrite or is one aracne
-	// cannot answer at all, so nudging it is bytes spent on nothing.
-	if got := nudge(terminal, "Bash", map[string]interface{}{"command": "head -5 " + filepath.Join(root, "app.go")}); strings.Contains(got, "arac read") {
+	// An intercepting mode names the shell spellings aracne answers instead -- there is no
+	// subcommand to reach for when the command the model just typed is the surface.
+	lineRange := helper.DefaultConfig()
+	lineRange.Mode = helper.ModeLineRange
+	got = nudge(lineRange, "Read", map[string]interface{}{"file_path": app})
+	if !strings.Contains(got, "answered from the topology") || strings.Contains(got, "mcp__aracne__") {
+		t.Errorf("line_range nudge should name the shell forms:\n%s", got)
+	}
+
+	// ModeInterceptID is the one mode whose nudge may teach ids, because it is the one whose
+	// contract does.
+	interceptID := helper.DefaultConfig()
+	interceptID.Mode = helper.ModeInterceptID
+	if got := nudge(interceptID, "Read", map[string]interface{}{"file_path": app}); !strings.Contains(got, "resource ID") {
+		t.Errorf("intercept_id nudge should mention resource IDs:\n%s", got)
+	}
+	if got := nudge(lineRange, "Read", map[string]interface{}{"file_path": app}); strings.Contains(got, "resource ID") {
+		t.Errorf("line_range nudge must not re-teach resource IDs:\n%s", got)
+	}
+
+	// Where reads ARE intercepted, a Bash read was either already answered by the rewrite or
+	// is one aracne cannot answer at all, so nudging it is bytes spent on nothing.
+	if got := nudge(lineRange, "Bash", map[string]interface{}{"command": "head -5 " + app}); strings.Contains(got, "answered from the topology") {
 		t.Errorf("an intercepted Bash read should not also be nudged:\n%s", got)
 	}
 }

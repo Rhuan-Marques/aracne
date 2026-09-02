@@ -26,6 +26,15 @@ func RunServe(args []string) {
 		fmt.Fprintf(os.Stderr, "invalid --tool-profile %q\n", *profileName)
 		os.Exit(1)
 	}
+	// Only ModeMCP has MCP tools. Serving an empty registry instead of saying so is the
+	// failure that looks like a working server: the harness connects, lists nothing, and the
+	// model is told about tools it will never be offered.
+	if !cfg.MCPEnabled() {
+		fmt.Fprintf(os.Stderr, "aracne: mode %q serves no MCP tools. Set \"mode\": \"mcp\" in "+
+			".aracne/config.json (or run `arac init --mcp`) to wire the server, or remove the "+
+			"aracne entry from this harness's MCP config.\n", cfg.EffectiveMode())
+		os.Exit(1)
+	}
 	registry := BuildToolRegistry(manager, reg, cfg, *harness, *profileName)
 
 	server := mcp.NewServer(registry)

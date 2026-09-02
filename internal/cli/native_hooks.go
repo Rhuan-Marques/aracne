@@ -159,7 +159,10 @@ func writeClaudePermissions(settingsPath string, cfg *helper.Config) {
 // upsertAracneAllowRules strips every mcp__aracne__* rule before re-adding, so flipping the
 // flag in either direction self-heals an existing settings.json on the next init.
 func claudeMCPPermissionRules(cfg *helper.Config) []string {
-	names := allMCPToolNames()
+	// The mode filter runs here as everywhere else: a rule pre-approving a tool the server
+	// never registers is inert, but it is also the exact shape of the drift this file's
+	// generator/server test hunts, and a reader cannot tell the inert one from a real bug.
+	names := cfg.ServableMCPTools(allMCPToolNames())
 	rules := make([]string, 0, len(names)+1)
 	for _, name := range names {
 		if toolspec.IsBugTool(name) && !cfg.BugManagementEnabled() {

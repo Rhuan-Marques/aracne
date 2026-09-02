@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"aracne/internal/helper"
-	"aracne/internal/prompts"
 	"aracne/internal/toolspec"
 	"aracne/internal/topology"
 )
@@ -26,10 +25,20 @@ import (
 // These tests close that gap by comparing what the generators emit against what a real
 // registry actually serves.
 
-// generatedAgents lists the agents `arac init` writes files for, per flag state. "main" is
-// included because CLAUDE.md / AGENTS.md name tools in prose the same way.
+// Every test here runs in ModeMCP, and has to: it is the only mode with MCP tools, so it is the
+// only one where "the name a generator writes must be a name the server registers" is a claim
+// with two sides. In the other three modes both sides are empty and the invariant is vacuous.
+
+// generatedAgents lists the agents `arac init` writes an ALLOW-LIST for, per flag state.
+//
+// "main" is deliberately absent. It has no agent file, its contract names no tool since the
+// mode rework (each tool's own description does that), and the only artifact left that mentions
+// tool names for it -- the harness permission block -- is a deliberate SUPERSET: it pre-approves
+// every catalog name and both spellings of the read tool, because per-agent servers differ and
+// allowing only the resolved name would leave the others prompting. Checking a superset against
+// a registry is not this invariant; it is a different, false one.
 func generatedAgents(bugManagement bool) []string {
-	agents := []string{"main", "descriptions-generation-executor"}
+	agents := []string{"descriptions-generation-executor"}
 	if bugManagement {
 		agents = append(agents, "bug-hunter", "bug-judge", "bug-solver")
 	}
@@ -73,19 +82,6 @@ func emittedNames(t *testing.T, cfg *helper.Config, harness, agentName string) m
 		}
 	}
 
-	if agentName == "main" {
-		// The main agent has no agent file; its contract is the injected CLAUDE.md/AGENTS.md.
-		prefix := "mcp__aracne__"
-		body := claudeMdForTest(cfg, harness)
-		if harness == "opencode" {
-			prefix = "aracne_"
-		}
-		for _, m := range regexp.MustCompile("`"+prefix+`([A-Za-z0-9_]+)`+"`").FindAllStringSubmatch(body, -1) {
-			add(m[1])
-		}
-		return names
-	}
-
 	if harness == "claude_code" {
 		content := claudeAgentContent(agentName, "d", eff, "Body paragraph.\n\nRest.")
 		if m := claudeToolsLine.FindStringSubmatch(content); m != nil {
@@ -112,21 +108,13 @@ func emittedNames(t *testing.T, cfg *helper.Config, harness, agentName string) m
 	return names
 }
 
-// claudeMdForTest renders the main-agent contract for a harness. These are the files
-// `arac init` injects into CLAUDE.md / AGENTS.md, and they name tools in prose.
-func claudeMdForTest(cfg *helper.Config, harness string) string {
-	eff := cfg.EffectiveAgent(harness, "main")
-	if harness == "opencode" {
-		return prompts.AgentsMdContentForAgent(eff)
-	}
-	return prompts.ClaudeMdContentForAgent(eff)
-}
-
 // TestGeneratedToolNamesAreServed is the core invariant: every aracne tool name that lands in
 // a generated file is a name the server for that agent actually registers.
 func TestGeneratedToolNamesAreServed(t *testing.T) {
 	for _, bugManagement := range []bool{false, true} {
 		cfg := helper.DefaultConfig()
+		cfg.Mode = helper.ModeMCP
+		cfg.Mode = helper.ModeMCP
 		cfg.Features.BugManagement = bugManagement
 		for _, harness := range []string{"claude_code", "opencode"} {
 			for _, agentName := range generatedAgents(bugManagement) {
@@ -152,6 +140,7 @@ func TestGeneratedToolNamesAreServed(t *testing.T) {
 // check would pass on an agent that emitted BOTH names, which is not a valid allow-list.
 func TestGeneratedReadNameIsExactlyOne(t *testing.T) {
 	cfg := helper.DefaultConfig()
+	cfg.Mode = helper.ModeMCP
 	cfg.Features.BugManagement = true
 	for _, harness := range []string{"claude_code", "opencode"} {
 		for _, agentName := range generatedAgents(true) {
@@ -173,6 +162,7 @@ func TestGeneratedReadNameIsExactlyOne(t *testing.T) {
 // future "cleanup" that unified the two on a single bool would silently re-break one of them.
 func TestHarnessesDisagreeOnTheReadName(t *testing.T) {
 	cfg := helper.DefaultConfig()
+	cfg.Mode = helper.ModeMCP
 	claude := servedNames(t, cfg, "claude_code", "main")
 	opencode := servedNames(t, cfg, "opencode", "main")
 
@@ -201,6 +191,8 @@ func servesAnyBugTool(t *testing.T, cfg *helper.Config, harness, profile string)
 func TestBugToolsFollowTheFeatureFlag(t *testing.T) {
 	for _, bugManagement := range []bool{false, true} {
 		cfg := helper.DefaultConfig()
+		cfg.Mode = helper.ModeMCP
+		cfg.Mode = helper.ModeMCP
 		cfg.Features.BugManagement = bugManagement
 		for _, harness := range []string{"claude_code", "opencode"} {
 			if got := servesAnyBugTool(t, cfg, harness, "all"); got != bugManagement {
@@ -222,6 +214,8 @@ func TestBugToolsFollowTheFeatureFlag(t *testing.T) {
 func TestMainProfileNeverServesBugTools(t *testing.T) {
 	for _, bugManagement := range []bool{false, true} {
 		cfg := helper.DefaultConfig()
+		cfg.Mode = helper.ModeMCP
+		cfg.Mode = helper.ModeMCP
 		cfg.Features.BugManagement = bugManagement
 		for _, harness := range []string{"claude_code", "opencode"} {
 			// OpenCode's main agent is served by the shared "all" profile, so its restriction

@@ -17,9 +17,18 @@ import (
 // an empty new_string outright, so deleting a block of code meant rewriting the
 // whole file or escaping to a shell the guard exists to discourage.
 func RunEdit() {
+	// Both shapes the underlying tool accepts: the single edit, and the `edits` array that
+	// applies several against one file lock and rolls back as a unit.
+	//
+	// The batch form was reachable only through the MCP edit tool until that tool stopped
+	// being registered -- edits are answered on the shell in every mode now, so this verb is
+	// the batch path, and validating it away here would have quietly removed the capability.
+	// The measured cost of the edit path was call COUNT, not the topology sync: one call per
+	// hunk against a baseline that batched ten replacements into a single heredoc.
 	var input struct {
-		FilePath  string `json:"file_path"`
-		OldString string `json:"old_string"`
+		FilePath  string            `json:"file_path"`
+		OldString string            `json:"old_string"`
+		Edits     []json.RawMessage `json:"edits"`
 	}
 	data, err := io.ReadAll(os.Stdin)
 	if err != nil {
@@ -31,9 +40,11 @@ func RunEdit() {
 		os.Exit(1)
 	}
 	// new_string is not checked: an empty one deletes the matched text.
-	if input.FilePath == "" || input.OldString == "" {
+	if len(input.Edits) == 0 && (input.FilePath == "" || input.OldString == "") {
 		fmt.Fprintln(os.Stderr, `Usage: echo '{"file_path":"...","old_string":"...","new_string":"...","replace_all":false}' | arac edit`)
+		fmt.Fprintln(os.Stderr, `       batch: echo '{"edits":[{"file_path":"...","old_string":"...","new_string":"..."}, ...]}' | arac edit`)
 		fmt.Fprintln(os.Stderr, "       an empty new_string deletes the matched text; old_string must match exactly once unless replace_all is true")
+		fmt.Fprintln(os.Stderr, "       a batch takes one file lock and rolls back as a unit")
 		os.Exit(1)
 	}
 

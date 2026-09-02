@@ -1,14 +1,7 @@
 {
-  "integration": {
-    "mode": "terminal"
-  },
+  "mode": "line_range",
   "terminal": {
-    "intercept": true,
-    "enhance_files": true,
-    "enhance_resources": true,
-    "grep": true,
-    "max_overserve": 4,
-    "prefer_resource_ids": false
+    "max_overserve": 4
   },
   "scan": {
     "mode": "default",

@@ -105,29 +105,52 @@ testing_ground/   Hand-built multi-language corpus of edge cases (see its README
 A free-form schema (a clean break from older formats — invalid/old files are
 overwritten with defaults). Top-level sections:
 
-- **`integration`** — `mode`: `terminal` (default) | `mcp` | `both`. Which surface aracne
-  reaches an agent through, and the one field every generated artifact derives from: `arac
-  init` writes `.mcp.json` and the `mcp__aracne__*` permission allow-list only when the mode
-  includes MCP, and picks the short terminal contract or the MCP contract to match. **Absent
-  means `terminal`**, so a project predating this field loses its MCP server entry on the next
-  `arac init` unless it says otherwise — init prints that rather than doing it silently, and
-  `arac init --mcp` persists `both`.
-- **`identification_mode`** — `line_range` (default) | `id`. How every surface NAMES a resource
-  to the model. Under `line_range` a context entry reads
-  `## pkg.Foo (src/x.go:120-160): description` and a grep header reads
-  `# src/x.go:120-160 — description`; under `id` both keep the bare topology ID. The default
-  is evidence-driven: over `ab-prefer-ids-20260902a` the model used a resource ID as a command
-  operand **0 times in 408 shell commands** while addressing code as file+line in all 408.
-  `line_range` also carries a promise the slice reader enforces — reading an advertised span
-  returns byte-for-byte what the resource read would have, imports and context included
-  (`whollyContained` in `universaltools/slice.go`).
-- **`terminal`** — the terminal surface: `intercept` (may the guard rewrite a shell command at
-  all), `enhance_files` (a read of an indexed FILE; off makes it behave like an unindexed one),
-  `enhance_resources` (may a resource ID stand where a path does), `grep` (route shell searches
-  through the annotated grep), `prefer_resource_ids` (whether the contract carries the one
-  sentence steering toward IDs — isolated behind a key so it can be A/B'd; see
-  `bench/configs/run/ab-prefer-ids.yaml`), and `max_overserve` (the answer must stay within this multiple
-  of the bytes the real command would have printed, or `arac cmd` passes through instead).
+- **`mode`** — `mcp` | `aracne_read` (default) | `intercept_id` | `line_range`. **The one dial.**
+  It answers three questions at once — which tools exist, which shell commands aracne answers,
+  and what vocabulary the contract teaches — and every generated artifact derives from it.
+
+  | mode | MCP tools | shell reads | shell grep | `blocked_tools` | addressing |
+  |------|-----------|-------------|------------|-----------------|------------|
+  | `mcp` | one `read` (+ `warnings_list`, `bug_*`) | run as themselves | intercepted | **active** | resource IDs |
+  | `aracne_read` *(default)* | none | run as themselves | intercepted | inert | resource IDs, via `arac read` |
+  | `intercept_id` | none | **intercepted** | intercepted | inert | resource IDs, as command operands |
+  | `line_range` | none | **intercepted** | intercepted | inert | `path:start-end` |
+
+  Three things hold in every mode: shell `grep` is answered by the annotated grep (it is the one
+  capability with no competing surface — no read tool answers "which node is DESCRIBED as X"),
+  edits re-sync the topology through the `arac update-file` hook, and `arac read`/`arac grep`
+  work from the CLI.
+
+  `grep`, `edit` and `write` are **not** MCP tools in any mode (`toolspec.IsShellServedTool`):
+  their shell forms are intercepted everywhere, so a tool for them offered a second way to ask
+  one question and charged a schema block per request for it. `Config.ServableMCPTools` is the
+  one filter every consumer goes through — the server registry, the generated agent markdown,
+  both harnesses' permission blocks — so a name in one that the server does not register cannot
+  drift in unnoticed.
+
+  **WHY FOUR MODES AND NOT A CROSS-PRODUCT.** This was `integration.mode` (terminal/mcp/both)
+  × `identification_mode` (id/line_range) × five `terminal` booleans, with nothing folding them
+  together — so combinations existed that made no sense and shipped anyway. `mcp` +
+  `line_range` printed `path:start-end` in every grep header while the only reader in the
+  project was an MCP `read` that takes ids and has no line-range argument, and that project's
+  contract never mentioned a range at all. The surfaces are not independent axes.
+
+  **Both retired keys still map forward silently** (`Config.legacyMode`), so an existing config
+  keeps behaving as it does today: `mcp` → `mcp`; `terminal`/`both` → `intercept_id` or
+  `line_range` depending on the old `identification_mode`. `both` lands on an intercepting mode
+  because that is what those projects were running; the tools it also had are the half being
+  dropped. A config with neither key resolves to `aracne_read`.
+
+  `line_range` carries a promise the slice reader enforces: reading an advertised span returns
+  byte-for-byte what the resource read would have, imports and context included
+  (`whollyContained` in `universaltools/slice.go`). It is the default addressing for the
+  intercepting pair on evidence — over `ab-prefer-ids-20260902a` the model used a resource ID as
+  a command operand **0 times in 408 shell commands** while addressing code as file+line in all
+  408.
+- **`terminal`** — `max_overserve` only: the answer must stay within this multiple of the bytes
+  the real command would have printed, or `arac cmd` passes through instead. Its five former
+  booleans (`intercept`, `enhance_files`, `enhance_resources`, `grep`, `prefer_resource_ids`)
+  are facts about the mode now.
 
 - **`scan`** / **`scanner`** — default mode (`default`/`hard`/`all`) for the
   one-shot `arac scan` and the live scanner; `update_frequency`; and
@@ -192,7 +215,7 @@ use the **universal** implementations, and only `update_description` /
 ## 7. User-facing surfaces (the harnesses)
 
 There are **five** ways to use aracne, all over the same topology engine. The default is
-**E, the terminal surface**; MCP (B) is opt-in via `integration.mode`:
+`mode: aracne_read`; MCP (B) is opt-in via `mode: "mcp"` or `arac init --mcp`:
 
 ### A. CLI (`arac <subcommand>`) — `internal/cli`, dispatched from `main.go`
 Direct, no LLM. Key commands (full list in `usage.go` / `PrintUsage`):
@@ -276,27 +299,33 @@ a project: generates the injected **CLAUDE.md / AGENTS.md**, the MCP config
 plugins. Two hooks ship for Claude Code:
 
 - **`arac-guard.sh`** → `arac guard --claude-hook`: the **Tool Guard**. What it does depends
-  on `integration.mode`:
-  - **terminal** (default) — it **rewrites**. A single, unpiped, unredirected Bash command
-    that `shellcmd` models, on a target the topology knows, comes back as
-    `<arac> cmd -- <the original text>` through `updatedInput`. The original text is reused
-    verbatim so the shell re-splits it exactly as it would have. Guard rails: never a second
-    time (`isAracCommand` stops the recursion), never across a pipe, a redirect, a heredoc,
-    an `&&`, an env prefix or a wrapper, never a mutation, and never a file with no topology
-    nodes. `blocked_tools` still applies to what interception declined, but the refusal names
-    the **shell** surface -- the spellings aracne does answer, plus `arac read`/`arac grep` --
-    never an `mcp__aracne__*` tool, since sending a model to a tool that is not in its list is
-    the reliable way to buy a wasted turn. Interception is tried first, so a command aracne can
-    serve is answered rather than refused however `blocked_tools` reads.
-  - **mcp** — the previous behaviour, unchanged: no rewriting; native `Read`/`Grep`/`Edit`/
-    `Write` and their shell equivalents are nudged toward the MCP tool, and anything in
-    `blocked_tools` is denied outright (blocking `grep` also blocks `rg`/`Select-String` run
-    via Bash; blocking `bash` blocks the Bash tool entirely). A denied read is answered with
-    its content where it can be (`guard_proxy.go`). Piped reads (`cmd | grep`) are exempt
-    unless `read.pipe_passthrough:false`.
-  - **both** — rewrite first, then the denial path for whatever was not rewritten.
+  on `mode`:
+  - **searches, every mode** — it **rewrites**. A single, unpiped, unredirected Bash `grep` that
+    `shellcmd` models comes back as `<arac> cmd -- <the original text>` through `updatedInput`.
+    The original text is reused verbatim so the shell re-splits it exactly as it would have.
+    Guard rails: never a second time (`isAracCommand` stops the recursion), never across a pipe,
+    a redirect, a heredoc, an `&&`, an env prefix or a wrapper, never a mutation, and never a
+    file with no topology nodes.
+  - **`intercept_id` / `line_range`** — the same rewrite additionally covers shell READS
+    (`cat`/`head`/`tail`/`sed -n`/`awk`) on a target the topology knows.
+  - **`mcp` / `aracne_read`** — reads are left alone. The read capability already has a surface
+    in both (a tool, or `arac read`), and rewriting the model's `cat` on top of it would answer
+    one question twice.
+  - **`blocked_tools`** applies in **`mcp` only** (`Config.GuardBlocksNativeReads`). That is the
+    one mode where a refusal has somewhere to send the model — an MCP tool that is in its list.
+    In the other three a block would refuse a call aracne was about to answer itself, which is
+    the two-turns-for-one-question failure interception was built to end. Where it does apply:
+    blocking `grep` also blocks `rg`/`Select-String` run via Bash; blocking `bash` blocks the
+    Bash tool entirely; a denied read is answered with its content where it can be
+    (`guard_proxy.go`); piped reads (`cmd | grep`) are exempt unless
+    `read.pipe_passthrough:false`. Interception is tried first, so a command aracne can serve is
+    answered rather than refused however `blocked_tools` reads.
+  - The **PostToolUse nudge** fires on native `Read`/`Grep`/`Edit`/`Write`, which interception
+    never sees, and names the surface the mode actually has
+    (`toolspec.WarningForSurface`). Note that `grep`/`edit`/`write` guidance is the `arac`
+    subcommand in *every* mode including `mcp`, because no mode registers a tool for them.
 
-  Note that `integration.mode` governs the **main agent's** surface only. Generated sub-agents
+  Note that `mode` governs the **main agent's** surface only. Generated sub-agents
   (`descriptions-generation-executor`, `bug-*`) declare their own scoped MCP server inline in
   their frontmatter (`mcpServers:` → `arac serve --tool-profile <agent>`), so the descriptions
   and bug pipelines keep working on the terminal surface. That is the right split: those agents

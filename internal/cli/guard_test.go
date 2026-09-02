@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"aracne/internal/toolspec"
 )
 
 func TestCommandKeys(t *testing.T) {
@@ -106,9 +108,9 @@ func TestDecideGuard(t *testing.T) {
 		wantInMsg string
 	}{
 		{"native grep allowed", "Grep", nil, set(), true, false, ""},
-		{"native grep blocked", "Grep", nil, set("grep"), true, true, "mcp__aracne__grep"},
+		{"native grep blocked", "Grep", nil, set("grep"), true, true, "arac grep"},
 		{"native read blocked", "Read", nil, set("read"), true, true, "blocked_tools: read"},
-		{"native write blocked", "Write", nil, set("write"), true, true, "mcp__aracne__write"},
+		{"native write blocked", "Write", nil, set("write"), true, true, "arac write"},
 		{"native edit not in blocked", "Edit", nil, set("grep"), true, false, ""},
 		{"bash grep blocked", "Bash", bash("grep x | head"), set("grep"), true, true, "grep"},
 		{"bash cat allowed", "Bash", bash("cat f"), set(), true, false, ""},
@@ -134,7 +136,7 @@ func TestDecideGuard(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			d := decideGuard(tt.tool, tt.input, tt.blocked, tt.exempt, "", false)
+			d := decideGuard(tt.tool, tt.input, tt.blocked, tt.exempt, "", toolspec.SurfaceMCP)
 			if d.Deny != tt.wantDeny {
 				t.Fatalf("decideGuard(%q) Deny = %v, want %v (msg: %q)", tt.tool, d.Deny, tt.wantDeny, d.Message)
 			}
@@ -171,27 +173,47 @@ func withConfig(t *testing.T, configJSON string, fn func()) {
 
 // mcpSurfaceConfig is the minimum config that puts a project on the MCP surface, where
 // blocked_tools denials and the MCP-tool nudges apply.
-const mcpSurfaceConfig = `{"scan":{"mode":"default"},"integration":{"mode":"mcp"}}`
+const mcpSurfaceConfig = `{"scan":{"mode":"default"},"mode":"mcp"}`
 
-const blocksGrepConfig = `{"scan":{"mode":"default"},"integration":{"mode":"mcp"},"llm":{"claude_code":{"main_agent":{"blocked_tools":["grep"]}}}}`
+const blocksGrepConfig = `{"scan":{"mode":"default"},"mode":"mcp","llm":{"claude_code":{"main_agent":{"blocked_tools":["grep"]}}}}`
 
+// The NATIVE Grep tool, not a Bash one: interception only rewrites Bash, and a Bash grep is
+// intercepted in every mode now -- which beats the denial, and should, since a rewrite hands the
+// model the answer inside the call it already made.
 func TestRunClaudeGuardHook_PreToolDeny(t *testing.T) {
 	withConfig(t, blocksGrepConfig, func() {
 		var out bytes.Buffer
-		in := strings.NewReader(`{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"grep foo src"}}`)
+		in := strings.NewReader(`{"hook_event_name":"PreToolUse","tool_name":"Grep","tool_input":{"pattern":"foo"}}`)
 		runClaudeGuardHook(in, &out)
 		got := out.String()
 		if !strings.Contains(got, `"permissionDecision":"deny"`) {
 			t.Fatalf("expected deny decision, got: %q", got)
 		}
-		if !strings.Contains(got, "mcp__aracne__grep") {
+		if !strings.Contains(got, "arac grep") {
 			t.Fatalf("expected guidance in deny reason, got: %q", got)
 		}
 	})
 }
 
-const blocksReadConfig = `{"scan":{"mode":"default"},"integration":{"mode":"mcp"},"llm":{"claude_code":{"main_agent":{"blocked_tools":["read"]}}}}`
-const blocksReadStrictConfig = `{"scan":{"mode":"default"},"integration":{"mode":"mcp"},"read":{"pipe_passthrough":false},"llm":{"claude_code":{"main_agent":{"blocked_tools":["read"]}}}}`
+// A Bash grep in the same project is REWRITTEN rather than denied. The denial costs a turn for
+// information the rewrite delivers inside the call the model already made.
+func TestRunClaudeGuardHook_ABashGrepIsRewrittenNotDenied(t *testing.T) {
+	withConfig(t, blocksGrepConfig, func() {
+		var out bytes.Buffer
+		in := strings.NewReader(`{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"grep foo src"}}`)
+		runClaudeGuardHook(in, &out)
+		got := out.String()
+		if strings.Contains(got, `"permissionDecision":"deny"`) {
+			t.Fatalf("a bash grep was denied instead of rewritten: %q", got)
+		}
+		if !strings.Contains(got, "updatedInput") {
+			t.Fatalf("expected a rewrite, got: %q", got)
+		}
+	})
+}
+
+const blocksReadConfig = `{"scan":{"mode":"default"},"mode":"mcp","llm":{"claude_code":{"main_agent":{"blocked_tools":["read"]}}}}`
+const blocksReadStrictConfig = `{"scan":{"mode":"default"},"mode":"mcp","read":{"pipe_passthrough":false},"llm":{"claude_code":{"main_agent":{"blocked_tools":["read"]}}}}`
 
 func TestRunClaudeGuardHook_PipedReadExempt(t *testing.T) {
 	// Default pipe_passthrough (true): a read command fed by a pipe is exempt.
@@ -229,17 +251,20 @@ func TestRunClaudeGuardHook_PreToolFailOpen(t *testing.T) {
 	})
 }
 
-// The PostToolUse nudge names an MCP tool, so it only fires on a surface that serves one.
-// On the terminal surface the same command has already BEEN answered by aracne, and the
-// reminder would advertise a tool the agent does not have.
+// The PostToolUse nudge fires on a NATIVE tool call, which interception never sees, so it is
+// the only place the model learns the cheaper spelling. It names `arac grep` rather than an MCP
+// tool because no mode registers an MCP grep.
 func TestRunClaudeGuardHook_PostToolWarning(t *testing.T) {
 	withConfig(t, mcpSurfaceConfig, func() {
 		var out bytes.Buffer
 		in := strings.NewReader(`{"hook_event_name":"PostToolUse","tool_name":"Grep","tool_input":{"pattern":"x"}}`)
 		runClaudeGuardHook(in, &out)
 		got := out.String()
-		if !strings.Contains(got, `"additionalContext"`) || !strings.Contains(got, "mcp__aracne__grep") {
+		if !strings.Contains(got, `"additionalContext"`) || !strings.Contains(got, "arac grep") {
 			t.Fatalf("expected PostToolUse warning, got: %q", got)
+		}
+		if strings.Contains(got, "mcp__aracne__grep") {
+			t.Fatalf("nudge names a tool no mode registers: %q", got)
 		}
 	})
 }

@@ -100,8 +100,17 @@ func TestWarningFor(t *testing.T) {
 			}
 		}
 	}
-	if !strings.Contains(WarningFor("grep", true), "mcp__aracne__grep") {
-		t.Fatalf("grep warning should reference the MCP tool: %q", WarningFor("grep", true))
+	// grep, edit and write are shell-served in every mode, so their guidance names the `arac`
+	// subcommand on every surface. Naming an MCP tool for them would point a ModeMCP agent at
+	// something its own server does not register.
+	for _, key := range []string{"grep", "edit", "write"} {
+		got := WarningFor(key, true)
+		if strings.Contains(got, "mcp__aracne__") {
+			t.Fatalf("%s warning names an MCP tool that is never registered: %q", key, got)
+		}
+		if !strings.Contains(got, "arac "+key) && !strings.Contains(got, "arac edit") {
+			t.Fatalf("%s warning should name its `arac` subcommand: %q", key, got)
+		}
 	}
 	for _, key := range []string{"bash", "nope", ""} {
 		if WarningFor(key, true) != "" {

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"aracne/internal/helper"
+	"aracne/internal/toolspec"
 	"aracne/internal/topology"
 )
 
@@ -42,6 +44,15 @@ func scannedProject(t *testing.T) (root, dbPath string) {
 	// zero bytes and the scan silently disappears.)
 	if err := mgr.FullScan(root, NewScannerRegistry()); err != nil {
 		t.Fatalf("scan: %v", err)
+	}
+	// The fixture is a project in an intercepting mode. Without a config on disk the guard
+	// loads defaults, and the default is ModeAracneRead -- which intercepts searches but not
+	// reads, so every read-interception assertion built on this fixture would go quietly
+	// vacuous rather than fail.
+	cfg := helper.DefaultConfig()
+	cfg.Mode = helper.ModeLineRange
+	if err := helper.SaveConfig(cfg, helper.ConfigPath(dbPath)); err != nil {
+		t.Fatal(err)
 	}
 	// Guard against a silently empty scan making every assertion below vacuous.
 	if tracked, ok := trackedFiles([]string{filepath.Join(root, "app.go")}, dbPath); !ok || len(tracked) != 1 {
@@ -135,23 +146,23 @@ func TestDecideGuardLetsThroughOnlyUnmodelledReads(t *testing.T) {
 
 	bash := func(cmd string) map[string]interface{} { return map[string]interface{}{"command": cmd} }
 
-	if d := decideGuard("Bash", bash("cat "+filepath.Join(root, "CHANGELOG.md")), blocked, false, dbPath, false); d.Deny {
+	if d := decideGuard("Bash", bash("cat "+filepath.Join(root, "CHANGELOG.md")), blocked, false, dbPath, toolspec.SurfaceMCP); d.Deny {
 		t.Errorf("read of an unmodelled file denied: %s", d.Message)
 	}
-	if d := decideGuard("Bash", bash("cat "+filepath.Join(root, "app.go")), blocked, false, dbPath, false); !d.Deny {
+	if d := decideGuard("Bash", bash("cat "+filepath.Join(root, "app.go")), blocked, false, dbPath, toolspec.SurfaceMCP); !d.Deny {
 		t.Error("read of indexed source was not denied")
 	}
 	// An EDIT must go through the tool that re-syncs the topology whether or not the file is
 	// indexed today -- writing to an unmodelled path is one way it becomes indexed. The
 	// exemption is gated on read being the ONLY thing denied, which is what keeps this so.
-	if d := decideGuard("Bash", bash("sed -i s/a/b/ "+filepath.Join(root, "CHANGELOG.md")), blocked, false, dbPath, false); !d.Deny {
+	if d := decideGuard("Bash", bash("sed -i s/a/b/ "+filepath.Join(root, "CHANGELOG.md")), blocked, false, dbPath, toolspec.SurfaceMCP); !d.Deny {
 		t.Error("an in-place edit of an unmodelled file must still be denied")
 	}
 	// A read that also implicates a second blocked key keeps its denial, even on an
 	// unmodelled file: the exemption answers "can aracne read this", not "is any of this
 	// command harmless".
 	mixed := bash("cat " + filepath.Join(root, "CHANGELOG.md") + " && sed -i s/a/b/ " + filepath.Join(root, "CHANGELOG.md"))
-	if d := decideGuard("Bash", mixed, blocked, false, dbPath, false); !d.Deny {
+	if d := decideGuard("Bash", mixed, blocked, false, dbPath, toolspec.SurfaceMCP); !d.Deny {
 		t.Error("a command that also edits must stay denied")
 	}
 }
