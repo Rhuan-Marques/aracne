@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 
 # Substrings that identify an aracne resolution failure in a tool result. These are the
 # exact strings the engine emits — see internal/llm/languages/universaltools/universal_read.go
@@ -46,6 +47,14 @@ _GUARD_MARKER = "Blocked by aracne config"
 #   - the elision marker, present whenever a window is framed by its enclosing declaration.
 #   - topogrep's per-resource annotation header, which is what an intercepted SEARCH returns
 #     instead of a fence.
+# Matches an `arac cmd` the MODEL typed itself. Kept only for that case, which is rare:
+# the guard's own rewrites are invisible here. A PreToolUse hook substitutes the command
+# through `hookSpecificOutput.updatedInput`, and the transcript records what the model
+# WROTE -- confirmed by running a session against an intercepting fixture, where the model
+# typed `grep -rn X .`, aracne answered it, and the transcript showed the typed form with
+# aracne's output underneath. Counting this pattern therefore reported ZERO interceptions
+# for every run ever measured, including runs where interception fired on most commands.
+# guard_counts() reads the guard's own event log instead; see cli.GuardLogEnv.
 _INTERCEPT_RE = re.compile(r"\barac\s+cmd\s+--")
 # Discovery commands run through the shell, matched on the command WORD so the classification
 # holds whether or not the guard rewrote the call. `arac cmd --` is skipped over first, since
@@ -436,6 +445,42 @@ def summarize(stdout: str, answer_key: str = "") -> tuple[dict, str]:
     return stats, "\n".join(reduced)
 
 
+def guard_counts(path) -> dict:
+    """Fold the guard's decision log into counters.
+
+    Returns {} when the file is absent, which is the honest answer for a baseline cell (no
+    guard runs there) and for any run made before the log existed -- as opposed to zero,
+    which would read as "the guard saw commands and answered none of them".
+
+    `n_guard_seen` is what makes `n_intercepted` legible: two rewrites means nothing without
+    how many commands the guard was offered.
+    """
+    p = Path(path) if path else None
+    if not p or not p.exists():
+        return {}
+    counts = {"rewrite": 0, "deny": 0, "passthrough": 0, "nudge": 0}
+    for line in p.read_text(errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        d = rec.get("decision")
+        if d in counts:
+            counts[d] += 1
+    return {
+        "n_intercepted": counts["rewrite"],
+        "n_guard_seen": counts["rewrite"] + counts["deny"] + counts["passthrough"],
+        "n_guard_passthrough": counts["passthrough"],
+        "n_guard_nudges": counts["nudge"],
+        # Recorded by the guard, which is the only component that knows: a PreToolUse deny
+        # never reaches the model as a tool_result, so the transcript cannot see it either.
+        "n_guard_denials_logged": counts["deny"],
+    }
+
+
 # The subset of counters that is flat enough to sit on a result row and be aggregated.
 ROW_FIELDS = (
     "n_tool_calls", "n_mcp_calls", "n_native_calls",
@@ -445,6 +490,15 @@ ROW_FIELDS = (
     "n_answer_key_attempts", "n_answer_key_fetches",
     "n_intercepted", "terminal_result_bytes",
     "shell_read_result_bytes", "shell_grep_result_bytes",
+)
+
+# Guard counters are deliberately NOT in ROW_FIELDS. They come from the guard's own log,
+# which only an aracne cell writes, and row_fields defaults a missing field to 0 -- so
+# listing them here would stamp "the guard saw 0 commands and answered 0 of them" onto every
+# baseline row, which reads as a measurement of aracne rather than the absence of one.
+# runner.py merges guard_counts() separately, and a baseline row simply has no such keys.
+GUARD_FIELDS = (
+    "n_guard_seen", "n_guard_passthrough", "n_guard_nudges", "n_guard_denials_logged",
 )
 
 

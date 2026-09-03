@@ -1,0 +1,32 @@
+# Single-case smoke: does the whole pipeline still work end to end?
+#
+# Not a measurement. One task, one seed, both arms, 10 turns -- enough to see the harness
+# start a cell, the agent drive aracne, the topology stay consistent and grading run, and
+# short enough that a break shows up in minutes rather than hours.
+#
+# terraform-docs-901 because it is the smallest fixture in the pool (335 describable nodes)
+# and the one whose baseline behaviour is already known from the turns4 pilot: 13 turns,
+# 143,440 context. A 10-turn cap will cut the agent off before it finishes, which is fine --
+# the question here is whether the machinery runs, not whether the patch is right.
+sample_id: smoke1
+languages: [go]
+seeds: 1
+arms: [baseline, aracne]
+
+run_harness: claude_code
+model: sonnet
+max_turns: 10
+timeout_s: 900
+run_parallel: 2
+
+# The fixture is at 0.60 describable coverage after the rescan that added call-site records,
+# below the 0.95 gate. Cold is correct for a smoke test: it is measuring that the plumbing
+# works, and a partial context block exercises the same code paths as a full one.
+allow_cold: true
+
+isolate_operator_config: true
+deny_answer_key: true
+
+arm_builtin_tools:
+  baseline: [Bash, Glob]
+  aracne:   [Bash, Glob]

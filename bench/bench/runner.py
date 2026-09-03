@@ -125,6 +125,12 @@ def _run_cell(task: Task, arm: str, seed: int, cfg: dict, out_dir: Path,
         # for an incremental scan. It must wrap the agent call and nothing else: started
         # after the workdir is restored (there is no DB to watch before that) and stopped
         # before grading reads the patch.
+        # Written under out_dir, never inside the worktree: restore() git-cleans the
+        # worktree before the next cell, which would delete the telemetry as it was written.
+        # Same reasoning as the reduced transcript below.
+        guard_log = out_dir / "guardlogs" / f"{_short(task.key)}__{arm}__s{seed}.jsonl"
+        guard_log.parent.mkdir(parents=True, exist_ok=True)
+        guard_log.unlink(missing_ok=True)
         with arms.background_scanner(arm, workdir, cfg) as scanning:
             row["bg_scanner"] = scanning
             rr = agents.run_agent(
@@ -137,6 +143,7 @@ def _run_cell(task: Task, arm: str, seed: int, cfg: dict, out_dir: Path,
                 # The web stays open; the repository holding this task's answer does not.
                 deny_repo=(netshim.deny_target(task.clone_url)
                            if cfg.get("deny_answer_key", True) else None),
+                guard_log=str(guard_log),
             )
         row.update(
             input_tokens=rr.input_tokens, output_tokens=rr.output_tokens,
@@ -148,6 +155,10 @@ def _run_cell(task: Task, arm: str, seed: int, cfg: dict, out_dir: Path,
         # next run, which would delete the telemetry we just wrote).
         stats, reduced = toolstats.summarize(rr.transcript, netshim.deny_target(task.clone_url))
         row.update(toolstats.row_fields(stats))
+        # Overwrites the transcript-derived n_intercepted, which structurally cannot see a
+        # rewrite; absent for a baseline cell, where no guard runs and "0 interceptions"
+        # would be a statement about aracne rather than about the control.
+        row.update(toolstats.guard_counts(guard_log))
         if reduced:
             tpath = out_dir / "transcripts" / f"{_short(task.key)}__{arm}__s{seed}.jsonl"
             tpath.parent.mkdir(parents=True, exist_ok=True)

@@ -87,6 +87,11 @@ func runClaudeGuardHook(input io.Reader, output io.Writer) {
 		if event.ToolName == "Bash" {
 			if command, _ := event.ToolInput["command"].(string); command != "" {
 				if rewritten, ok := interceptCommand(command, dbPath, cfg); ok {
+					// Recorded here rather than inferred downstream: the rewrite reaches the
+					// model as `updatedInput`, and the transcript keeps the command the model
+					// WROTE -- so this is the only place that knows a command was answered
+					// from the topology instead of run. See GuardLogEnv.
+					logGuardDecision(guardRewrote, event.ToolName, command)
 					emitPreToolRewrite(output, event.ToolInput, rewritten)
 					return
 				}
@@ -100,7 +105,12 @@ func runClaudeGuardHook(input io.Reader, output io.Writer) {
 		// could not serve the command as written -- so telling the model which spelling it
 		// CAN serve is the whole value of the refusal.
 		if d := decideGuard(event.ToolName, event.ToolInput, blocked, exemptPiped, dbPath, cfg.Surface()); d.Deny {
+			logGuardDecision(guardDenied, event.ToolName, guardLoggedCommand(event.ToolInput))
 			emitPreToolDeny(output, d.Message)
+		} else {
+			// The passthrough count is what makes the rewrite count readable: "2 rewrites"
+			// means nothing without "out of how many commands the guard saw".
+			logGuardDecision(guardPassedT, event.ToolName, guardLoggedCommand(event.ToolInput))
 		}
 		// Note: decideGuard already folded in the proxied content when it could, so the
 		// denial either carries the file or carries the pointer -- never both.
@@ -137,9 +147,19 @@ func runClaudeGuardHook(input io.Reader, output io.Writer) {
 			}
 		}
 		if len(parts) > 0 {
+			logGuardDecision(guardNudged, event.ToolName, guardLoggedCommand(event.ToolInput))
 			emitPostToolWarning(output, strings.Join(parts, "\n\n"))
 		}
 	}
+}
+
+// guardLoggedCommand pulls the command text out of a tool input for the event log, or ""
+// for a tool that has none (a native Read/Grep/Edit/Write).
+func guardLoggedCommand(toolInput map[string]interface{}) string {
+	if c, ok := toolInput["command"].(string); ok {
+		return c
+	}
+	return ""
 }
 
 // guardDecision is the result of evaluating a tool call against blocked_tools.

@@ -320,3 +320,64 @@ def test_ordinary_git_use_is_not_counted():
         transcript = _bash("1", cmd) + "\n" + _result("1", "ok\n") + "\n"
         stats, _ = toolstats.summarize(transcript, "org/repo")
         assert stats["n_future_history"] == 0, f"{cmd!r} should not count"
+
+
+# --- the guard event log ------------------------------------------------------
+#
+# n_intercepted used to be counted by matching `arac cmd --` in the transcript, and it
+# reported zero for every run ever measured -- including runs where interception fired on
+# most commands. The cause is structural: a PreToolUse hook substitutes the command through
+# `hookSpecificOutput.updatedInput`, and the transcript records what the MODEL wrote.
+# Confirmed by running a session against an intercepting fixture: the model typed
+# `grep -rn NewMarkdownTable --include=*.go .`, the result was aracne's answer (it began at
+# format/doc.go, which real grep does not match, and omitted the _test.go hit real grep
+# returns first), and the transcript showed the typed command. So the guard records its own
+# decisions instead.
+
+def _write_log(tmp_path, *decisions):
+    p = tmp_path / "guard.jsonl"
+    p.write_text("".join(
+        json.dumps({"t": "2026-09-03T00:00:00Z", "tool": "Bash",
+                    "decision": d, "command": "grep -rn x ."}) + "\n"
+        for d in decisions
+    ))
+    return p
+
+
+def test_guard_counts_reads_the_log(tmp_path):
+    p = _write_log(tmp_path, "rewrite", "rewrite", "passthrough", "deny", "nudge")
+    got = toolstats.guard_counts(p)
+    assert got["n_intercepted"] == 2
+    # nudge is a PostToolUse event and is NOT a command the guard was offered to answer.
+    assert got["n_guard_seen"] == 4
+    assert got["n_guard_passthrough"] == 1
+    assert got["n_guard_denials_logged"] == 1
+    assert got["n_guard_nudges"] == 1
+
+
+def test_guard_counts_absent_log_is_empty_not_zero(tmp_path):
+    """A baseline cell runs no guard. Reporting 0 there would state that aracne answered
+    nothing, when the truth is that aracne was never asked."""
+    assert toolstats.guard_counts(tmp_path / "nope.jsonl") == {}
+    assert toolstats.guard_counts(None) == {}
+
+
+def test_guard_counts_survives_a_truncated_line(tmp_path):
+    """The log is appended to by concurrent hook processes; a partial final line must not
+    lose the counts already recorded."""
+    p = tmp_path / "guard.jsonl"
+    p.write_text(
+        json.dumps({"decision": "rewrite"}) + "\n"
+        + json.dumps({"decision": "rewrite"}) + "\n"
+        + '{"decision": "rewr'
+    )
+    assert toolstats.guard_counts(p)["n_intercepted"] == 2
+
+
+def test_guard_counts_ignores_unknown_decisions(tmp_path):
+    """A newer aracne recording a decision kind this harness does not know must not be
+    counted as an interception."""
+    p = _write_log(tmp_path, "rewrite", "teleport")
+    got = toolstats.guard_counts(p)
+    assert got["n_intercepted"] == 1
+    assert got["n_guard_seen"] == 1
