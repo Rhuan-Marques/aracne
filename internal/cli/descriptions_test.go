@@ -1,6 +1,9 @@
 package cli
 
 import (
+	"database/sql"
+
+	_ "modernc.org/sqlite"
 	"os"
 	"path/filepath"
 	"strings"
@@ -97,6 +100,12 @@ func TestPendingDescriptionResourcesRegenOversized(t *testing.T) {
 	if err := helper.WriteDb(topo, dbPath); err != nil {
 		t.Fatalf("WriteDb: %v", err)
 	}
+	// WriteDb caps descriptions on the way in (domain.CapDescription), so an over-budget row
+	// can no longer be created through it. These rows are the GRANDFATHERED ones --  written
+	// before the cap existed -- which is the only population `--regen_oversized` exists to
+	// find, so the test writes them the way history did: straight into the table.
+	writeOversizedDescription(t, dbPath, "fn:over", strings.Repeat("x", domain.DescriptionBudgetFunction+1))
+	writeOversizedDescription(t, dbPath, "st:over", strings.Repeat("y", domain.DescriptionBudgetType+1))
 	manager := topology.New()
 	if err := manager.Load(dbPath); err != nil {
 		t.Fatalf("Load: %v", err)
@@ -163,5 +172,19 @@ func TestWriteOpenCodePrimaryCommandDoesNotCreateSubtask(t *testing.T) {
 	}
 	if strings.Contains(content, "subtask: true") {
 		t.Fatalf("descriptions command must not run as an OpenCode subtask:\n%s", content)
+	}
+}
+
+// writeOversizedDescription puts a description into the table directly, bypassing the storage
+// cap, to simulate a row written before that cap existed.
+func writeOversizedDescription(t *testing.T, dbPath, id, description string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec("UPDATE resources SET description = ? WHERE id = ?", description, id); err != nil {
+		t.Fatalf("seed oversized description: %v", err)
 	}
 }

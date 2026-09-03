@@ -381,6 +381,10 @@ func RunDescriptionApply(args []string) {
 func RunClearDescriptions(args []string) {
 	fs := flag.NewFlagSet("descriptions-clear", flag.ExitOnError)
 	targetFlag := fs.String("target", "", "Comma-separated resource kinds to clear; clears all kinds when omitted")
+	oversized := fs.Bool("oversized", false,
+		"Clear ONLY descriptions that overrun their kind's character budget, leaving the rest "+
+			"untouched. domain.DescriptionForStorage keeps new ones out, but rows written before "+
+			"it existed are grandfathered; this is the explicit sweep for those.")
 	fs.Parse(args)
 
 	targetValue := strings.TrimSpace(*targetFlag)
@@ -396,6 +400,21 @@ func RunClearDescriptions(args []string) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
+	}
+
+	if *oversized {
+		count, err := helper.ClearOversizedDescriptions(".aracne/topology.db", targets)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		scope := "all kinds"
+		if len(targets) > 0 {
+			scope = helper.FormatDescribeTargets(targets)
+		}
+		fmt.Printf("Cleared %d over-budget description(s) (%s). "+
+			"Run `arac descriptions generate` to write real ones for them.\n", count, scope)
+		return
 	}
 
 	manager, _ := InitRegistry(".aracne/topology.db")

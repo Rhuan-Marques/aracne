@@ -1271,7 +1271,6 @@ func (c *Config) Surface() toolspec.Surface {
 	}
 }
 
-
 // EffectiveTerminalMaxOverserve returns the over-serve factor; 0 means "no ceiling".
 func (c *Config) EffectiveTerminalMaxOverserve() int {
 	if c.Terminal.MaxOverserve == nil {

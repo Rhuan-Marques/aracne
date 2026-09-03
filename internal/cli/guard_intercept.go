@@ -123,7 +123,7 @@ func interceptableSegment(segments []commandSegment, i int, original, dbPath str
 	default:
 		return 0, false
 	}
-	if !pipesOnlyIntoCappers(segments, i, req.Kind) {
+	if !pipesIntoLinePreservingConsumers(segments, i, req.Kind) {
 		return 0, false
 	}
 	if namesOnlyUnindexedFiles(req.Operands, dbPath) {
@@ -138,19 +138,28 @@ func interceptableSegment(segments []commandSegment, i int, original, dbPath str
 	return off, true
 }
 
-// pipesOnlyIntoCappers decides whether a segment that FEEDS a pipe may be rewritten.
+// pipesIntoLinePreservingConsumers decides whether a segment that FEEDS a pipe may be
+// rewritten.
 //
-// The distinction is what the consumer does to the bytes. `grep … | head -30` caps a list of
-// matches, and aracne returns a list of matches too, so capping it means the same thing --
-// this is the single most common search shape in a real transcript. `cat f | grep x` does not:
-// the consumer would search aracne's RENDERING, whose elided bodies are not in the file's text,
-// and quietly return a different answer.
+// The distinction is what the consumer does to the bytes, and it is delegated to
+// shellcmd.ClassifyConsumer so the guard and the rewrite cannot disagree about which segments
+// of a pipeline are aracne's to answer. `grep … | grep -v _test | head -30` filters and caps a
+// list of matches, and aracne returns a list of matches too, so the pipeline still means the
+// same thing. `grep … | wc -l` does not: aracne interleaves `# path:a-b` annotation lines with
+// the matches, so the count is of a different thing and comes back as a bare number with
+// nothing in it to reveal the substitution.
 //
-// So only a search may be rewritten upstream of a pipe, and only into pure line cappers. A read
-// producer is left alone: `cat f | head -30` means "the first 30 lines of f", which is a window
-// -- and the window shape is the one that costs MORE than the plain command anyway, so nothing
-// is lost by leaving it.
-func pipesOnlyIntoCappers(segments []commandSegment, i int, kind shellcmd.Kind) bool {
+// The old rule here allowed head and tail only. Measured over 664 real shell commands from
+// hard9-modes and navcheck-20260902a, that reached 88 of the 133 piped greps (66%); allowing
+// line-preserving filters reaches 129 (97%). The 41 it was refusing were almost entirely
+// `| grep -v <noise> | head -N`, which is simply how the model writes a search.
+//
+// A READ producer is still left alone whatever follows it. `cat f | grep x` would search
+// aracne's RENDERING, whose elided bodies are not in the file's text, and quietly return
+// FEWER matches than the real command -- a wrong answer with nothing to mark it as one. That
+// is the opposite trade from the grep case: there, aracne's answer is the same KIND of thing
+// the consumer expected; here it is not.
+func pipesIntoLinePreservingConsumers(segments []commandSegment, i int, kind shellcmd.Kind) bool {
 	if i+1 >= len(segments) || !segments[i+1].pipedInto {
 		return true // feeds no pipe
 	}
@@ -158,13 +167,29 @@ func pipesOnlyIntoCappers(segments []commandSegment, i int, kind shellcmd.Kind) 
 		return false
 	}
 	for j := i + 1; j < len(segments) && segments[j].pipedInto; j++ {
-		switch commandWord(segments[j].text) {
-		case "head", "tail":
-		default:
+		if !shellcmd.ConsumerPreservesLines(stdinReader(segments[j].text)) {
 			return false
 		}
 	}
 	return true
+}
+
+// stdinReader is the command word that actually RECEIVES the pipe.
+//
+// Deliberately not commandWord, which looks past wrappers to classify what ultimately runs.
+// That is the right answer for "what is this segment doing" and the wrong one here: in
+// `… | xargs sed -i s/a/b/` the stage reading stdin is `xargs`, which EXECUTES the lines it
+// is given, while commandWord reports `sed` -- a line filter -- and would wave it through.
+// Only environment assignments are skipped, because `LC_ALL=C sort` is still sort reading the
+// pipe.
+func stdinReader(segment string) string {
+	for _, f := range strings.Fields(segment) {
+		if isEnvAssignment(f) {
+			continue
+		}
+		return f
+	}
+	return ""
 }
 
 // namesOnlyUnindexedFiles reports whether every operand is a file that exists on disk and has

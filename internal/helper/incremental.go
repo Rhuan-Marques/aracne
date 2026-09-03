@@ -166,7 +166,7 @@ func WriteScopedResources(dbPath string, upserts []domain.Resource, deletes []st
 					locPath = res.Location.Path
 				}
 				if _, err := resStmt.Exec(res.ID, string(res.Kind), res.Name, res.Language,
-					res.Description, toJSON(res.Properties), startsAt, endsAt, locPath); err != nil {
+					domain.DescriptionForStorage(res.Kind, res.Description), toJSON(res.Properties), startsAt, endsAt, locPath); err != nil {
 					return err
 				}
 				if _, err := tx.Exec("DELETE FROM connections WHERE source_id = ?", res.ID); err != nil {
@@ -278,7 +278,7 @@ func WriteIncremental(dbPath string, topo *domain.Topology, upserts []domain.Res
 					locPath = res.Location.Path
 				}
 				if _, err := resStmt.Exec(res.ID, string(res.Kind), res.Name, res.Language,
-					res.Description, toJSON(res.Properties), startsAt, endsAt, locPath); err != nil {
+					domain.DescriptionForStorage(res.Kind, res.Description), toJSON(res.Properties), startsAt, endsAt, locPath); err != nil {
 					return err
 				}
 				if _, err := tx.Exec("DELETE FROM connections WHERE source_id = ?", res.ID); err != nil {

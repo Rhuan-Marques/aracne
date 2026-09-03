@@ -765,7 +765,7 @@ func neighborContext(neighbors []domain.Resource) func(*strings.Builder, *render
 			if description == "" {
 				description = "no description"
 			}
-			fmt.Fprintf(b, "## %s (%s): %s\n", n.ID, n.Kind, description)
+			fmt.Fprintf(b, "## %s (%s): %s\n", n.ID, n.Kind, domain.RenderDescription(n.Kind, description))
 		}
 	}
 }

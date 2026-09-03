@@ -381,7 +381,7 @@ func WriteDelta(dbPath string, upserts []domain.Resource, deletes []string) erro
 					locPath = res.Location.Path
 				}
 				if _, err := resStmt.Exec(res.ID, string(res.Kind), res.Name, res.Language,
-					res.Description, toJSON(res.Properties), startsAt, endsAt, locPath); err != nil {
+					domain.DescriptionForStorage(res.Kind, res.Description), toJSON(res.Properties), startsAt, endsAt, locPath); err != nil {
 					return err
 				}
 				// Clear stale outgoing edges for this source before re-inserting.

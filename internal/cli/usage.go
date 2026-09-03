@@ -61,7 +61,7 @@ Usage:
   Aracne init    [flags]    Initialize topology integration (--claude, --opencode, --global)
   Aracne descriptions generate [flags]  Generate descriptions for targeted undocumented resources
   Aracne descriptions apply            Write topology descriptions back into source as doc comments
-  Aracne descriptions clear [flags]    Clear stored topology descriptions
+  Aracne descriptions clear [flags]    Clear stored topology descriptions (--oversized: only over-budget ones)
   Aracne descriptions export [flags]   Back up descriptions to an ID-independent JSONL sidecar
   Aracne descriptions import [flags]   Restore descriptions from a sidecar after a re-scan
   arac read [--kind <kind>] [--full] <resource-id>...  Read one or more resources by ID; --kind forces exact kind (function, method, struct, named_type, interface, variable, file, package, dependency); --full returns whole file bodies under read.file_mode "skeleton"

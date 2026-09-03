@@ -1,6 +1,7 @@
 package readunit
 
 import (
+	"aracne/internal/topology/domain"
 	"regexp"
 	"sort"
 	"strings"
@@ -254,7 +255,7 @@ func writeIncoming(b *strings.Builder, st *renderstate.State, units []Unit, opt 
 			if st.IsExcluded(string(ref.ID)) || !used.FirstTime(string(ref.ID)) {
 				continue
 			}
-			line := "## " + ref.ID + " (" + string(ref.Kind) + "): " + describe(ref.Description) + "\n"
+			line := "## " + ref.ID + " (" + string(ref.Kind) + "): " + domain.RenderDescription(ref.Kind, ref.Description) + "\n"
 			if !used.Allow(len(line)) {
 				continue
 			}

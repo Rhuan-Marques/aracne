@@ -419,3 +419,65 @@ func TestNativeToolNudgeFollowsTheSurface(t *testing.T) {
 		t.Errorf("an intercepted Bash read should not also be nudged:\n%s", got)
 	}
 }
+
+// The shape the model actually writes. Over 664 real shell commands from hard9-modes and
+// navcheck-20260902a, 133 were a piped grep; the head/tail-only rule served 88 of them, and
+// nearly all of the 45 it refused were `| grep -v <noise> | head -N`. That refusal is why
+// n_intercepted was 0 across the pilot's aracne cells while the arm still paid for its
+// contract.
+func TestGrepIsInterceptedThroughLinePreservingFilters(t *testing.T) {
+	root, dbPath := scannedProject(t)
+	for _, cmd := range []string{
+		"grep -rn Serve " + root + " | grep -v _test",
+		"grep -rn Serve " + root + " | grep -v _test | head -30",
+		"grep -rn Serve " + root + " | grep -v _test | grep -v testdata | head -40",
+	} {
+		got := rewriteOf(t, dbPath, cmd)
+		if got == "" {
+			t.Errorf("expected a rewrite for %q", cmd)
+			continue
+		}
+		if !strings.Contains(got, "cmd -- grep") {
+			t.Errorf("rewrote the wrong segment of %q: %s", cmd, got)
+		}
+		// Everything downstream of the producer must survive byte-for-byte: the whole point is
+		// that the rest of the pipeline still runs, over aracne's answer.
+		if tailPart := cmd[strings.Index(cmd, "|"):]; !strings.Contains(got, tailPart) {
+			t.Errorf("downstream of the pipe was not preserved for %q: %s", cmd, got)
+		}
+	}
+}
+
+// A consumer whose meaning depends on bytes aracne never promised to reproduce must leave the
+// producer alone. `wc -l` over aracne's answer counts its `# path:a-b` annotation lines too,
+// and returns a bare number with nothing in it to reveal the substitution.
+func TestGrepIsNotInterceptedIntoOpaqueConsumers(t *testing.T) {
+	root, dbPath := scannedProject(t)
+	for _, cmd := range []string{
+		"grep -rn Serve " + root + " | wc -l",
+		"grep -rln Serve " + root + " | xargs sed -i s/a/b/",
+		"grep -rn Serve " + root + " | tee /tmp/out.txt",
+		"grep -rn Serve " + root + " | head -5 | wc -l",
+	} {
+		if got := rewriteOf(t, dbPath, cmd); got != "" {
+			t.Errorf("must NOT rewrite %q (consumer changes what the pipeline means), got %s", cmd, got)
+		}
+	}
+}
+
+// A READ producer stays untouched whatever follows it: `cat f | grep x` would search aracne's
+// rendering, whose elided bodies are not in the file's text, and return FEWER matches than the
+// real command with nothing marking it as a different answer.
+func TestReadIsNeverInterceptedIntoAPipe(t *testing.T) {
+	root, dbPath := scannedProject(t)
+	app := filepath.Join(root, "app.go")
+	for _, cmd := range []string{
+		"cat " + app + " | grep Serve",
+		"cat " + app + " | head -30",
+		"sed -n 1,40p " + app + " | grep -v test",
+	} {
+		if got := rewriteOf(t, dbPath, cmd); got != "" {
+			t.Errorf("must NOT rewrite a read into a pipe: %q -> %s", cmd, got)
+		}
+	}
+}

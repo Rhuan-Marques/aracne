@@ -99,7 +99,7 @@ func WriteDb(topo *domain.Topology, path string) error {
 				endsAt = res.Location.EndsAt
 				locPath = res.Location.Path
 			}
-			if _, err := resStmt.Exec(id, string(res.Kind), res.Name, res.Language, res.Description, propsJSON, startsAt, endsAt, locPath); err != nil {
+			if _, err := resStmt.Exec(id, string(res.Kind), res.Name, res.Language, domain.DescriptionForStorage(res.Kind, res.Description), propsJSON, startsAt, endsAt, locPath); err != nil {
 				return err
 			}
 			for kind, targets := range res.Connections {
@@ -1023,4 +1023,76 @@ func CleanupOrphanedBugsScoped(dbPath string) error {
 		}
 	}
 	return nil
+}
+
+// ClearOversizedDescriptions deletes every stored description that overruns its kind's budget,
+// optionally restricted to `targets`. Returns how many were removed.
+//
+// WHY THIS EXISTS AS A COMMAND. domain.DescriptionForStorage keeps over-budget text out of the
+// database from now on, but it cannot fix what is already there: descriptions written before it
+// existed are grandfathered, and domain.ValidateDescription deliberately never sweeps stored
+// rows. This is that sweep, run explicitly. On grafana/k6 it is 34% of harvested doc comments.
+//
+// It CLEARS rather than truncates, for the same reason the storage path now refuses: the first
+// 120 characters of a paragraph is a severed clause that reads like a description without being
+// one. Cleared resources become visible to `descriptions generate` and
+// `node_list_no_description`, which is the state that gets them a real one.
+func ClearOversizedDescriptions(dbPath string, targets []domain.ResourceKind) (int64, error) {
+	type row struct {
+		id   string
+		kind domain.ResourceKind
+		desc string
+	}
+	var over []row
+	if err := withSQLiteRead(dbPath, func(db *sql.DB) error {
+		rows, err := db.Query("SELECT id, kind, description FROM resources " +
+			"WHERE description IS NOT NULL AND TRIM(description) <> ''")
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		want := map[domain.ResourceKind]bool{}
+		for _, t := range targets {
+			want[t] = true
+		}
+		for rows.Next() {
+			var r row
+			var kind string
+			if err := rows.Scan(&r.id, &kind, &r.desc); err != nil {
+				return err
+			}
+			r.kind = domain.ResourceKind(kind)
+			if len(want) > 0 && !want[r.kind] {
+				continue
+			}
+			if domain.ValidateDescription(r.kind, r.desc) != nil {
+				over = append(over, r)
+			}
+		}
+		return rows.Err()
+	}); err != nil {
+		return 0, err
+	}
+	if len(over) == 0 {
+		return 0, nil
+	}
+	var n int64
+	err := withSQLiteWrite(dbPath, func(db *sql.DB) error {
+		stmt, err := db.Prepare("UPDATE resources SET description = '' WHERE id = ?")
+		if err != nil {
+			return err
+		}
+		defer stmt.Close()
+		for _, r := range over {
+			res, err := stmt.Exec(r.id)
+			if err != nil {
+				return err
+			}
+			if c, _ := res.RowsAffected(); c > 0 {
+				n += c
+			}
+		}
+		return nil
+	})
+	return n, err
 }
