@@ -72,8 +72,22 @@ testing_ground/   Hand-built multi-language corpus of edge cases (see its README
 - **`Topology`** — `Root`, `Language`/`Languages`, `Resources` map, `Warnings`
   map, `Errors` map. Multiple languages merge into one graph (`Language="multi"`).
 - **`TopologyWarning`** — surfaced after edits: `use_missing_node`,
-  `node_removed`, `signature_changed`. Tells an agent its change may have broken
-  callers.
+  `node_removed`, `signature_changed`, `interface_conflict`. Tells an agent its
+  change may have broken callers.
+
+  The last two are **derived from current state, not remembered from an event**, which is
+  what lets them retire themselves. `signature_changed` names a callee (`SourceID`) and the
+  caller to verify (`TargetID`), and stands only while a RECORDED CALL SITE still fails to
+  fit — callers store what they pass in a private `__call_sites` edge
+  (`internal/topology/contract`), one matcher per language because arity is binding in Go,
+  Rust, Java, TypeScript and Python but *not* in JavaScript, where `f(1)` against
+  `function f(a, b)` is legal. Where a call cannot be read, `TopologyWarning.Baseline` — the
+  signature the callers were written against — is the fallback, and it remains the only
+  mechanism for a return-type-only change, which no call site records.
+  `interface_conflict` is the implementer's side: a type that DECLARES an interface and
+  does not deliver it. It runs only where that declaration is a claim that can be wrong
+  (Rust, Java, TypeScript, Python ABC); Go and Python `Protocol` are structural, so their
+  `implements` edge is derived from satisfaction and a broken type simply has no edge.
 - **`KnownBug`** — a reported defect on a node with state `pending` →
   `acknowledged` / `dismissed`, driving the bug-hunter/judge/solver workflow.
 
