@@ -44,6 +44,7 @@ type payload struct {
 	Types    []*string `json:"t,omitempty"`
 	Variadic bool      `json:"v,omitempty"`
 	Kwargs   []string  `json:"k,omitempty"`
+	Dyn      bool      `json:"d,omitempty"`
 }
 
 // EncodeCallSite renders one recorded call. An empty callee id yields "", which callers
@@ -52,7 +53,7 @@ func EncodeCallSite(s CallSite) string {
 	if s.CalleeID == "" {
 		return ""
 	}
-	raw, err := json.Marshal(payload{N: s.N, Types: s.Types, Variadic: s.Variadic, Kwargs: s.Kwargs})
+	raw, err := json.Marshal(payload{N: s.N, Types: s.Types, Variadic: s.Variadic, Kwargs: s.Kwargs, Dyn: s.Dyn})
 	if err != nil {
 		return ""
 	}
@@ -77,6 +78,7 @@ func DecodeCallSite(rec string) (CallSite, bool) {
 		Types:    p.Types,
 		Variadic: p.Variadic,
 		Kwargs:   p.Kwargs,
+		Dyn:      p.Dyn,
 	}, true
 }
 

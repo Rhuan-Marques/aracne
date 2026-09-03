@@ -53,6 +53,14 @@ type pyBodyCall struct {
 	ObjectName string `json:"object_name"`
 	MethodName string `json:"method_name"`
 	LineNo     int    `json:"lineno"`
+	// What the call passes. ArgC is -1 when a starred argument hides the real count.
+	// Recorded so a later scan can ask whether the call still fits its callee rather than
+	// whether the callee merely changed. Absent on the synthesized operator and decorator
+	// pseudo-calls, which have no argument list; those record no shape and stay unjudged.
+	ArgC     int      `json:"argc"`
+	ArgTypes []string `json:"argtypes"`
+	Starred  bool     `json:"starred"`
+	KwNames  []string `json:"kw_names"`
 }
 
 // Struct capturing an assignment statement in Python source: variable name, inferred value type, and line number.
@@ -95,6 +103,9 @@ type pyVarDef struct {
 	Name     string   `json:"name"`
 	Typing   string   `json:"typing"`
 	TypeRefs []string `json:"type_refs"`
+	Optional bool     `json:"optional"`
+	Variadic bool     `json:"variadic"`
+	KeyOnly  bool     `json:"key_only"`
 }
 
 // Represents a Python variable with its name, type annotation, value, and source location.
@@ -436,7 +447,11 @@ func convertFunction(fn pyFunc, filePath string, modulePath string, classID *pyt
 		if p.Name == "self" || p.Name == "cls" {
 			continue
 		}
-		input = append(input, python.VariableDefinition{Name: p.Name, Typing: p.Typing, TypingID: canonicalTypeID(p.Typing, modulePath, importMap, importTargets)})
+		input = append(input, python.VariableDefinition{
+			Name: p.Name, Typing: p.Typing,
+			TypingID: canonicalTypeID(p.Typing, modulePath, importMap, importTargets),
+			Optional: p.Optional, Variadic: p.Variadic, KeyOnly: p.KeyOnly,
+		})
 	}
 
 	var output []python.VariableDefinition

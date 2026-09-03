@@ -20,6 +20,13 @@ type VariableDefinition struct {
 	// It is resolved in the DEFINING file's import context during resolveTopology, so a
 	// caller in another file can follow a return type without the callee's imports.
 	TypingID string
+	// Optional and Variadic are what the declaration says about how the parameter may be
+	// passed. TypeScript marks an optional parameter with "?" or a default, and neither is
+	// recoverable from Name and Typing -- without them `f(a: number, b?: string)` and
+	// `f(a: number, b: string)` are the same shape, so any check on how many arguments a
+	// call passes would warn on every call that legitimately omits the optional one.
+	Optional bool
+	Variadic bool // a rest parameter
 }
 
 // Represents a function signature with its name, input, and output variable definitions.

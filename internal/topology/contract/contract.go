@@ -64,6 +64,12 @@ type CallSite struct {
 	Types    []*string `json:"t,omitempty"` // per position; nil entry = not determinable
 	Variadic bool      `json:"v,omitempty"` // f(xs...) / f(*args) / f(...a) AT THE CALL SITE
 	Kwargs   []string  `json:"k,omitempty"` // Python keyword-argument names
+	// Dyn marks a callee that was resolved heuristically rather than exactly -- Java's
+	// overload fallback, a duck-typed method call. The edge is a guess about WHICH function
+	// is called, so a mismatch against it is a guess too, and gets downgraded to Unknown.
+	// Without this, Java's habit of connecting every same-named overload when no arity fits
+	// would make an arity check report a mismatch against overloads the call never meant.
+	Dyn bool `json:"d,omitempty"`
 }
 
 // Param is one declared parameter, read from Properties["input"].

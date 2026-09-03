@@ -1,8 +1,10 @@
 package pyscanner
 
 import (
+	"sort"
 	"strings"
 
+	"aracne/internal/topology/contract"
 	"aracne/internal/topology/python"
 )
 
@@ -14,7 +16,21 @@ func analyzeFunctionBody(body *pyFunc, pr *ParseResult, gt *python.PythonTopolog
 		return conn
 	}
 
+	// current is the call being resolved, or nil outside the call loop. Reading it in add()
+	// records the argument shape at every ConnCalls site without threading it through each.
+	var current *pyBodyCall
+	var callSites []string
 	add := func(kind python.ConnectionKind, id string) {
+		// Recorded BEFORE the edge dedupe below returns. Two calls to the same callee are
+		// one edge but two call sites, and they are exactly the interesting case: a
+		// function called once correctly and once with the wrong arguments must still
+		// report the wrong one.
+		if kind == python.ConnCalls && current != nil {
+			rec := contract.EncodeCallSite(pyCallSite(id, current))
+			if rec != "" && !containsPyRec(callSites, rec) {
+				callSites = append(callSites, rec)
+			}
+		}
 		ids := conn[kind]
 		for _, existing := range ids {
 			if existing == id {
@@ -34,13 +50,19 @@ func analyzeFunctionBody(body *pyFunc, pr *ParseResult, gt *python.PythonTopolog
 	if bodyAssigns == nil {
 		bodyAssigns = []pyBodyAssign{}
 	}
-	resolveBodyCallRefs(bodyCalls, bodyAssigns, pr, gt, add, funcInput, receiverClass)
+	resolveBodyCallRefs(bodyCalls, bodyAssigns, pr, gt, add, funcInput, receiverClass, &current)
+
+	// Sorted: the at-scale suite compares connection sets across scan modes byte-for-byte.
+	if len(callSites) > 0 {
+		sort.Strings(callSites)
+		conn[python.ConnectionKind(contract.CallSitesConn)] = callSites
+	}
 
 	return conn
 }
 
 // Resolves method and function calls within a function body by mapping variable types and matching calls to class methods or global functions.
-func resolveBodyCallRefs(bodyCalls []pyBodyCall, bodyAssigns []pyBodyAssign, pr *ParseResult, gt *python.PythonTopology, add func(kind python.ConnectionKind, id string), funcInput []python.VariableDefinition, receiverClass *python.ClassID) {
+func resolveBodyCallRefs(bodyCalls []pyBodyCall, bodyAssigns []pyBodyAssign, pr *ParseResult, gt *python.PythonTopology, add func(kind python.ConnectionKind, id string), funcInput []python.VariableDefinition, receiverClass *python.ClassID, cur **pyBodyCall) {
 	varTypeMap := make(map[string]python.ClassID)
 
 	// Methods reach sibling methods through the receiver; map self/cls to the
@@ -85,7 +107,13 @@ func resolveBodyCallRefs(bodyCalls []pyBodyCall, bodyAssigns []pyBodyAssign, pr 
 	}
 
 	// Resolve method calls
-	for _, call := range bodyCalls {
+	for ci := range bodyCalls {
+		call := bodyCalls[ci]
+		// nil when a caller resolves calls without recording their shapes, which the
+		// focused unit tests do.
+		if cur != nil {
+			*cur = &bodyCalls[ci]
+		}
 		if call.ObjectName == "" || call.MethodName == "" {
 			// Direct function call: resolve via same-module or imported name.
 			if fid := lookupFuncByName(call.Func, pr, gt); fid != "" {
@@ -716,4 +744,43 @@ func resolveMetaclassRefs(pr *ParseResult, gt *python.PythonTopology) {
 		}
 		gt.Classes[ref.ClassID] = cls
 	}
+}
+
+// pyCallSite reads the argument shape of one Python call.
+//
+// Python's arity is binding -- a missing required argument is a TypeError, not a silently
+// undefined parameter -- so this is a real check, unlike in JavaScript. Keyword arguments
+// are carried by name because they can satisfy a positional parameter, and a name that
+// matches no parameter is itself a genuine error that no other language here can detect.
+func pyCallSite(calleeID string, c *pyBodyCall) contract.CallSite {
+	site := contract.CallSite{
+		CalleeID: calleeID,
+		N:        c.ArgC,
+		Variadic: c.Starred,
+		Kwargs:   c.KwNames,
+	}
+	anyKnown := false
+	types := make([]*string, 0, len(c.ArgTypes))
+	for _, tok := range c.ArgTypes {
+		if tok == "" {
+			types = append(types, nil)
+			continue
+		}
+		anyKnown = true
+		t := tok
+		types = append(types, &t)
+	}
+	if anyKnown {
+		site.Types = types
+	}
+	return site
+}
+
+func containsPyRec(recs []string, rec string) bool {
+	for _, r := range recs {
+		if r == rec {
+			return true
+		}
+	}
+	return false
 }

@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"aracne/internal/topology/contract"
 	"aracne/internal/topology/domain"
 	java "aracne/internal/topology/java"
 )
@@ -492,6 +493,23 @@ func analyzeFunctionBody(gt *java.JavaTopology, ctx *javaCtx, pr *ParseResult, b
 		}
 		conn[kind] = append(conn[kind], id)
 	}
+	var callSites []string
+	// addCalls records the edges for one call site along with what it passes.
+	//
+	// matchMethods returns EVERY same-named overload when none has the right arity, so
+	// those edges are a guess about which method is meant. Since the fallback fires
+	// precisely when no arity fits, checking arity against them would report a mismatch on
+	// all of them; the Dyn flag marks the guess so the verdict is downgraded to Unknown.
+	addCalls := func(ids []string, argCount int, argTypes []string) {
+		exact := javaArityExact(ids, argCount)
+		for _, mid := range ids {
+			add(java.ConnCalls, mid)
+			rec := contract.EncodeCallSite(javaCallSite(mid, argCount, argTypes, !exact))
+			if rec != "" && !containsJavaRec(callSites, rec) {
+				callSites = append(callSites, rec)
+			}
+		}
+	}
 	addUses := func(fqn string) {
 		if fqn == "" {
 			return
@@ -568,9 +586,7 @@ func analyzeFunctionBody(gt *java.JavaTopology, ctx *javaCtx, pr *ParseResult, b
 		fqn := ctx.typeFQN(n.Type, pr)
 		if fqn != "" {
 			addUses(fqn)
-			for _, mid := range matchMethods(ctx, fqn, "<init>", n.ArgCount) {
-				add(java.ConnCalls, mid)
-			}
+			addCalls(matchMethods(ctx, fqn, "<init>", n.ArgCount), n.ArgCount, nil)
 		} else if imp, ok := pr.ImportMap[stripTypeText(n.Type)]; ok && !imp.Internal && imp.Dep != "" {
 			add(java.ConnUsesDep, imp.Dep)
 		}
@@ -599,27 +615,27 @@ func analyzeFunctionBody(gt *java.JavaTopology, ctx *javaCtx, pr *ParseResult, b
 			}
 		}
 		if sid != "" {
-			for _, mid := range matchMethods(ctx, sid, c.Method, c.ArgCount) {
-				add(java.ConnCalls, mid)
-			}
+			addCalls(matchMethods(ctx, sid, c.Method, c.ArgCount), c.ArgCount, nil)
 		} else if c.Object != "" {
 			if imp, ok := pr.ImportMap[c.Object]; ok && !imp.Internal && imp.Dep != "" {
 				add(java.ConnUsesDep, imp.Dep)
 			} else if owner, ok := pr.StaticMembers[c.Method]; ok {
 				ofqn := ctx.typeFQN(owner, pr)
-				for _, mid := range matchMethods(ctx, ofqn, c.Method, c.ArgCount) {
-					add(java.ConnCalls, mid)
-				}
+				addCalls(matchMethods(ctx, ofqn, c.Method, c.ArgCount), c.ArgCount, nil)
 			}
 		} else if c.IsSelf {
 			// implicit-this static import call: defaultGlobal() with no receiver
 			if owner, ok := pr.StaticMembers[c.Method]; ok {
 				ofqn := ctx.typeFQN(owner, pr)
-				for _, mid := range matchMethods(ctx, ofqn, c.Method, c.ArgCount) {
-					add(java.ConnCalls, mid)
-				}
+				addCalls(matchMethods(ctx, ofqn, c.Method, c.ArgCount), c.ArgCount, nil)
 			}
 		}
+	}
+
+	// Sorted: the at-scale suite compares connection sets across scan modes byte-for-byte.
+	if len(callSites) > 0 {
+		sort.Strings(callSites)
+		conn[java.ConnectionKind(contract.CallSitesConn)] = callSites
 	}
 
 	return conn
@@ -734,4 +750,47 @@ func uniqueConns(conns map[java.ConnectionKind][]string) map[java.ConnectionKind
 		}
 	}
 	return result
+}
+
+// javaCallSite reads the argument shape of one Java call.
+func javaCallSite(calleeID string, argCount int, argTypes []string, dyn bool) contract.CallSite {
+	site := contract.CallSite{CalleeID: calleeID, N: argCount, Dyn: dyn}
+	anyKnown := false
+	types := make([]*string, 0, len(argTypes))
+	for _, tok := range argTypes {
+		if tok == "" {
+			types = append(types, nil)
+			continue
+		}
+		anyKnown = true
+		t := tok
+		types = append(types, &t)
+	}
+	if anyKnown && len(argTypes) == argCount {
+		site.Types = types
+	}
+	return site
+}
+
+// javaArityExact reports whether matchMethods actually found an overload of the wanted
+// arity, rather than falling back to returning every same-named one.
+func javaArityExact(ids []string, argCount int) bool {
+	if argCount < 0 {
+		return false
+	}
+	for _, id := range ids {
+		if methodArity(id) == argCount {
+			return true
+		}
+	}
+	return false
+}
+
+func containsJavaRec(recs []string, rec string) bool {
+	for _, r := range recs {
+		if r == rec {
+			return true
+		}
+	}
+	return false
 }

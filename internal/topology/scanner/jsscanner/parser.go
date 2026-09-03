@@ -10,6 +10,7 @@ import (
 	tstsx "github.com/smacker/go-tree-sitter/typescript/tsx"
 	tstypescript "github.com/smacker/go-tree-sitter/typescript/typescript"
 
+	"aracne/internal/topology/contract"
 	"aracne/internal/topology/domain"
 	js "aracne/internal/topology/javascript"
 )
@@ -149,6 +150,10 @@ type jsBodyCall struct {
 	Func               string
 	IsNew              bool
 	LineNo             int
+	// Args is one token per argument written at the call site, "" where the argument's
+	// type could not be read; ArgC is -1 when a spread hides the real count.
+	Args []string
+	ArgC int
 }
 
 // Represents a variable assignment in a function body with optional constructor call, method call, alias, or TypeScript type annotation
@@ -1064,14 +1069,20 @@ func paramDef(c *sitter.Node, src []byte) js.VariableDefinition {
 		if ta := c.ChildByFieldName("type"); ta != nil {
 			def.Typing = typeAnnotationName(ta, src)
 		}
+		// "b?: string" and "b: string = x" may both be omitted at the call site. The
+		// grammar gives the first its own node type; the second keeps a value child.
+		def.Optional = c.Type() == ntOptionalParameter || c.ChildByFieldName("value") != nil
+		if pat := c.ChildByFieldName("pattern"); pat != nil && pat.Type() == ntRestPattern {
+			def.Variadic = true
+		}
 		return def
 	case ntAssignmentPattern:
 		if left := c.ChildByFieldName("left"); left != nil {
-			return js.VariableDefinition{Name: nodeText(left, src)}
+			return js.VariableDefinition{Name: nodeText(left, src), Optional: true}
 		}
 	case ntRestPattern:
 		if id := childByType(c, ntIdentifier); id != nil {
-			return js.VariableDefinition{Name: "..." + nodeText(id, src)}
+			return js.VariableDefinition{Name: "..." + nodeText(id, src), Variadic: true}
 		}
 	}
 	return js.VariableDefinition{Name: nodeText(c, src)}
@@ -1283,6 +1294,28 @@ func extractDecorators(node *sitter.Node, src []byte) []string {
 	return decs
 }
 
+// jsCallArgs reads the argument count and one token per argument of a call.
+//
+// Literals only. Anything else -- an identifier, a nested call, an operator expression --
+// is left unknown rather than guessed, because a wrong token is a false warning about
+// correct code. A spread argument hides the real count, so the count is reported unknown.
+func jsCallArgs(call *sitter.Node) (int, []string) {
+	args := call.ChildByFieldName("arguments")
+	if args == nil {
+		return -1, nil
+	}
+	n := int(args.NamedChildCount())
+	out := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		child := args.NamedChild(i)
+		if child.Type() == "spread_element" {
+			return -1, nil
+		}
+		out = append(out, contract.LiteralToken(child.Type()))
+	}
+	return n, out
+}
+
 // Recursively extracts function calls and variable assignments from a function body AST node.
 func collectBody(paramsNode, bodyNode *sitter.Node, src []byte, pr *ParseResult) ([]jsBodyCall, []jsBodyAssign) {
 	var calls []jsBodyCall
@@ -1293,6 +1326,13 @@ func collectBody(paramsNode, bodyNode *sitter.Node, src []byte, pr *ParseResult)
 		if n == nil {
 			return
 		}
+		// Whatever the switch below appends for a call belongs to THIS call, so its
+		// argument shape is stamped on right after it, rather than repeated at each of the
+		// several append sites. Stamping happens BEFORE the recursion into children: a
+		// nested call is a separate walk that records its own arguments, and deferring
+		// would hand it this call's.
+		before := len(calls)
+
 		switch n.Type() {
 		case ntCallExpression:
 			if fn := n.ChildByFieldName("function"); fn != nil {
@@ -1398,6 +1438,14 @@ func collectBody(paramsNode, bodyNode *sitter.Node, src []byte, pr *ParseResult)
 				assigns = append(assigns, assignFrom(nodeText(left, src), n.ChildByFieldName("right"), src))
 			}
 		}
+		if t := n.Type(); t == ntCallExpression || t == ntNewExpression {
+			argc, args := jsCallArgs(n)
+			for i := before; i < len(calls); i++ {
+				calls[i].ArgC = argc
+				calls[i].Args = args
+			}
+		}
+
 		for i := 0; i < int(n.NamedChildCount()); i++ {
 			walk(n.NamedChild(i))
 		}

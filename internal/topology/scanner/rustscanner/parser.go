@@ -7,6 +7,7 @@ import (
 	sitter "github.com/smacker/go-tree-sitter"
 	rustgrammar "github.com/smacker/go-tree-sitter/rust"
 
+	"aracne/internal/topology/contract"
 	"aracne/internal/topology/domain"
 	rust "aracne/internal/topology/rust"
 )
@@ -85,6 +86,10 @@ type rustCall struct {
 	ObjName  string // method call `obj.method()`: the receiver text
 	Method   string // method call: the method name
 	IsSelf   bool   // receiver is `self`, or path head is `Self`
+	// Args is one token per argument written at the call site, "" where the argument's
+	// type could not be read. Recorded so a later scan can ask whether the call still fits
+	// its callee rather than whether the callee merely changed.
+	Args []string
 }
 
 // rustLet records a `let pat = value;` binding whose value lets us type the var.
@@ -951,18 +956,21 @@ func recordCall(n *sitter.Node, src []byte, rb *rustBody) {
 	if fn == nil {
 		return
 	}
+	args := callArgTokens(n)
 	switch fn.Type() {
 	case ntIdentifier:
-		rb.Calls = append(rb.Calls, rustCall{Func: nodeText(fn, src)})
+		rb.Calls = append(rb.Calls, rustCall{Func: nodeText(fn, src), Args: args})
 	case ntScopedIdentifier:
 		path := fn.ChildByFieldName("path")
 		name := nodeText(fn.ChildByFieldName("name"), src)
 		head := lastPathSeg(path, src)
-		rb.Calls = append(rb.Calls, rustCall{PathType: head, PathName: name, IsSelf: head == "Self"})
+		rb.Calls = append(rb.Calls, rustCall{
+			PathType: head, PathName: name, IsSelf: head == "Self", Args: args,
+		})
 	case ntFieldExpression:
 		val := fn.ChildByFieldName("value")
 		field := nodeText(fn.ChildByFieldName("field"), src)
-		c := rustCall{Method: field}
+		c := rustCall{Method: field, Args: args}
 		if val != nil {
 			if val.Type() == ntSelf {
 				c.IsSelf = true
@@ -973,6 +981,25 @@ func recordCall(n *sitter.Node, src []byte, rb *rustBody) {
 		}
 		rb.Calls = append(rb.Calls, c)
 	}
+}
+
+// callArgTokens reads one token per argument of a call.
+//
+// Literals only. Anything else -- an identifier, a nested call, an operator expression --
+// is left empty rather than guessed, because a wrong token is a false warning about correct
+// code, which is the failure this whole mechanism exists to remove. Rust's arity check does
+// not depend on these; they only sharpen it.
+func callArgTokens(call *sitter.Node) []string {
+	args := call.ChildByFieldName("arguments")
+	if args == nil {
+		return nil
+	}
+	n := int(args.NamedChildCount())
+	out := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		out = append(out, contract.LiteralToken(args.NamedChild(i).Type()))
+	}
+	return out
 }
 
 // classifyLet inspects a let value to type the bound variable.

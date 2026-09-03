@@ -2,8 +2,10 @@ package jsscanner
 
 import (
 	"path/filepath"
+	"sort"
 	"strings"
 
+	"aracne/internal/topology/contract"
 	js "aracne/internal/topology/javascript"
 )
 
@@ -187,9 +189,21 @@ func analyzeFunctionBody(body *jsFunc, pr *ParseResult, gt *js.JavaScriptTopolog
 		return conn
 	}
 
+	// current is the call being resolved, or nil outside the call loop.
+	var current *jsBodyCall
+	var callSites []string
 	add := func(kind js.ConnectionKind, id string) {
 		if id == "" {
 			return
+		}
+		// Recorded BEFORE the edge dedupe below returns: two calls to the same callee are
+		// one edge but two call sites, and a function called once correctly and once
+		// wrongly must still report the wrong one.
+		if kind == js.ConnCalls && current != nil {
+			rec := contract.EncodeCallSite(jsCallSite(id, current))
+			if rec != "" && !containsJSRec(callSites, rec) {
+				callSites = append(callSites, rec)
+			}
 		}
 		for _, existing := range conn[kind] {
 			if existing == id {
@@ -282,7 +296,9 @@ func analyzeFunctionBody(body *jsFunc, pr *ParseResult, gt *js.JavaScriptTopolog
 		}
 	}
 
-	for _, call := range body.BodyCalls {
+	for ci := range body.BodyCalls {
+		call := body.BodyCalls[ci]
+		current = &body.BodyCalls[ci]
 		switch {
 		case call.IsNew:
 			cid, ok := resolveClassName(call.Func, pr, gt)
@@ -303,8 +319,50 @@ func analyzeFunctionBody(body *jsFunc, pr *ParseResult, gt *js.JavaScriptTopolog
 			resolveMethodCall(call, pr, gt, varTypeMap, varTypeArg, receiverClass, fnScope, add)
 		}
 	}
+	current = nil
+
+	// Sorted: the at-scale suite compares connection sets across scan modes byte-for-byte.
+	if len(callSites) > 0 {
+		sort.Strings(callSites)
+		conn[js.ConnectionKind(contract.CallSitesConn)] = callSites
+	}
 
 	return conn
+}
+
+// jsCallSite reads the argument shape of one JavaScript or TypeScript call.
+//
+// Recorded for both, judged only for TypeScript. JavaScript arity is not binding --
+// f(1) against function f(a, b) is legal and leaves b undefined -- so a mismatch there
+// would be a style opinion dressed as a correctness warning, which is the class of false
+// positive this whole mechanism exists to remove. The records are still written for JS
+// because they cost nothing and become meaningful the moment the file gains annotations.
+func jsCallSite(calleeID string, c *jsBodyCall) contract.CallSite {
+	site := contract.CallSite{CalleeID: calleeID, N: c.ArgC, Variadic: c.ArgC < 0}
+	anyKnown := false
+	types := make([]*string, 0, len(c.Args))
+	for _, tok := range c.Args {
+		if tok == "" {
+			types = append(types, nil)
+			continue
+		}
+		anyKnown = true
+		t := tok
+		types = append(types, &t)
+	}
+	if anyKnown {
+		site.Types = types
+	}
+	return site
+}
+
+func containsJSRec(recs []string, rec string) bool {
+	for _, r := range recs {
+		if r == rec {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveFunctionTypingIDs resolves each parsed function's parameter and return type names

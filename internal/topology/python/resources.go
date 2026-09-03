@@ -20,6 +20,14 @@ type VariableDefinition struct {
 	// return type) resolve the type without the callee's import context. It is a
 	// candidate id: consumers must still verify it exists.
 	TypingID string
+	// Optional, Variadic and KeyOnly are what Python's declaration says about how the
+	// parameter may be passed, and none of it is recoverable from Name and Typing alone.
+	// Without them `def f(a, b=1)` and `def f(a, b)` are the same shape, so any check on
+	// how many arguments a call passes would warn on every call that legitimately omits a
+	// defaulted parameter -- which is most of them.
+	Optional bool // has a default
+	Variadic bool // *args or **kwargs
+	KeyOnly  bool // declared after a bare * or *args, so never positional
 }
 
 // Signature metadata for a Python function including name, input and output variable definitions.

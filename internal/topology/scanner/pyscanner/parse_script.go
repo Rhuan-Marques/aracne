@@ -70,9 +70,10 @@ def alias_refs(value_node):
         return annot_refs(value_node)
     return []
 
-def var_def(arg):
+def var_def(arg, optional=False, variadic=False, key_only=False):
     annot = expr_str(arg.annotation) if arg.annotation else ''
-    return {'name': arg.arg, 'typing': annot, 'type_refs': annot_refs(arg.annotation)}
+    return {'name': arg.arg, 'typing': annot, 'type_refs': annot_refs(arg.annotation),
+            'optional': optional, 'variadic': variadic, 'key_only': key_only}
 
 def decorator_names(node):
     return [expr_str(d) for d in getattr(node, 'decorator_list', [])]
@@ -111,6 +112,30 @@ BINOP_DUNDERS = {
     'BitAnd': '__and__',
 }
 
+# Literal argument classes. A literal is reported as a CLASS rather than a type
+# because that is what an assignability check needs; see contract.UntypedInt.
+CONST_TOKENS = {'int': '#int', 'float': '#float', 'str': '#string',
+                'bool': '#bool', 'NoneType': '#nil'}
+
+def arg_token(node):
+    # Only literals. Anything needing inference is left unknown on purpose: a wrong
+    # token is a false warning about correct code, which is worse than no warning.
+    if isinstance(node, ast.Constant):
+        return CONST_TOKENS.get(type(node.value).__name__, '')
+    return ''
+
+def call_shape(node):
+    # What the call passes, so a later scan can ask whether it still fits the callee.
+    # A starred argument hides the real count, so the count is reported as unknown.
+    starred = any(isinstance(a, ast.Starred) for a in node.args)
+    kwargs_splat = any(k.arg is None for k in node.keywords)
+    return {
+        'argc': -1 if starred else len(node.args),
+        'argtypes': [] if starred else [arg_token(a) for a in node.args],
+        'starred': starred or kwargs_splat,
+        'kw_names': [k.arg for k in node.keywords if k.arg is not None],
+    }
+
 def extract_body_calls(body):
     calls = []
     for stmt in body:
@@ -120,29 +145,35 @@ def extract_body_calls(body):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
                 val = node.func.value
                 if isinstance(val, ast.Name):
-                    calls.append({
+                    c = {
                         'object_name': val.id,
                         'method_name': node.func.attr,
                         'func': expr_str(node.func),
                         'lineno': node.lineno,
-                    })
+                    }
+                    c.update(call_shape(node))
+                    calls.append(c)
                 elif (isinstance(val, ast.Call) and isinstance(val.func, ast.Name)
                       and val.func.id == 'super'):
                     # super().method(...): the 'super' object_name is a marker the
                     # Go resolver resolves against the receiver class's bases.
-                    calls.append({
+                    c = {
                         'object_name': 'super',
                         'method_name': node.func.attr,
                         'func': 'super().' + node.func.attr,
                         'lineno': node.lineno,
-                    })
+                    }
+                    c.update(call_shape(node))
+                    calls.append(c)
             elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-                calls.append({
+                c = {
                     'object_name': '',
                     'method_name': '',
                     'func': node.func.id,
                     'lineno': node.lineno,
-                })
+                }
+                c.update(call_shape(node))
+                calls.append(c)
             elif isinstance(node, ast.BinOp) and isinstance(node.left, ast.Name):
                 # a + b -> a.__add__(b): record the operator as a call so an
                 # overloaded dunder on a typed operand resolves to a Calls edge.
@@ -304,16 +335,27 @@ def parse_func(node, parent, import_map):
     is_prop = any(d in ('property', 'cached_property', 'functools.cached_property')
                   or d.endswith('.setter') or d.endswith('.getter') for d in decs)
     params = []
-    for attr_name in ('posonlyargs', 'args', 'kwonlyargs'):
-        for a in getattr(getattr(node, 'args'), attr_name, []):
-            if hasattr(a, 'arg'):
-                params.append(var_def(a))
+    # defaults covers the LAST N of posonlyargs+args, and kw_defaults aligns
+    # positionally with kwonlyargs using None for no default. Recording which
+    # parameters may be omitted is what makes an argument-count check possible at all.
+    a_args = getattr(node, 'args')
+    positional = list(getattr(a_args, 'posonlyargs', [])) + list(getattr(a_args, 'args', []))
+    defaults = list(getattr(a_args, 'defaults', []))
+    first_defaulted = len(positional) - len(defaults)
+    for i, a in enumerate(positional):
+        if hasattr(a, 'arg'):
+            params.append(var_def(a, optional=(i >= first_defaulted)))
+    kw_defaults = list(getattr(a_args, 'kw_defaults', []))
+    for i, a in enumerate(getattr(a_args, 'kwonlyargs', [])):
+        if hasattr(a, 'arg'):
+            has_def = i < len(kw_defaults) and kw_defaults[i] is not None
+            params.append(var_def(a, optional=has_def, key_only=True))
     vararg = getattr(node.args, 'vararg', None)
     if vararg is not None:
-        params.append(var_def(vararg))
+        params.append(var_def(vararg, optional=True, variadic=True))
     kwarg = getattr(node.args, 'kwarg', None)
     if kwarg is not None:
-        params.append(var_def(kwarg))
+        params.append(var_def(kwarg, optional=True, variadic=True, key_only=True))
     results = []
     if getattr(node, 'returns', None):
         results.append({'name': '', 'typing': expr_str(node.returns),

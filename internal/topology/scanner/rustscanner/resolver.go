@@ -3,8 +3,10 @@ package rustscanner
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
+	"aracne/internal/topology/contract"
 	"aracne/internal/topology/domain"
 	rust "aracne/internal/topology/rust"
 )
@@ -458,9 +460,23 @@ func analyzeBodies(gt *rust.RustTopology, pr *ParseResult, ctx *crateCtx) {
 // the receiver type ID for `self`/`Self` resolution (empty for free functions).
 func analyzeFunctionBody(body *rustBody, pr *ParseResult, gt *rust.RustTopology, ctx *crateCtx, ownerSID string) map[rust.ConnectionKind][]string {
 	conn := map[rust.ConnectionKind][]string{}
+	// current is the call being resolved. Every ConnCalls edge below is emitted from inside
+	// the body.Calls loop, so reading it in add() records the argument shape at all three
+	// emission sites without threading it through each.
+	var current *rustCall
+	var callSites []string
 	add := func(kind rust.ConnectionKind, id string) {
 		if id == "" {
 			return
+		}
+		// Recorded BEFORE the edge dedupe below returns: two calls to the same callee are
+		// one edge but two call sites, and a function called once correctly and once
+		// wrongly must still report the wrong one.
+		if kind == rust.ConnCalls && current != nil {
+			rec := contract.EncodeCallSite(rustCallSite(id, current))
+			if rec != "" && !containsRec(callSites, rec) {
+				callSites = append(callSites, rec)
+			}
 		}
 		for _, e := range conn[kind] {
 			if e == id {
@@ -507,7 +523,9 @@ func analyzeFunctionBody(body *rustBody, pr *ParseResult, gt *rust.RustTopology,
 		}
 	}
 
-	for _, c := range body.Calls {
+	for i := range body.Calls {
+		c := body.Calls[i]
+		current = &body.Calls[i]
 		switch {
 		case c.Method != "":
 			sid := ""
@@ -542,6 +560,7 @@ func analyzeFunctionBody(body *rustBody, pr *ParseResult, gt *rust.RustTopology,
 			}
 		}
 	}
+	current = nil
 
 	for _, name := range body.Structs {
 		if sid := resolveTypeID(name, pr.ModulePath, pr.ImportMap, gt); sid != "" {
@@ -563,6 +582,13 @@ func analyzeFunctionBody(body *rustBody, pr *ParseResult, gt *rust.RustTopology,
 		if len(full) > 1 && ctx.ExternalCrates[full[0]] {
 			add(rust.ConnUsesDep, full[0])
 		}
+	}
+
+	// Sorted: the at-scale suite compares connection sets across scan modes byte-for-byte,
+	// and resolution order is not guaranteed to agree between a cold and an incremental pass.
+	if len(callSites) > 0 {
+		sort.Strings(callSites)
+		conn[rust.ConnectionKind(contract.CallSitesConn)] = callSites
 	}
 
 	return conn
@@ -768,4 +794,36 @@ func uniqueConns(conns map[rust.ConnectionKind][]string) map[rust.ConnectionKind
 		}
 	}
 	return result
+}
+
+// rustCallSite reads the argument shape of one Rust call. Rust has no default arguments,
+// no overloads and no varargs, so arity alone is a sound check -- which is why the token
+// list only sharpens the verdict and never weakens it.
+func rustCallSite(calleeID string, c *rustCall) contract.CallSite {
+	site := contract.CallSite{CalleeID: calleeID, N: len(c.Args)}
+	anyKnown := false
+	types := make([]*string, 0, len(c.Args))
+	for _, tok := range c.Args {
+		if tok == "" {
+			types = append(types, nil)
+			continue
+		}
+		anyKnown = true
+		t := tok
+		types = append(types, &t)
+	}
+	if anyKnown {
+		site.Types = types
+	}
+	return site
+}
+
+// containsRec reports whether a record is already recorded.
+func containsRec(recs []string, rec string) bool {
+	for _, r := range recs {
+		if r == rec {
+			return true
+		}
+	}
+	return false
 }
