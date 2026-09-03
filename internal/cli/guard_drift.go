@@ -78,6 +78,12 @@ func runGuardScan(dbPath string, scan func(*topology.TopologyManager, *scanner.R
 // lost: the scan persists them in the topology, where `warnings_list` / `arac warnings list`
 // still finds them, and the post-call check reports the ones a shell write causes.
 func preToolScan(dbPath string, cfg *helper.Config) {
+	// Record what the repository already looks like BEFORE the tool runs, so the post-tool
+	// comparison is against the state this call found. Done regardless of the scan mode --
+	// it is one id query, and skipping it under `pre_tool: none` would make the first shell
+	// write of a session dump every pre-existing warning as if the model had caused it.
+	seedReportedWarnings(dbPath)
+
 	mode := cfg.EffectivePreToolScan()
 	if mode == helper.PreToolScanNone {
 		return
@@ -104,10 +110,23 @@ func preToolScan(dbPath string, cfg *helper.Config) {
 // It is deliberately cheap to skip and safe to fail: an unreadable topology, a scan error or a
 // timeout all return nothing, exactly like the rest of this hook.
 func driftCheck(dbPath string) string {
-	warnings := runGuardScan(dbPath, func(mgr *topology.TopologyManager, reg *scanner.Registry) ([]domain.TopologyWarning, error) {
+	// The scan still runs: it is what makes the topology describe the file the command just
+	// wrote. Its RETURN value is deliberately ignored.
+	runGuardScan(dbPath, func(mgr *topology.TopologyManager, reg *scanner.Registry) ([]domain.TopologyWarning, error) {
 		return mgr.IncrementalScan(".", reg)
 	})
-	return formatDriftWarnings(warnings)
+	// Report by what is new in the TABLE rather than by what this scan produced. An
+	// IncrementalScan only emits warnings for files IT finds drifted, so anything that
+	// re-indexed the change first -- `arac scanner run`, the pre-tool scan, an `arac scan` in
+	// another terminal -- leaves this scan with nothing to find and the model with nothing to
+	// read. Measured on a real fixture, editing a function with eleven cross-file callers:
+	// 11 warnings reported without the watcher, 0 with it. The warnings were correct and
+	// present in the database both times. See guard_warnstate.go.
+	fresh := unreportedWarnings(dbPath)
+	// Recorded here because nothing downstream can see it: hook output reaches the model as
+	// additionalContext, which the transcript does not carry. See logGuardWarnings.
+	logGuardWarnings("Bash", fresh)
+	return formatDriftWarnings(fresh)
 }
 
 // formatDriftWarnings renders the re-scan's warnings the same way edit/write already render

@@ -1,0 +1,37 @@
+# The same nine tasks in line_range, against the SAME baseline rows.
+#
+# WHY THIS RUN EXISTS. The aracne_read run answered its question in the transcript rather than
+# the numbers: across nine cells the model issued 201 shell reads and called `arac read` ZERO
+# times. The contract told it to prefer `arac read`; a nudge fired after every servable read;
+# adoption was exactly nil. A model with a working `cat` uses `cat`.
+#
+# line_range removes the choice. Reads are intercepted, so the model types `cat` and gets
+# aracne's answer inside the call it already made -- and lazy descriptions fire on that path,
+# which is why five fixtures sitting at ~0% coverage should warm up during this run instead of
+# staying cold as they did last time.
+sample_id: hard9
+languages: [go, rust, typescript, javascript]
+
+seeds: 1
+arms: [aracne]
+
+run_harness: claude_code
+model: opus
+effort: medium
+max_turns: 100
+timeout_s: 3600
+run_parallel: 3
+
+grade_timeout_s: 7200
+grade_stall_timeout_s: 1800
+ni_margin: 0.10
+
+isolate_operator_config: true
+deny_answer_key: true
+allow_cold: true
+
+arm_builtin_tools:
+  aracne: [Bash, Glob]
+
+arm_aracne_config:
+  aracne: lazy-linerange-run

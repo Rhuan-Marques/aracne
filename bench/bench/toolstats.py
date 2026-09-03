@@ -458,7 +458,9 @@ def guard_counts(path) -> dict:
     p = Path(path) if path else None
     if not p or not p.exists():
         return {}
-    counts = {"rewrite": 0, "deny": 0, "passthrough": 0, "nudge": 0}
+    counts = {"rewrite": 0, "deny": 0, "passthrough": 0, "nudge": 0, "drift": 0}
+    warned = 0
+    kinds: dict = {}
     for line in p.read_text(errors="replace").splitlines():
         line = line.strip()
         if not line:
@@ -470,6 +472,14 @@ def guard_counts(path) -> dict:
         d = rec.get("decision")
         if d in counts:
             counts[d] += 1
+        # Topology warnings handed to the model. Counted from the guard's own log because a
+        # hook returns them through `additionalContext`, which the transcript does NOT record
+        # -- verified by running a session that emitted eleven signature warnings and finding
+        # the string nowhere in its events. Grepping transcripts reports zero whether the
+        # channel is working or dead, which is how it went unnoticed that it was dead.
+        warned += int(rec.get("warnings") or 0)
+        for k, n in (rec.get("warning_kinds") or {}).items():
+            kinds[k] = kinds.get(k, 0) + int(n)
     return {
         "n_intercepted": counts["rewrite"],
         "n_guard_seen": counts["rewrite"] + counts["deny"] + counts["passthrough"],
@@ -478,6 +488,9 @@ def guard_counts(path) -> dict:
         # Recorded by the guard, which is the only component that knows: a PreToolUse deny
         # never reaches the model as a tool_result, so the transcript cannot see it either.
         "n_guard_denials_logged": counts["deny"],
+        "n_warnings_shown": warned,
+        "n_warning_reports": counts["drift"],
+        "warning_kinds": kinds,
     }
 
 

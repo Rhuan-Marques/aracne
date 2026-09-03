@@ -381,3 +381,22 @@ def test_guard_counts_ignores_unknown_decisions(tmp_path):
     got = toolstats.guard_counts(p)
     assert got["n_intercepted"] == 1
     assert got["n_guard_seen"] == 1
+
+
+def test_guard_counts_counts_warnings_shown(tmp_path):
+    """Topology warnings are counted from the guard log, not the transcript: a hook returns
+    them through additionalContext, which stream-json does not record."""
+    p = tmp_path / "guard.jsonl"
+    p.write_text(
+        json.dumps({"decision": "passthrough", "tool": "Bash"}) + "\n"
+        + json.dumps({"decision": "drift", "tool": "Bash", "warnings": 11,
+                      "warning_kinds": {"signature_changed": 11}}) + "\n"
+        + json.dumps({"decision": "drift", "tool": "Bash", "warnings": 2,
+                      "warning_kinds": {"use_missing_node": 2}}) + "\n"
+    )
+    got = toolstats.guard_counts(p)
+    assert got["n_warnings_shown"] == 13
+    assert got["n_warning_reports"] == 2
+    assert got["warning_kinds"] == {"signature_changed": 11, "use_missing_node": 2}
+    # a drift report is not a command the guard was offered to answer
+    assert got["n_guard_seen"] == 1

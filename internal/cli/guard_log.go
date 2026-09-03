@@ -5,6 +5,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"aracne/internal/topology/domain"
 )
 
 // GuardLogEnv names a file the guard appends one line to per decision it makes.
@@ -30,8 +32,31 @@ const (
 	guardDenied      guardDecisionKind = "deny"        // refused, with a pointer to the surface
 	guardPassedT     guardDecisionKind = "passthrough" // seen, and left to run for real
 	guardNudged      guardDecisionKind = "nudge"       // PostToolUse advice
-	guardDriftedScan guardDecisionKind = "drift"       // PostToolUse drift report
+	guardDriftedScan guardDecisionKind = "drift"       // PostToolUse topology warnings
 )
+
+// logGuardWarnings records how many topology warnings were handed to the model, and of which
+// kinds.
+//
+// WHY THIS CANNOT BE READ FROM THE TRANSCRIPT. A hook returns text through
+// `hookSpecificOutput.additionalContext`, and Claude Code's stream-json transcript does not
+// record it -- verified by running a session whose guard emitted both a nudge and eleven
+// signature warnings and finding neither string anywhere in the events. So a benchmark
+// counting warnings by grepping transcripts measures nothing, and reports zero whether the
+// channel is working or dead. Exactly the failure that made n_intercepted useless.
+func logGuardWarnings(tool string, warnings []domain.TopologyWarning) {
+	if len(warnings) == 0 {
+		return
+	}
+	kinds := map[string]int{}
+	for _, w := range warnings {
+		kinds[string(w.Kind)]++
+	}
+	logGuardEvent(guardEvent{
+		Tool: tool, Decision: string(guardDriftedScan),
+		Warnings: len(warnings), WarningKinds: kinds,
+	})
+}
 
 // logGuardDecision appends one event, best-effort. Never fails a tool call: this is
 // measurement, and a hook that errors because a log is unwritable would break the session
@@ -41,18 +66,27 @@ func logGuardDecision(kind guardDecisionKind, tool, command string) {
 	if path == "" {
 		return
 	}
-	rec := struct {
-		T        string `json:"t"`
-		Tool     string `json:"tool"`
-		Decision string `json:"decision"`
-		Command  string `json:"command,omitempty"`
-	}{
-		T:        time.Now().UTC().Format(time.RFC3339Nano),
-		Tool:     tool,
-		Decision: string(kind),
-		Command:  command,
+	logGuardEvent(guardEvent{Tool: tool, Decision: string(kind), Command: command})
+}
+
+// guardEvent is one line of the log.
+type guardEvent struct {
+	T            string         `json:"t"`
+	Tool         string         `json:"tool"`
+	Decision     string         `json:"decision"`
+	Command      string         `json:"command,omitempty"`
+	Warnings     int            `json:"warnings,omitempty"`
+	WarningKinds map[string]int `json:"warning_kinds,omitempty"`
+}
+
+// logGuardEvent appends one event, best-effort.
+func logGuardEvent(ev guardEvent) {
+	path := strings.TrimSpace(os.Getenv(GuardLogEnv))
+	if path == "" {
+		return
 	}
-	line, err := json.Marshal(rec)
+	ev.T = time.Now().UTC().Format(time.RFC3339Nano)
+	line, err := json.Marshal(ev)
 	if err != nil {
 		return
 	}
