@@ -27,7 +27,7 @@ import (
 // cannot keep.
 var modeMarkers = map[string]string{
 	helper.ModeMCP:         "arrive as MCP tools",
-	helper.ModeAracneRead:  "Reach for it before opening the file",
+	helper.ModeAracneRead:  "Prefer it over reading whole files or line ranges",
 	helper.ModeInterceptID: "## Resource IDs",
 	helper.ModeLineRange:   "## Line ranges",
 }

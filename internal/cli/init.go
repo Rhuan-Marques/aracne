@@ -690,8 +690,34 @@ const (
 	// upgrading a project rewrites its existing block rather than stacking a new one under it,
 	// and so `arac disable` can still remove a block written by an older binary.
 	AracIntegrationLegacyStart = "# Aracne Project Integration"
-	AracIntegrationEnd         = "Good Luck in your task."
+	// AracIntegrationEnd is the closing line every contract but ModeAracneRead writes.
+	AracIntegrationEnd = "Good Luck in your task."
 )
+
+// aracIntegrationEndMarkers are the lines that can close a generated block.
+//
+// Each is the actual LAST LINE of some contract, never a delimiter injected for the parser's
+// benefit. An HTML comment would have been easier to match and is the wrong trade: the block
+// is a prompt, it is re-sent on every request, and a marker the model can see but cannot use
+// is noise in it. So the parser learns the real closing lines instead, and a contract's last
+// sentence has to earn its place as writing rather than as punctuation.
+var aracIntegrationEndMarkers = []string{
+	AracIntegrationEnd,
+	prompts.AracneReadClosingLine,
+}
+
+// findAracIntegrationEnd locates the generated block's closing line, whichever contract wrote
+// it, searching from the block's opening heading. Returns the EARLIEST match and the marker
+// that produced it, or -1 when none is present.
+func findAracIntegrationEnd(content string, from int) (int, string) {
+	best, bestMarker := -1, ""
+	for _, marker := range aracIntegrationEndMarkers {
+		if i := findMarkdownLine(content, marker, from); i >= 0 && (best < 0 || i < best) {
+			best, bestMarker = i, marker
+		}
+	}
+	return best, bestMarker
+}
 
 // findAracIntegrationStart locates the generated block's opening heading, current or legacy,
 // returning -1 when the file has no aracne block.
@@ -741,9 +767,9 @@ func updateMarkdownIntegrationSegment(existing, segment string) string {
 
 	start := findAracIntegrationStart(existing)
 	if start >= 0 {
-		end := findMarkdownLine(existing, AracIntegrationEnd, start)
+		end, marker := findAracIntegrationEnd(existing, start)
 		if end >= 0 {
-			end += len(AracIntegrationEnd)
+			end += len(marker)
 			if strings.HasPrefix(existing[end:], "\r\n") {
 				end += 2
 			} else if strings.HasPrefix(existing[end:], "\n") {

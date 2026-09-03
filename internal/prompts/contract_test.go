@@ -23,15 +23,42 @@ func contractFor(mode string) string {
 	return ContractContent(cfg)
 }
 
-// The intro and the closing rules hold in every mode: what the graph IS does not depend on how
-// it reaches the agent.
-func TestEveryContractIsAWholeDocument(t *testing.T) {
+// Every contract opens with the same heading and closes on a line cli can find, because those
+// two are what `arac init` uses to REPLACE its block instead of stacking a second copy, and
+// what `arac disable` uses to remove it. A contract that loses either silently starts
+// duplicating itself on every init.
+//
+// The marker is always a real line of the document. An invisible delimiter would be easier to
+// match and is the wrong trade: this text is a prompt, re-sent on every request, and a token
+// the model can see but cannot use is noise in it.
+func TestEveryContractIsFindableByInit(t *testing.T) {
 	for _, mode := range allModes {
 		got := contractFor(mode)
-		for _, want := range []string{"# Aracne", ".aracne/topology.db", "## Behavioral Rules", "Good Luck"} {
-			if !strings.Contains(got, want) {
-				t.Errorf("mode %q: contract is missing %q\n%s", mode, want, got)
+		if !strings.HasPrefix(got, "# Aracne\n") {
+			t.Errorf("mode %q: contract does not open with the heading init looks for\n%s", mode, got)
+		}
+		last := ""
+		for _, line := range strings.Split(strings.TrimRight(got, "\n"), "\n") {
+			if strings.TrimSpace(line) != "" {
+				last = strings.TrimSpace(line)
 			}
+		}
+		if last != "Good Luck in your task." && last != AracneReadClosingLine {
+			t.Errorf("mode %q: closes on %q, which cli cannot find", mode, last)
+		}
+	}
+}
+
+// What the graph IS still has to be said in every mode -- an agent that does not know a
+// topology exists cannot reach for it.
+func TestEveryContractSaysWhatTheGraphIs(t *testing.T) {
+	for _, mode := range allModes {
+		got := contractFor(mode)
+		// ModeAracneRead says it in prose rather than by naming the file, because the path is
+		// not something the model ever types there.
+		if !strings.Contains(got, ".aracne/topology.db") &&
+			!strings.Contains(got, "every function, type, interface and variable is indexed") {
+			t.Errorf("mode %q: contract never says a topology exists\n%s", mode, got)
 		}
 	}
 }
@@ -103,14 +130,24 @@ func TestTheGuardNoteAppearsOnlyWhereAGuardCanFire(t *testing.T) {
 	}
 }
 
-// Every mode has to say how a search is answered, because the annotated grep is the one
-// capability all four share and the only one that finds a node by its description.
-func TestEveryContractExplainsTheAnnotatedGrep(t *testing.T) {
-	for _, mode := range allModes {
+// The three modes that TEACH a search have to say what it additionally reaches, because that
+// is the half a plain grep cannot do and the model has no way to discover.
+//
+// ModeAracneRead is deliberately absent. A shell grep is rewritten to the annotated grep in
+// every mode (Config.InterceptGrep), so the capability arrives whether or not the contract
+// names it -- and naming a second spelling of something already automatic costs bytes on every
+// request. The gap that leaves is real and small: a shape the guard will not rewrite
+// (`grep … | wc -l`, `grep -o`) falls back to plain grep, and there the model never learns the
+// annotated one exists.
+func TestContractsThatTeachSearchSayWhatItReaches(t *testing.T) {
+	for _, mode := range []string{helper.ModeMCP, helper.ModeInterceptID, helper.ModeLineRange} {
 		if !strings.Contains(contractFor(mode), "node names and stored descriptions") {
 			t.Errorf("mode %q: contract never explains what grep additionally searches\n%s",
 				mode, contractFor(mode))
 		}
+	}
+	if strings.Contains(contractFor(helper.ModeAracneRead), "arac grep") {
+		t.Error("aracne_read names a subcommand the model gets for free; those bytes ship on every request")
 	}
 }
 
@@ -121,7 +158,15 @@ func TestAnUnknownModeStillRendersAContract(t *testing.T) {
 	cfg := helper.DefaultConfig()
 	cfg.Mode = "wat"
 	got := ContractContent(cfg)
-	if !strings.Contains(got, "# Aracne") || !strings.Contains(got, "Good Luck") {
-		t.Errorf("an unknown mode rendered a partial contract:\n%s", got)
+	// EffectiveMode normalizes a typo to the DEFAULT mode, which is aracne_read -- so the
+	// assertion is on the properties every contract must have, not on one mode's wording.
+	if !strings.HasPrefix(got, "# Aracne\n") {
+		t.Errorf("an unknown mode rendered a contract init cannot find:\n%s", got)
+	}
+	if !strings.Contains(got, "Good Luck") && !strings.Contains(got, AracneReadClosingLine) {
+		t.Errorf("an unknown mode rendered a contract with no findable ending:\n%s", got)
+	}
+	if got != contractFor(helper.ModeAracneRead) {
+		t.Error("an unknown mode must render exactly the default mode's contract")
 	}
 }

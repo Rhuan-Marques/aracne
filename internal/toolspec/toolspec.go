@@ -186,10 +186,15 @@ var aracneReadWarnings = withShellWarnings(map[string]string{
 // longer "read" entry above still covers a NATIVE Read tool call, where the guard has more to
 // explain than a spelling: which capability exists at all.
 //
-// It names `arac grep` as well because an id is the one thing the model does not have. Telling
-// it to pass an id without saying where ids come from is advice it cannot act on.
-const ShellReadNudge = "aracne: `arac read <id>` gives this declaration with its callers and " +
-	"descriptions, for a fraction of the bytes. `arac grep <name>` finds the id."
+// It says where an id comes from, because that is the one thing the model does not have and
+// telling it to pass one without that is advice it cannot act on. It points at SEARCH OUTPUT
+// rather than at `arac grep`: a shell grep is rewritten to the annotated grep in every mode and
+// its results carry `# <id> — <description>` headers for what they name, so the ids are already
+// arriving in work the model does anyway. Naming a subcommand instead would teach a second
+// spelling of something automatic -- which is the reason the aracne_read contract stopped
+// mentioning `arac grep` at all, and this line must not reintroduce it.
+const ShellReadNudge = "aracne: `arac read <id>` returns a declaration with its context, for a " +
+	"fraction of the file. Search output prints the ids."
 
 // interceptIDWarnings name the spellings aracne answers and the ids they take.
 var interceptIDWarnings = withShellWarnings(map[string]string{

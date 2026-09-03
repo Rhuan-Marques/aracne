@@ -210,7 +210,7 @@ func TestInitWritesTheContractForTheMode(t *testing.T) {
 		mode   string
 		marker string
 	}{
-		{modeAracneRead, "Reach for it before opening the file"},
+		{modeAracneRead, "Prefer it over reading whole files or line ranges"},
 		{modeInterceptID, "## Resource IDs"},
 		{modeLineRange, "## Line ranges"},
 	} {

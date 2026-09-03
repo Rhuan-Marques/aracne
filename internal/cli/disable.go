@@ -297,12 +297,12 @@ func stripAracneIntegrationSegment(content string) string {
 		return content
 	}
 
-	end := findMarkdownLine(content, AracIntegrationEnd, start)
+	end, endMarker := findAracIntegrationEnd(content, start)
 	if end < 0 {
 		return content
 	}
 
-	endAfter := end + len(AracIntegrationEnd)
+	endAfter := end + len(endMarker)
 	if endAfter < len(content) {
 		if strings.HasPrefix(content[endAfter:], "\r\n") {
 			endAfter += 2

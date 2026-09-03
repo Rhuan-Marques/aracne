@@ -22,13 +22,18 @@ import (
 
 // ContractContent renders the contract for a project's mode.
 func ContractContent(cfg *helper.Config) string {
+	// ModeAracneRead is written as one continuous document rather than assembled from the
+	// shared sections. It has one capability to teach and no tool schemas to lean on, so the
+	// headings were structure around three paragraphs -- and every byte of them is re-sent on
+	// every request.
+	if cfg.EffectiveMode() == helper.ModeAracneRead {
+		return aracneReadContract(cfg)
+	}
 	var b strings.Builder
 	b.WriteString(contractIntro())
 	switch cfg.EffectiveMode() {
 	case helper.ModeMCP:
 		b.WriteString(mcpHowItReaches())
-	case helper.ModeAracneRead:
-		b.WriteString(aracneReadHowItReaches())
 	case helper.ModeInterceptID:
 		b.WriteString(interceptHowItReaches())
 		b.WriteString(interceptResourceIDs())
@@ -67,21 +72,60 @@ func mcpHowItReaches() string {
 		"says the word.\n\n"
 }
 
-// aracneReadHowItReaches teaches one subcommand, because in this mode that is the whole of the
-// aracne read surface: nothing intercepts a `cat`, and there is no tool schema to lean on.
-func aracneReadHowItReaches() string {
-	return "## How it reaches you\n\n" +
-		"`arac read <id> <id> ...` returns those declarations with their source, their imports " +
-		"and a `# CONTEXT:` list of what they touch -- several in one call, grouped by file " +
-		"under a single context section. **Reach for it before opening the file:** a symbol " +
-		"carries its neighbours and their descriptions for a fraction of the file's tokens.\n\n" +
-		"```\narac read internal/cli.RunGuard app.Flask.register_blueprint\n```\n\n" +
-		"A unique trailing part of an ID is enough, and a miss returns the nearest candidates " +
-		"rather than an error. `arac grep <pattern>` searches node names and stored " +
-		"descriptions as well as file contents, so a plain-English query finds code that never " +
-		"says the word.\n\n" +
-		"Ordinary reads (`cat`, `head`, `sed -n`) run as the plain command.\n\n"
+// aracneReadContract is the whole document for ModeAracneRead.
+//
+// It teaches one subcommand, because in this mode that is the whole of the aracne read
+// surface: nothing intercepts a `cat`, and there is no tool schema to lean on.
+//
+// TWO THINGS IT DELIBERATELY NO LONGER SAYS.
+//
+// `arac grep` is gone. A shell `grep` is rewritten to the annotated grep in EVERY mode
+// (Config.InterceptGrep), so the model gets node names and stored descriptions searched
+// whether or not it knows the subcommand exists. Spending contract bytes -- re-sent every
+// request -- to name a second spelling of something already automatic is the clearest case of
+// paying twice. The gap that leaves is real and small: a shape the guard will not rewrite
+// (`grep … | wc -l`, `grep -o`) falls back to plain grep and the model never learns the
+// annotated one exists.
+//
+// "Ordinary reads (`cat`, `head`, `sed -n`) run as the plain command" is gone too. It was
+// true, and it read as permission -- granted immediately after telling the model to prefer
+// `arac read`. Nothing else here implies interception, so stating the default only invited the
+// behaviour the paragraph above it argues against.
+func aracneReadContract(cfg *helper.Config) string {
+	var b strings.Builder
+	// The H1 stays: it is how init finds this block again to REPLACE it, and how `arac
+	// disable` finds it to remove it. It also keeps the generated text from merging into
+	// whatever a project already had in its CLAUDE.md.
+	b.WriteString("# Aracne\n\n")
+	b.WriteString(
+		"This repository supports Aracne: every function, type, interface and variable is " +
+			"indexed, with a description and unique id you can use to read it.\n\n" +
+			"`arac read <id> <id> ...` returns declarations with their source, their imports " +
+			"and additional context, several in one call. Very useful for exploring and " +
+			"navigating. Prefer it over reading whole files or line ranges.\n\n" +
+			"```\narac read internal/cli.RunGuard app.Flask.register_blueprint\n```\n\n" +
+			"Edits keep the graph current automatically; act on any topology warning that " +
+			"comes back.\n\n" +
+			"Let descriptions guide you: only read files and resources you need to understand " +
+			"fully -- most times the descriptions are enough.\n\n" +
+			"")
+	// Only when someone has opted into blocked_tools. A denial the contract has not explained
+	// costs a turn to work out. Written BEFORE the closing line, because that line is what
+	// init and disable find to locate the end of this block.
+	b.WriteString(contractGuardNote(cfg))
+	// The last line, and the block's end marker. It is a real instruction rather than a
+	// delimiter dressed as one: `arac init` needs to find where its block stops so a re-run
+	// replaces it instead of stacking a second copy, and every candidate for that job is
+	// re-sent to the model on every request -- so it had better be a line worth sending.
+	b.WriteString(AracneReadClosingLine + "\n")
+	return b.String()
 }
+
+// AracneReadClosingLine is the final line of the ModeAracneRead contract, and the marker cli
+// uses to find the end of the generated block. Exported so the two cannot drift: a change to
+// the wording here without a matching change there would make every `arac init` append a
+// second contract instead of replacing the first.
+const AracneReadClosingLine = "Parallelise multiple reads and edits in a single command when possible."
 
 // interceptHowItReaches is shared by the two intercepting modes: the mechanism is identical and
 // only the vocabulary of the answer differs, which the section after this one supplies.
