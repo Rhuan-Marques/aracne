@@ -128,12 +128,28 @@ func tsProj(files map[string]string) map[string]string {
 func TestConformanceRust(t *testing.T) {
 	runConformanceCases(t, []conformanceCase{
 		{
-			name: "an impl that no longer matches the trait",
+			// Rust reports a MISSING method and nothing else. A signature that differs is not
+			// reported, because deciding one needs `use` context, associated-type bindings,
+			// lifetimes and per-impl identity that this package does not have -- and the
+			// attempt produced 39 warnings on vello and lalrpop, none correct. See
+			// contract.Satisfies.
+			name: "an impl whose signature differs is NOT reported",
 			files: rustProj(`pub trait Draw { fn draw(&self, scale: i32, extra: i32) -> i32; }
 pub struct Circle;
 impl Draw for Circle { fn draw(&self, scale: i32) -> i32 { scale } }
 `),
-			want: 1, message: "does not satisfy Draw.draw",
+			want: 0,
+		},
+		{
+			name: "an impl missing the method entirely",
+			files: rustProj(`pub trait Draw {
+    fn draw(&self) -> i32;
+    fn label(&self) -> i32;
+}
+pub struct Circle;
+impl Draw for Circle { fn draw(&self) -> i32 { 1 } }
+`),
+			want: 1, message: "does not provide label",
 		},
 		{
 			name: "a matching impl",
@@ -424,12 +440,15 @@ func Use(sh Shape) int { return sh.Area(2) }
 // remembered from an event -- the same property that makes the call-site rule immune to a
 // revert. Nothing is stored, so nothing has to be cleared.
 func TestConformanceClearsWhenFixed(t *testing.T) {
+	// Driven by ADDING a required method rather than by changing a signature: Rust reports a
+	// missing method and nothing else (see contract.Satisfies), so a signature edit would
+	// correctly produce no warning and there would be nothing to watch clear.
 	c := contractLang{
 		files: map[string]string{
 			"Cargo.toml": "[package]\nname = \"cf\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
-			"src/lib.rs": `pub trait Draw { fn draw(&self, scale: i32) -> i32; }
+			"src/lib.rs": `pub trait Draw { fn draw(&self) -> i32; }
 pub struct Circle;
-impl Draw for Circle { fn draw(&self, scale: i32) -> i32 { scale } }
+impl Draw for Circle { fn draw(&self) -> i32 { 1 } }
 `,
 		},
 	}
@@ -446,19 +465,28 @@ impl Draw for Circle { fn draw(&self, scale: i32) -> i32 { scale } }
 		t.Fatalf("a correct project must be clean, got %d", n)
 	}
 
-	// Widen the trait method; the impl no longer satisfies it.
-	p.edit("src/lib.rs", `pub trait Draw { fn draw(&self, scale: i32, extra: i32) -> i32; }
+	// Add a required method; the impl no longer provides everything the trait asks for.
+	p.edit("src/lib.rs", `pub trait Draw {
+    fn draw(&self) -> i32;
+    fn label(&self) -> i32;
+}
 pub struct Circle;
-impl Draw for Circle { fn draw(&self, scale: i32) -> i32 { scale } }
+impl Draw for Circle { fn draw(&self) -> i32 { 1 } }
 `)
 	if n := conflicts(); n != 1 {
 		t.Fatalf("widening the trait method must report the implementer, got %d", n)
 	}
 
 	// Fix the impl.
-	p.edit("src/lib.rs", `pub trait Draw { fn draw(&self, scale: i32, extra: i32) -> i32; }
+	p.edit("src/lib.rs", `pub trait Draw {
+    fn draw(&self) -> i32;
+    fn label(&self) -> i32;
+}
 pub struct Circle;
-impl Draw for Circle { fn draw(&self, scale: i32, extra: i32) -> i32 { scale + extra } }
+impl Draw for Circle {
+    fn draw(&self) -> i32 { 1 }
+    fn label(&self) -> i32 { 2 }
+}
 `)
 	if n := conflicts(); n != 0 {
 		w, _ := p.mgr.ListWarnings("", "", domain.WarnInterfaceConflict)
@@ -466,16 +494,19 @@ impl Draw for Circle { fn draw(&self, scale: i32, extra: i32) -> i32 { scale + e
 	}
 
 	// And reverting the trait clears it just as well, from the other side.
-	p.edit("src/lib.rs", `pub trait Draw { fn draw(&self, scale: i32, extra: i32) -> i32; }
+	p.edit("src/lib.rs", `pub trait Draw {
+    fn draw(&self) -> i32;
+    fn label(&self) -> i32;
+}
 pub struct Circle;
-impl Draw for Circle { fn draw(&self, scale: i32) -> i32 { scale } }
+impl Draw for Circle { fn draw(&self) -> i32 { 1 } }
 `)
 	if n := conflicts(); n != 1 {
 		t.Fatalf("expected the conflict back, got %d", n)
 	}
-	p.edit("src/lib.rs", `pub trait Draw { fn draw(&self, scale: i32) -> i32; }
+	p.edit("src/lib.rs", `pub trait Draw { fn draw(&self) -> i32; }
 pub struct Circle;
-impl Draw for Circle { fn draw(&self, scale: i32) -> i32 { scale } }
+impl Draw for Circle { fn draw(&self) -> i32 { 1 } }
 `)
 	if n := conflicts(); n != 0 {
 		t.Errorf("narrowing the trait back must clear it too, got %d", n)

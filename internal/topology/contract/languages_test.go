@@ -320,3 +320,62 @@ func TestEveryRegisteredLanguageIsReachable(t *testing.T) {
 		t.Error("an unknown language must have no matcher, so it cannot start warning")
 	}
 }
+
+// --- conformance: what the real world does to type text -----------------------
+//
+// Every case below is taken verbatim from two real Rust crates (vello, lalrpop), where the
+// first version of this checker produced 39 warnings and every one was wrong. They are kept as
+// tests rather than as a changelog entry because each is a different reason text comparison
+// fails, and any of them coming back would put false warnings in front of an agent.
+
+func TestSameTypeTextToleratesHowARealRepoWritesTypes(t *testing.T) {
+	for _, c := range []struct {
+		name, a, b string
+		want       bool
+	}{
+		// vello: the impl fully qualifies, the trait imported it.
+		{"qualified vs imported", "crate::peniko::Gradient", "Gradient", true},
+		{"qualified vs imported, ref", "crate::schedule::LoadOp", "LoadOp", true},
+		// vello: an associated type is a placeholder the impl is SUPPOSED to fill in.
+		{"associated type", "u32", "Self::SourceValue", true},
+		{"associated type, other side", "Self::Output", "DrawTag", true},
+		// Still different where it counts: the reference markers are kept, so a borrow of one
+		// type is not confused with a borrow of another.
+		{"different types behind a ref", "&mut RenderContext", "&mut Scene", false},
+		{"different types", "String", "u32", false},
+		// A scanner that could not name a type must not be the reason anything is reported.
+		{"unreadable", "", "Gradient", true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := sameTypeText(c.a, c.b); got != c.want {
+				t.Errorf("sameTypeText(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
+			}
+		})
+	}
+}
+
+// Rust reports a missing method and nothing else.
+//
+// Deciding a Rust signature match needs `use` context, associated-type bindings, lifetimes,
+// generics and per-impl identity -- none of which this package has. On vello and lalrpop the
+// attempt produced 39 warnings, 0 correct. A warning printed to an agent after an edit that it
+// cannot stand behind is worse than no warning: the channel gets skimmed past, and the real
+// ones go with it.
+func TestRustConformanceOnlyReportsAMissingMethod(t *testing.T) {
+	req := Signature{Name: "draw", Input: []Param{{Name: "scale", Typing: "i32"}}}
+	for _, provided := range []Signature{
+		{Name: "draw", Input: []Param{{Name: "scale", Typing: "crate::x::Scale"}}},
+		{Name: "draw", Input: []Param{{Name: "a", Typing: "i32"}, {Name: "b", Typing: "i32"}}},
+		{Name: "draw"},
+	} {
+		if v, why := Satisfies("rust", req, provided); v == Mismatch {
+			t.Errorf("rust must not report a signature mismatch, got: %s", why)
+		}
+	}
+	// Java still does, because its ids encode the parameter list and a differing signature
+	// there is a missing override rather than a loose one.
+	if v, _ := Satisfies("java", req,
+		Signature{Name: "draw", Input: []Param{{Name: "a", Typing: "int"}, {Name: "b", Typing: "int"}}}); v != Mismatch {
+		t.Error("java must still catch an arity mismatch")
+	}
+}
