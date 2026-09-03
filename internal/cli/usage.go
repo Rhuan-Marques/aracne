@@ -136,7 +136,7 @@ Flags for "warnings list":
   --db <path>     Topology database path (default ".aracne/topology.db")
   --source <id>   Filter by source resource ID
   --target <id>   Filter by target resource ID
-  --kind <kind>   Filter by warning kind (use_missing_node, node_removed, signature_changed)
+  --kind <kind>   Filter by warning kind (use_missing_node, node_removed, signature_changed, interface_conflict)
 
 Flags for "bug report":
   --db <path>            Topology database path (default ".aracne/topology.db")

@@ -6,6 +6,11 @@ const (
 	WarnUseMissingNode   WarningKind = "use_missing_node"
 	WarnNodeRemoved      WarningKind = "node_removed"
 	WarnSignatureChanged WarningKind = "signature_changed"
+	// WarnInterfaceConflict fires when a type DECLARES that it implements an interface and
+	// no longer does -- a missing method, or one whose signature the interface does not
+	// accept. Distinct from signature_changed because the thing to go fix is the
+	// implementer's own declaration, not a call.
+	WarnInterfaceConflict WarningKind = "interface_conflict"
 )
 
 // Warning about a topology issue linking a source resource to a target with a kind and message.

@@ -100,6 +100,10 @@ func (m *TopologyManager) FullScan(root string, reg *scanner.Registry) error {
 	if err != nil {
 		return err
 	}
+	// A declared implementer that does not deliver is a property of the code, not of an
+	// edit, so a cold scan has to find it too -- otherwise `arac scan --all` would be the
+	// one way to make these warnings disappear.
+	syncInterfaceConflicts(topo, nil)
 	if err := helper.WriteDb(topo, m.dbPath); err != nil {
 		return err
 	}
@@ -486,6 +490,12 @@ func (m *TopologyManager) FullReScan(root string, reg *scanner.Registry) ([]doma
 		// LLM-authored text costs a regeneration.
 		aliases = m.remapByIdentity(oldTopo, newTopo)
 	}
+
+	// Same reason as in FullScan: a declared implementer that does not deliver is a
+	// property of the code, so every scan mode has to find it. `scan --all` reaches this
+	// function rather than FullScan, and missing it here would make a full rescan the one
+	// way to make these warnings disappear.
+	syncInterfaceConflicts(newTopo, nil)
 
 	if err := helper.WriteDb(newTopo, m.dbPath); err != nil {
 		return nil, err
@@ -899,6 +909,11 @@ func settleSignatureWarnings(
 	// the calls themselves against the signature they now face, so where it can answer, its
 	// answer supersedes theirs.
 	helper.ReconcileSignatureWarnings(topo)
+	// Conformance is derived wholesale from current state, so it is rebuilt rather than
+	// reconciled: every previous verdict is dropped and re-derived. That is what keeps a
+	// fixed implementer from leaving a stale row behind, with nothing stored and nothing
+	// to clear.
+	raised := syncInterfaceConflicts(topo, beforeWarnings)
 
 	kept := reported[:0]
 	for _, w := range reported {
@@ -915,7 +930,36 @@ func settleSignatureWarnings(
 		}
 		kept = append(kept, stored)
 	}
-	return kept
+	// A conflict raised by THIS update is news the agent needs now -- it usually means the
+	// edit it just made unhooked an implementer. One that was already standing is not, and
+	// repeating it after every unrelated edit is how a channel gets ignored.
+	return append(kept, raised...)
+}
+
+// syncInterfaceConflicts replaces every interface_conflict warning with the set the graph
+// currently justifies.
+//
+// Clear-then-rebuild, deliberately. The warning is a statement about the graph as it stands
+// -- this type promises this interface and does not deliver it -- so there is no event to
+// remember and no lifecycle to get wrong. Fixing the implementer, fixing the interface, or
+// deleting either simply stops producing the warning on the next pass.
+func syncInterfaceConflicts(
+	topo *domain.Topology, before map[string]domain.TopologyWarning,
+) []domain.TopologyWarning {
+	for id, w := range topo.Warnings {
+		if w.Kind == domain.WarnInterfaceConflict {
+			delete(topo.Warnings, id)
+		}
+	}
+	var raised []domain.TopologyWarning
+	for _, w := range helper.InterfaceConflictWarnings(topo) {
+		topo.Warnings[w.ID] = w
+		if _, stood := before[w.ID]; !stood {
+			raised = append(raised, w)
+		}
+	}
+	sort.Slice(raised, func(i, j int) bool { return raised[i].ID < raised[j].ID })
+	return raised
 }
 
 // resourceSignatureKey returns a fingerprint of the parts of a resource whose

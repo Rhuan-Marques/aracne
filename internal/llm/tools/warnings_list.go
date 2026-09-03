@@ -35,7 +35,7 @@ func (w *WarningsList) Parameters() []Parameter {
 	return []Parameter{
 		{Name: "source_id", Type: "string", Description: "Filter by source resource ID", Required: false},
 		{Name: "target_id", Type: "string", Description: "Filter by target resource ID", Required: false},
-		{Name: "kind", Type: "string", Description: "Kind: use_missing_node | node_removed | signature_changed", Required: false},
+		{Name: "kind", Type: "string", Description: "Kind: use_missing_node | node_removed | signature_changed | interface_conflict", Required: false},
 	}
 }
 
@@ -79,7 +79,8 @@ func (w *WarningsList) Run(args json.RawMessage) (string, error) {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("Found %d warning(s):\n\n", len(warnings)))
 	b.WriteString("Summary:\n")
-	for _, kind := range []domain.WarningKind{domain.WarnUseMissingNode, domain.WarnNodeRemoved, domain.WarnSignatureChanged} {
+	for _, kind := range []domain.WarningKind{domain.WarnUseMissingNode, domain.WarnNodeRemoved, domain.WarnSignatureChanged,
+		domain.WarnInterfaceConflict} {
 		if count := counts[kind]; count > 0 {
 			b.WriteString(fmt.Sprintf("  - %s: %d\n", kind, count))
 		}

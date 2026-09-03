@@ -64,7 +64,8 @@ func RunWarningsList(args []string) {
 	}
 
 	fmt.Printf("Found %d warning(s):\n\n", len(warnings))
-	for _, k := range []domain.WarningKind{domain.WarnUseMissingNode, domain.WarnNodeRemoved, domain.WarnSignatureChanged} {
+	for _, k := range []domain.WarningKind{domain.WarnUseMissingNode, domain.WarnNodeRemoved, domain.WarnSignatureChanged,
+		domain.WarnInterfaceConflict} {
 		if c := counts[k]; c > 0 {
 			fmt.Printf("  %s: %d\n", k, c)
 		}
