@@ -334,17 +334,29 @@ plugins. Two hooks ship for Claude Code:
   - **`mcp` / `aracne_read`** — reads are left alone. The read capability already has a surface
     in both (a tool, or `arac read`), and rewriting the model's `cat` on top of it would answer
     one question twice.
-  - **`blocked_tools`** applies in **`mcp` only** (`Config.GuardBlocksNativeReads`). That is the
-    one mode where a refusal has somewhere to send the model — an MCP tool that is in its list.
-    In the other three a block would refuse a call aracne was about to answer itself, which is
-    the two-turns-for-one-question failure interception was built to end. Where it does apply:
+  - **`blocked_tools`** applies in **`mcp` and `aracne_read`** (`Config.GuardBlocksNativeReads`):
+    the two modes where a refusal has somewhere to send the model — an MCP tool in its list, or
+    `arac read`, which is a real command in `aracne_read` and where reads are not intercepted.
+    The two intercepting modes block nothing: there the capability arrives AS the command the
+    model typed, so a block would refuse a call aracne was about to answer — the
+    two-turns-for-one-question failure interception was built to end. It stays **off by default
+    everywhere** (`blocked_tools` is empty in a generated config), so this is an opt-in knob
+    rather than a default. `Config.BlockableInMode` additionally drops `grep` from the set
+    outside `mcp`, because search is intercepted in every mode and refusing it would deny a
+    command the guard was one step from answering. Where a block does apply:
     blocking `grep` also blocks `rg`/`Select-String` run via Bash; blocking `bash` blocks the
     Bash tool entirely; a denied read is answered with its content where it can be
     (`guard_proxy.go`); piped reads (`cmd | grep`) are exempt unless
     `read.pipe_passthrough:false`. Interception is tried first, so a command aracne can serve is
     answered rather than refused however `blocked_tools` reads.
   - The **PostToolUse nudge** fires on native `Read`/`Grep`/`Edit`/`Write`, which interception
-    never sees, and names the surface the mode actually has
+    never sees, and — in `aracne_read` only (`Config.NudgesShellReads`) — on a **shell read**
+    that mode deliberately leaves alone. That one is gated by the *interception* matcher asked
+    hypothetically (`shellReadWouldHaveBeenServed`): it fires only where aracne would have
+    answered the command, so it never advertises a capability that would not have applied. It
+    is one short line, because it is printed after a command the model has already been
+    answered for and the same line is spent again on the next read. Both name the surface the
+    mode actually has
     (`toolspec.WarningForSurface`). Note that `grep`/`edit`/`write` guidance is the `arac`
     subcommand in *every* mode including `mcp`, because no mode registers a tool for them.
 

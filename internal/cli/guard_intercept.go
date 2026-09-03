@@ -223,6 +223,30 @@ func namesOnlyUnindexedFiles(operands []string, dbPath string) bool {
 	return len(tracked) == 0
 }
 
+// namesAnIndexedFile reports whether some operand resolves to a file the topology knows.
+//
+// The POSITIVE form of namesOnlyUnindexedFiles, and the difference is the whole point.
+// Interception may act on "not provably unindexed" because `arac cmd` re-checks in the
+// agent's own shell and passes through when it cannot serve -- a wrong guess there costs
+// nothing. The nudge has no second check: whatever it decides is printed to the model. So it
+// requires evidence rather than the absence of counter-evidence.
+//
+// The case that made this necessary was a real one, from a smoke cell:
+//
+//	for f in a.tmpl b.tmpl; do echo "=== $f ==="; cat "$f"; done
+//
+// `cat "$f"` names a shell variable, which resolves to no path, so "are all operands
+// unindexed?" answered false and the nudge fired -- recommending `arac read` for template
+// files carrying zero topology nodes.
+func namesAnIndexedFile(operands []string, dbPath string) bool {
+	existing := existingReadFiles(operands, projectRoot(dbPath))
+	if len(existing) == 0 {
+		return false
+	}
+	tracked, ok := trackedFiles(existing, dbPath)
+	return ok && len(tracked) > 0
+}
+
 // segmentArgv turns a scanned segment back into argv. splitCommandSegments drops quote
 // characters and substitutes a control byte for the spaces they held together, so putting
 // those spaces back yields exactly the tokens a shell would have produced -- which is what
@@ -299,8 +323,16 @@ func shellReadWouldHaveBeenServed(command, dbPath string, cfg *helper.Config) bo
 		}
 		// Only a READ earns this nudge. A grep is already answered by aracne in every mode,
 		// so pointing at `arac read` after one is advice about a question the model did not ask.
-		if argv := segmentArgv(segments[i]); len(argv) > 0 &&
-			shellcmd.Parse(argv).Kind == shellcmd.KindRead {
+		argv := segmentArgv(segments[i])
+		if len(argv) == 0 {
+			continue
+		}
+		req := shellcmd.Parse(argv)
+		if req.Kind != shellcmd.KindRead {
+			continue
+		}
+		// And only when the target really carries nodes. See namesAnIndexedFile.
+		if namesAnIndexedFile(req.Operands, dbPath) {
 			return true
 		}
 	}

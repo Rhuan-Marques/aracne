@@ -565,6 +565,14 @@ func TestShellReadNudgeFiresOnlyWhereAracneCouldHaveAnswered(t *testing.T) {
 		{"a build", "go test ./...", false},
 		// No topology nodes, so `arac read` has nothing to return.
 		{"an unindexed file", "cat " + readme, false},
+		// An operand the guard cannot resolve. Interception may act on "not provably
+		// unindexed" because `arac cmd` re-checks and passes through; the nudge has no second
+		// check, so it needs evidence rather than the absence of counter-evidence. This exact
+		// shape fired twice in a smoke cell, recommending `arac read` for .tmpl files with
+		// zero topology nodes.
+		{"a read of a shell variable",
+			`for f in a.tmpl b.tmpl; do echo "=== $f ==="; cat "$f"; done`, false},
+		{"a bare unresolvable operand", "cat $TARGET", false},
 		// The answer would go to the file, not to the model.
 		{"a redirected read", "cat " + app + " > /tmp/x", false},
 		// aracne's rendering elides bodies, so grepping it returns FEWER matches than the
