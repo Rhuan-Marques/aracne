@@ -1,0 +1,45 @@
+# ModeAracneRead with the shell-read nudge, against an unchanged control.
+#
+# The mode leaves shell reads alone -- nothing intercepts a `cat` -- so the only thing pulling
+# the model toward `arac read` is the contract, plus a one-line nudge after a read aracne could
+# have served. Both were rewritten just before this run: the contract lost its `arac grep`
+# sentence and its "ordinary reads run as the plain command" line (1510 -> 740 bytes), and the
+# nudge was re-gated on the interception matcher so it fires only where aracne would have
+# answered. This run is whether that moves turns.
+#
+# 100 turns because the question is turns. An 80-turn cap on the previous run cut cells off
+# mid-work, and a capped cell is excluded from the paired analysis -- so a cap that binds does
+# not just lose precision, it loses the pair.
+sample_id: hard9
+languages: [go, rust, typescript, javascript]
+
+seeds: 1
+arms: [baseline, aracne]
+
+run_harness: claude_code
+model: opus
+effort: medium
+max_turns: 100
+timeout_s: 3600
+run_parallel: 3
+
+grade_timeout_s: 7200
+grade_stall_timeout_s: 1800
+ni_margin: 0.10
+
+isolate_operator_config: true
+deny_answer_key: true
+
+# descriptions.lazy makes a cold fixture legitimate: the run describes what it actually reads,
+# and the runner harvests those back into the snapshot, so coverage climbs across runs instead
+# of being paid up front. Five of the nine fixtures are at 0% today.
+allow_cold: true
+
+# Identical built-in surface on both sides, so the comparison is never decided by which tools
+# an arm had.
+arm_builtin_tools:
+  baseline: [Bash, Glob]
+  aracne:   [Bash, Glob]
+
+arm_aracne_config:
+  aracne: lazy-aracneread

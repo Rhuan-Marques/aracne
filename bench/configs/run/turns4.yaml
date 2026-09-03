@@ -1,0 +1,53 @@
+# Three arms, because the pilot showed the two "voluntary" aracne modes never engage.
+#
+# On terraform-docs-901, with an identical [Bash, Glob] surface and a fixture carrying no
+# future git history:
+#
+#   baseline      13 turns  143,440 ctx   1.00x
+#   line_range    20 turns  292,297 ctx   2.04x   intercepted 0
+#   aracne_read   21 turns  287,346 ctx   2.00x   intercepted 0
+#   mcp+blocked    8 turns   87,366 ctx   0.61x   2 MCP calls, 2 guard denials
+#
+# The two modes that WAIT to be used were never used: the model pipes almost every grep
+# (`| head`, `| grep -v _test`), which the guard deliberately refuses to rewrite, and reads
+# files that carry no topology nodes. Across 421 commands from the pilot and 40 navcheck
+# baseline cells, only 15% are a bare read or grep aracne could answer -- bare greps alone are
+# 1.9%. Those arms paid the contract and got nothing back.
+#
+# The mode that BLOCKS was used immediately: the shell grep was denied, the model switched to
+# `arac grep`, then read templates through mcp__aracne__read, and produced a patch of exactly
+# the same shape as the control's (84 lines / 6 files) in 8 turns instead of 13. n=1, so this
+# config exists to find out whether that holds across nine tasks.
+#
+# `aracne` is the mcp+blocked arm because it is the one under test; `aracne-open` carries
+# line_range so the intercepting mode is still measured rather than assumed dead.
+
+sample_id: turns4
+languages: [go, rust, typescript, javascript]
+
+seeds: 1
+arms: [baseline, aracne]
+
+run_harness: claude_code
+model: opus
+effort: medium
+max_turns: 80
+timeout_s: 2400
+run_parallel: 3
+
+grade_timeout_s: 7200
+grade_stall_timeout_s: 1800
+ni_margin: 0.10
+
+isolate_operator_config: true
+deny_answer_key: true
+allow_cold: true
+
+# blocked_tools only bites in mcp mode, and only the aracne arm runs it; the other two get the
+# same two built-ins so the surface is never what decides a comparison here again.
+arm_builtin_tools:
+  baseline:     [Bash, Glob]
+  aracne:       [Bash, Glob]
+
+arm_aracne_config:
+  aracne: linerange-full
