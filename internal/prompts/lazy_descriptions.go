@@ -65,7 +65,7 @@ func LazyDescriptionsInput(resources []DescriptionResource, exemplars []Descript
 	for _, res := range resources {
 		fmt.Fprintf(&b, "### %s\n", res.ID)
 		fmt.Fprintf(&b, "- id: %s\n- name: %s\n- kind: %s\n", res.ID, res.Name, res.Kind)
-		fmt.Fprintf(&b, "- budget: %d characters\n", domain.DescriptionBudget(res.Kind))
+		fmt.Fprintf(&b, "- budget: %d characters\n", domain.StatedDescriptionBudget(res.Kind))
 		if src := strings.TrimSpace(res.ReadOutput); src != "" {
 			b.WriteString("\n```text\n")
 			b.WriteString(src)

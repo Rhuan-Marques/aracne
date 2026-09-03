@@ -254,7 +254,7 @@ func BuildDescriptionExemplars(topo *domain.Topology, batchIDs []string, limit i
 
 // Returns the per-resource-kind guideline for writing one-line descriptions in the topology database.
 func singleDescriptionInstruction(kind domain.ResourceKind) string {
-	budget := domain.DescriptionBudget(kind)
+	budget := domain.StatedDescriptionBudget(kind)
 	switch kind {
 	case domain.ResourceFunction, domain.ResourceMethod:
 		return fmt.Sprintf("One line, ≤%d chars: what it does, plus any notable params, returns, or side effects.", budget)
@@ -290,7 +290,7 @@ func descriptionGuidelinesForKinds(resources []DescriptionResource) []string {
 	var lines []string
 	functionLike := seen[domain.ResourceFunction] || seen[domain.ResourceMethod]
 	if functionLike {
-		lines = append(lines, fmt.Sprintf("Functions/methods: one line each, ≤%d chars — what it does + any notable params/returns/side effects", domain.DescriptionBudget(domain.ResourceFunction)))
+		lines = append(lines, fmt.Sprintf("Functions/methods: one line each, ≤%d chars — what it does + any notable params/returns/side effects", domain.StatedDescriptionBudget(domain.ResourceFunction)))
 		delete(seen, domain.ResourceFunction)
 		delete(seen, domain.ResourceMethod)
 	}
@@ -306,7 +306,7 @@ func descriptionGuidelinesForKinds(resources []DescriptionResource) []string {
 
 // Returns description guidelines for a resource kind, specifying line limits and key details to include per type.
 func pluralDescriptionInstruction(kind domain.ResourceKind) string {
-	budget := domain.DescriptionBudget(kind)
+	budget := domain.StatedDescriptionBudget(kind)
 	switch kind {
 	case domain.ResourceStruct, domain.ResourceNamedType:
 		return fmt.Sprintf("Types: one line each, ≤%d chars — what they represent and key fields/methods", budget)

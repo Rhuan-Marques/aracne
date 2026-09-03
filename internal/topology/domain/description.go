@@ -125,3 +125,26 @@ func CapDescription(kind ResourceKind, s string) string {
 	}
 	return strings.TrimRight(cut, " .,;:") + "…"
 }
+
+// StatedBudgetMargin is how far BELOW the enforced budget a prompt tells the model to aim.
+//
+// WHY LIE TO THE MODEL. Models count characters badly, and the failure is one-sided: a
+// description that lands a few characters over is REJECTED by update_description, costing a
+// retry or leaving the resource undescribed, while one a few characters under costs nothing.
+// So the number in the prompt is the enforced budget minus this margin, and the enforced
+// budget is what actually gates the write. A model that overshoots its stated target by a
+// dozen characters still lands inside the real one.
+const StatedBudgetMargin = 20
+
+// StatedDescriptionBudget is the character cap a PROMPT should quote for a kind: lower than
+// DescriptionBudget by StatedBudgetMargin, so ordinary miscounting still fits.
+//
+// Never use this to validate. ValidateDescription and DescriptionForStorage are the truth;
+// this is only what we ask for.
+func StatedDescriptionBudget(kind ResourceKind) int {
+	b := DescriptionBudget(kind) - StatedBudgetMargin
+	if b < 20 {
+		b = 20
+	}
+	return b
+}

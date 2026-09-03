@@ -151,3 +151,37 @@ func TestDescriptionForStorageBoundary(t *testing.T) {
 		t.Error("one over budget must be dropped")
 	}
 }
+
+// Prompts quote a budget BELOW the enforced one, because models count characters badly and the
+// error is one-sided: a few characters over is rejected by update_description (a retry, or an
+// undescribed resource), a few under costs nothing.
+func TestStatedBudgetIsLowerThanEnforced(t *testing.T) {
+	for _, kind := range []ResourceKind{ResourceFunction, ResourceMethod, ResourceStruct,
+		ResourceInterface, ResourceFile, ResourceVariable} {
+		stated, real := StatedDescriptionBudget(kind), DescriptionBudget(kind)
+		if stated >= real {
+			t.Errorf("%s: stated %d must be below enforced %d", kind, stated, real)
+		}
+		if real-stated != StatedBudgetMargin {
+			t.Errorf("%s: margin is %d, want %d", kind, real-stated, StatedBudgetMargin)
+		}
+		// A description written to the stated budget must always pass the real gate.
+		if err := ValidateDescription(kind, strings.Repeat("a", stated)); err != nil {
+			t.Errorf("%s: text at the stated budget must validate: %v", kind, err)
+		}
+	}
+	// The headline numbers, pinned so a budget change cannot silently invert the margin.
+	if got := StatedDescriptionBudget(ResourceFunction); got != 100 {
+		t.Errorf("function: stated %d, want 100 (enforced 120)", got)
+	}
+	if got := StatedDescriptionBudget(ResourceStruct); got != 80 {
+		t.Errorf("struct: stated %d, want 80 (enforced 100)", got)
+	}
+}
+
+// The margin must never drive a budget to something unusable.
+func TestStatedBudgetHasAFloor(t *testing.T) {
+	if got := StatedDescriptionBudget(ResourceKind("nonexistent")); got < 20 {
+		t.Errorf("stated budget fell below the floor: %d", got)
+	}
+}
