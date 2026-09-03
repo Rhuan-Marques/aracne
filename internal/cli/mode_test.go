@@ -102,7 +102,11 @@ func TestInterceptionFollowsTheMode(t *testing.T) {
 		wantBlocks bool
 	}{
 		{helper.ModeMCP, false, true},
-		{helper.ModeAracneRead, false, false},
+		// ModeAracneRead may block because `arac read` is a real command there and reads are
+		// not intercepted, so a refusal points at a capability the model has rather than at
+		// one it was about to be handed. The two intercepting modes must not: there the
+		// capability arrives AS the command the model typed.
+		{helper.ModeAracneRead, false, true},
 		{helper.ModeInterceptID, true, false},
 		{helper.ModeLineRange, true, false},
 	} {
@@ -169,7 +173,7 @@ func TestBlockedToolsAreInertOutsideMCPMode(t *testing.T) {
 		wantBlock bool
 	}{
 		{helper.ModeMCP, true},
-		{helper.ModeAracneRead, false},
+		{helper.ModeAracneRead, true},
 		{helper.ModeInterceptID, false},
 		{helper.ModeLineRange, false},
 	} {
@@ -182,6 +186,15 @@ func TestBlockedToolsAreInertOutsideMCPMode(t *testing.T) {
 		blocked, _ := loadGuardConfig(dbPath)
 		if got := blocked["read"]; got != tc.wantBlock {
 			t.Errorf("mode %q: blocked[read] = %v, want %v", tc.mode, got, tc.wantBlock)
+		}
+		// `grep` is dropped from the set in EVERY mode, including the two that block. Search
+		// is intercepted everywhere (InterceptGrep), so refusing it would deny a command the
+		// guard was one step from answering itself -- the two-turns-for-one-question failure
+		// interception exists to end. ModeMCP is the exception: there the refusal sends the
+		// model to an MCP `grep` tool that is in its list.
+		wantGrep := tc.mode == helper.ModeMCP
+		if got := blocked["grep"]; got != wantGrep {
+			t.Errorf("mode %q: blocked[grep] = %v, want %v", tc.mode, got, wantGrep)
 		}
 	}
 }

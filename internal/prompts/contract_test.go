@@ -84,7 +84,11 @@ func TestTheGuardNoteAppearsOnlyWhereAGuardCanFire(t *testing.T) {
 		cfg.Mode = mode
 		cfg.LLM.Any.MainAgent.BlockedTools = []string{"read", "grep"}
 
-		want := mode == helper.ModeMCP
+		// The two modes whose guard can actually refuse something: ModeMCP, and
+		// ModeAracneRead where `arac read` is a surface a refusal can point at. The
+		// intercepting modes answer the command instead, so a guard note there would explain
+		// a denial that never comes.
+		want := mode == helper.ModeMCP || mode == helper.ModeAracneRead
 		if got := strings.Contains(ContractContent(cfg), "## Tool Guard"); got != want {
 			t.Errorf("mode %q: carries a Tool Guard note = %v, want %v", mode, got, want)
 		}

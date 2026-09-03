@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -297,19 +298,18 @@ func denyReason(t *testing.T, cfg *helper.Config, dir, command string) string {
 	return got.HookSpecificOutput.Reason
 }
 
-// blocked_tools does nothing outside ModeMCP, and this is where that has to be true end to end.
+// blocked_tools does nothing in the INTERCEPTING modes, and this is where that has to be true
+// end to end.
 //
 // It used to deny on every surface, with the refusal text rewritten to name shell forms instead
 // of MCP tools. That was the wrong half to fix: in an intercepting mode the command was about to
-// be ANSWERED, so the denial spent a turn refusing a question asked correctly, and in
-// ModeAracneRead it refused a `cat` for which the only alternative -- `arac read` -- the model
-// had already been told about in the contract. The knob now bites in the one mode where a
-// refusal has an MCP tool to send the model to.
-func TestBlockedToolsDenyNothingOutsideMCPMode(t *testing.T) {
+// be ANSWERED, so the denial spent a turn refusing a question asked correctly. That reasoning
+// is specific to those modes and still holds.
+func TestBlockedToolsDenyNothingInTheInterceptingModes(t *testing.T) {
 	root, _ := scannedProject(t)
 	app := filepath.Join(root, "app.go")
 
-	for _, mode := range []string{helper.ModeAracneRead, helper.ModeInterceptID, helper.ModeLineRange} {
+	for _, mode := range []string{helper.ModeInterceptID, helper.ModeLineRange} {
 		cfg := blockedIn(mode, "read", "grep", "edit", "write")
 
 		// `od -c` is a read aracne models no spelling of, so nothing else can be suppressing
@@ -319,6 +319,48 @@ func TestBlockedToolsDenyNothingOutsideMCPMode(t *testing.T) {
 		}
 		if reason := denyReason(t, cfg, root, "sed -i s/a/b/ "+app); reason != "" {
 			t.Errorf("mode %q denied an edit that blocked_tools should no longer gate:\n%s", mode, reason)
+		}
+	}
+}
+
+// ModeAracneRead is the third mode where a refusal has somewhere to send the model: `arac read`
+// is a real command there, and reads are NOT intercepted, so a block is not refusing something
+// aracne was about to hand over.
+//
+// This reverses an earlier decision that made the knob inert here, whose stated reason was that
+// the contract had already taught `arac read` so the refusal added nothing. Knowing is not
+// using: the smoke cell that prompted this change read files with `sed -n 1,200p` while the
+// contract sat in its context. The knob stays OFF by default -- blocked_tools is empty in a
+// generated config -- so this makes an opt-in setting work rather than changing what a project
+// gets without asking.
+func TestBlockedToolsBiteInAracneReadWhenAsked(t *testing.T) {
+	root, _ := scannedProject(t)
+	app := filepath.Join(root, "app.go")
+	cfg := blockedIn(helper.ModeAracneRead, "read", "grep", "edit", "write")
+
+	if reason := denyReason(t, cfg, root, "od -c "+app); reason == "" {
+		t.Error("a configured read block must deny in aracne_read, where `arac read` is the surface")
+	}
+	if reason := denyReason(t, cfg, root, "sed -i s/a/b/ "+app); reason == "" {
+		t.Error("a configured edit block must deny in aracne_read")
+	}
+	// grep is the entry that must NOT bite: aracne answers a search in every mode, so refusing
+	// one denies a command the guard was one step from answering itself.
+	if reason := denyReason(t, cfg, root, "grep -rn Handle "+root); reason != "" {
+		t.Errorf("search is intercepted in aracne_read and must never be refused:\n%s", reason)
+	}
+}
+
+// And with nothing configured -- the shape every generated project has -- aracne_read denies
+// nothing at all.
+func TestAracneReadDeniesNothingByDefault(t *testing.T) {
+	root, _ := scannedProject(t)
+	app := filepath.Join(root, "app.go")
+	cfg := blockedIn(helper.ModeAracneRead)
+
+	for _, cmd := range []string{"od -c " + app, "sed -i s/a/b/ " + app, "cat " + app} {
+		if reason := denyReason(t, cfg, root, cmd); reason != "" {
+			t.Errorf("default aracne_read must deny nothing, refused %q:\n%s", cmd, reason)
 		}
 	}
 }
@@ -478,6 +520,82 @@ func TestReadIsNeverInterceptedIntoAPipe(t *testing.T) {
 	} {
 		if got := rewriteOf(t, dbPath, cmd); got != "" {
 			t.Errorf("must NOT rewrite a read into a pipe: %q -> %s", cmd, got)
+		}
+	}
+}
+
+// The nudge in ModeAracneRead fires on exactly the commands aracne would have ANSWERED, had
+// that mode intercepted reads.
+//
+// Precision is the whole point. The loose classifier this replaces keyed off "does this look
+// like a read", and on one smoke cell it nudged `which grep; type grep` -- which reads nothing
+// -- and `arac grep "table" | head`, which is already aracne. Every one of those lines is
+// tokens spent telling a model to use a capability that would not have applied, printed after
+// a command it has already been answered for.
+func TestShellReadNudgeFiresOnlyWhereAracneCouldHaveAnswered(t *testing.T) {
+	root, dbPath := scannedProject(t)
+	app := filepath.Join(root, "app.go")
+	cfg := blockedIn(helper.ModeAracneRead)
+	// An EXISTING file the topology does not know. It has to exist: the scope test asks
+	// whether the target carries nodes, and a path that is not there at all is a different
+	// case (the command will fail on its own).
+	readme := filepath.Join(root, "README.md")
+	if err := os.WriteFile(readme, []byte("# docs\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		cmd  string
+		want bool
+	}{
+		{"a whole-file read of an indexed file", "cat " + app, true},
+		{"a windowed read", "sed -n '1,200p' " + app, true},
+		{"a head", "head -40 " + app, true},
+		{"a read inside a compound", "wc -l " + app + "; sed -n '1,80p' " + app, true},
+
+		// aracne answers a search already; pointing at `arac read` afterwards is advice about
+		// a question the model did not ask.
+		{"a search", "grep -rn Handle " + root, false},
+		// Already aracne. Nudging here tells it to do what it just did.
+		{"arac itself", "arac read pkg.Thing", false},
+		{"arac piped", `arac grep "table" | head -50`, false},
+		// Reads nothing.
+		{"not a read at all", "which grep; type grep", false},
+		{"a build", "go test ./...", false},
+		// No topology nodes, so `arac read` has nothing to return.
+		{"an unindexed file", "cat " + readme, false},
+		// The answer would go to the file, not to the model.
+		{"a redirected read", "cat " + app + " > /tmp/x", false},
+		// aracne's rendering elides bodies, so grepping it returns FEWER matches than the
+		// real command -- a wrong answer with nothing marking it as one.
+		{"a read feeding a pipe", "cat " + app + " | grep Handle", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shellReadWouldHaveBeenServed(tc.cmd, dbPath, cfg); got != tc.want {
+				t.Errorf("shellReadWouldHaveBeenServed(%q) = %v, want %v", tc.cmd, got, tc.want)
+			}
+		})
+	}
+}
+
+// And the nudge only exists in the mode that leaves shell reads alone.
+func TestShellReadNudgeIsScopedToAracneRead(t *testing.T) {
+	for _, tc := range []struct {
+		mode string
+		want bool
+	}{
+		{helper.ModeAracneRead, true},
+		// Already answered the command.
+		{helper.ModeInterceptID, false},
+		{helper.ModeLineRange, false},
+		// Refuses it with a message that names the tool.
+		{helper.ModeMCP, false},
+	} {
+		cfg := helper.DefaultConfig()
+		cfg.Mode = tc.mode
+		if got := cfg.NudgesShellReads(); got != tc.want {
+			t.Errorf("mode %q: NudgesShellReads = %v, want %v", tc.mode, got, tc.want)
 		}
 	}
 }

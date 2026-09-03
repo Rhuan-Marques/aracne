@@ -178,6 +178,19 @@ var aracneReadWarnings = withShellWarnings(map[string]string{
 		"context, for a fraction of the file they sit in. Prefer it over opening the file.",
 })
 
+// ShellReadNudge is what a shell read earns in a mode that does not intercept it.
+//
+// Deliberately one short line. It fires after a command the model has ALREADY been answered
+// for -- it has the file's contents in hand -- so every token here is spent on the next read
+// rather than this one, and the same line will be spent again on the read after that. The
+// longer "read" entry above still covers a NATIVE Read tool call, where the guard has more to
+// explain than a spelling: which capability exists at all.
+//
+// It names `arac grep` as well because an id is the one thing the model does not have. Telling
+// it to pass an id without saying where ids come from is advice it cannot act on.
+const ShellReadNudge = "aracne: `arac read <id>` gives this declaration with its callers and " +
+	"descriptions, for a fraction of the bytes. `arac grep <name>` finds the id."
+
 // interceptIDWarnings name the spellings aracne answers and the ids they take.
 var interceptIDWarnings = withShellWarnings(map[string]string{
 	"read": "aracne: `cat`, `head -N`, `tail -N` and `sed -n 'A,Bp'` on an indexed file are " +
@@ -225,6 +238,9 @@ const (
 	// makes them technically distinct, and the loser is usually the one that knows the
 	// topology.
 	ReadResourceToolName = "read_resource"
+	// GrepToolName is the blocked_tools key for search. Named so callers deciding whether a
+	// mode may refuse it compare against a constant rather than a literal.
+	GrepToolName = "grep"
 )
 
 // ResolveReadToolName returns the name the read tool registers under. nativeReadAvailable

@@ -1250,12 +1250,68 @@ func (c *Config) LineRangeIdentification() bool { return c.EffectiveMode() == Mo
 // GuardBlocksNativeReads reports whether blocked_tools may deny a native or bash read and
 // redirect it into aracne.
 //
-// ModeMCP only. It is the one mode where a denial has somewhere to send the model: an MCP tool
-// that is present in its tool list. In the other three the capability arrives as the command
-// the model already typed (or as `arac read`), so a block would refuse a call that aracne was
-// about to answer -- which is how the guard used to spend two turns on a question asked
-// correctly the first time.
-func (c *Config) GuardBlocksNativeReads() bool { return c.EffectiveMode() == ModeMCP }
+// The test is whether a denial has somewhere to SEND the model. ModeMCP does: an MCP `read`
+// tool that is present in its tool list. ModeAracneRead does too: `arac read` is a real
+// command there, and reads are not intercepted, so a refusal points at a capability the model
+// has rather than refusing something aracne was about to answer anyway.
+//
+// The two intercepting modes do not, and must not: there the capability arrives AS the command
+// the model already typed, so a block would refuse a call aracne was about to serve -- which is
+// how the guard used to spend two turns on a question asked correctly the first time.
+//
+// What a mode may block is narrower than the set an operator writes; see BlockableInMode.
+func (c *Config) GuardBlocksNativeReads() bool {
+	m := c.EffectiveMode()
+	return m == ModeMCP || m == ModeAracneRead
+}
+
+// NudgesShellReads reports whether a SHELL read should earn a one-line pointer at the read
+// capability after it runs.
+//
+// ModeAracneRead only, and only because that mode is the one where a shell read is neither
+// intercepted nor refused: the model types `sed -n 1,200p file.go`, gets the raw file, and
+// nothing in the exchange tells it `arac read` exists. The intercepting modes already
+// answered the command, and ModeMCP refuses it with a message that names the tool -- in both,
+// this line would be spent explaining something the model just received.
+func (c *Config) NudgesShellReads() bool { return c.EffectiveMode() == ModeAracneRead }
+
+// BlockableInMode filters an operator's blocked_tools down to the ones this mode may actually
+// refuse.
+//
+// Search is the entry that has to be dropped. InterceptGrep is true in EVERY mode, so a
+// blocked `grep` in ModeAracneRead would deny a command the guard was one step away from
+// answering itself -- the exact two-turns-for-one-question failure interception exists to end.
+// The operator's config is not rejected for it: `blocked_tools: [read, grep]` is a reasonable
+// thing to write when moving a project between modes, and silently keeping the half that
+// applies is better than failing the whole config over the half that does not.
+func (c *Config) BlockableInMode(blocked map[string]bool) map[string]bool {
+	if len(blocked) == 0 || !c.GuardBlocksNativeReads() {
+		return map[string]bool{}
+	}
+	if c.EffectiveMode() == ModeMCP {
+		return blocked
+	}
+	out := make(map[string]bool, len(blocked))
+	for name, on := range blocked {
+		if !on || c.interceptsToolName(name) {
+			continue
+		}
+		out[name] = true
+	}
+	return out
+}
+
+// interceptsToolName reports whether aracne answers this capability by rewriting the command,
+// which is what makes blocking it counterproductive.
+func (c *Config) interceptsToolName(name string) bool {
+	switch name {
+	case toolspec.GrepToolName:
+		return c.InterceptGrep()
+	case toolspec.ReadToolName:
+		return c.InterceptReads()
+	}
+	return false
+}
 
 // Surface maps the mode onto the guidance table the guard's warnings come from.
 func (c *Config) Surface() toolspec.Surface {

@@ -127,7 +127,25 @@ func runClaudeGuardHook(input io.Reader, output io.Writer) {
 		// advertising something the agent just got, or something that does not exist. A NATIVE
 		// Read/Grep/Edit/Write is different: interception never sees it, so the nudge is the
 		// only place the model learns which spelling is the cheaper question.
-		if !cfg.InterceptReads() || event.ToolName != "Bash" {
+		switch {
+		case event.ToolName != "Bash":
+			// A native Read/Grep/Edit/Write. Interception never sees these, so the nudge is
+			// the only place the model learns the shell forms are the cheaper question.
+			if msg := warningMessage(keys, !blocked[toolspec.ReadToolName], cfg.Surface()); msg != "" {
+				parts = append(parts, msg)
+			}
+		case cfg.NudgesShellReads():
+			// A shell read this mode deliberately leaves alone. Nudged only when aracne WOULD
+			// have answered it -- the same test interception uses, asked hypothetically -- so
+			// the line is never spent advertising a capability that would not have applied.
+			// The loose classifier this replaces fired on `which grep; type grep`, which reads
+			// nothing, and on `arac grep "table" | head`, which is already aracne.
+			if shellReadWouldHaveBeenServed(guardLoggedCommand(event.ToolInput), dbPath, cfg) {
+				parts = append(parts, toolspec.ShellReadNudge)
+			}
+		case !cfg.InterceptReads():
+			// ModeMCP: a Bash read is refused rather than rewritten, and the refusal already
+			// names the tool, so this is the fallback for the ones blocked_tools let through.
 			if msg := warningMessage(keys, !blocked[toolspec.ReadToolName], cfg.Surface()); msg != "" {
 				parts = append(parts, msg)
 			}
@@ -310,14 +328,13 @@ func loadGuardConfig(dbPath string) (blocked map[string]bool, exemptPiped bool) 
 	if !ok {
 		return map[string]bool{}, true
 	}
-	// blocked_tools does something in ModeMCP and nothing anywhere else, and this is the one
-	// place that has to be true -- every denial, every proxied read and every warning that
-	// names a tool flows from this set. In the other three modes a block would refuse a call
-	// aracne was about to answer itself, and send the model to a tool that is not in its list.
-	if !cfg.GuardBlocksNativeReads() {
-		return map[string]bool{}, cfg.EffectivePipePassthrough()
-	}
-	return toolNameSet(cfg.EffectiveAgent("claude_code", "main").BlockedTools), cfg.EffectivePipePassthrough()
+	// This is the one place the blocked set is decided -- every denial, every proxied read and
+	// every warning that names a tool flows from it. BlockableInMode drops the entries this
+	// mode must not refuse: in the intercepting modes that is all of them (a block would
+	// refuse a call aracne was about to answer), and in ModeAracneRead it is `grep` alone,
+	// which aracne answers there too.
+	blockedSet := toolNameSet(cfg.EffectiveAgent("claude_code", "main").BlockedTools)
+	return cfg.BlockableInMode(blockedSet), cfg.EffectivePipePassthrough()
 }
 
 // ---------------------------------------------------------------------------

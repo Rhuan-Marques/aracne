@@ -72,7 +72,7 @@ func interceptCommand(command, dbPath string, cfg *helper.Config) (string, bool)
 	segments := splitCommandSegments(original)
 	var at []int
 	for i := range segments {
-		if off, ok := interceptableSegment(segments, i, original, dbPath, cfg); ok {
+		if off, ok := interceptableSegment(segments, i, original, dbPath, cfg, cfg.InterceptReads()); ok {
 			at = append(at, off)
 		}
 	}
@@ -90,7 +90,8 @@ func interceptCommand(command, dbPath string, cfg *helper.Config) (string, bool)
 
 // interceptableSegment reports whether one segment of a command may be rewritten, and the byte
 // offset in the original string where the `arac cmd --` prefix belongs.
-func interceptableSegment(segments []commandSegment, i int, original, dbPath string, cfg *helper.Config) (int, bool) {
+func interceptableSegment(segments []commandSegment, i int, original, dbPath string,
+	cfg *helper.Config, allowReads bool) (int, bool) {
 	seg := segments[i]
 	// A segment reading piped stdin has no file to look up, and one redirecting stdout would
 	// send aracne's answer to that file instead of to the model.
@@ -115,7 +116,11 @@ func interceptableSegment(segments []commandSegment, i int, original, dbPath str
 		// Only the intercepting modes rewrite a read. In ModeMCP the read capability is a
 		// tool and in ModeAracneRead it is `arac read`; rewriting the model's `cat` on top of
 		// either would be a second answer to a question that already has one.
-		if !cfg.InterceptReads() {
+		//
+		// The nudge path passes allowReads=true to ask the same question hypothetically --
+		// "would this have been answered, had reads been intercepted?" -- which is what keeps
+		// the nudge from advertising a capability that would not have applied.
+		if !allowReads {
 			return 0, false
 		}
 	case shellcmd.KindGrep:
@@ -259,4 +264,45 @@ func emitPreToolRewrite(output io.Writer, toolInput map[string]interface{}, comm
 			"updatedInput":  updated,
 		},
 	})
+}
+
+// shellReadWouldHaveBeenServed reports whether a Bash command contains a read that aracne
+// could have answered from the topology.
+//
+// The nudge in ModeAracneRead exists because that mode leaves shell reads alone: the model
+// types `sed -n 1,200p file.go`, gets the raw file, and never learns that `arac read` would
+// have given it the declaration with its callers instead. But a nudge is only worth its
+// tokens when it is TRUE, and the loose classifier that used to drive it fired on anything
+// resembling a read -- measured on one smoke cell it nudged `which grep; type grep`, which
+// reads nothing, and `arac grep "table" | head`, which is already aracne.
+//
+// So it asks the interception matcher instead, with reads hypothetically allowed. Everything
+// interception refuses is refused here for the same reason and by the same code: an `arac`
+// command, a path outside the project, a heredoc, a file with no topology nodes, a segment
+// whose output is piped or redirected somewhere aracne's answer does not belong. What
+// survives is exactly the set aracne would have served.
+func shellReadWouldHaveBeenServed(command, dbPath string, cfg *helper.Config) bool {
+	original := strings.TrimSpace(command)
+	if original == "" || strings.Contains(original, "<<") || strings.ContainsAny(original, "\n") {
+		return false
+	}
+	if isAracCommand(map[string]interface{}{"command": original}) {
+		return false
+	}
+	if operatesOutsideProject(original, projectRoot(dbPath)) {
+		return false
+	}
+	segments := splitCommandSegments(original)
+	for i := range segments {
+		if _, ok := interceptableSegment(segments, i, original, dbPath, cfg, true); !ok {
+			continue
+		}
+		// Only a READ earns this nudge. A grep is already answered by aracne in every mode,
+		// so pointing at `arac read` after one is advice about a question the model did not ask.
+		if argv := segmentArgv(segments[i]); len(argv) > 0 &&
+			shellcmd.Parse(argv).Kind == shellcmd.KindRead {
+			return true
+		}
+	}
+	return false
 }
