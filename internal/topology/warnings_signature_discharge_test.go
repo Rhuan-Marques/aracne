@@ -290,3 +290,101 @@ func TestSignatureWarningRevertClearsInEveryLanguage(t *testing.T) {
 		})
 	}
 }
+
+// --- contract matching: the warning follows the CALL, not the callee's history ---
+//
+// The baseline rule above asks whether the callee went back to the signature its callers
+// were written against. That is a proxy, and it is wrong as soon as a caller changes on its
+// own -- which is what a refactor is. Reproduced before the contract rule existed, on a
+// project that compiles:
+//
+//	fun1(x)            fun2 calls fun1(5)     -> agree
+//	fun1 -> (x, y)                            -> warn, correctly
+//	fun2 -> fun1(5,6,7)                       -> cleared, because fun2's FILE was re-parsed
+//	fun1 -> (x, y, z)                         -> warned AGAIN, and `go build` passes
+//
+// The last step is the false positive: three parameters, three arguments, and an
+// instruction to the agent to go verify correct code.
+
+const sigCallerThreeArgs = `package testproject
+func Caller() int { return FuncA(1, 2, 3) }
+`
+
+// TestSignatureWarningFollowsTheCallNotTheCalleeHistory is the acceptance test for
+// contract matching.
+func TestSignatureWarningFollowsTheCallNotTheCalleeHistory(t *testing.T) {
+	p, mgr := newSigProj(t)
+
+	// The callee widens; the caller has not caught up.
+	p.write(t, "target.go", sigTargetTwoArgs)
+	p.updateFileWarnings(t, mgr, "target.go")
+	if n := sigWarns(t, mgr); n != 1 {
+		t.Fatalf("widening the signature should warn the caller, got %d", n)
+	}
+
+	// The caller is changed -- and overshoots, to three arguments.
+	p.write(t, "caller.go", sigCallerThreeArgs)
+	p.updateFileWarnings(t, mgr, "caller.go")
+
+	// The callee catches up to three parameters. Caller and callee now agree.
+	p.write(t, "target.go", sigTargetThreeArgs)
+	p.updateFileWarnings(t, mgr, "target.go")
+
+	if n := sigWarns(t, mgr); n != 0 {
+		w, _ := mgr.ListWarnings("", "", domain.WarnSignatureChanged)
+		t.Errorf("caller passes 3 arguments and callee takes 3 parameters; "+
+			"there is nothing to verify, but %d warning(s) stand: %+v", n, w)
+	}
+}
+
+// TestCallerSideClearRequiresTheCallToFit closes the loose caller-side clear. Re-parsing
+// the caller's file used to discharge the warning whatever the edit was, so touching a
+// caller silenced a warning that was still true.
+func TestCallerSideClearRequiresTheCallToFit(t *testing.T) {
+	p, mgr := newSigProj(t)
+
+	p.write(t, "target.go", sigTargetTwoArgs)
+	p.updateFileWarnings(t, mgr, "target.go")
+	if n := sigWarns(t, mgr); n != 1 {
+		t.Fatalf("expected the caller to be warned, got %d", n)
+	}
+
+	// An edit to the caller that does not fix the call.
+	p.write(t, "caller.go", `package testproject
+
+// a comment, and nothing else
+func Caller() int { return FuncA(1) }
+`)
+	p.updateFileWarnings(t, mgr, "caller.go")
+	if n := sigWarns(t, mgr); n != 1 {
+		t.Errorf("the call still passes 1 argument to a 2-parameter function; "+
+			"touching the file must not discharge the warning, got %d", n)
+	}
+
+	// And the real fix does clear it.
+	p.write(t, "caller.go", `package testproject
+func Caller() int { return FuncA(1, 2) }
+`)
+	p.updateFileWarnings(t, mgr, "caller.go")
+	if n := sigWarns(t, mgr); n != 0 {
+		w, _ := mgr.ListWarnings("", "", domain.WarnSignatureChanged)
+		t.Errorf("fixing the call must clear it, %d left: %+v", n, w)
+	}
+}
+
+// TestContractRuleDoesNotSilenceARealMismatch guards the direction that would make this
+// fix worse than the bug: a caller that genuinely does not fit must keep its warning
+// however many times either side is re-parsed.
+func TestContractRuleDoesNotSilenceARealMismatch(t *testing.T) {
+	p, mgr := newSigProj(t)
+
+	p.write(t, "target.go", sigTargetTwoArgs)
+	p.updateFileWarnings(t, mgr, "target.go")
+
+	// Unrelated edits to both files; the call is never corrected.
+	p.write(t, "target.go", sigTargetTwoArgs+"\nfunc Unrelated() int { return 7 }\n")
+	p.updateFileWarnings(t, mgr, "target.go")
+	if n := sigWarns(t, mgr); n != 1 {
+		t.Errorf("an unrelated edit to the callee must not discharge a live warning, got %d", n)
+	}
+}

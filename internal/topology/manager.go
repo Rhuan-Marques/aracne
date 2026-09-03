@@ -417,6 +417,11 @@ func (m *TopologyManager) tryPartialIncremental(root string, reg *scanner.Regist
 		// invalidated. Runs before the report loop below so a dropped warning is
 		// not surfaced either.
 		helper.CleanupOrphanedWarningsScoped(warnings, deletes)
+		// The contract rule has to run here too, not only on the full path. This IS the
+		// single-file edit path, so it is where an agent's fix to a caller lands; without
+		// this, fixing the call would leave the warning standing until something forced a
+		// full re-resolve.
+		helper.ReconcileSignatureWarningsScoped(m.dbPath, warnings, upserts)
 		if err := helper.WriteScopedResources(m.dbPath, upserts, deletes, warnings); err != nil {
 			return true, allWarnings, fmt.Errorf("write topology db: %w", err)
 		}
@@ -862,12 +867,20 @@ var crossFileBodyConnTypes = []string{
 // settleSignatureWarnings runs the signature_changed lifecycle that both update
 // paths owe the warnings table, and returns the reportable subset of `reported`.
 //
-// The three steps are ordered, not interchangeable. Restoring comes first so a
-// warning re-raised by this update is judged against the signature its callers
-// were ORIGINALLY written against rather than the one the previous edit left
-// behind. Stamping then records a baseline for warnings raised here for the
-// first time. Only with both in place can discharging ask its question -- "is
-// the subject back to the shape the callers expect?" -- and get a true answer.
+// Four steps, ordered, not interchangeable. The first three are the BASELINE rule, which
+// asks whether the callee went back to the signature its callers were written against:
+// restoring comes first so a warning re-raised by this update is judged against the
+// signature its callers were ORIGINALLY written against rather than the one the previous
+// edit left behind; stamping then records a baseline for warnings raised here for the first
+// time; only with both in place can discharging get a true answer.
+//
+// The fourth is the CONTRACT rule, and it is authoritative wherever it can answer, because
+// the first three reason about the callee alone. A callee's history is only a proxy for
+// what its callers expect, and the proxy is wrong as soon as a caller changes
+// independently. The contract rule compares the recorded calls against the signature they
+// now face. It stays last, and stays additive, because it is silent by design on JavaScript
+// and on any call it could not read -- and there the baseline rule is still the best
+// available answer.
 //
 // The filter at the end is not cosmetic. A revert re-raises the warning before
 // the discharge deletes it, so without this the command that FIXED the topology
@@ -881,6 +894,11 @@ func settleSignatureWarnings(
 	helper.RestoreSignatureBaselines(topo, beforeWarnings)
 	helper.StampSignatureBaselines(topo, beforeResources)
 	helper.DischargeSignatureWarnings(topo)
+	// Authoritative, and last: the three steps above reason about what the CALLEE used to
+	// look like, which is only ever a proxy for what its callers expect. This one compares
+	// the calls themselves against the signature they now face, so where it can answer, its
+	// answer supersedes theirs.
+	helper.ReconcileSignatureWarnings(topo)
 
 	kept := reported[:0]
 	for _, w := range reported {

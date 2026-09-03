@@ -707,16 +707,20 @@ func (s *GoScanner) applyFileUpdate(gt *golang.GolangTopology, pr *ParseResult, 
 }
 
 // Removes topology warnings related to a reanalyzed function.
+//
+// signature_changed is deliberately NOT handled here any more. Dropping it because the
+// caller was re-parsed cannot tell a fix from a comment -- touching a caller silenced a
+// warning that was still true -- and the check that can tell them apart needs the recorded
+// call sites, which live on the domain resource rather than in this typed topology. The
+// manager's ClearReferrerWarningsForFile now owns that case for every language, and runs on
+// this path too (manager.go's UpdateFile and the batch resolve set), so removing it here
+// loses no coverage and removes a second, looser copy of the same rule.
 func (s *GoScanner) clearReanalyzedFunctionWarnings(gt *golang.GolangTopology, functionID golang.FunctionID) {
 	id := string(functionID)
 	for warnID, w := range gt.Warnings {
 		switch w.Kind {
 		case domain.WarnUseMissingNode, domain.WarnNodeRemoved:
 			if w.SourceID == id {
-				delete(gt.Warnings, warnID)
-			}
-		case domain.WarnSignatureChanged:
-			if w.TargetID == id {
 				delete(gt.Warnings, warnID)
 			}
 		}

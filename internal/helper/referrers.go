@@ -177,9 +177,19 @@ func ClearReferrerWarningsForFile(topo *domain.Topology, path string) {
 				delete(topo.Warnings, id)
 			}
 		case domain.WarnSignatureChanged:
-			if inFile(w.TargetID) {
-				delete(topo.Warnings, id)
+			if !inFile(w.TargetID) {
+				continue
 			}
+			// "The caller's file was re-parsed" cannot tell a fix from a comment: adding a
+			// blank line to the caller discharged the warning exactly as well as correcting
+			// the call. Where the recorded calls can be checked, check them, and keep the
+			// warning when they still do not fit. Where they cannot -- JavaScript, an
+			// argument whose type could not be read, a caller last parsed by an older build
+			// -- fall back to the permissive rule rather than hold a warning on no evidence.
+			if fits, known := CallerStillFits(topo, w.TargetID, w.SourceID); known && !fits {
+				continue
+			}
+			delete(topo.Warnings, id)
 		}
 	}
 }

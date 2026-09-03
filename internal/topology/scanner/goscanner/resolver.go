@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
+	"sort"
 	"strings"
 
+	"aracne/internal/topology/contract"
 	"aracne/internal/topology/domain"
 	"aracne/internal/topology/golang"
 )
@@ -21,6 +23,22 @@ type bodyAnalyzer struct {
 	callerID     golang.FunctionID
 	warnings     *map[string]domain.TopologyWarning
 	knownNames   map[string]bool
+
+	// currentCall is the call expression being resolved, or nil outside one. Every
+	// ConnCalls edge in this file is emitted from resolveCallExpr, directly or through
+	// resolveQualifiedCall (its only caller), so reading this in add() records the
+	// argument shape at all six emission sites without threading the node through each.
+	currentCall *ast.CallExpr
+	// callSites accumulates the encoded records, in resolution order.
+	callSites []string
+	// paramTypes maps an enclosing parameter's name to its declared type. Forwarding a
+	// parameter is the one argument form whose type is exactly known without inference.
+	paramTypes map[string]string
+	// shadowed are names the body redeclares. A local that reuses a parameter's name makes
+	// paramTypes wrong for it, and a wrong argument type is a false warning about correct
+	// code -- so the name is dropped rather than trusted. Reading a nil map is false, which
+	// is the safe direction only because paramTypes is consulted for nothing else.
+	shadowed map[string]bool
 }
 
 // Creates a bodyAnalyzer instance initialized with function parameters, receiver, and known names for code body traversal.
@@ -35,6 +53,7 @@ func newBodyAnalyzer(pr *ParseResult, gt *golang.GolangTopology, funcInput []gol
 		callerID:     callerID,
 		warnings:     &gt.Warnings,
 		knownNames:   make(map[string]bool),
+		paramTypes:   make(map[string]string),
 	}
 
 	for name := range goBuiltins {
@@ -47,6 +66,7 @@ func newBodyAnalyzer(pr *ParseResult, gt *golang.GolangTopology, funcInput []gol
 	for _, param := range funcInput {
 		if param.Name != "_" {
 			ba.knownNames[param.Name] = true
+			ba.paramTypes[param.Name] = param.Typing
 		}
 		ba.resolveVarType(param.Name, param)
 	}
@@ -171,6 +191,91 @@ func (ba *bodyAnalyzer) add(kind golang.ConnectionKind, id string) {
 	if !containsString(ids, id) {
 		ba.conn[kind] = append(ids, id)
 	}
+	if kind == golang.ConnCalls {
+		ba.recordCallSite(id)
+	}
+}
+
+// recordCallSite stores what this call passes, so a later scan can ask whether the call
+// still fits the callee rather than whether the callee merely changed.
+//
+// Deduped like the edges themselves: two textually identical calls to the same callee carry
+// the same information once. Two calls with DIFFERENT shapes are two records, and the
+// database keeps both because the shape is part of the primary key.
+func (ba *bodyAnalyzer) recordCallSite(calleeID string) {
+	if ba.currentCall == nil || calleeID == "" {
+		return
+	}
+	rec := contract.EncodeCallSite(ba.callSiteOf(calleeID, ba.currentCall))
+	if rec != "" && !containsString(ba.callSites, rec) {
+		ba.callSites = append(ba.callSites, rec)
+	}
+}
+
+// callSiteOf reads the argument shape of one call.
+func (ba *bodyAnalyzer) callSiteOf(calleeID string, call *ast.CallExpr) contract.CallSite {
+	site := contract.CallSite{
+		CalleeID: calleeID,
+		N:        len(call.Args),
+		Variadic: call.Ellipsis != token.NoPos,
+	}
+	anyKnown := false
+	types := make([]*string, 0, len(call.Args))
+	for _, arg := range call.Args {
+		tok := ba.argToken(arg)
+		if tok == "" {
+			types = append(types, nil)
+			continue
+		}
+		anyKnown = true
+		t := tok
+		types = append(types, &t)
+	}
+	if anyKnown {
+		site.Types = types
+	}
+	return site
+}
+
+// argToken names the type of one argument, or "" when it cannot be known.
+//
+// Deliberately narrow. A wrong token is a false warning about correct code, which is the
+// failure this whole mechanism exists to remove, so anything requiring real inference --
+// a call result, a field selection, an index expression, arithmetic on non-literals -- is
+// left unknown rather than guessed. What is left is still most arguments in practice:
+// literals, and parameters forwarded from the enclosing signature.
+//
+// A literal is reported as an untyped CLASS, not a type. Go's 5 is an untyped constant
+// assignable to every numeric type, so recording "int" and comparing for equality would
+// call f(5) against f(x float64) a mismatch. See contract.UntypedInt.
+func (ba *bodyAnalyzer) argToken(arg ast.Expr) string {
+	switch a := arg.(type) {
+	case *ast.BasicLit:
+		switch a.Kind {
+		case token.INT:
+			return contract.UntypedInt
+		case token.FLOAT, token.IMAG:
+			return contract.UntypedFloat
+		case token.STRING:
+			return contract.UntypedString
+		case token.CHAR:
+			return contract.UntypedRune
+		}
+	case *ast.Ident:
+		switch a.Name {
+		case "true", "false":
+			return contract.UntypedBool
+		case "nil":
+			return contract.UntypedNil
+		}
+		// A forwarded parameter carries its declared type exactly, with no inference.
+		// A local shadowing a parameter would make this wrong, so only report it when
+		// nothing in the body redeclared the name.
+		if t, ok := ba.paramTypes[a.Name]; ok && t != "" && !ba.shadowed[a.Name] {
+			return t
+		}
+	}
+	return ""
 }
 
 // Registers a deduped topology warning with its kind, target ID, and message.
@@ -200,6 +305,10 @@ func analyzeFunctionBody(body *ast.BlockStmt, pr *ParseResult, gt *golang.Golang
 	extraKnownNames = append(extraKnownNames, localTypeNames...)
 	extraKnownNames = append(extraKnownNames, localVarNames...)
 	ba := newBodyAnalyzer(pr, gt, funcInput, receiverName, receiverStruct, callerID, extraKnownNames)
+	ba.shadowed = make(map[string]bool, len(localVarNames))
+	for _, n := range localVarNames {
+		ba.shadowed[n] = true
+	}
 
 	var visit func(n ast.Node) bool
 	visit = func(n ast.Node) bool {
@@ -224,6 +333,17 @@ func analyzeFunctionBody(body *ast.BlockStmt, pr *ParseResult, gt *golang.Golang
 		return true
 	}
 	ast.Inspect(body, visit)
+
+	// Records ride out as an ordinary connection kind, which is what makes every existing
+	// mechanism apply to them unchanged: they are part of the caller's resourceSignature,
+	// so a call whose shape changed marks the caller dirty; and the per-source
+	// DELETE-then-reinsert every upsert performs rebuilds them wholesale. Sorted because
+	// the at-scale suite compares connection sets across scan modes byte-for-byte, and
+	// resolution order is not guaranteed to agree between a cold and an incremental pass.
+	if len(ba.callSites) > 0 {
+		sort.Strings(ba.callSites)
+		ba.conn[golang.ConnectionKind(contract.CallSitesConn)] = ba.callSites
+	}
 
 	return ba.conn
 }
@@ -289,6 +409,12 @@ func collectLocalVarNames(body *ast.BlockStmt) []string {
 
 // Resolves function and type calls, creating connections to called functions, structs, and named types with qualified names.
 func (ba *bodyAnalyzer) resolveCallExpr(call *ast.CallExpr) {
+	// Resolution never recurses -- ast.Inspect descends into a nested call separately and
+	// re-enters here -- so a plain assignment is enough to keep each call's arguments with
+	// its own edges.
+	ba.currentCall = call
+	defer func() { ba.currentCall = nil }()
+
 	fun := call.Fun
 	if ile, ok := fun.(*ast.IndexListExpr); ok {
 		fun = ile.X
