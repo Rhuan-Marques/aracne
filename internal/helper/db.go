@@ -83,7 +83,7 @@ func WriteDb(topo *domain.Topology, path string) error {
 		}
 		defer connStmt.Close()
 
-		warnStmt, err := tx.Prepare("INSERT INTO warnings VALUES (?, ?, ?, ?, ?)")
+		warnStmt, err := tx.Prepare("INSERT INTO warnings VALUES (?, ?, ?, ?, ?, ?)")
 		if err != nil {
 			return err
 		}
@@ -112,7 +112,7 @@ func WriteDb(topo *domain.Topology, path string) error {
 		}
 
 		for id, w := range topo.Warnings {
-			if _, err := warnStmt.Exec(id, w.SourceID, string(w.Kind), w.TargetID, w.Message); err != nil {
+			if _, err := warnStmt.Exec(id, w.SourceID, string(w.Kind), w.TargetID, w.Message, w.Baseline); err != nil {
 				return err
 			}
 		}
@@ -180,7 +180,10 @@ func createSchema(db *sql.DB) error {
 		source_id TEXT NOT NULL,
 		kind TEXT NOT NULL,
 		target_id TEXT DEFAULT '',
-		message TEXT NOT NULL
+		message TEXT NOT NULL,
+		-- The signature source_id had when this warning was raised; see
+		-- domain.TopologyWarning.Baseline. Empty for every other kind.
+		baseline TEXT DEFAULT ''
 	);
 	CREATE INDEX IF NOT EXISTS idx_warnings_source ON warnings(source_id);
 	CREATE INDEX IF NOT EXISTS idx_warnings_target ON warnings(target_id);
@@ -210,6 +213,9 @@ func createSchema(db *sql.DB) error {
 	if err := ensureResourceLanguageColumn(db); err != nil {
 		return err
 	}
+	if err := ensureWarningBaselineColumn(db); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -224,6 +230,13 @@ func createSchema(db *sql.DB) error {
 // the scanners and the source tree, neither of which is available here. It only makes the
 // database say which scheme it holds, so the next `arac scan` can notice it is behind and
 // run the remap (see IDSchemeVersion / ReadIDScheme).
+//
+// v3: adds warnings.baseline. It runs HERE rather than only in createSchema because the
+// read path selects the column: ensureSQLiteMigrated fires before any read or write of an
+// existing database, while createSchema runs only on the write paths, so a database that
+// was merely read after the upgrade would have failed on "no such column". Existing rows
+// keep an empty baseline, which reads as "raised before this was recorded" and simply never
+// discharges -- the old behaviour rather than a wrong one.
 func applyMigrations(db *sql.DB) error {
 	var version int
 	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
@@ -259,6 +272,15 @@ func applyMigrations(db *sql.DB) error {
 			}
 		}
 		if _, err := db.Exec(
+			fmt.Sprintf("PRAGMA user_version = %d", 2)); err != nil {
+			return err
+		}
+	}
+	if version < 3 {
+		if err := ensureWarningBaselineColumn(db); err != nil {
+			return err
+		}
+		if _, err := db.Exec(
 			fmt.Sprintf("PRAGMA user_version = %d", latestSchemaVersion)); err != nil {
 			return err
 		}
@@ -271,7 +293,7 @@ const maxStoredErrors = 100
 
 // latestSchemaVersion is the user_version applyMigrations brings a database up to. Bump it
 // in the same commit as a new migration step.
-const latestSchemaVersion = 2
+const latestSchemaVersion = 3
 
 // IDSchemeVersion is the resource-ID grammar this binary produces. Bump it in the same
 // commit as any change to how a scanner builds IDs, so existing databases are detected as
@@ -461,6 +483,43 @@ func ensureResourceLanguageColumn(db *sql.DB) error {
 	return err
 }
 
+// ensureWarningBaselineColumn adds warnings.baseline to a database created
+// before signature_changed recorded what it was raised against. Additive and
+// idempotent, like the language column: an existing row keeps an empty
+// baseline, which reads as "unknown" and simply never discharges -- the old
+// behaviour, rather than a wrong one.
+func ensureWarningBaselineColumn(db *sql.DB) error {
+	has, err := columnExists(db, "warnings", "baseline")
+	if err != nil || has {
+		return err
+	}
+	_, err = db.Exec("ALTER TABLE warnings ADD COLUMN baseline TEXT DEFAULT ''")
+	return err
+}
+
+// columnExists reports whether table already has the named column.
+func columnExists(db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
 // Checks if the language column exists in the resources database table.
 func resourceLanguageColumnExists(db *sql.DB) (bool, error) {
 	rows, err := db.Query("PRAGMA table_info(resources)")
@@ -644,14 +703,14 @@ func ReadDb(path string) (*domain.Topology, error) {
 		}
 		connRows.Close()
 
-		warnRows, err := db.Query("SELECT id, source_id, kind, target_id, message FROM warnings")
+		warnRows, err := db.Query("SELECT id, source_id, kind, target_id, message, baseline FROM warnings")
 		if err != nil {
 			return err
 		}
 		defer warnRows.Close()
 		for warnRows.Next() {
-			var id, sourceID, kind, targetID, message string
-			if err := warnRows.Scan(&id, &sourceID, &kind, &targetID, &message); err != nil {
+			var id, sourceID, kind, targetID, message, baseline string
+			if err := warnRows.Scan(&id, &sourceID, &kind, &targetID, &message, &baseline); err != nil {
 				return err
 			}
 			read.Warnings[id] = domain.TopologyWarning{
@@ -660,6 +719,7 @@ func ReadDb(path string) (*domain.Topology, error) {
 				Kind:     domain.WarningKind(kind),
 				TargetID: targetID,
 				Message:  message,
+				Baseline: baseline,
 			}
 		}
 		if err := warnRows.Err(); err != nil {

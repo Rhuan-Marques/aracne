@@ -119,13 +119,13 @@ func WriteScopedResources(dbPath string, upserts []domain.Resource, deletes []st
 		if _, err := tx.Exec("DELETE FROM warnings"); err != nil {
 			return err
 		}
-		warnStmt, err := tx.Prepare("INSERT INTO warnings VALUES (?, ?, ?, ?, ?)")
+		warnStmt, err := tx.Prepare("INSERT INTO warnings VALUES (?, ?, ?, ?, ?, ?)")
 		if err != nil {
 			return err
 		}
 		defer warnStmt.Close()
 		for id, w := range warnings {
-			if _, err := warnStmt.Exec(id, w.SourceID, string(w.Kind), w.TargetID, w.Message); err != nil {
+			if _, err := warnStmt.Exec(id, w.SourceID, string(w.Kind), w.TargetID, w.Message, w.Baseline); err != nil {
 				return err
 			}
 		}
@@ -231,13 +231,13 @@ func WriteIncremental(dbPath string, topo *domain.Topology, upserts []domain.Res
 		if _, err := tx.Exec("DELETE FROM warnings"); err != nil {
 			return err
 		}
-		warnStmt, err := tx.Prepare("INSERT INTO warnings VALUES (?, ?, ?, ?, ?)")
+		warnStmt, err := tx.Prepare("INSERT INTO warnings VALUES (?, ?, ?, ?, ?, ?)")
 		if err != nil {
 			return err
 		}
 		defer warnStmt.Close()
 		for id, w := range topo.Warnings {
-			if _, err := warnStmt.Exec(id, w.SourceID, string(w.Kind), w.TargetID, w.Message); err != nil {
+			if _, err := warnStmt.Exec(id, w.SourceID, string(w.Kind), w.TargetID, w.Message, w.Baseline); err != nil {
 				return err
 			}
 		}

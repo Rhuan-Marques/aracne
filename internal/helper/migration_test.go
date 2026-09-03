@@ -83,3 +83,57 @@ func TestApplyMigrationsIsVersionGated(t *testing.T) {
 		t.Fatalf("kind = %q, want %q (version gate should skip the second run)", kind, "type")
 	}
 }
+
+// Seeds a database with the pre-baseline warnings table, as a build before the
+// signature-discharge fix would have written it.
+func seedPreBaselineWarningsDB(t *testing.T, path string) {
+	t.Helper()
+	db, err := openSQLite(path, true)
+	if err != nil {
+		t.Fatalf("openSQLite: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`
+		CREATE TABLE warnings (
+			id TEXT PRIMARY KEY,
+			source_id TEXT NOT NULL,
+			kind TEXT NOT NULL,
+			target_id TEXT DEFAULT '',
+			message TEXT NOT NULL
+		);
+		INSERT INTO warnings VALUES ('w1', 'p.F', 'signature_changed', 'p.Caller', 'verify p.Caller');
+		PRAGMA user_version = 2;
+	`); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+}
+
+// TestApplyMigrationsAddsWarningBaseline pins the column onto the READ path.
+// createSchema only runs when something writes, so a database that was upgraded
+// and then merely read -- `arac read`, `arac warnings list`, the guard's
+// pre-tool scan finding nothing to do -- would have failed on "no such column:
+// baseline" if the column were added there alone.
+func TestApplyMigrationsAddsWarningBaseline(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "topology.db")
+	seedPreBaselineWarningsDB(t, path)
+
+	var baseline string
+	var version int
+	if err := withSQLiteRead(path, func(db *sql.DB) error {
+		if err := db.QueryRow(`SELECT baseline FROM warnings WHERE id = 'w1'`).Scan(&baseline); err != nil {
+			return err
+		}
+		return db.QueryRow(`PRAGMA user_version`).Scan(&version)
+	}); err != nil {
+		t.Fatalf("read after migration: %v", err)
+	}
+	// An existing warning has no recorded baseline, and must not acquire a
+	// guessed one: empty never discharges, which is exactly how it behaved
+	// before the column existed.
+	if baseline != "" {
+		t.Errorf("pre-existing warning got baseline %q, want empty", baseline)
+	}
+	if version != latestSchemaVersion {
+		t.Errorf("user_version = %d, want %d", version, latestSchemaVersion)
+	}
+}

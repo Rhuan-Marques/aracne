@@ -15,6 +15,24 @@ type TopologyWarning struct {
 	Kind     WarningKind
 	TargetID string
 	Message  string
+	// Baseline is the signature SourceID had at the moment this warning was
+	// raised -- the shape TargetID was written against, in the language-agnostic
+	// form SignatureBaseline produces. Only signature_changed sets it.
+	//
+	// WHY IT IS STORED AND NOT RECOMPUTED. A signature_changed warning is
+	// discharged by two different events, and only one of them was ever
+	// detectable. Re-parsing the CALLER answers it (that is
+	// ClearReferrerWarningsForFile, keyed on TargetID). Putting the DEFINITION
+	// back the way it was answers it too, and nothing could see that: the
+	// database holds the current signature and the previous one is overwritten
+	// on every scan, so after a revert there is nothing left to compare against
+	// and the warning outlived the change that caused it. Recording the shape
+	// the callers were written against makes the revert a string comparison.
+	//
+	// It survives repeated edits deliberately: a definition changed A->B->C
+	// keeps Baseline A, because A is still what the callers were written
+	// against. See PreserveSignatureBaselines.
+	Baseline string
 }
 
 // Graph of code resources indexed by ID, with language tracking, warnings, and errors for a codebase root.

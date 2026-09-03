@@ -68,8 +68,10 @@ func TestMigrationV2StampsExistingDatabaseAsLegacyScheme(t *testing.T) {
 	if _, _, err := ReadIDScheme(path); err != nil { // triggers ensureSQLiteMigrated
 		t.Fatalf("ReadIDScheme: %v", err)
 	}
-	if got := userVersion(t, path); got != 2 {
-		t.Fatalf("want user_version 2 after migration, got %d", got)
+	// Every migration runs, not just v2, so this tracks the constant rather than
+	// pinning the number v2 happened to leave behind.
+	if got := userVersion(t, path); got != latestSchemaVersion {
+		t.Fatalf("want user_version %d after migration, got %d", latestSchemaVersion, got)
 	}
 	scheme, stamped, err := ReadIDScheme(path)
 	if err != nil {

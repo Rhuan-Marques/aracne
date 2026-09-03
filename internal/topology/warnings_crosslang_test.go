@@ -829,3 +829,12 @@ func Untouched() int { return 7 }
 		t.Skip("the edit fell back to the full path (ARAC_NO_PARTIAL?), so the scoped orphan sweep was not exercised")
 	}
 }
+
+// writeFile overwrites the case's target file with arbitrary content.
+func (c crossLangCase) writeFile(t *testing.T, dir, content string) {
+	t.Helper()
+	p := filepath.Join(dir, filepath.FromSlash(c.target))
+	if err := os.WriteFile(p, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+}

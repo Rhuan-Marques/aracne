@@ -301,14 +301,14 @@ func ReadReverseConnections(dbPath string, targetIDs []string, connType string) 
 func ReadAllWarnings(dbPath string) (map[string]domain.TopologyWarning, error) {
 	out := make(map[string]domain.TopologyWarning)
 	err := withSQLiteRead(dbPath, func(db *sql.DB) error {
-		rows, err := db.Query("SELECT id, source_id, kind, target_id, message FROM warnings")
+		rows, err := db.Query("SELECT id, source_id, kind, target_id, message, baseline FROM warnings")
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var id, sourceID, kind, targetID, message string
-			if err := rows.Scan(&id, &sourceID, &kind, &targetID, &message); err != nil {
+			var id, sourceID, kind, targetID, message, baseline string
+			if err := rows.Scan(&id, &sourceID, &kind, &targetID, &message, &baseline); err != nil {
 				return err
 			}
 			out[id] = domain.TopologyWarning{
@@ -317,6 +317,7 @@ func ReadAllWarnings(dbPath string) (map[string]domain.TopologyWarning, error) {
 				Kind:     domain.WarningKind(kind),
 				TargetID: targetID,
 				Message:  message,
+				Baseline: baseline,
 			}
 		}
 		return rows.Err()

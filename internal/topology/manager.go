@@ -181,6 +181,10 @@ func (m *TopologyManager) IncrementalScan(root string, reg *scanner.Registry) ([
 		beforeResources[id] = res
 		beforeSigKeys[id] = resourceSignatureKey(res)
 	}
+	// Needed to keep a re-raised signature_changed warning pointing at the
+	// signature its callers were originally written against; see
+	// helper.RestoreSignatureBaselines.
+	beforeWarnings := cloneWarnings(topo.Warnings)
 
 	var allWarnings []domain.TopologyWarning
 
@@ -297,6 +301,7 @@ func (m *TopologyManager) IncrementalScan(root string, reg *scanner.Registry) ([
 	helper.ResolveReferrerWarnings(topo)
 
 	helper.CleanupOrphanedWarnings(topo)
+	allWarnings = settleSignatureWarnings(topo, beforeResources, beforeWarnings, allWarnings)
 	normalizeTopologyLanguages(topo)
 
 	upserts, deletes := helper.DiffResources(beforeSigs, topo.Resources)
@@ -634,6 +639,11 @@ func (m *TopologyManager) UpdateFile(path string, reg *scanner.Registry) ([]doma
 		return nil, fmt.Errorf("read topology db: %w", err)
 	}
 	beforeSigs := helper.ResourceSignatures(topo.Resources)
+	beforeResources := make(map[string]domain.Resource, len(topo.Resources))
+	for id, res := range topo.Resources {
+		beforeResources[id] = res
+	}
+	beforeWarnings := cloneWarnings(topo.Warnings)
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return nil, err
@@ -644,6 +654,7 @@ func (m *TopologyManager) UpdateFile(path string, reg *scanner.Registry) ([]doma
 			topo.Warnings[w.ID] = w
 		}
 		helper.CleanupOrphanedWarnings(topo)
+		warnings = settleSignatureWarnings(topo, beforeResources, beforeWarnings, warnings)
 		upserts, deletes := helper.DiffResources(beforeSigs, topo.Resources)
 		if err := helper.WriteIncremental(m.dbPath, topo, upserts, deletes); err != nil {
 			return nil, fmt.Errorf("write topology db: %w", err)
@@ -687,8 +698,6 @@ func (m *TopologyManager) UpdateFile(path string, reg *scanner.Registry) ([]doma
 	if !helper.IsSourceFile(topo.Root, absPath, langScanner.Name()) {
 		return finish(helper.RemoveFileResources(topo, absPath))
 	}
-
-	beforeWarnings := cloneWarnings(topo.Warnings)
 
 	// Only goscanner writes into topo.Warnings directly; every other scanner
 	// RETURNS its warnings. Dropping this return value is why an edit to a JS,
@@ -848,6 +857,47 @@ var crossFileBodyConnTypes = []string{
 	"uses_class",
 	"uses_interface",
 	"uses_named_type",
+}
+
+// settleSignatureWarnings runs the signature_changed lifecycle that both update
+// paths owe the warnings table, and returns the reportable subset of `reported`.
+//
+// The three steps are ordered, not interchangeable. Restoring comes first so a
+// warning re-raised by this update is judged against the signature its callers
+// were ORIGINALLY written against rather than the one the previous edit left
+// behind. Stamping then records a baseline for warnings raised here for the
+// first time. Only with both in place can discharging ask its question -- "is
+// the subject back to the shape the callers expect?" -- and get a true answer.
+//
+// The filter at the end is not cosmetic. A revert re-raises the warning before
+// the discharge deletes it, so without this the command that FIXED the topology
+// would print the full pile of warnings it had just cleared from the database.
+func settleSignatureWarnings(
+	topo *domain.Topology,
+	beforeResources map[string]domain.Resource,
+	beforeWarnings map[string]domain.TopologyWarning,
+	reported []domain.TopologyWarning,
+) []domain.TopologyWarning {
+	helper.RestoreSignatureBaselines(topo, beforeWarnings)
+	helper.StampSignatureBaselines(topo, beforeResources)
+	helper.DischargeSignatureWarnings(topo)
+
+	kept := reported[:0]
+	for _, w := range reported {
+		if w.Kind != domain.WarnSignatureChanged {
+			kept = append(kept, w)
+			continue
+		}
+		// Report the STORED warning, not the scanner's copy of it: the baseline
+		// is stamped on the table, and a caller handed a copy without one would
+		// be told the warning can never discharge when it can.
+		stored, live := topo.Warnings[w.ID]
+		if !live {
+			continue
+		}
+		kept = append(kept, stored)
+	}
+	return kept
 }
 
 // resourceSignatureKey returns a fingerprint of the parts of a resource whose

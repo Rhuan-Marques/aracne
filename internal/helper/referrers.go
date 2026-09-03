@@ -1,8 +1,10 @@
 package helper
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
 	"aracne/internal/topology/domain"
 )
@@ -308,4 +310,162 @@ func ResolveReferrerWarnings(topo *domain.Topology) {
 		referrer.Connections[connType] = append(referrer.Connections[connType], w.TargetID)
 		topo.Resources[w.SourceID] = referrer
 	}
+}
+
+// SignatureBaseline fingerprints the part of a resource that a CALLER is written
+// against: its name and its declared input/output types.
+//
+// Language-agnostic on purpose. Every scanner already lands its typed parameter
+// and result lists in Properties["input"]/["output"], so the shape a caller
+// depends on is readable from the domain resource without asking the scanner
+// that produced it. That is what lets one rule discharge Go, JavaScript,
+// TypeScript, Python and Rust warnings instead of five near-copies.
+//
+// The value is CANONICAL, not just deterministic, and that is the whole
+// difficulty. The same function reaches this code in two different Go shapes: a
+// freshly parsed resource carries typed structs, while one loaded back from
+// SQLite carries the JSON round-trip of those structs -- []any of
+// map[string]any. json.Marshal writes a struct in field order and a map in
+// sorted-key order, so marshalling the raw value would give the same function
+// two different fingerprints depending on where it came from, and a baseline
+// stored from one shape could never match a signature computed from the other.
+// Re-marshalling through `any` puts both through the map path, so the
+// comparison is between signatures rather than between provenances.
+func SignatureBaseline(res domain.Resource) string {
+	var b strings.Builder
+	b.WriteString(res.Name)
+	b.WriteByte('|')
+	b.WriteString(canonicalJSON(res.Properties["input"]))
+	b.WriteByte('|')
+	b.WriteString(canonicalJSON(res.Properties["output"]))
+	return b.String()
+}
+
+// canonicalJSON renders v the same way whichever Go shape it arrives in.
+//
+// "No parameters" has four spellings on the way through here -- the key absent,
+// a Go nil, a nil slice (which marshals to `null`) and an empty slice (`[]`) --
+// and which one a resource carries says only where it was built, not what the
+// function looks like. A scanner emits a nil slice while the same resource read
+// back from SQLite has the key missing entirely, so leaving them distinct made
+// a parameterless function fail to match its own baseline.
+func canonicalJSON(v any) string {
+	if v == nil {
+		return ""
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	var generic any
+	if err := json.Unmarshal(raw, &generic); err != nil {
+		return string(raw)
+	}
+	switch g := generic.(type) {
+	case nil:
+		return ""
+	case []any:
+		if len(g) == 0 {
+			return ""
+		}
+	case map[string]any:
+		if len(g) == 0 {
+			return ""
+		}
+	}
+	out, err := json.Marshal(generic)
+	if err != nil {
+		return string(raw)
+	}
+	return string(out)
+}
+
+// StampSignatureBaselines records, on every signature_changed warning that does
+// not have one, the signature its subject had BEFORE this update -- which is the
+// signature its callers were written against.
+//
+// `before` is the pre-update resource set. A warning whose subject is not in it
+// is left unstamped rather than stamped with the current signature: an empty
+// baseline never discharges, which is the old behaviour, whereas a wrong one
+// would discharge a warning that is still true.
+//
+// Warnings that ALREADY carry a baseline keep it. See PreserveSignatureBaselines
+// for why that matters.
+func StampSignatureBaselines(topo *domain.Topology, before map[string]domain.Resource) {
+	for id, w := range topo.Warnings {
+		if w.Kind != domain.WarnSignatureChanged || w.Baseline != "" {
+			continue
+		}
+		prev, ok := before[w.SourceID]
+		if !ok {
+			continue
+		}
+		base := SignatureBaseline(prev)
+		if base == "" {
+			continue
+		}
+		w.Baseline = base
+		topo.Warnings[id] = w
+	}
+}
+
+// RestoreSignatureBaselines puts back a baseline that this update overwrote,
+// by re-raising a warning that was already in the table under the same id.
+//
+// A definition edited twice raises the same src@kind@tgt id twice, and the
+// second raise knows only the signature left by the first edit. Letting it win
+// would move the target: the callers are still written against the ORIGINAL
+// signature, so a definition taken A->B->C and then put back to A has to
+// discharge, and it only can if the recorded baseline is still A rather than B.
+//
+// Keyed on the topology rather than on a warning slice because the producers
+// disagree about how they deliver: goscanner assigns into the warnings map
+// itself while every other scanner returns a slice the manager merges. Reading
+// the finished map covers both, and cannot be bypassed by a scanner that starts
+// writing directly tomorrow.
+func RestoreSignatureBaselines(topo *domain.Topology, before map[string]domain.TopologyWarning) {
+	if len(before) == 0 {
+		return
+	}
+	for id, w := range topo.Warnings {
+		if w.Kind != domain.WarnSignatureChanged || w.Baseline != "" {
+			continue
+		}
+		prev, ok := before[id]
+		if !ok || prev.Kind != domain.WarnSignatureChanged || prev.Baseline == "" {
+			continue
+		}
+		w.Baseline = prev.Baseline
+		topo.Warnings[id] = w
+	}
+}
+
+// DischargeSignatureWarnings drops every signature_changed warning whose subject
+// is back to the signature the warning was raised against, and reports how many
+// it dropped.
+//
+// This is the definition-side counterpart to ClearReferrerWarningsForFile, and
+// until it existed there was none: a signature_changed warning could only be
+// answered by re-parsing the CALLER or by the caller disappearing. Undoing the
+// change answered nothing, so a definition edited and then reverted left one
+// warning per caller in the database permanently, and only a full `arac scan
+// --all` -- which rebuilds the table from nothing -- cleared them. On a
+// widely-called symbol that is hundreds of rows telling an agent to go verify
+// callers that were never broken.
+func DischargeSignatureWarnings(topo *domain.Topology) int {
+	dropped := 0
+	for id, w := range topo.Warnings {
+		if w.Kind != domain.WarnSignatureChanged || w.Baseline == "" {
+			continue
+		}
+		res, ok := topo.Resources[w.SourceID]
+		if !ok {
+			continue // CleanupOrphanedWarnings owns the vanished-subject case
+		}
+		if SignatureBaseline(res) == w.Baseline {
+			delete(topo.Warnings, id)
+			dropped++
+		}
+	}
+	return dropped
 }
