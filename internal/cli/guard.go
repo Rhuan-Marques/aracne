@@ -143,9 +143,16 @@ func runClaudeGuardHook(input io.Reader, output io.Writer) {
 			if shellReadWouldHaveBeenServed(guardLoggedCommand(event.ToolInput), dbPath, cfg) {
 				parts = append(parts, toolspec.ShellReadNudge)
 			}
-		case !cfg.InterceptReads():
+		case cfg.EffectiveMode() == helper.ModeMCP:
 			// ModeMCP: a Bash read is refused rather than rewritten, and the refusal already
 			// names the tool, so this is the fallback for the ones blocked_tools let through.
+			//
+			// Tested on the MODE, not on `!InterceptReads()`. That predicate is also true in
+			// ModeAracneRead, which used to be unreachable here only because the case above it
+			// always matched that mode. Once `terminal.shell_read_nudge: false` made the case
+			// above skippable, aracne_read fell through to this branch and printed the MCP
+			// pointer instead of nothing -- so a run that asked for no nudge silently got a
+			// different one.
 			if msg := warningMessage(keys, !blocked[toolspec.ReadToolName], cfg.Surface()); msg != "" {
 				parts = append(parts, msg)
 			}

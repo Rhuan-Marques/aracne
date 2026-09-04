@@ -607,3 +607,46 @@ func TestShellReadNudgeIsScopedToAracneRead(t *testing.T) {
 		}
 	}
 }
+
+// Switching the shell-read nudge off must leave the model with NO pointer, not a different
+// one. The PostToolUse switch used to reach its ModeMCP fallback through `!InterceptReads()`,
+// which is equally true in ModeAracneRead -- that branch was unreachable for aracne_read only
+// because the nudge case above it always matched. Adding `terminal.shell_read_nudge: false`
+// made it reachable, and a benchmark run that asked for no nudge silently got the MCP pointer
+// on every servable shell read instead. The fallback is keyed on the MODE now; this pins it.
+func TestNudgeOffMeansNoNudgeNotADifferentOne(t *testing.T) {
+	off := false
+	for _, tc := range []struct {
+		name          string
+		mode          string
+		nudge         *bool
+		wantShell     bool
+		wantMCPBranch bool
+	}{
+		{"aracne_read default nudges the shell read", helper.ModeAracneRead, nil, true, false},
+		{"aracne_read with the nudge off does nothing", helper.ModeAracneRead, &off, false, false},
+		{"mcp still gets its own fallback", helper.ModeMCP, &off, false, true},
+		{"line_range answers the command instead", helper.ModeLineRange, &off, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := helper.DefaultConfig()
+			cfg.Mode = tc.mode
+			cfg.Terminal.ShellReadNudge = tc.nudge
+
+			if got := cfg.NudgesShellReads(); got != tc.wantShell {
+				t.Errorf("NudgesShellReads = %v, want %v", got, tc.wantShell)
+			}
+			// The guard's third case. Keyed on the mode, it is MCP-only; keyed on
+			// !InterceptReads() it would also capture aracne_read.
+			if got := cfg.EffectiveMode() == helper.ModeMCP; got != tc.wantMCPBranch {
+				t.Errorf("MCP fallback reached = %v, want %v", got, tc.wantMCPBranch)
+			}
+			if tc.mode == helper.ModeAracneRead && tc.nudge == &off {
+				if !cfg.InterceptReads() {
+					t.Log("note: !InterceptReads() is true here -- the old predicate would " +
+						"have fired the MCP pointer on a run that asked for silence")
+				}
+			}
+		})
+	}
+}

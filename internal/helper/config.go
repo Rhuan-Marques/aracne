@@ -386,6 +386,16 @@ type TerminalSection struct {
 	// question, and an answer disproportionate to it is not a cheaper read -- it is a way to
 	// spend the context window on one `head -1`. 0 or negative disables the check.
 	MaxOverserve *int `json:"max_overserve"`
+
+	// ShellReadNudge controls the one-line pointer printed after a shell read that
+	// ModeAracneRead leaves alone. Nil means on, which is the behaviour that shipped.
+	//
+	// It exists to be turned OFF, because whether the line earns its tokens is an empirical
+	// question and the answer so far is no: across three benchmark runs the model issued
+	// hundreds of shell reads, the nudge fired on the servable ones, and `arac read` was called
+	// exactly zero times. A knob makes the with/without comparison a config change rather than
+	// a build, which is the only way that question gets settled.
+	ShellReadNudge *bool `json:"shell_read_nudge"`
 }
 
 // Root configuration struct holding scan, read, scanner, descriptions, LLM, and viz settings.
@@ -1273,7 +1283,14 @@ func (c *Config) GuardBlocksNativeReads() bool {
 // nothing in the exchange tells it `arac read` exists. The intercepting modes already
 // answered the command, and ModeMCP refuses it with a message that names the tool -- in both,
 // this line would be spent explaining something the model just received.
-func (c *Config) NudgesShellReads() bool { return c.EffectiveMode() == ModeAracneRead }
+// `terminal.shell_read_nudge: false` switches it off without leaving the mode, so the nudge can
+// be measured against its own absence.
+func (c *Config) NudgesShellReads() bool {
+	if c.EffectiveMode() != ModeAracneRead {
+		return false
+	}
+	return c.Terminal.ShellReadNudge == nil || *c.Terminal.ShellReadNudge
+}
 
 // BlockableInMode filters an operator's blocked_tools down to the ones this mode may actually
 // refuse.
