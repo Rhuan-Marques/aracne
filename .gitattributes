@@ -1,0 +1,12 @@
+* text=auto eol=lf
+
+# Hand-written, but large enough that GitHub reads the repo as a JavaScript
+# project without this. Aracne is Go.
+internal/viz/static/app.js linguist-generated=true
+internal/viz/static/styles.css linguist-generated=true
+
+# The multi-language corpus exists to be parsed, not to be reviewed as source.
+testing_ground/** linguist-vendored=true
+
+*.png binary
+*.svg binary

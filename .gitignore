@@ -1,19 +1,13 @@
-# If you prefer the allow list template instead of the deny list, see community template:
-# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
-#
 # Binaries for programs and plugins
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
-*.log
-*bin/
-.hidden/
+/bin/
 node_modules/
 dist/
 build/
-.env
 
 # Test binary, built with `go test -c`
 *.test
@@ -24,28 +18,19 @@ coverage.*
 *.coverprofile
 profile.cov
 
-# Dependency directories (remove the comment below to include it)
-# vendor/
-
 # Go workspace file
 go.work
 go.work.sum
 
-# env file
-.env
+# Logs, local databases, secrets
+*.log
 *.db
+.env
 
-# Easier to use in cloud environment claude code
-# Aracne artifacts 
-.aracne/ 
-*.venv/
-*.venva/
+# Aracne's own per-project state, written into whatever repo it scans
+.aracne/
 
-# Editor/IDE
-# .idea/
-# .vscode/
-.opencode/
+# Editor / harness state. `arac init` regenerates both from .aracne/config.json.
 .claude/
-go.sum
-.rtk/*
-bench/report_*.json
+.opencode/
+.rtk/

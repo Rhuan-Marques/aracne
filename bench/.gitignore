@@ -1,9 +1,16 @@
-results/
-work/
-repos/
+# Checked-out task repos, run outputs and sampled task manifests. Large and reproducible:
+# `run_benchmark.py sample|prepare` rebuilds them.
 fixtures/
+repos/
+results/
 samples/
-.venv/
+work/
+report_*.json
+
+# Local run config (start from config.example.yaml) and the venv.
 config.yaml
+.venv/
+
 __pycache__/
 *.pyc
+.pytest_cache/
