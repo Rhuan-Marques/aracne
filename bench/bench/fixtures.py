@@ -37,7 +37,17 @@ ARACNE_ARTIFACTS = [".aracne", ".claude", ".opencode", ".mcp.json", "CLAUDE.md",
 # --------------------------------------------------------------------------- #
 
 def fixture_key(task) -> str:
+    # SWE-Atlas trees are copied out of a per-task Docker image rather than cloned, and several
+    # tasks in one repo share a base commit while being DIFFERENT trees -- so repo@commit, the
+    # identity for every cloned source, would collapse them onto one directory. The task key
+    # already carries repo + task id, so it is the identity here.
+    if is_atlas_task(task):
+        return task.key
     return f"{task.repo_slug()}@{task.base_commit[:12]}"
+
+
+def is_atlas_task(task) -> bool:
+    return str(getattr(task, "source", "")).startswith("swe_atlas")
 
 
 def fixture_dir(fixtures_root: Path, task) -> Path:
@@ -393,7 +403,12 @@ def freeze(task, cfg: dict, fixtures_root) -> dict:
 
     # THE fix for poisoned fixtures. What gets frozen here is what every run of this instance
     # will be handed, so it must describe base_commit and nothing else. See source_drift.
-    drift = ensure_base_commit(task, cfg, wt, "freeze")
+    #
+    # A SWE-Atlas fixture is exempt because it is not a checkout of base_commit at all: the
+    # tree was copied out of the task's own image and committed as a single squashed commit,
+    # which is deliberately the tree the verifier diffs against. There is no upstream sha to
+    # reconcile it with, and demanding one would reject every atlas fixture.
+    drift = {} if is_atlas_task(task) else ensure_base_commit(task, cfg, wt, "freeze")
 
     described, total, cov = description_coverage(wt / ".aracne" / "topology.db", _gen_kinds(cfg))
 
@@ -553,7 +568,7 @@ def restore(task, cfg: dict, fixtures_root) -> Path:
     if not snap.exists():
         raise RuntimeError(f"no snapshot for {fixture_key(task)}; freeze first")
 
-    run_git(["reset", "--hard", task.base_commit], wt)
+    run_git(["reset", "--hard", "HEAD" if is_atlas_task(task) else task.base_commit], wt)
     run_git(["clean", "-ffdxq"], wt, check=False)
 
     for p in ARACNE_ARTIFACTS:
@@ -581,6 +596,55 @@ def ensure_snapshot(task, cfg: dict, fixtures_root) -> dict:
     if not snapshot_path(fixtures_root, task).exists():
         return freeze(task, cfg, fixtures_root)
     return read_meta(task, fixtures_root) or freeze(task, cfg, fixtures_root)
+
+
+def topology_is_relocated(worktree) -> str:
+    """Report a topology whose file ids point somewhere other than `worktree`, else "".
+
+    WHY THIS CHECK EXISTS. A `file` resource's id is the ABSOLUTE path it was scanned at
+    (see any fixture's topology.db). Move or copy a prepared fixture and every file id still
+    names the old location, so the guard's `namesAnIndexedFile` matches nothing: reads stop
+    being intercepted, searches stop being annotated, and the run silently measures a plain
+    Claude Code with an idle sidecar. Nothing errors -- the failure looks exactly like a model
+    that chose not to use the tools, which is the most expensive way to be wrong here.
+
+    Costs one indexed query against one row, so it is cheap enough to run before every cell.
+    """
+    db = Path(worktree) / ".aracne" / "topology.db"
+    if not db.exists():
+        return ""
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            row = con.execute("SELECT id FROM resources WHERE kind='file' LIMIT 1").fetchone()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return ""
+    if not row or not row[0]:
+        return ""
+    scanned_at = str(row[0])
+    root = str(Path(worktree).resolve())
+    if scanned_at.startswith(root + "/") or scanned_at == root:
+        return ""
+    return scanned_at
+
+
+def runtime_env(task, fixtures_root) -> dict:
+    """Environment that pins this fixture's build to the toolchain its verifier uses.
+
+    Written by atlas_prepare.py from the task image itself. Empty for every non-atlas source,
+    and empty for an atlas fixture whose probe failed -- in both cases the agent runs with the
+    host toolchain, which is the behaviour that predates this.
+    """
+    path = fixture_dir(Path(fixtures_root), task) / "runtime_env.json"
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
 
 
 def read_meta(task, fixtures_root) -> dict | None:

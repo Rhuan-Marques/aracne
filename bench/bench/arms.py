@@ -16,11 +16,12 @@ from __future__ import annotations
 
 import contextlib
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
 from . import fixtures
-from .gitutil import clone_at, ensure_repo_cache
+from .gitutil import clone_at, ensure_repo_cache, run_git
 from .fixtures import ARACNE_ARTIFACTS  # noqa: F401 - re-exported for back-compat
 
 ARMS = ("baseline", "aracne", "aracne-open", "aracne-noprefer")
@@ -86,6 +87,14 @@ def prepare_workdir(arm: str, task, cfg: dict, repos_dir: Path, ephemeral_dir: P
     Raises RuntimeError on a coverage-guardrail violation (so the caller can record it as
     a setup error and move on).
     """
+    # SWE-Atlas has no clone URL: the tree lives in the task's own Docker image, and the
+    # verifier diffs the agent's work against THAT tree. Cloning the upstream repository at the
+    # base commit would hand the agent a different starting point than the one it is scored on
+    # -- images carry vendored modules, generated files and a squashed history. So both arms
+    # start from the copy atlas_prepare.py extracted from the image.
+    if arm == "baseline" and fixtures.is_atlas_task(task):
+        return atlas_baseline_workdir(task, Path(fixtures_root), Path(ephemeral_dir))
+
     if arm == "baseline":
         cache = ensure_repo_cache(task, Path(repos_dir))
         clone_at(task, cache, Path(ephemeral_dir), task.base_commit)
@@ -105,6 +114,15 @@ def prepare_workdir(arm: str, task, cfg: dict, repos_dir: Path, ephemeral_dir: P
             f"or pass --allow-cold"
         )
     wt = fixtures.restore(task, cfg, fixtures_root)
+    # A topology scanned somewhere else is worse than no topology: every read passes through,
+    # every search goes unannotated, and the arm reports as a normal run. Fail loudly instead.
+    stale = fixtures.topology_is_relocated(wt)
+    if stale:
+        raise RuntimeError(
+            f"{task.key}: the topology was scanned at a different path, so no file in it can "
+            f"be matched.\n  worktree: {wt}\n  scanned : {stale}\n"
+            f"Re-scan in place: rm {wt}/.aracne/topology.db {wt}/.aracne/file_manifest.json "
+            f"&& (cd {wt} && arac scan --all), then re-freeze.")
     # Optionally overlay a benchmark-selected .aracne/config.json for this run (aracne arm only),
     # then regenerate the contract so what the agent is TOLD matches the tools it is GIVEN --
     # the overlay can rename the read tool and change the native-tool policy.
@@ -113,6 +131,40 @@ def prepare_workdir(arm: str, task, cfg: dict, repos_dir: Path, ephemeral_dir: P
         fixtures.apply_aracne_config(wt, overlay)
         fixtures.sync_agent_contract(wt, cfg.get("arac_bin", "arac"))
     return wt
+
+
+def atlas_baseline_workdir(task, fixtures_root: Path, ephemeral: Path) -> Path:
+    """The control's copy of a SWE-Atlas tree: the prepared fixture, minus every aracne file.
+
+    Copied and stripped rather than cloned. The upstream repository at base_commit is NOT the
+    same tree -- the image carries vendored modules, generated files and a squashed history,
+    and the verifier diffs the agent's work against the image's tree, not GitHub's. Copying is
+    therefore what keeps the two arms starting from byte-identical source, so the only
+    difference between them is whether aracne is present.
+    """
+    canonical = fixtures.worktree_path(Path(fixtures_root), task)
+    if not (canonical / ".aracne" / "topology.db").exists():
+        raise RuntimeError(
+            f"no prepared SWE-Atlas fixture at {canonical}; run:\n"
+            f"  python bench/atlas_prepare.py --manifest <manifest.jsonl>")
+
+    if ephemeral.exists():
+        shutil.rmtree(ephemeral, ignore_errors=True)
+    shutil.copytree(canonical, ephemeral, symlinks=True)
+    run_git(["reset", "--hard", "--quiet", "HEAD"], ephemeral, check=False)
+    run_git(["clean", "-ffdxq"], ephemeral, check=False)
+    for artifact in fixtures.ARACNE_ARTIFACTS:
+        target = ephemeral / artifact
+        if target.is_dir():
+            shutil.rmtree(target, ignore_errors=True)
+        elif target.exists():
+            target.unlink()
+    # Commit the removal so the control's own diff is against a tree that never had aracne in
+    # it; otherwise every baseline patch would open by deleting a topology database.
+    run_git(["add", "-A"], ephemeral, check=False)
+    run_git(["-c", "user.email=bench@aracne.local", "-c", "user.name=aracne bench",
+             "commit", "-q", "-m", "baseline: no aracne"], ephemeral, check=False)
+    return ephemeral
 
 
 @contextlib.contextmanager

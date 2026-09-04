@@ -1,0 +1,50 @@
+# SWE-Atlas refactors, aracne_read + nudge, against an unchanged control.
+#
+# WHY THIS RUN EXISTS. Every earlier run was scored on BUG FIXES, and a bug fix changes no
+# declarations -- across the nine hard9 tasks, every gold patch removed exactly zero. The
+# warning channel, the one capability with no substitute, therefore could not fire, and three
+# runs measured the product with its most distinctive feature switched off by the task set.
+#
+# These twelve tasks are the opposite shape. Each one's reference solution REMOVES at least ten
+# declarations (127, 31, 25, 25, 24, 22, 18, 14, 12, 12, 11, 11), and removals are the half that
+# strands callers -- verified, not assumed: a 10-turn smoke agent added a whole new package of
+# declarations and raised zero warnings, because nothing pointed at them yet.
+#
+# 100 turns because the question is turns, and because ten was measurably not enough: the smoke
+# agent spent thirteen of fifteen tool calls reading and never reached the phase where old
+# implementations come out. A cap that binds does not just lose precision, it loses the pair --
+# a capped cell is excluded from the paired analysis entirely.
+#
+# CLUSTERING. Twelve tasks, but only FOUR repositories (grafana/grafana, grafana/k6,
+# secdev/scapy, trufflesecurity/trufflehog). The paired analysis bootstraps over repositories,
+# so the effective N is 4. Read the per-task rows; do not read the aggregate as n=12.
+sample_id: atlas12
+languages: [go, python]
+
+seeds: 1
+arms: [baseline, aracne]
+
+run_harness: claude_code
+model: opus
+effort: medium
+max_turns: 100
+timeout_s: 3600
+run_parallel: 3
+
+grade_timeout_s: 10800
+grade_stall_timeout_s: 3600
+ni_margin: 0.10
+
+isolate_operator_config: true
+deny_answer_key: true
+allow_cold: true
+
+# Identical built-in surface on both sides, so the comparison is never decided by which tools
+# an arm had.
+arm_builtin_tools:
+  baseline: [Bash, Glob]
+  aracne:   [Bash, Glob]
+
+# mode: aracne_read, which is what turns the shell-read nudge on (Config.NudgesShellReads).
+arm_aracne_config:
+  aracne: lazy-aracneread

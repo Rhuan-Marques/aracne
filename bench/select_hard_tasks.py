@@ -181,7 +181,7 @@ class Verdict:
     reasons: list[str]
 
 
-def judge(row: dict, min_files: int, allow_symbol: bool) -> Verdict | None:
+def judge(row: dict, min_files: int, allow_symbol: bool, min_dirs: int = 1) -> Verdict | None:
     patch = _patch_of(row)
     stmt = _statement_of(row)
     if not patch or not stmt:
@@ -205,6 +205,8 @@ def judge(row: dict, min_files: int, allow_symbol: bool) -> Verdict | None:
         reasons.append(f"statement names patch symbol(s): {', '.join(leak_s[:3])}")
     if len(files) < min_files:
         reasons.append(f"patch touches {len(files)} file(s) < min_files={min_files}")
+    if len(dirs) < min_dirs:
+        reasons.append(f"patch spans {len(dirs)} dir(s) < min_dirs={min_dirs}")
 
     return Verdict(
         key=_key_of(row), repo=_repo_of(row),
@@ -260,6 +262,13 @@ def main() -> int:
                     help="frozen splits only, for A/B comparability across runs "
                          "(default: %(default)s)")
     ap.add_argument("--jsonl", help="read rows from a local JSONL dump instead of HF")
+    ap.add_argument("--min-dirs", type=int, default=1,
+                    help="require the patch to span at least N distinct directories. Width is "
+                         "what turns navigation from a convenience into correctness: on a "
+                         "one-file fix the model finds the site and is done, while on a patch "
+                         "spanning several packages it must find EVERY call site or the tests "
+                         "fail. Measured over SWE-bench-Live/MultiLang, 23%% of tasks reach "
+                         ">=4 files across >=3 dirs (default: %(default)s)")
     ap.add_argument("--min-files", type=int, default=2,
                     help="require the patch to touch at least N non-test files "
                          "(default: %(default)s; use 1 to keep single-file tasks)")
@@ -277,7 +286,7 @@ def main() -> int:
     rows = load_rows(args.dataset, args.split, args.jsonl)
     verdicts, unjudgeable = [], 0
     for r in rows:
-        v = judge(r, args.min_files, args.allow_symbol)
+        v = judge(r, args.min_files, args.allow_symbol, args.min_dirs)
         if v is None:
             unjudgeable += 1
         else:
@@ -297,6 +306,8 @@ def main() -> int:
             tally["statement names a patched symbol"] += 1
         if v.n_files < args.min_files:
             tally[f"patch touches < {args.min_files} non-test files"] += 1
+        if v.n_dirs < args.min_dirs:
+            tally[f"patch spans < {args.min_dirs} directories"] += 1
 
     print(f"dataset      {args.dataset} [{args.split}]")
     print(f"rows         {len(rows)}  ({unjudgeable} unjudgeable: no patch/statement, or test-only)")

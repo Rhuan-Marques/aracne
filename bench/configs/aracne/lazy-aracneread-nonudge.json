@@ -1,0 +1,40 @@
+{
+  "mode": "aracne_read",
+  "read": {
+    "context_filter": {
+      "hide_no_description": false
+    }
+  },
+  "descriptions": {
+    "lazy": {
+      "enabled": true,
+      "provider": "claude_cli",
+      "model": "haiku",
+      "max_nodes": 40,
+      "timeout_seconds": 180,
+      "batch_size": 12,
+      "parallel": 2
+    }
+  },
+  "mcp_tools": [],
+  "blocked_tools": [],
+  "llm": {
+    "<any>": {
+      "main_agent": {
+        "plugins": [
+          "edit-update-db-plugin"
+        ]
+      }
+    },
+    "claude_code": {
+      "main_agent": {
+        "plugins": [
+          "edit-update-db-plugin"
+        ]
+      }
+    }
+  },
+  "terminal": {
+    "shell_read_nudge": false
+  }
+}

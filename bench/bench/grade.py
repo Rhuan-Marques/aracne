@@ -301,7 +301,9 @@ def _grade_batch(source: str, arm: str, tag: str, items: list[tuple],
     harness is recorded on the rows and the next batch still runs."""
     label = f"{source}/{arm}" + (f"/{tag}" if tag else "")
     try:
-        if source == "swe_bench":
+        if source.startswith("swe_atlas"):
+            resolved = _grade_atlas(items, arm, cfg, out_dir, tag)
+        elif source == "swe_bench":
             resolved = _grade_swe(items, arm, cfg, out_dir, tag)
         elif source == "swe_bench_live":
             resolved = _grade_live(items, arm, cfg, out_dir, tag)
@@ -341,6 +343,57 @@ def _grade_batch(source: str, arm: str, tag: str, items: list[tuple],
         if task.key in resolved:
             row["success"] = bool(resolved[task.key])
         outcome.stamp(row)
+
+
+def _grade_atlas(items: list[tuple], arm: str, cfg: dict, out_dir: Path,
+                 tag: str) -> dict[str, bool]:
+    """Grade SWE-Atlas refactoring tasks, one container per run.
+
+    Unlike the two SWE-bench harnesses this does NOT batch: an Atlas task is scored by its own
+    per-task verifier inside its own per-task image, and there is no cross-instance harness to
+    amortize. Each run gets a container, the patch applied, `bash /tests/test.sh`, and the
+    reward the verifier writes.
+
+    Two things the SWE-bench paths do not need:
+
+      - A JUDGE. Half of an Atlas reward is a rubric graded by an LLM, and the verifier expects
+        an OpenAI-shaped endpoint. atlas_judge serves one backed by `claude --print`, so the
+        judging cost lands on the same subscription as the agent and no extra key is required.
+        One server for the whole batch; the container reaches it via host.docker.internal.
+      - A PASS BAR that is not just "tests pass". reward is 1.0 only when the tests reward is
+        1.0 AND every must-have rubric item passes, which is what makes these gradeable at all:
+        a refactor that keeps the tests green while ignoring the instruction is not a solve.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import atlas_grade
+    import atlas_judge
+
+    httpd = atlas_judge.serve(0, "0.0.0.0")
+    judge_url = f"http://host.docker.internal:{httpd.server_address[1]}/v1"
+    outdir = out_dir / "atlas" / (f"{arm}__{tag}" if tag else arm)
+    outdir.mkdir(parents=True, exist_ok=True)
+    resolved: dict[str, bool] = {}
+    try:
+        for row, task, _arm, patch in items:
+            rec = dict(task.raw)
+            rec["key"] = task.key
+            timeout_s = int(rec.get("timeout_sec") or 7200)
+            print(f"[grade] atlas/{arm}: {task.key} ...")
+            res = atlas_grade.grade(rec, patch, judge_url, timeout_s=timeout_s,
+                                    log=lambda m: print(f"        {m}"))
+            (outdir / f"{task.key}.json").write_text(json.dumps(res, indent=2))
+            # A reward the verifier never produced is unknown, not a failure -- the same rule
+            # the other sources follow when a harness leaves an instance unjudged.
+            if res.get("reward") is not None:
+                resolved[task.key] = float(res["reward"]) >= 1.0
+            else:
+                row["grade_error"] = res.get("error") or "no reward"
+            print(f"        {task.key}: reward={res.get('reward')} "
+                  f"tests={res.get('tests_reward')} must_have={res.get('must_have_pass')}"
+                  + (f" error={res['error']}" if res.get("error") else ""))
+    finally:
+        httpd.shutdown()
+    return resolved
 
 
 def _grade_swe(items: list[tuple], arm: str, cfg: dict, out_dir: Path,

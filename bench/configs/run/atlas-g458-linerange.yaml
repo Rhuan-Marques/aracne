@@ -1,0 +1,38 @@
+# grafana/grafana-10d4b458 in line_range, to be read against the SAME task's aracne_read cell
+# in atlas12-read-1 (30 turns, 1,370,387 context, 187 warnings).
+#
+# WHY THIS TASK. It is the one cell where the warning channel really engaged -- 187
+# caller-attributed warnings, and the largest turn saving in the run (-29% vs its control). If
+# intercepting reads adds anything on top of that, it should be visible here; if it does not
+# show up on the best case for aracne, it is unlikely to show up elsewhere.
+#
+# WHAT DIFFERS BETWEEN THE TWO CELLS. Only `mode` is intended to differ (aracne_read ->
+# line_range, which turns shell reads from passthrough into interception and turns the nudge
+# OFF, since Config.NudgesShellReads is aracne_read-only). But this run also carries the
+# GOTOOLCHAIN pin added after atlas12-read-1, so the comparison is not perfectly clean -- see
+# the report. No baseline arm: the control for this question is the aracne_read cell.
+sample_id: atlas-g458
+languages: [go]
+
+seeds: 1
+arms: [aracne]
+
+run_harness: claude_code
+model: opus
+effort: medium
+max_turns: 100
+timeout_s: 3600
+run_parallel: 1
+
+grade_timeout_s: 10800
+grade_stall_timeout_s: 3600
+
+isolate_operator_config: true
+deny_answer_key: true
+allow_cold: true
+
+arm_builtin_tools:
+  aracne: [Bash, Glob]
+
+arm_aracne_config:
+  aracne: lazy-linerange-run

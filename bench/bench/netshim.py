@@ -13,7 +13,7 @@ came from reading the diff rather than the code.
 So the rule this module enforces is narrow on purpose: **the web is fair game, the graded diff
 is not.** Everything except the repository under test stays reachable.
 
-HOW. A scratch directory holding `curl` and `wget` wrappers is prepended to PATH. Each wrapper
+HOW. A scratch directory holding `curl`, `wget`, `gh` and `git` wrappers is prepended to PATH. Each wrapper
 refuses when any argument names the repository in `ARACNE_BENCH_DENY_REPO` and otherwise execs
 the real binary, so a normal fetch is untouched. The deny target rides in the environment
 rather than being baked into the script, which is what lets one shim directory serve every
@@ -21,8 +21,7 @@ cell in a run.
 
 WHAT THIS DOES NOT COVER, deliberately. A hand-rolled `python3 -c "urllib..."`, or a harness
 tool that makes its own HTTP request (`WebFetch`). Closing those needs an egress proxy, and on
-this evidence -- every observed fetch was `curl` -- that is not yet worth a per-cell failure
-mode. The gap is covered by measurement instead: `toolstats.count_answer_key_fetches` reads
+this evidence that is not yet worth a per-cell failure mode. The gap is covered by measurement instead: `toolstats.count_answer_key_fetches` reads
 the same intent out of the transcript afterwards, and `paired._graded` drops any repository
 where it fired from BOTH arms. If the audit ever fires, the shim leaked and the proxy becomes
 worth building.
@@ -42,7 +41,20 @@ DENY_ENV = "ARACNE_BENCH_DENY_REPO"
 # host -- an agent tried `gh pr list --repo <task>` and got "No such file or directory" -- but
 # relying on that is relying on luck, and shim_dir only writes a wrapper for a binary that
 # actually exists, so naming it here costs nothing on a host without it.
-_WRAPPED = ("curl", "wget", "gh")
+# `git` is here because it was the leak that actually fired. On secdev/scapy the CONTROL arm
+# ran `git clone https://github.com/secdev/scapy`, found the upstream commit with `log -S`, and
+# `git apply`-ed the real diff -- while the aracne arm's `curl` to raw.githubusercontent.com for
+# the same repository was refused. The two arms were not solving the same problem, and the
+# asymmetry favoured the control. The audit caught it after the fact (n_answer_key_fetches=1,
+# so the pair is censored), but a hole the audit has to clean up is a hole.
+#
+# Wrapping `git` wholesale is safe because the rule keys on the argument text: an answer-key
+# fetch spells out `org/repo` in a URL, while ordinary local work (`git diff`, `git reset`,
+# `git -C <fixture>`) never does -- fixture directories are named `org_repo-<id>` and workdirs
+# `org--repo--...`, neither of which contains the `org/repo` needle. Prepared fixtures also
+# carry NO remote, so there is no `git fetch` that reaches the repository without naming it.
+# Only the agent's environment gets this PATH; the harness's own run_git is untouched.
+_WRAPPED = ("curl", "wget", "gh", "git")
 
 # Built with str.replace rather than str.format: the script is mostly shell `${...}`
 # expansions, and formatting it meant escaping every one of them as `$${...}`. The first

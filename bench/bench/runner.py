@@ -30,6 +30,21 @@ def _short(key: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]", "-", key)[:80]
 
 
+def _patch_base(workdir: Path, task: Task) -> str:
+    """The revision an arm's work should be diffed against.
+
+    Normally the task's own base commit. A SWE-Atlas fixture is the exception: its tree was
+    copied out of the task image and re-committed locally, so the upstream base sha is not a
+    valid object in that repository at all -- `git diff --cached <sha>` fails, returns nothing,
+    and the run records an EMPTY patch. Silently: an empty patch grades as "made no changes",
+    which is indistinguishable from an agent that did nothing.
+
+    HEAD is the right base there because the fixture's single commit IS the pristine tree, and
+    it is the same tree the verifier diffs against.
+    """
+    return "HEAD" if fixtures.is_atlas_task(task) else task.base_commit
+
+
 def _extract_patch(workdir: Path, base_commit: str) -> str:
     """Stage everything the agent changed and diff it against the pristine base commit,
     excluding aracne's own artifacts so the patch is pure source change."""
@@ -144,6 +159,11 @@ def _run_cell(task: Task, arm: str, seed: int, cfg: dict, out_dir: Path,
                 deny_repo=(netshim.deny_target(task.clone_url)
                            if cfg.get("deny_answer_key", True) else None),
                 guard_log=str(guard_log),
+                # Build with the toolchain the VERIFIER uses, not whatever the host happens to
+                # ship. Identical for both arms, so it can never decide the comparison -- it
+                # exists to stop both arms burning turns on a build that was broken before
+                # either of them touched it.
+                extra_env=fixtures.runtime_env(task, fixtures_root),
             )
         row.update(
             input_tokens=rr.input_tokens, output_tokens=rr.output_tokens,
@@ -185,7 +205,7 @@ def _run_cell(task: Task, arm: str, seed: int, cfg: dict, out_dir: Path,
     except Exception as e:  # noqa: BLE001 - record and continue the matrix
         row["error"] = f"agent error: {e}"
 
-    patch = _extract_patch(workdir, task.base_commit)
+    patch = _extract_patch(workdir, _patch_base(workdir, task))
     if patch.strip():
         patch_path = out_dir / "patches" / f"{_short(task.key)}__{arm}__s{seed}.patch"
         patch_path.parent.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,40 @@
+# SWE-Atlas smoke: does the warning channel actually fire on a real refactor?
+#
+# WHY THIS RUN EXISTS. Every benchmark run so far was scored on BUG FIXES, and a bug fix
+# changes no declarations -- verified across hard9, where every gold patch changed exactly
+# zero. A signature warning cannot fire when no signature moves, so the one capability with
+# no substitute was never being exercised, let alone measured.
+#
+# This task is the opposite shape: extract duplicated buffer-pool and content-writer code
+# into two new shared packages, DELETE the local implementations, and propagate context
+# through the callers. The reference solution changes 58 declarations across 7 files. Moving
+# a type out of a package breaks its callers by construction -- which is precisely the
+# condition `signature_changed` and `interface_conflict` exist to report.
+#
+# Ten turns is not enough to solve it. It is not meant to be: the question here is whether
+# warnings TRIGGER and reach the model, which the guard event log answers directly.
+sample_id: atlas-smoke
+languages: [go]
+
+seeds: 1
+arms: [aracne]
+
+run_harness: claude_code
+model: opus
+effort: medium
+max_turns: 10
+timeout_s: 2400
+run_parallel: 1
+
+grade_timeout_s: 7200
+grade_stall_timeout_s: 2400
+
+isolate_operator_config: true
+deny_answer_key: true
+allow_cold: true
+
+arm_builtin_tools:
+  aracne: [Bash, Glob]
+
+arm_aracne_config:
+  aracne: lazy-linerange-run

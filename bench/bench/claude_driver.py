@@ -68,7 +68,7 @@ def normalize_model(model: str) -> str:
 
 
 def isolated_env(isolate_operator_config: bool = False, deny_repo: str | None = None,
-                 guard_log: str | None = None) -> dict:
+                 guard_log: str | None = None, extra_env: dict | None = None) -> dict:
     """The environment an agent subprocess runs in, with the host's Python protected.
 
     WHY THIS EXISTS. The agent runs with `--dangerously-skip-permissions` and a shell, and
@@ -96,6 +96,10 @@ def isolated_env(isolate_operator_config: bool = False, deny_repo: str | None = 
     See bench/bench/netshim.py for the measurement that motivated it.
     """
     env = dict(os.environ)
+    # Applied BEFORE anything else so it cannot silently lose to an inherited value: this is
+    # what makes the agent compile with the toolchain its verifier uses. See
+    # atlas_prepare.probe_runtime for the failure it exists to prevent.
+    env.update(extra_env or {})
     env["PYTHONUSERBASE"] = tempfile.mkdtemp(prefix="aracne-bench-userbase-")
     env["PYTHONNOUSERSITE"] = "1"
     env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
@@ -150,7 +154,7 @@ def run_raw(prompt: str, cwd, model: str, max_turns: int, timeout_s: int,
             allowed_tools: list[str] | None = None,
             builtin_tools: list[str] | None = None,
             deny_repo: str | None = None,
-               guard_log: str | None = None) -> RunResult:
+               guard_log: str | None = None, extra_env: dict | None = None) -> RunResult:
     """Run one headless Claude Code session in `cwd`, feeding `prompt` verbatim on stdin
     (so it is never subject to argv length limits). `prompt` may be a slash command such
     as "/descriptions-generate".
@@ -186,7 +190,7 @@ def run_raw(prompt: str, cwd, model: str, max_turns: int, timeout_s: int,
     proc = subprocess.run(
         cmd, input=prompt, cwd=str(cwd), text=True,
         capture_output=True, timeout=timeout_s,
-        env=isolated_env(isolate_operator_config, deny_repo, guard_log),
+        env=isolated_env(isolate_operator_config, deny_repo, guard_log, extra_env),
     )
     rr = parse_output(proc.stdout, proc.stderr, proc.returncode)
     if stream:
@@ -200,14 +204,14 @@ def run_claude(problem: str, cwd, model: str, max_turns: int, timeout_s: int,
                allowed_tools: list[str] | None = None,
                builtin_tools: list[str] | None = None,
                deny_repo: str | None = None,
-               guard_log: str | None = None) -> RunResult:
+               guard_log: str | None = None, extra_env: dict | None = None) -> RunResult:
     """Run one headless Claude Code session to solve a benchmark task (wraps the issue
     text in the task-solving template, then delegates to `run_raw`)."""
     return run_raw(PROMPT_TEMPLATE.format(problem=problem), cwd, model, max_turns,
                    timeout_s, extra_args, stream=stream, effort=effort,
                    isolate_operator_config=isolate_operator_config,
                    allowed_tools=allowed_tools, builtin_tools=builtin_tools,
-                   deny_repo=deny_repo, guard_log=guard_log)
+                   deny_repo=deny_repo, guard_log=guard_log, extra_env=extra_env)
 
 
 def parse_output(stdout: str, stderr: str, returncode: int) -> RunResult:

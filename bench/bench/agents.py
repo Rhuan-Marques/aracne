@@ -22,7 +22,8 @@ def run_agent(harness: str, prompt: str, cwd, model: str, max_turns: int, timeou
               allowed_tools: list[str] | None = None,
               builtin_tools: list[str] | None = None,
               deny_repo: str | None = None,
-              guard_log: str | None = None):
+              guard_log: str | None = None,
+              extra_env: dict | None = None):
     """Run `prompt` (verbatim — already templated by the caller) in `cwd` and return a RunResult.
 
     `stream` asks the backend for a per-event transcript on `RunResult.transcript`, which
@@ -41,7 +42,7 @@ def run_agent(harness: str, prompt: str, cwd, model: str, max_turns: int, timeou
                                      allowed_tools=allowed_tools,
                                      builtin_tools=builtin_tools,
                                      deny_repo=deny_repo,
-                                     guard_log=guard_log)
+                                     guard_log=guard_log, extra_env=extra_env)
     if harness == "opencode":
         return opencode_driver.run_raw(prompt, cwd, model, max_turns, timeout_s,
                                        agent=agent, extra_args=extra_args)
