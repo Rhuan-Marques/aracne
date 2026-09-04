@@ -6,82 +6,86 @@ import (
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
-func TestEffectiveContextFilterDefaults(t *testing.T) {
-	c := &Config{}
-	if c.EffectiveExternalVarsVisibility() != "normal" {
-		t.Errorf("ext vars visibility default = %q, want normal", c.EffectiveExternalVarsVisibility())
-	}
-	if c.EffectiveSmallFunctionsVisibility() != "normal" {
-		t.Errorf("small fn visibility default = %q, want normal", c.EffectiveSmallFunctionsVisibility())
-	}
-	if c.EffectiveSmallFunctionThreshold() != 5 {
-		t.Errorf("threshold default = %d, want 5", c.EffectiveSmallFunctionThreshold())
-	}
-	if c.EffectiveIncludeIncoming() {
-		t.Error("include incoming default should be false")
-	}
-	// An undescribed neighbour costs a CONTEXT line and answers the one question the section
-	// exists to answer ("does this matter?") with nothing, so the default is to omit it.
-	if !c.EffectiveHideNoDescription() {
-		t.Error("hide no description default should be true")
-	}
-
-	f := c.EffectiveContextFilter()
-	want := domain.DefaultContextFilter()
-	if f != want {
-		t.Errorf("EffectiveContextFilter() = %+v, want %+v", f, want)
+// A bare config renders the default context block, and so does the explicit "normal" preset.
+func TestContextFilterDefaultsToNormal(t *testing.T) {
+	for _, c := range []*Config{{}, {Read: ReadSection{ContextFilter: ContextFilterNormal}}} {
+		if got, want := c.EffectiveContextFilter(), domain.DefaultContextFilter(); got != want {
+			t.Errorf("EffectiveContextFilter() = %+v, want %+v", got, want)
+		}
+		// An undescribed neighbour costs a CONTEXT line and answers the one question the
+		// section exists to answer ("does this matter?") with nothing, so it is omitted.
+		if !c.EffectiveContextFilter().HideNoDescription {
+			t.Error("hide-no-description should be on by default")
+		}
+		if c.EffectiveIncludeIncoming() {
+			t.Error(`"# USED BY:" should be off by default`)
+		}
 	}
 }
 
-func TestEffectiveContextFilterOverrides(t *testing.T) {
-	c := &Config{Read: ReadSection{ContextFilter: ContextFilterSection{
-		IncludeIncoming:          true,
-		ExternalVarsVisibility:   "hidden",
-		SmallFunctionsVisibility: "full",
-		SmallFunctionThreshold:   8,
-		HideNoDescription:        boolPtr(true),
-	}}}
-
+// "off" renders the code asked for and nothing around it.
+func TestContextFilterOffHidesEveryNeighbour(t *testing.T) {
+	c := &Config{Read: ReadSection{ContextFilter: ContextFilterOff}}
 	f := c.EffectiveContextFilter()
-	if !f.IncludeIncoming {
-		t.Error("IncludeIncoming should be true")
-	}
 	if f.ExtVarsVisibility != domain.VisibilityHidden {
 		t.Errorf("ExtVarsVisibility = %d, want Hidden", f.ExtVarsVisibility)
+	}
+	if f.SmallFnVisibility != domain.VisibilityHidden {
+		t.Errorf("SmallFnVisibility = %d, want Hidden", f.SmallFnVisibility)
+	}
+	if f.IncludeIncoming {
+		t.Error(`"off" must not add "# USED BY:"`)
+	}
+}
+
+// "full" is the other end: neighbours as fenced cuts, undescribed ones kept, plus "# USED BY:".
+func TestContextFilterFullElevatesEveryNeighbour(t *testing.T) {
+	c := &Config{Read: ReadSection{ContextFilter: ContextFilterFull}}
+	f := c.EffectiveContextFilter()
+	if f.ExtVarsVisibility != domain.VisibilityFull {
+		t.Errorf("ExtVarsVisibility = %d, want Full", f.ExtVarsVisibility)
 	}
 	if f.SmallFnVisibility != domain.VisibilityFull {
 		t.Errorf("SmallFnVisibility = %d, want Full", f.SmallFnVisibility)
 	}
-	if f.SmallFnThreshold != 8 {
-		t.Errorf("SmallFnThreshold = %d, want 8", f.SmallFnThreshold)
+	if f.HideNoDescription {
+		t.Error(`"full" must keep undescribed neighbours`)
 	}
-	if !f.HideNoDescription {
-		t.Error("HideNoDescription should be true")
+	if !c.EffectiveIncludeIncoming() {
+		t.Error(`"full" should add "# USED BY:"`)
 	}
 }
 
-func TestNormalizeConfigContextFilter(t *testing.T) {
-	c := &Config{Read: ReadSection{ContextFilter: ContextFilterSection{
-		ExternalVarsVisibility:   "",
-		SmallFunctionsVisibility: "bogus",
-		SmallFunctionThreshold:   0,
-	}}}
-	normalizeConfig(c)
-	if c.Read.ContextFilter.ExternalVarsVisibility != "normal" {
-		t.Errorf("ext vars normalized = %q, want normal", c.Read.ContextFilter.ExternalVarsVisibility)
+// A typo must not silently render an EMPTY context block -- that would strip every neighbour
+// from every read while looking like a configuration that worked.
+func TestAnUnknownContextFilterFallsBackToTheDefault(t *testing.T) {
+	c := &Config{Read: ReadSection{ContextFilter: "verbose"}}
+	if got, want := c.EffectiveContextFilter(), domain.DefaultContextFilter(); got != want {
+		t.Errorf("unknown preset = %+v, want the default %+v", got, want)
 	}
-	if c.Read.ContextFilter.SmallFunctionsVisibility != "normal" {
-		t.Errorf("small fn normalized = %q, want normal", c.Read.ContextFilter.SmallFunctionsVisibility)
+	if err := c.Validate(); err == nil {
+		t.Error("Validate should reject an unknown read.context_filter")
 	}
-	if c.Read.ContextFilter.SmallFunctionThreshold != 5 {
-		t.Errorf("threshold normalized = %d, want 5", c.Read.ContextFilter.SmallFunctionThreshold)
+}
+
+// normalizeConfig stamps the resolved preset, so a re-saved config states its verbosity.
+func TestNormalizeConfigStampsTheContextFilter(t *testing.T) {
+	for in, want := range map[string]string{
+		"":        ContextFilterNormal,
+		"bogus":   ContextFilterNormal,
+		"  FULL ": ContextFilterFull,
+		"off":     ContextFilterOff,
+	} {
+		c := &Config{Read: ReadSection{ContextFilter: in}}
+		normalizeConfig(c)
+		if c.Read.ContextFilter != want {
+			t.Errorf("normalize(%q) = %q, want %q", in, c.Read.ContextFilter, want)
+		}
 	}
 }
 
 func TestDefaultConfigContextFilter(t *testing.T) {
-	c := DefaultConfig()
-	f := c.EffectiveContextFilter()
-	if f != domain.DefaultContextFilter() {
-		t.Errorf("default config filter = %+v, want default", f)
+	if got, want := DefaultConfig().EffectiveContextFilter(), domain.DefaultContextFilter(); got != want {
+		t.Errorf("default config filter = %+v, want %+v", got, want)
 	}
 }

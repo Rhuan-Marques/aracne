@@ -11,27 +11,32 @@ catalog at load/init time, so a typo fails fast instead of silently disabling a 
 
 ## Sections
 
-- **`terminal`** — two keys. `max_overserve`: the answer must stay within this multiple of
-  the bytes the real command would have printed, or `arac cmd` passes through instead.
-  `shell_read_nudge` (default on): the one-line pointer printed after a shell read that
-  `cli` leaves alone — it exists to be turned off, so the line can be measured
-  against its own absence. The five former booleans (`intercept`, `enhance_files`,
-  `enhance_resources`, `grep`, `prefer_resource_ids`) are facts about the mode now.
+- **`terminal`** — one key. `max_overserve`: the answer must stay within this multiple of
+  the bytes the real command would have printed, or `arac cmd` passes through instead. The
+  five former booleans (`intercept`, `enhance_files`, `enhance_resources`, `grep`,
+  `prefer_resource_ids`) are facts about the mode now.
 
-- **`scan`** / **`scanner`** — default mode (`default`/`hard`/`all`) for the
-  one-shot `arac scan` and the live scanner; `update_frequency`; and
+- **`scan`** / **`scanner`** — `scan.ignore`, `scan.workers` and `scan.progress` (each also
+  a flag on `arac scan`, which wins); `scanner.update_frequency` for the `arac scanner run`
+  watch loop; and
   **`scan.pre_tool`** (`default` (the default) / `none` / `full` / `hard`) — the scan
   the guard runs *before* every tool call it sees, on both harnesses. `default` is
   an incremental scan, so the usual case (nothing changed since the last call) is a
   no-op; `none` switches the freshness guarantee off for projects that keep the
   topology current another way (e.g. `arac scanner run`).
-- **`read`** — `max_file_size`; **`kinds`** (project-wide allow-list of
-  resource kinds `read` will return — default `file`, `function`, `struct`,
-  `interface`; also accepts `named_type`, `package`, `dependency`, `variable`);
-  **`context_filter`** (how verbosely the `# CONTEXT:` block renders neighbors,
-  incoming "USED BY" edges, small-fn threshold, hide-undocumented,
-  `max_inline_parent_lines`); **`pipe_passthrough`** (whether the guard
-  exempts piped reads like `cmd | tail`).
+- **`read`** — `max_file_size`; **`kinds`** (allow-list of resource kinds the **MCP `read`
+  tool** returns — default `file`, `function`, `struct`, `interface`; also accepts
+  `named_type`, `package`, `dependency`, `variable`). Note the scope: every other read path
+  — `arac read`, an intercepted shell read, the denial proxy — deliberately reads every
+  kind, because the key exists to narrow what a *model* is offered through a tool schema,
+  not to lock a person out. Outside `mcp` it therefore has no effect.
+  **`context_filter`** — one of `off`, `normal` (the default) or `full`: how verbosely the
+  `# CONTEXT:` block renders a read's neighbours. `full` also adds the `# USED BY:` section
+  and keeps undescribed neighbours. **`file_mode`** (`full` / `skeleton`) decides what a
+  whole-**file** read returns; the default depends on the surface — `skeleton` everywhere
+  except `mcp`, which defaults to `full` — with `skeleton_threshold` and `max_symbol_lines`
+  bounding what elides. **`pipe_passthrough`** (whether the guard exempts piped reads like
+  `cmd | tail`).
 - **`descriptions`** — which `kinds` to document + `style_exemplars` count, and
   **`lazy`** (default **true**): generate a missing description at the moment a read or a
   search is about to show it, instead of only in an `arac descriptions generate` sweep. The

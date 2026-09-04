@@ -923,9 +923,6 @@ func TestLoadConfigCleanBreakOnOldFormat(t *testing.T) {
 	if ok {
 		t.Fatal("old-format config should not parse as valid new schema")
 	}
-	if cfg.Scan.Mode != ScanModeDefault {
-		t.Fatalf("Scan.Mode = %q, want default", cfg.Scan.Mode)
-	}
 	if len(cfg.Descriptions.Kinds) != len(DefaultNeedDescription()) {
 		t.Fatalf("Descriptions.Kinds = %v, want defaults", cfg.Descriptions.Kinds)
 	}
@@ -933,7 +930,7 @@ func TestLoadConfigCleanBreakOnOldFormat(t *testing.T) {
 
 func TestLoadConfigNewSchema(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
-	if err := os.WriteFile(path, []byte(`{"descriptions":{"kinds":["file","struct"]},"scan":{"mode":"all"}}`), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"descriptions":{"kinds":["file","struct"]},"read":{"max_file_size":4096}}`), 0644); err != nil {
 		t.Fatalf("WriteFile config: %v", err)
 	}
 	cfg, ok := LoadConfigStrict(path)
@@ -942,9 +939,6 @@ func TestLoadConfigNewSchema(t *testing.T) {
 	}
 	if len(cfg.Descriptions.Kinds) != 2 || cfg.Descriptions.Kinds[0] != domain.ResourceFile || cfg.Descriptions.Kinds[1] != domain.ResourceStruct {
 		t.Fatalf("Descriptions.Kinds = %v, want [file type]", cfg.Descriptions.Kinds)
-	}
-	if cfg.Scan.Mode != ScanModeAll {
-		t.Fatalf("Scan.Mode = %q, want all", cfg.Scan.Mode)
 	}
 	if cfg.Read.MaxFileSize <= 0 {
 		t.Fatalf("Read.MaxFileSize = %d, want normalized default", cfg.Read.MaxFileSize)
@@ -994,7 +988,7 @@ func TestLoadConfigPreToolScan(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 
 	// A valid scan.pre_tool value survives loading.
-	if err := os.WriteFile(path, []byte(`{"scan":{"mode":"default","pre_tool":"full"}}`), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"scan":{"pre_tool":"full"}}`), 0644); err != nil {
 		t.Fatalf("WriteFile config: %v", err)
 	}
 	cfg, ok := LoadConfigStrict(path)
@@ -1008,8 +1002,8 @@ func TestLoadConfigPreToolScan(t *testing.T) {
 	// An absent or invalid value normalizes to the incremental scan, so a project that
 	// never heard of the field still gets a fresh graph before each tool call.
 	for _, body := range []string{
-		`{"scan":{"mode":"default","pre_tool":"bogus"}}`,
-		`{"scan":{"mode":"default"}}`,
+		`{"scan":{"pre_tool":"bogus"}}`,
+		`{"read":{"max_file_size":524288}}`,
 	} {
 		if err := os.WriteFile(path, []byte(body), 0644); err != nil {
 			t.Fatalf("WriteFile config: %v", err)
@@ -1024,7 +1018,7 @@ func TestLoadConfigPreToolScan(t *testing.T) {
 	}
 
 	// "none" is the one way to switch the freshness guarantee off.
-	if err := os.WriteFile(path, []byte(`{"scan":{"mode":"default","pre_tool":"none"}}`), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"scan":{"pre_tool":"none"}}`), 0644); err != nil {
 		t.Fatalf("WriteFile config: %v", err)
 	}
 	cfg3, ok3 := LoadConfigStrict(path)
@@ -1137,7 +1131,7 @@ func TestGrepDescriptionKindsDefaultWhenKeyAbsent(t *testing.T) {
 	// An existing config predating the key must pick up the defaults rather than
 	// silently losing description search.
 	path := filepath.Join(t.TempDir(), "config.json")
-	if err := os.WriteFile(path, []byte(`{"scan":{"mode":"default"}}`), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"read":{"max_file_size":524288}}`), 0644); err != nil {
 		t.Fatalf("WriteFile config: %v", err)
 	}
 	cfg, ok := LoadConfigStrict(path)
@@ -1157,7 +1151,7 @@ func TestGrepDescriptionKindsEmptyListDisablesAndSurvivesNormalization(t *testin
 	// defaults, the way an empty Descriptions.Kinds is treated, would make the
 	// setting impossible to express.
 	path := filepath.Join(t.TempDir(), "config.json")
-	if err := os.WriteFile(path, []byte(`{"scan":{"mode":"default"},"grep":{"description_kinds":[]}}`), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"grep":{"description_kinds":[]}}`), 0644); err != nil {
 		t.Fatalf("WriteFile config: %v", err)
 	}
 	cfg, ok := LoadConfigStrict(path)
@@ -1174,7 +1168,7 @@ func TestGrepDescriptionKindsEmptyListDisablesAndSurvivesNormalization(t *testin
 
 func TestGrepDescriptionKindsAreNormalized(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
-	if err := os.WriteFile(path, []byte(`{"scan":{"mode":"default"},"grep":{"description_kinds":["functions","named-type"]}}`), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"grep":{"description_kinds":["functions","named-type"]}}`), 0644); err != nil {
 		t.Fatalf("WriteFile config: %v", err)
 	}
 	cfg, ok := LoadConfigStrict(path)

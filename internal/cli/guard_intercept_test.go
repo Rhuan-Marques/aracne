@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -524,129 +523,20 @@ func TestReadIsNeverInterceptedIntoAPipe(t *testing.T) {
 	}
 }
 
-// The nudge in ModeCLI fires on exactly the commands aracne would have ANSWERED, had
-// that mode intercepted reads.
+// The guard's fallback pointer is keyed on the MODE, not on !InterceptReads().
 //
-// Precision is the whole point. The loose classifier this replaces keyed off "does this look
-// like a read", and on one smoke cell it nudged `which grep; type grep` -- which reads nothing
-// -- and `arac grep "table" | head`, which is already aracne. Every one of those lines is
-// tokens spent telling a model to use a capability that would not have applied, printed after
-// a command it has already been answered for.
-func TestShellReadNudgeFiresOnlyWhereAracneCouldHaveAnswered(t *testing.T) {
-	root, dbPath := scannedProject(t)
-	app := filepath.Join(root, "app.go")
-	cfg := blockedIn(helper.ModeCLI)
-	// An EXISTING file the topology does not know. It has to exist: the scope test asks
-	// whether the target carries nodes, and a path that is not there at all is a different
-	// case (the command will fail on its own).
-	readme := filepath.Join(root, "README.md")
-	if err := os.WriteFile(readme, []byte("# docs\n"), 0o644); err != nil {
-		t.Fatal(err)
+// Those two are not the same set: !InterceptReads() is true in ModeCLI as well as ModeMCP, so
+// keying the fallback on it would print the MCP tool pointer after a shell read ModeCLI
+// deliberately leaves alone and was never going to refuse. That regression shipped once, when
+// the shell-read nudge still occupied the case above it and hid the fall-through. The nudge is
+// gone; this pins the difference the nudge used to mask.
+func TestTheMCPFallbackIsKeyedOnTheModeNotOnInterception(t *testing.T) {
+	cfg := helper.DefaultConfig()
+	cfg.Mode = helper.ModeCLI
+	if cfg.InterceptReads() {
+		t.Fatal("ModeCLI must not intercept reads -- the trap this guards depends on it")
 	}
-
-	for _, tc := range []struct {
-		name string
-		cmd  string
-		want bool
-	}{
-		{"a whole-file read of an indexed file", "cat " + app, true},
-		{"a windowed read", "sed -n '1,200p' " + app, true},
-		{"a head", "head -40 " + app, true},
-		{"a read inside a compound", "wc -l " + app + "; sed -n '1,80p' " + app, true},
-
-		// aracne answers a search already; pointing at `arac read` afterwards is advice about
-		// a question the model did not ask.
-		{"a search", "grep -rn Handle " + root, false},
-		// Already aracne. Nudging here tells it to do what it just did.
-		{"arac itself", "arac read pkg.Thing", false},
-		{"arac piped", `arac grep "table" | head -50`, false},
-		// Reads nothing.
-		{"not a read at all", "which grep; type grep", false},
-		{"a build", "go test ./...", false},
-		// No topology nodes, so `arac read` has nothing to return.
-		{"an unindexed file", "cat " + readme, false},
-		// An operand the guard cannot resolve. Interception may act on "not provably
-		// unindexed" because `arac cmd` re-checks and passes through; the nudge has no second
-		// check, so it needs evidence rather than the absence of counter-evidence. This exact
-		// shape fired twice in a smoke cell, recommending `arac read` for .tmpl files with
-		// zero topology nodes.
-		{"a read of a shell variable",
-			`for f in a.tmpl b.tmpl; do echo "=== $f ==="; cat "$f"; done`, false},
-		{"a bare unresolvable operand", "cat $TARGET", false},
-		// The answer would go to the file, not to the model.
-		{"a redirected read", "cat " + app + " > /tmp/x", false},
-		// aracne's rendering elides bodies, so grepping it returns FEWER matches than the
-		// real command -- a wrong answer with nothing marking it as one.
-		{"a read feeding a pipe", "cat " + app + " | grep Handle", false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := shellReadWouldHaveBeenServed(tc.cmd, dbPath, cfg); got != tc.want {
-				t.Errorf("shellReadWouldHaveBeenServed(%q) = %v, want %v", tc.cmd, got, tc.want)
-			}
-		})
-	}
-}
-
-// And the nudge only exists in the mode that leaves shell reads alone.
-func TestShellReadNudgeIsScopedToAracneRead(t *testing.T) {
-	for _, tc := range []struct {
-		mode string
-		want bool
-	}{
-		{helper.ModeCLI, true},
-		// Already answered the command.
-		{helper.ModeInterceptID, false},
-		{helper.ModeInterceptLineRanges, false},
-		// Refuses it with a message that names the tool.
-		{helper.ModeMCP, false},
-	} {
-		cfg := helper.DefaultConfig()
-		cfg.Mode = tc.mode
-		if got := cfg.NudgesShellReads(); got != tc.want {
-			t.Errorf("mode %q: NudgesShellReads = %v, want %v", tc.mode, got, tc.want)
-		}
-	}
-}
-
-// Switching the shell-read nudge off must leave the model with NO pointer, not a different
-// one. The PostToolUse switch used to reach its ModeMCP fallback through `!InterceptReads()`,
-// which is equally true in ModeCLI -- that branch was unreachable for cli only
-// because the nudge case above it always matched. Adding `terminal.shell_read_nudge: false`
-// made it reachable, and a benchmark run that asked for no nudge silently got the MCP pointer
-// on every servable shell read instead. The fallback is keyed on the MODE now; this pins it.
-func TestNudgeOffMeansNoNudgeNotADifferentOne(t *testing.T) {
-	off := false
-	for _, tc := range []struct {
-		name          string
-		mode          string
-		nudge         *bool
-		wantShell     bool
-		wantMCPBranch bool
-	}{
-		{"cli default nudges the shell read", helper.ModeCLI, nil, true, false},
-		{"cli with the nudge off does nothing", helper.ModeCLI, &off, false, false},
-		{"mcp still gets its own fallback", helper.ModeMCP, &off, false, true},
-		{"intercept_line_ranges answers the command instead", helper.ModeInterceptLineRanges, &off, false, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := helper.DefaultConfig()
-			cfg.Mode = tc.mode
-			cfg.Terminal.ShellReadNudge = tc.nudge
-
-			if got := cfg.NudgesShellReads(); got != tc.wantShell {
-				t.Errorf("NudgesShellReads = %v, want %v", got, tc.wantShell)
-			}
-			// The guard's third case. Keyed on the mode, it is MCP-only; keyed on
-			// !InterceptReads() it would also capture cli.
-			if got := cfg.EffectiveMode() == helper.ModeMCP; got != tc.wantMCPBranch {
-				t.Errorf("MCP fallback reached = %v, want %v", got, tc.wantMCPBranch)
-			}
-			if tc.mode == helper.ModeCLI && tc.nudge == &off {
-				if !cfg.InterceptReads() {
-					t.Log("note: !InterceptReads() is true here -- the old predicate would " +
-						"have fired the MCP pointer on a run that asked for silence")
-				}
-			}
-		})
+	if cfg.EffectiveMode() == helper.ModeMCP {
+		t.Error("ModeCLI must not reach the MCP fallback")
 	}
 }

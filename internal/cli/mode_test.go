@@ -208,7 +208,7 @@ func TestBlockedToolsAreInertOutsideMCPMode(t *testing.T) {
 func TestAConfigWithNoModeKeysResolvesToTheDefault(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
-	if err := os.WriteFile(path, []byte(`{"scan":{"mode":"default"},"read":{"max_file_size":1024}}`), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"read":{"max_file_size":1024}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	cfg, ok := helper.LoadConfigStrict(path)

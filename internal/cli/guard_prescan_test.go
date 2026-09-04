@@ -92,7 +92,7 @@ func TestPreToolScanRunsBeforeEveryGuardedCall(t *testing.T) {
 // scanner is buying.
 func TestPreToolScanNoneSkipsTheScan(t *testing.T) {
 	root, dbPath := scannedProject(t)
-	cfg := `{"scan":{"mode":"default","pre_tool":"none"},"read":{"max_file_size":524288}}`
+	cfg := `{"scan":{"pre_tool":"none"},"read":{"max_file_size":524288}}`
 	if err := os.WriteFile(filepath.Join(root, ".aracne", "config.json"), []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}

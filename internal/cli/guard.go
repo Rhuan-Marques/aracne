@@ -134,25 +134,14 @@ func runClaudeGuardHook(input io.Reader, output io.Writer) {
 			if msg := warningMessage(keys, !blocked[toolspec.ReadToolName], cfg.Surface()); msg != "" {
 				parts = append(parts, msg)
 			}
-		case cfg.NudgesShellReads():
-			// A shell read this mode deliberately leaves alone. Nudged only when aracne WOULD
-			// have answered it -- the same test interception uses, asked hypothetically -- so
-			// the line is never spent advertising a capability that would not have applied.
-			// The loose classifier this replaces fired on `which grep; type grep`, which reads
-			// nothing, and on `arac grep "table" | head`, which is already aracne.
-			if shellReadWouldHaveBeenServed(guardLoggedCommand(event.ToolInput), dbPath, cfg) {
-				parts = append(parts, toolspec.ShellReadNudge)
-			}
 		case cfg.EffectiveMode() == helper.ModeMCP:
 			// ModeMCP: a Bash read is refused rather than rewritten, and the refusal already
 			// names the tool, so this is the fallback for the ones blocked_tools let through.
 			//
 			// Tested on the MODE, not on `!InterceptReads()`. That predicate is also true in
-			// ModeCLI, which used to be unreachable here only because the case above it
-			// always matched that mode. Once `terminal.shell_read_nudge: false` made the case
-			// above skippable, cli fell through to this branch and printed the MCP
-			// pointer instead of nothing -- so a run that asked for no nudge silently got a
-			// different one.
+			// ModeCLI, where a shell read is deliberately left alone and earns nothing --
+			// testing the mode is what keeps cli from falling through and printing the MCP
+			// pointer at a read it was never going to refuse.
 			if msg := warningMessage(keys, !blocked[toolspec.ReadToolName], cfg.Surface()); msg != "" {
 				parts = append(parts, msg)
 			}

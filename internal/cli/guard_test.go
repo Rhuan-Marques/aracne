@@ -173,9 +173,9 @@ func withConfig(t *testing.T, configJSON string, fn func()) {
 
 // mcpSurfaceConfig is the minimum config that puts a project on the MCP surface, where
 // blocked_tools denials and the MCP-tool nudges apply.
-const mcpSurfaceConfig = `{"scan":{"mode":"default"},"mode":"mcp"}`
+const mcpSurfaceConfig = `{"mode":"mcp"}`
 
-const blocksGrepConfig = `{"scan":{"mode":"default"},"mode":"mcp","llm":{"claude_code":{"main_agent":{"blocked_tools":["grep"]}}}}`
+const blocksGrepConfig = `{"mode":"mcp","llm":{"claude_code":{"main_agent":{"blocked_tools":["grep"]}}}}`
 
 // The NATIVE Grep tool, not a Bash one: interception only rewrites Bash, and a Bash grep is
 // intercepted in every mode now -- which beats the denial, and should, since a rewrite hands the
@@ -212,8 +212,8 @@ func TestRunClaudeGuardHook_ABashGrepIsRewrittenNotDenied(t *testing.T) {
 	})
 }
 
-const blocksReadConfig = `{"scan":{"mode":"default"},"mode":"mcp","llm":{"claude_code":{"main_agent":{"blocked_tools":["read"]}}}}`
-const blocksReadStrictConfig = `{"scan":{"mode":"default"},"mode":"mcp","read":{"pipe_passthrough":false},"llm":{"claude_code":{"main_agent":{"blocked_tools":["read"]}}}}`
+const blocksReadConfig = `{"mode":"mcp","llm":{"claude_code":{"main_agent":{"blocked_tools":["read"]}}}}`
+const blocksReadStrictConfig = `{"mode":"mcp","read":{"pipe_passthrough":false},"llm":{"claude_code":{"main_agent":{"blocked_tools":["read"]}}}}`
 
 func TestRunClaudeGuardHook_PipedReadExempt(t *testing.T) {
 	// Default pipe_passthrough (true): a read command fed by a pipe is exempt.

@@ -18,7 +18,7 @@ func TestBugManagementDefaultsOff(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
 	// A realistic pre-existing config: valid new schema, no features key.
-	if err := os.WriteFile(path, []byte(`{"scan":{"mode":"default"},"read":{"max_file_size":1024}}`), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"read":{"max_file_size":1024}}`), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	if LoadConfig(path).BugManagementEnabled() {
@@ -138,7 +138,7 @@ func TestChatAndAgentDefaultOff(t *testing.T) {
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
-	if err := os.WriteFile(path, []byte(`{"scan":{"mode":"default"},"read":{"max_file_size":1024}}`), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"read":{"max_file_size":1024}}`), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	cfg := LoadConfig(path)

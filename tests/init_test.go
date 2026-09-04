@@ -293,7 +293,7 @@ func TestInitWithEditPlugin_CreatesNativeHooks(t *testing.T) {
 	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
 		t.Fatalf("mkdir .aracne: %v", err)
 	}
-	cfgJSON := `{"scan":{"mode":"default"},"llm":{"<any>":{"main_agent":{"mcp_tools":["read","edit","write"],"blocked_tools":["read","grep","edit","write"],"plugins":["edit-update-db-plugin"]}}}}`
+	cfgJSON := `{"llm":{"<any>":{"main_agent":{"mcp_tools":["read","edit","write"],"blocked_tools":["read","grep","edit","write"],"plugins":["edit-update-db-plugin"]}}}}`
 	if err := os.WriteFile(filepath.Join(cfgDir, "config.json"), []byte(cfgJSON), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}

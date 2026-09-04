@@ -51,21 +51,6 @@ func TestConfigValidateRejectsBadReadKinds(t *testing.T) {
 	}
 }
 
-func TestEffectiveMaxInlineParentLines(t *testing.T) {
-	c := &Config{}
-	if got := c.EffectiveMaxInlineParentLines(); got != domain.DefaultMaxInlineParentLines {
-		t.Fatalf("absent should default to %d, got %d", domain.DefaultMaxInlineParentLines, got)
-	}
-	// 0 is meaningful (disable inlining), so it must be distinguishable from absent.
-	c.Read.ContextFilter.MaxInlineParentLines = intPtr(0)
-	if got := c.EffectiveMaxInlineParentLines(); got != 0 {
-		t.Fatalf("explicit 0 should survive, got %d", got)
-	}
-	if got := c.EffectiveContextFilter().MaxInlineParentLines; got != 0 {
-		t.Fatalf("EffectiveContextFilter should carry it, got %d", got)
-	}
-}
-
 func TestDefaultAgentToolsHaveOneReadEntry(t *testing.T) {
 	// The per-kind read tools are gone; every default profile names "read" once or not at all.
 	gone := map[string]bool{

@@ -56,7 +56,8 @@ func RunScan(args []string) {
 	start := time.Now()
 	reg := NewScannerRegistry()
 
-	resolvedMode := cfg.Scan.Mode
+	// The scan mode comes from the flags alone: --hard, --all, or the incremental default.
+	resolvedMode := helper.ScanModeDefault
 	switch {
 	case explicitFlags["hard"] && *hardFlag:
 		resolvedMode = helper.ScanModeHard

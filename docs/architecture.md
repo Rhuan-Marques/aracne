@@ -272,15 +272,15 @@ plugins. Two hooks ship for Claude Code:
     `read.pipe_passthrough:false`. Interception is tried first, so a command aracne can serve is
     answered rather than refused however `blocked_tools` reads.
   - The **PostToolUse nudge** fires on native `Read`/`Grep`/`Edit`/`Write`, which interception
-    never sees, and — in `cli` only (`Config.NudgesShellReads`) — on a **shell read**
-    that mode deliberately leaves alone. That one is gated by the *interception* matcher asked
-    hypothetically (`shellReadWouldHaveBeenServed`): it fires only where aracne would have
-    answered the command, so it never advertises a capability that would not have applied. It
-    is one short line, because it is printed after a command the model has already been
-    answered for and the same line is spent again on the next read. Both name the surface the
-    mode actually has
-    (`toolspec.WarningForSurface`). Note that `grep`/`edit`/`write` guidance is the `arac`
-    subcommand in *every* mode including `mcp`, because no mode registers a tool for them.
+    never sees, and names the surface the mode actually has (`toolspec.WarningForSurface`).
+    A **shell** read earns nothing: `cli` used to print a one-line pointer at `arac read`
+    after one, and it was removed because it did not work — across three benchmark runs the
+    nudge fired on hundreds of servable shell reads and `arac read` was called exactly zero
+    times. The MCP fallback below it is keyed on the *mode* rather than on
+    `!InterceptReads()`, which is also true in `cli`; keying it on the predicate would print
+    the MCP pointer after a read `cli` was never going to refuse. Note that
+    `grep`/`edit`/`write` guidance is the `arac` subcommand in *every* mode including `mcp`,
+    because no mode registers a tool for them.
 
   Note that `mode` governs the **main agent's** surface only. Generated sub-agents
   (`descriptions-generation-executor`, `bug-*`) declare their own scoped MCP server inline in

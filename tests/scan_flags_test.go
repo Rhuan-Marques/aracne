@@ -179,28 +179,6 @@ var DefaultService = &Service{}
 	}
 }
 
-func TestScanConfigDrivenMode(t *testing.T) {
-	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "go.mod"), "module configmode\n\ngo 1.21\n")
-	writeFile(t, filepath.Join(dir, "main.go"), `package main
-
-func Hello() {}
-`)
-
-	dbPath := filepath.Join(dir, "test.db")
-
-	mustRun(t, dir, "scan", "-root", dir, "-output", dbPath)
-
-	configPath := filepath.Join(filepath.Dir(dbPath), "config.json")
-	writeFile(t, configPath, `{"scan": {"mode": "all"}}`)
-
-	out := mustRun(t, dir, "scan", "-root", dir, "-output", dbPath)
-
-	if !strings.Contains(out, "Full re-scan") {
-		t.Fatalf("expected 'Full re-scan' from config scan.mode=all, got:\n%s", out)
-	}
-}
-
 // TestScanUnderHiddenRootIndexesFiles is the CLI-level regression for the
 // dot-directory blackout.
 //

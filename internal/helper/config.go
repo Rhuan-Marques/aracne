@@ -52,8 +52,6 @@ const InheritsModel = "<inherits>"
 // runs before each tool call.
 
 type ScanSection struct {
-	// Mode is the default mode for the one-shot `arac scan` command.
-	Mode ScanMode `json:"mode"`
 	// Ignore is a list of .gitignore-style glob patterns. Any path matching a
 	// pattern is skipped by the scanner on every front (file discovery, manifest,
 	// and parsing in every mode), so ignored files never enter the topology.
@@ -88,29 +86,46 @@ const (
 // Configuration for file read operations, including max file size, context filtering, and shell command passthrough behavior.
 type ReadSection struct {
 	MaxFileSize int64 `json:"max_file_size"`
-	// Kinds is the global allow-list of resource kinds the `read` tool will return.
+	// Kinds is the allow-list of resource kinds the MCP `read` TOOL will return.
 	//
-	// This replaced the per-agent read_function/read_struct/read_interface/... tool lists.
-	// Which KINDS are readable is a property of the project, not of an agent, and splitting
-	// one capability across eight tool names made models pick the wrong one. An ID that
-	// resolves to a kind absent from this list returns an error naming the allowed kinds.
-	// Absent (null) means the default set; an explicit [] would make read useless and is
-	// rejected by Validate.
-	Kinds         []domain.ResourceKind `json:"kinds"`
-	ContextFilter ContextFilterSection  `json:"context_filter"`
+	// SCOPE: the MCP tool, and nothing else. Every other read path passes AllReadKinds()
+	// explicitly -- `arac read` (cli/read.go), an intercepted shell read (cli/cmd.go), the
+	// denial proxy (cli/guard_proxy.go) and the slice reader. That is deliberate: the setting
+	// exists to narrow what a MODEL is offered through a tool schema, not to lock a person
+	// out of their own topology. The consequence is that in every mode but ModeMCP this key
+	// has no effect, because no other mode registers the tool it governs.
+	//
+	// It replaced the per-agent read_function/read_struct/read_interface/... tool lists:
+	// splitting one capability across eight tool names made models pick the wrong one. An ID
+	// that resolves to a kind absent from this list returns an error naming the allowed
+	// kinds. Absent (null) means the default set; an explicit [] would make read useless and
+	// is rejected by Validate.
+	Kinds []domain.ResourceKind `json:"kinds"`
+	// ContextFilter is how verbosely the "# CONTEXT:" block renders a read's neighbours:
+	// "off", "normal" (the default) or "full". See the ContextFilter* constants.
+	//
+	// This was six independent sub-keys -- include_incoming, external_vars_visibility,
+	// small_functions_visibility, small_function_threshold, hide_no_description and
+	// max_inline_parent_lines. They were never independent in practice: a project wants a
+	// terser or a fuller context block, not one neighbour kind elevated while another is
+	// suppressed. Six knobs made that one decision six ways, and five of the six accessors
+	// had no reader outside the function that composed them back together.
+	ContextFilter string `json:"context_filter"`
 	// PipePassthrough exempts read/grep shell commands that consume piped
 	// stdin (e.g. `cmd | tail`) from the tool guard: such commands operate on
 	// command output, which the aracne MCP tools cannot serve. Direct file
 	// reads (`cat foo.go`) are still gated. Absent means the default (true).
 	PipePassthrough *bool `json:"pipe_passthrough"`
-	// FileMode decides what a whole-FILE read returns: "full" (default) is the file verbatim,
-	// "skeleton" is each top-level declaration's signature with large bodies elided.
+	// FileMode decides what a whole-FILE read returns: "full" is the file verbatim, "skeleton"
+	// is each top-level declaration's signature with large bodies elided.
 	//
-	// A benchmark run measured a file read returning 1.00x the bytes on disk, plus the context
-	// block on top -- strictly more expensive than `cat`, with the context block as the only
-	// thing bought. Skeleton mode is the answer, but it is opt-in: a model that has only seen
-	// a skeleton must not build an `edit` old_string from it, and that risk is worth measuring
-	// before it is anyone's default. Reading a SYMBOL is unaffected and already compact.
+	// THE DEFAULT DEPENDS ON THE SURFACE, and EffectiveFileMode is the only place that decides
+	// it: "skeleton" everywhere except ModeMCP, which defaults to "full". A benchmark run
+	// measured a whole-file read returning 1.00x the bytes on disk plus a context block on top
+	// -- strictly more expensive than the `cat` it replaced -- which is why the intercepting
+	// surfaces do not default to it. ModeMCP keeps "full" because there a file read is an
+	// explicit tool call against a named id, already the deliberate choice skeleton mode
+	// exists to force. Reading a SYMBOL is unaffected and already compact.
 	FileMode string `json:"file_mode"`
 	// SkeletonThreshold is how many lines a declaration may span before file_mode "skeleton"
 	// replaces its body with an elision marker. Absent uses the default.
@@ -132,22 +147,6 @@ type ReadSection struct {
 	// largest single tool result across two benchmark runs -- because `into_config` is one
 	// enormous function. 0 or negative disables the cap.
 	MaxSymbolLines *int `json:"max_symbol_lines,omitempty"`
-}
-
-// ContextFilterSection tunes the "# CONTEXT:" block emitted by the read tools:
-// how verbosely each neighbor kind is rendered and whether incoming
-// (caller/user) connections are shown. Visibility fields take
-// "hidden" | "normal" | "full".
-type ContextFilterSection struct {
-	IncludeIncoming          bool   `json:"include_incoming"`
-	ExternalVarsVisibility   string `json:"external_vars_visibility"`
-	SmallFunctionsVisibility string `json:"small_functions_visibility"`
-	SmallFunctionThreshold   int    `json:"small_function_threshold"`
-	HideNoDescription        *bool  `json:"hide_no_description"`
-	// MaxInlineParentLines caps how large a method's enclosing type may be before it stops
-	// being printed above the method and becomes an ordinary context entry. 0 disables
-	// inlining, negative means no cap. Absent uses the default.
-	MaxInlineParentLines *int `json:"max_inline_parent_lines,omitempty"`
 }
 
 // Configuration for the live/incremental scanner (`arac scanner run`).
@@ -368,16 +367,6 @@ type TerminalSection struct {
 	// question, and an answer disproportionate to it is not a cheaper read -- it is a way to
 	// spend the context window on one `head -1`. 0 or negative disables the check.
 	MaxOverserve *int `json:"max_overserve"`
-
-	// ShellReadNudge controls the one-line pointer printed after a shell read that
-	// ModeCLI leaves alone. Nil means on, which is the behaviour that shipped.
-	//
-	// It exists to be turned OFF, because whether the line earns its tokens is an empirical
-	// question and the answer so far is no: across three benchmark runs the model issued
-	// hundreds of shell reads, the nudge fired on the servable ones, and `arac read` was called
-	// exactly zero times. A knob makes the with/without comparison a config change rather than
-	// a build, which is the only way that question gets settled.
-	ShellReadNudge *bool `json:"shell_read_nudge"`
 }
 
 // Root configuration struct holding scan, read, scanner, descriptions, LLM, and viz settings.
@@ -449,40 +438,19 @@ func (c *Config) EffectivePipePassthrough() bool {
 	return *c.Read.PipePassthrough
 }
 
-// normalizeVisibility coerces a raw visibility string to one of
-// "hidden" | "normal" | "full", defaulting to "normal".
-func normalizeVisibility(s string) string {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "hidden":
-		return "hidden"
-	case "full":
-		return "full"
-	default:
-		return "normal"
-	}
-}
+// Context-filter presets for read.context_filter.
+const (
+	// ContextFilterOff renders no neighbours: the code asked for, and nothing around it.
+	ContextFilterOff = "off"
+	// ContextFilterNormal names each neighbour with its description. The default.
+	ContextFilterNormal = "normal"
+	// ContextFilterFull renders neighbours as fenced source cuts and adds "# USED BY:".
+	ContextFilterFull = "full"
+)
 
-// Returns whether to include incoming resource references in context output.
+// EffectiveIncludeIncoming reports whether a read appends the "# USED BY:" section.
 func (c *Config) EffectiveIncludeIncoming() bool {
-	return c.Read.ContextFilter.IncludeIncoming
-}
-
-// Returns the normalized visibility level for external variables from context filter configuration.
-func (c *Config) EffectiveExternalVarsVisibility() string {
-	return normalizeVisibility(c.Read.ContextFilter.ExternalVarsVisibility)
-}
-
-// Returns the normalized visibility level for small functions in context output.
-func (c *Config) EffectiveSmallFunctionsVisibility() string {
-	return normalizeVisibility(c.Read.ContextFilter.SmallFunctionsVisibility)
-}
-
-// Returns the line-count threshold for identifying small functions, defaulting to 5 if not set.
-func (c *Config) EffectiveSmallFunctionThreshold() int {
-	if c.Read.ContextFilter.SmallFunctionThreshold <= 0 {
-		return 5
-	}
-	return c.Read.ContextFilter.SmallFunctionThreshold
+	return c.EffectiveContextFilter().IncludeIncoming
 }
 
 // Returns whether to hide resources without descriptions in context output.
@@ -556,32 +524,6 @@ func (c *Config) EffectiveMaxSymbolLines() int {
 	return *c.Read.MaxSymbolLines
 }
 
-// EffectiveHideNoDescription resolves read.context_filter.hide_no_description, defaulting to
-// TRUE when the key is absent -- hence the pointer, which is how this file already
-// distinguishes "unset" from a meaningful false (see EffectiveMaxInlineParentLines).
-//
-// The default flipped after a benchmark run measured what an undescribed neighbour actually
-// buys. The CONTEXT section earns its tokens by letting the model skip a read: a description
-// says whether the neighbour matters. An entry with no description makes that promise and
-// does not keep it, so it costs a line and answers nothing. Constants are exempt upstream --
-// a value shown is a description (see applyExtVars).
-func (c *Config) EffectiveHideNoDescription() bool {
-	if c.Read.ContextFilter.HideNoDescription == nil {
-		return true
-	}
-	return *c.Read.ContextFilter.HideNoDescription
-}
-
-// EffectiveMaxInlineParentLines resolves read.context_filter.max_inline_parent_lines,
-// defaulting when the key is absent. 0 and negative values are meaningful (disable inlining /
-// no cap), so absence is signalled by a nil pointer rather than by a zero.
-func (c *Config) EffectiveMaxInlineParentLines() int {
-	if c.Read.ContextFilter.MaxInlineParentLines == nil {
-		return domain.DefaultMaxInlineParentLines
-	}
-	return *c.Read.ContextFilter.MaxInlineParentLines
-}
-
 // EffectiveReadKinds resolves read.kinds, defaulting when absent.
 func (c *Config) EffectiveReadKinds() []domain.ResourceKind {
 	if c.Read.Kinds == nil {
@@ -648,16 +590,41 @@ func ValidateReadKinds(kinds []domain.ResourceKind) error {
 		strings.Join(unknown, ", "), strings.Join(names, ", "))
 }
 
-// EffectiveContextFilter composes the resolved read.context_filter settings
-// into a domain.ContextFilter used by the topology read managers.
+// normalizeContextFilter stamps a recognised preset, so a re-saved config states its context
+// verbosity instead of leaving it implicit. An unrecognised value normalises to the default.
+func normalizeContextFilter(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case ContextFilterOff:
+		return ContextFilterOff
+	case ContextFilterFull:
+		return ContextFilterFull
+	default:
+		return ContextFilterNormal
+	}
+}
+
+// EffectiveContextFilter resolves read.context_filter into the domain.ContextFilter the read
+// managers apply. An unrecognised value resolves to the default rather than to an empty
+// filter, which would silently render no context at all.
 func (c *Config) EffectiveContextFilter() domain.ContextFilter {
-	return domain.ContextFilter{
-		IncludeIncoming:      c.EffectiveIncludeIncoming(),
-		ExtVarsVisibility:    domain.ParseVisibility(c.EffectiveExternalVarsVisibility()),
-		SmallFnVisibility:    domain.ParseVisibility(c.EffectiveSmallFunctionsVisibility()),
-		SmallFnThreshold:     c.EffectiveSmallFunctionThreshold(),
-		HideNoDescription:    c.EffectiveHideNoDescription(),
-		MaxInlineParentLines: c.EffectiveMaxInlineParentLines(),
+	switch strings.ToLower(strings.TrimSpace(c.Read.ContextFilter)) {
+	case ContextFilterOff:
+		return domain.ContextFilter{
+			ExtVarsVisibility:    domain.VisibilityHidden,
+			SmallFnVisibility:    domain.VisibilityHidden,
+			SmallFnThreshold:     domain.DefaultContextFilter().SmallFnThreshold,
+			MaxInlineParentLines: domain.DefaultMaxInlineParentLines,
+			HideNoDescription:    true,
+		}
+	case ContextFilterFull:
+		f := domain.DefaultContextFilter()
+		f.IncludeIncoming = true
+		f.ExtVarsVisibility = domain.VisibilityFull
+		f.SmallFnVisibility = domain.VisibilityFull
+		f.HideNoDescription = false
+		return f
+	default:
+		return domain.DefaultContextFilter()
 	}
 }
 
@@ -678,6 +645,12 @@ func (c *Config) Validate() error {
 	default:
 		return fmt.Errorf("mode: unknown mode %q (want %s, %s, %s or %s)",
 			c.Mode, ModeMCP, ModeCLI, ModeInterceptID, ModeInterceptLineRanges)
+	}
+	switch strings.ToLower(strings.TrimSpace(c.Read.ContextFilter)) {
+	case "", ContextFilterOff, ContextFilterNormal, ContextFilterFull:
+	default:
+		return fmt.Errorf("read.context_filter: unknown value %q (want %s, %s or %s)",
+			c.Read.ContextFilter, ContextFilterOff, ContextFilterNormal, ContextFilterFull)
 	}
 	if err := ValidateLazyDescriptions(c.Descriptions.Lazy); err != nil {
 		return err
@@ -894,7 +867,7 @@ func DefaultConfig() *Config {
 		return ac
 	}
 	return &Config{
-		Scan:  ScanSection{Mode: ScanModeDefault, Ignore: []string{}, Workers: 0, Progress: ProgressAuto, PreTool: PreToolScanDefault},
+		Scan:  ScanSection{Ignore: []string{}, Workers: 0, Progress: ProgressAuto, PreTool: PreToolScanDefault},
 		Paths: []domain.PathRule{},
 		// Stamped explicitly rather than left to the default: a written config should say
 		// which of the four products it is, not make the reader know what absence means.
@@ -906,12 +879,7 @@ func DefaultConfig() *Config {
 			MaxFileSize:     512 * 1024,
 			Kinds:           DefaultReadKinds(),
 			PipePassthrough: boolPtr(true),
-			ContextFilter: ContextFilterSection{
-				ExternalVarsVisibility:   "normal",
-				SmallFunctionsVisibility: "normal",
-				SmallFunctionThreshold:   5,
-				MaxInlineParentLines:     intPtr(domain.DefaultMaxInlineParentLines),
-			},
+			ContextFilter:   ContextFilterNormal,
 		},
 		Scanner:      ScannerSection{UpdateFrequency: 200},
 		Descriptions: DescriptionsSection{Kinds: DefaultNeedDescription(), StyleExemplars: DefaultDescriptionStyleExemplars},
@@ -1103,7 +1071,10 @@ func validConfig(c *Config) bool {
 	// EnsureConfig can clean-break migrate it.
 	return c.LLM.Any.MainAgent.MCPTools != nil ||
 		len(c.LLM.Any.Agents) > 0 ||
-		c.Scan.Mode != "" ||
+		c.Scan.PreTool != "" ||
+		// Non-nil rather than non-empty: an explicit [] disables description matching, and
+		// judging that file legacy would overwrite the one setting it exists to express.
+		c.Grep.DescriptionKinds != nil ||
 		c.Read.MaxFileSize != 0 ||
 		len(c.Descriptions.Kinds) > 0 ||
 		c.Viz.Chat.MainAgent.Tools != nil ||
@@ -1210,23 +1181,6 @@ func (c *Config) GuardBlocksNativeReads() bool {
 	return m == ModeMCP || m == ModeCLI
 }
 
-// NudgesShellReads reports whether a SHELL read should earn a one-line pointer at the read
-// capability after it runs.
-//
-// ModeCLI only, and only because that mode is the one where a shell read is neither
-// intercepted nor refused: the model types `sed -n 1,200p file.go`, gets the raw file, and
-// nothing in the exchange tells it `arac read` exists. The intercepting modes already
-// answered the command, and ModeMCP refuses it with a message that names the tool -- in both,
-// this line would be spent explaining something the model just received.
-// `terminal.shell_read_nudge: false` switches it off without leaving the mode, so the nudge can
-// be measured against its own absence.
-func (c *Config) NudgesShellReads() bool {
-	if c.EffectiveMode() != ModeCLI {
-		return false
-	}
-	return c.Terminal.ShellReadNudge == nil || *c.Terminal.ShellReadNudge
-}
-
 // BlockableInMode filters an operator's blocked_tools down to the ones this mode may actually
 // refuse.
 //
@@ -1315,11 +1269,6 @@ func normalizeConfig(c *Config) {
 	// Resolve the mode once and stamp it, so a re-saved config states its surface instead of
 	// leaving it implicit.
 	c.Mode = c.EffectiveMode()
-	switch c.Scan.Mode {
-	case ScanModeDefault, ScanModeHard, ScanModeAll:
-	default:
-		c.Scan.Mode = ScanModeDefault
-	}
 	if c.Scanner.UpdateFrequency <= 0 {
 		c.Scanner.UpdateFrequency = 200
 	}
@@ -1327,16 +1276,9 @@ func normalizeConfig(c *Config) {
 		c.Read.MaxFileSize = 512 * 1024
 	}
 	c.Scan.PreTool = normalizePreToolScan(string(c.Scan.PreTool))
-	c.Read.ContextFilter.ExternalVarsVisibility = normalizeVisibility(c.Read.ContextFilter.ExternalVarsVisibility)
-	c.Read.ContextFilter.SmallFunctionsVisibility = normalizeVisibility(c.Read.ContextFilter.SmallFunctionsVisibility)
+	c.Read.ContextFilter = normalizeContextFilter(c.Read.ContextFilter)
 	if c.Read.Kinds == nil {
 		c.Read.Kinds = DefaultReadKinds()
-	}
-	if c.Read.ContextFilter.MaxInlineParentLines == nil {
-		c.Read.ContextFilter.MaxInlineParentLines = intPtr(domain.DefaultMaxInlineParentLines)
-	}
-	if c.Read.ContextFilter.SmallFunctionThreshold <= 0 {
-		c.Read.ContextFilter.SmallFunctionThreshold = 5
 	}
 	if len(c.Descriptions.Kinds) == 0 {
 		c.Descriptions.Kinds = DefaultNeedDescription()
