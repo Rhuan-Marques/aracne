@@ -22,36 +22,6 @@ func desc(s string) string {
 // multi-id `read` uses, so a single read and a batched one produce identical output. The
 // per-resource body/context split lives in unit.go.
 
-// Formats a Go function or method read.
-func FormatGoFunctionContext(ctx *golang.GoFunctionContext) string {
-	return renderOne(FunctionUnit(ctx, nil))
-}
-
-// Formats a Go struct read.
-func FormatGoStructContext(ctx *golang.GoStructContext) string {
-	return renderOne(StructUnit(ctx))
-}
-
-// Formats a Go interface read.
-func FormatGoInterfaceContext(ctx *golang.GoInterfaceContext) string {
-	return renderOne(InterfaceUnit(ctx))
-}
-
-// Formats a Go named type read.
-func FormatGoNamedTypeContext(ctx *golang.GoNamedTypeContext) string {
-	return renderOne(NamedTypeUnit(ctx))
-}
-
-// Formats a Go package read.
-func FormatGoPackageContext(ctx *golang.GoPackageContext) string {
-	return renderOne(PackageUnit(ctx))
-}
-
-// Formats a Go dependency read.
-func FormatGoDependencyContext(ctx *golang.GoDependencyContext) string {
-	return renderOne(DependencyUnit(ctx))
-}
-
 // renderOne is the single-resource entry point into the batch renderer.
 func renderOne(u readunit.Unit) string {
 	return readunit.Render([]readunit.Unit{u}, readunit.Options{IncludeIncoming: true})

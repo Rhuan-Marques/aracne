@@ -52,26 +52,6 @@ func joinComponents(vars []java.VariableDefinition) string {
 // `read` uses, so single and batched reads produce identical output. The body/context split
 // lives in unit.go. Whole-file reads are language-neutral and no longer pass through here.
 
-// Formats a Java method or constructor read.
-func FormatJavaFunctionContext(ctx *java.JavaFunctionContext) string {
-	return renderOne(FunctionUnit(ctx, nil))
-}
-
-// Formats a Java class/enum/record read.
-func FormatJavaStructContext(ctx *java.JavaStructContext) string {
-	return renderOne(StructUnit(ctx))
-}
-
-// Formats a Java interface/annotation read.
-func FormatJavaInterfaceContext(ctx *java.JavaInterfaceContext) string {
-	return renderOne(InterfaceUnit(ctx))
-}
-
-// Formats a Java dependency read.
-func FormatJavaDependencyContext(ctx *java.JavaDependencyContext) string {
-	return renderOne(DependencyUnit(ctx))
-}
-
 // renderOne is the single-resource entry point into the batch renderer.
 func renderOne(u readunit.Unit) string {
 	return readunit.Render([]readunit.Unit{u}, readunit.Options{IncludeIncoming: true})

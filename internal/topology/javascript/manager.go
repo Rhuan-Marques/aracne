@@ -739,60 +739,6 @@ func (m *JavaScriptManager) UpdateDescription(id string, kind domain.ResourceKin
 	return helper.UpdateDescription(m.generic.DbPath(), kind, id, description)
 }
 
-// Returns the code cut for a resource (function, method, class, variable, file, or dependency) by kind and ID.
-func (m *JavaScriptManager) ReadResourceAndCut(id string, kind domain.ResourceKind) (*domain.CodeEntry, error) {
-	topo, err := m.generic.ReadAll()
-	if err != nil {
-		return nil, err
-	}
-
-	var loc domain.Location
-	found := false
-
-	switch kind {
-	case domain.ResourceFunction, domain.ResourceMethod:
-		gt := FromGeneric(topo)
-		for _, fn := range gt.Functions {
-			if string(fn.ID) == id {
-				loc = fn.Loc
-				found = true
-				break
-			}
-		}
-	case domain.ResourceStruct:
-		gt := FromGeneric(topo)
-		for _, c := range gt.Classes {
-			if string(c.ID) == id {
-				loc = c.Loc
-				found = true
-				break
-			}
-		}
-	case domain.ResourceVariable:
-		gt := FromGeneric(topo)
-		for _, v := range gt.ExternalVars {
-			if string(v.ID) == id {
-				loc = v.Location
-				found = true
-				break
-			}
-		}
-	case domain.ResourceDependency:
-		return &domain.CodeEntry{Cut: string(kind)}, nil
-	case domain.ResourceFile:
-		loc = domain.Location{Path: id}
-		found = true
-	default:
-		return nil, fmt.Errorf("unknown resource: %s", kind)
-	}
-
-	if !found {
-		return nil, fmt.Errorf("resource not found: %s", id)
-	}
-
-	return m.generic.Cut(loc)
-}
-
 // Converts JavaScriptFunction to SimplifiedFunction for API output.
 func simplifyFunction(fn JavaScriptFunction) SimplifiedFunction {
 	return SimplifiedFunction{

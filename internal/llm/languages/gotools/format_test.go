@@ -35,7 +35,7 @@ func TestFormatGoFunctionContextVisibility(t *testing.T) {
 		},
 	}
 
-	out := FormatGoFunctionContext(ctx)
+	out := renderOne(FunctionUnit(ctx, nil))
 
 	mustContain := []string{
 		"# CONTEXT:",
@@ -75,7 +75,7 @@ func TestFormatGoFunctionContextNormalUnchanged(t *testing.T) {
 			{ID: "pkg.helperA", Description: "does A", Visibility: domain.VisibilityNormal},
 		},
 	}
-	out := FormatGoFunctionContext(ctx)
+	out := renderOne(FunctionUnit(ctx, nil))
 	if !strings.Contains(out, "## pkg.helperA: does A") {
 		t.Errorf("missing normal line:\n%s", out)
 	}

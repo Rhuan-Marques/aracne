@@ -9,6 +9,7 @@ import (
 
 	"github.com/Rhuan-Marques/aracne/internal/helper"
 	"github.com/Rhuan-Marques/aracne/internal/llm/languages/gotools"
+	"github.com/Rhuan-Marques/aracne/internal/llm/languages/readunit"
 	"github.com/Rhuan-Marques/aracne/internal/topology"
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 	"github.com/Rhuan-Marques/aracne/internal/topology/golang"
@@ -734,7 +735,7 @@ func TestReadInterface(t *testing.T) {
 		t.Fatalf("expected interface, struct, and method blocks, got %d", len(ctx.Blocks))
 	}
 
-	formatted := gotools.FormatGoInterfaceContext(ctx)
+	formatted := readunit.Render([]readunit.Unit{gotools.InterfaceUnit(ctx)}, readunit.Options{IncludeIncoming: true})
 	if !strings.Contains(formatted, "## Implemented By") || !strings.Contains(formatted, "example.com/readctx.(Store).Read") {
 		t.Fatalf("formatted interface context missing implementation details:\n%s", formatted)
 	}
@@ -775,7 +776,7 @@ func TestReadNamedType(t *testing.T) {
 		t.Fatalf("expected named type and usage blocks, got %d", len(ctx.Blocks))
 	}
 
-	formatted := gotools.FormatGoNamedTypeContext(ctx)
+	formatted := readunit.Render([]readunit.Unit{gotools.NamedTypeUnit(ctx)}, readunit.Options{IncludeIncoming: true})
 	if !strings.Contains(formatted, "## Used By") || !strings.Contains(formatted, "example.com/readctx.Store") {
 		t.Fatalf("formatted named type context missing usage details:\n%s", formatted)
 	}

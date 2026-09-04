@@ -150,11 +150,10 @@ type ContextFilterSection struct {
 	MaxInlineParentLines *int `json:"max_inline_parent_lines,omitempty"`
 }
 
-// Configuration for the live/incremental scanner, including default scan mode and update frequency.
+// Configuration for the live/incremental scanner (`arac scanner run`).
 type ScannerSection struct {
-	// Mode is the default mode for the live/incremental scanner.
-	Mode            ScanMode `json:"mode"`
-	UpdateFrequency int      `json:"update_frequency"`
+	// UpdateFrequency is how often, in milliseconds, the watch loop re-checks the manifest.
+	UpdateFrequency int `json:"update_frequency"`
 }
 
 // Configuration for description generation specifying which resource kinds to describe and how many style exemplars to use as house-style anchors.
@@ -967,7 +966,7 @@ func DefaultConfig() *Config {
 				MaxInlineParentLines:     intPtr(domain.DefaultMaxInlineParentLines),
 			},
 		},
-		Scanner:      ScannerSection{Mode: ScanModeDefault, UpdateFrequency: 200},
+		Scanner:      ScannerSection{UpdateFrequency: 200},
 		Descriptions: DescriptionsSection{Kinds: DefaultNeedDescription(), StyleExemplars: DefaultDescriptionStyleExemplars},
 		Grep:         GrepSection{DescriptionKinds: DefaultGrepDescriptionKinds()},
 		LLM: LLMSection{
@@ -1403,11 +1402,6 @@ func normalizeConfig(c *Config) {
 	default:
 		c.Scan.Mode = ScanModeDefault
 	}
-	switch c.Scanner.Mode {
-	case ScanModeDefault, ScanModeHard, ScanModeAll:
-	default:
-		c.Scanner.Mode = ScanModeDefault
-	}
 	if c.Scanner.UpdateFrequency <= 0 {
 		c.Scanner.UpdateFrequency = 200
 	}
@@ -1655,14 +1649,6 @@ func ShouldRegenerateDescription(res domain.Resource, targetSet map[domain.Resou
 		return true
 	}
 	return filter.For(res.Kind, locLineSpan(res.Location), true) == domain.VisibilityNormal
-}
-
-func ShouldDescribeKind(kind domain.ResourceKind, targets []domain.ResourceKind) bool {
-	// Checks if a resource kind should be described based on configured describe targets.
-	if targets == nil {
-		targets = DefaultDescribeTargets()
-	}
-	return DescribeTargetSet(targets)[kind]
 }
 
 func FormatDescribeTargets(targets []domain.ResourceKind) string {

@@ -1320,29 +1320,6 @@ func addedWarnings(before, after map[string]domain.TopologyWarning) []domain.Top
 	return added
 }
 
-// Finds resource IDs by name, optionally filtered by resource kind.
-func (m *TopologyManager) FindResourcesByName(name string, kinds ...domain.ResourceKind) ([]string, error) {
-	topo, err := helper.ReadDb(m.dbPath)
-	if err != nil {
-		return nil, err
-	}
-	kindSet := make(map[domain.ResourceKind]bool, len(kinds))
-	for _, k := range kinds {
-		kindSet[k] = true
-	}
-	var results []string
-	for id, res := range topo.Resources {
-		if res.Name != name {
-			continue
-		}
-		if len(kindSet) > 0 && !kindSet[res.Kind] {
-			continue
-		}
-		results = append(results, id)
-	}
-	return results, nil
-}
-
 // ResolveNodeID snaps a caller-supplied resource id to the canonical id the topology holds,
 // or returns an error carrying ranked candidates so the caller can retry in the same turn.
 //
@@ -1424,15 +1401,6 @@ func (m *TopologyManager) UpdateDescription(id string, kind domain.ResourceKind,
 // Removes descriptions for the specified resource kinds from the database and returns the count of cleared entries
 func (m *TopologyManager) ClearDescriptions(targets []domain.ResourceKind) (int64, error) {
 	return helper.ClearDescriptions(m.dbPath, targets)
-}
-
-// Retrieves all topology warnings from the database.
-func (m *TopologyManager) GetWarnings() (map[string]domain.TopologyWarning, error) {
-	topo, err := helper.ReadDb(m.dbPath)
-	if err != nil {
-		return nil, err
-	}
-	return topo.Warnings, nil
 }
 
 // Retrieves topology warnings filtered by source ID, target ID, and kind.

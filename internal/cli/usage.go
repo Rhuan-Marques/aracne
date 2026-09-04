@@ -119,7 +119,6 @@ Usage:
   arac grep [flags] <pattern> [path]  Search node names, node descriptions and file contents (ranked in that order)
   arac cmd -- <command> [args...]  Run a shell read or search (cat/head/tail/sed -n/grep...), answered from the topology where aracne can and by the real command where it cannot
   arac update-file <path>  Re-parse a file and update the topology database (--db to specify db path)
-  Aracne read-resource-and-cut <id> <kind>  Get a resource's source code cut (kind: Function, Struct, Interface, ExternalVar, File, Package)
   arac update-description <id> <kind> <desc>  Update a resource's description in the topology DB
   arac node count            Print total node count
   arac node count --no-description  Print count of undocumented nodes
