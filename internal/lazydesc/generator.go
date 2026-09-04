@@ -151,6 +151,44 @@ var providerFallbackModel = map[string]string{
 // first, since a lazy fill is a small, mechanical, latency-sensitive job.
 var providerProbeOrder = []string{providerAnthropic, providerOpenAI, providerDeepSeek}
 
+// ResolveDescriptionProvider works out which LLM to describe with, for any caller that needs
+// one -- the lazy filler and the `arac descriptions generate` sweep both go through it.
+//
+// It exists exported because the sweep used to construct providers.NewDeepSeek() outright and
+// exit if DEEPSEEK_API_KEY was unset. Description generation is a headline feature, so having
+// it work with exactly one vendor's key -- while the lazy path on the same descriptions
+// already accepted four -- made the product's answer to "how do I describe my repo?" depend
+// on which of two entry points you happened to find.
+//
+// Unlike the lazy fill it falls back to probing the environment when the CONFIGURED provider
+// has no key. The two want different things from the same resolution: a lazy fill is a side
+// effect of a read and must decline silently rather than surprise anyone, while `arac
+// descriptions generate` is an explicit request, so reaching for the key the user actually
+// has beats refusing over one they merely configured. Without this, the stock config -- which
+// pins the executor to "haiku", i.e. Anthropic -- refuses a project holding only a DeepSeek
+// key, which is the exact case the command supported before it was generalised.
+//
+// Returns ok=false when nothing at all is configured; see resolveProvider for why that is not
+// an error.
+func ResolveDescriptionProvider(cfg helper.ResolvedLazyDescriptions) (llm.Provider, string, bool) {
+	if provider, model, ok := resolveProvider(cfg); ok {
+		return provider, model, true
+	}
+	// Keep the caller's base URL: it is transport, not provider choice, and a project that
+	// proxies its LLM traffic still proxies it when the key came from the environment.
+	return resolveProvider(helper.ResolvedLazyDescriptions{BaseURL: cfg.BaseURL})
+}
+
+// ProviderKeyEnvNames lists the environment variables any provider key may come from, for
+// error messages that name every option instead of the one the caller happened to prefer.
+func ProviderKeyEnvNames() []string {
+	names := make([]string, 0, len(providerProbeOrder))
+	for _, p := range providerProbeOrder {
+		names = append(names, providerKeyEnv[p])
+	}
+	return names
+}
+
 // resolveProvider works out what to call, in three tiers: an explicit provider, a provider
 // inferred from the model name, or whichever provider has a key in the environment.
 //

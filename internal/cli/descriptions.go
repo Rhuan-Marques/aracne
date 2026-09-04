@@ -9,9 +9,9 @@ import (
 	"sync"
 
 	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/lazydesc"
 	"github.com/Rhuan-Marques/aracne/internal/llm"
 	"github.com/Rhuan-Marques/aracne/internal/llm/agent"
-	"github.com/Rhuan-Marques/aracne/internal/llm/providers"
 	"github.com/Rhuan-Marques/aracne/internal/llm/tools"
 	"github.com/Rhuan-Marques/aracne/internal/prompts"
 	"github.com/Rhuan-Marques/aracne/internal/topology"
@@ -53,15 +53,23 @@ func RunGenerateDescriptions(args []string) {
 	regenOversized := fs.Bool("regen_oversized", false, "Rewrite existing descriptions that overrun their kind's character budget instead of describing undocumented resources")
 	fs.Parse(args)
 
-	apiKey := os.Getenv("DEEPSEEK_API_KEY")
-	if apiKey == "" {
-		fmt.Fprintln(os.Stderr, "Error: DEEPSEEK_API_KEY environment variable is not set")
+	manager, reg := InitRegistry(".aracne/topology.db")
+	cfg := helper.EnsureConfig(helper.ConfigPath(".aracne/topology.db"))
+
+	// Resolved the same way the lazy fill resolves it, from descriptions.lazy plus the
+	// descriptions-generation-executor's model. This used to be providers.NewDeepSeek()
+	// outright, so the sweep needed DEEPSEEK_API_KEY while the lazy path over the same
+	// descriptions already accepted Anthropic, OpenAI or DeepSeek -- one feature with two
+	// different answers to "which key do I need", depending on which entry point you found.
+	provider, model, ok := lazydesc.ResolveDescriptionProvider(
+		cfg.EffectiveLazyDescriptions(helper.DefaultLazyHarness))
+	if !ok {
+		fmt.Fprintf(os.Stderr, "Error: no LLM provider configured for description generation.\n"+
+			"Set one of %s, or name a provider under \"descriptions\": {\"lazy\": {\"provider\": ...}}\n"+
+			"in .aracne/config.json.\n", strings.Join(lazydesc.ProviderKeyEnvNames(), ", "))
 		os.Exit(1)
 	}
-
-	manager, reg := InitRegistry(".aracne/topology.db")
-	provider := providers.NewDeepSeek()
-	cfg := helper.EnsureConfig(helper.ConfigPath(".aracne/topology.db"))
+	fmt.Fprintf(os.Stderr, "Describing with %s\n", model)
 	batchSizeProvided := false
 	includeNotVisibleProvided := false
 	fs.Visit(func(f *flag.Flag) {
