@@ -17,7 +17,7 @@ import (
 	"strings"
 	"testing"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // Stable resource IDs (rooted at the crate package name "rustfamily").

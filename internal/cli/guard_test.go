@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"aracne/internal/toolspec"
+	"github.com/Rhuan-Marques/aracne/internal/toolspec"
 )
 
 func TestCommandKeys(t *testing.T) {

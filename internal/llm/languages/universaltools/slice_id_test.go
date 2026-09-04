@@ -13,8 +13,8 @@ import (
 // leave a Go method's marker reading `⋯ +1 lines of  ⋯` with no name at all.
 func TestLastIDSegment(t *testing.T) {
 	for _, tc := range []struct{ id, want string }{
-		{"aracne/testing_ground/go/shapes.(Triangle).Perimeter", "Perimeter"},
-		{"aracne/internal/cli.RunGuard", "RunGuard"},
+		{"github.com/Rhuan-Marques/aracne/testing_ground/go/shapes.(Triangle).Perimeter", "Perimeter"},
+		{"github.com/Rhuan-Marques/aracne/internal/cli.RunGuard", "RunGuard"},
 		{"src/flask/app.Flask.register_blueprint", "register_blueprint"},
 		{"crate::args::Args::parse", "parse"},
 		{"com.example.Foo.bar(int,int)", "bar"},
@@ -34,8 +34,8 @@ func TestLastIDSegment(t *testing.T) {
 // is how it shipped.
 func TestMarkerAlwaysNamesTheDeclaration(t *testing.T) {
 	ids := []string{
-		"aracne/testing_ground/go/shapes.(Triangle).Perimeter",
-		"aracne/internal/cli.RunGuard",
+		"github.com/Rhuan-Marques/aracne/testing_ground/go/shapes.(Triangle).Perimeter",
+		"github.com/Rhuan-Marques/aracne/internal/cli.RunGuard",
 		"src/flask/app.Flask.register_blueprint",
 		"crate::args::Args::parse",
 		"com.example.Foo.bar(int,int)",

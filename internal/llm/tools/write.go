@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"aracne/internal/topology"
-	"aracne/internal/topology/scanner"
+	"github.com/Rhuan-Marques/aracne/internal/topology"
+	"github.com/Rhuan-Marques/aracne/internal/topology/scanner"
 )
 
 // LLM tool for writing files with scanner registry and topology manager integration.

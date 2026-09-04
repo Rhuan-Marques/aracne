@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"aracne/internal/topology"
+	"github.com/Rhuan-Marques/aracne/internal/topology"
 )
 
 // LLM tool to report a bug detected in the codebase to the topology database.

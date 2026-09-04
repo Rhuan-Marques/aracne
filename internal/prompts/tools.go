@@ -3,7 +3,7 @@ package prompts
 import (
 	"strings"
 
-	"aracne/internal/toolspec"
+	"github.com/Rhuan-Marques/aracne/internal/toolspec"
 )
 
 // WithToolsListing inserts a "## Tools" section — built from the tool catalog

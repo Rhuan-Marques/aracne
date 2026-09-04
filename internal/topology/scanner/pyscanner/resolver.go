@@ -4,8 +4,8 @@ import (
 	"sort"
 	"strings"
 
-	"aracne/internal/topology/contract"
-	"aracne/internal/topology/python"
+	"github.com/Rhuan-Marques/aracne/internal/topology/contract"
+	"github.com/Rhuan-Marques/aracne/internal/topology/python"
 )
 
 // Extracts function dependencies by resolving references and calls within the function body.

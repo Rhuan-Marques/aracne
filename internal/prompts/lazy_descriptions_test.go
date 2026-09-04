@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 func wanted(ids ...string) map[string]domain.ResourceKind {

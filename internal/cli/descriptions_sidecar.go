@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 
-	"aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
 )
 
 // `arac descriptions export` / `import` — the ID-independent backup for LLM-authored

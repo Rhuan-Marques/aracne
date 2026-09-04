@@ -13,12 +13,12 @@ import (
 	"sync"
 	"testing"
 
-	"aracne/internal/helper"
-	"aracne/internal/lazydesc"
-	"aracne/internal/llm/languages/universaltools"
-	"aracne/internal/llm/tools"
-	"aracne/internal/topogrep"
-	"aracne/internal/topology"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/lazydesc"
+	"github.com/Rhuan-Marques/aracne/internal/llm/languages/universaltools"
+	"github.com/Rhuan-Marques/aracne/internal/llm/tools"
+	"github.com/Rhuan-Marques/aracne/internal/topogrep"
+	"github.com/Rhuan-Marques/aracne/internal/topology"
 )
 
 // descriptions.lazy, end to end over a really scanned project.

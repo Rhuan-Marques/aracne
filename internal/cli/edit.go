@@ -6,7 +6,7 @@ import (
 	"io"
 	"os"
 
-	"aracne/internal/llm/tools"
+	"github.com/Rhuan-Marques/aracne/internal/llm/tools"
 )
 
 // Reads JSON from stdin containing file path and old/new strings, applies the

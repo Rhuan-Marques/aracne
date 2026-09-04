@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"aracne/internal/llm"
+	"github.com/Rhuan-Marques/aracne/internal/llm"
 )
 
 func setupResumeTest(t *testing.T, serverURL string) (*Manager, *Session, func()) {

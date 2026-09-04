@@ -38,104 +38,104 @@ package tests_test
 import (
 	"testing"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // Stable resource IDs in the Go corpus (module path: aracne).
 const (
-	idConsumerReport = "aracne/testing_ground/go/consumer.Report"
-	idConsumerTotal  = "aracne/testing_ground/go/consumer.Total"
-	idGeomMakeCircle = "aracne/testing_ground/go/geometry.MakeCircle"
-	idGeomMintCircle = "aracne/testing_ground/go/geometry.MintCircle"
+	idConsumerReport = "github.com/Rhuan-Marques/aracne/testing_ground/go/consumer.Report"
+	idConsumerTotal  = "github.com/Rhuan-Marques/aracne/testing_ground/go/consumer.Total"
+	idGeomMakeCircle = "github.com/Rhuan-Marques/aracne/testing_ground/go/geometry.MakeCircle"
+	idGeomMintCircle = "github.com/Rhuan-Marques/aracne/testing_ground/go/geometry.MintCircle"
 
-	idShape       = "aracne/testing_ground/go/shapes.Shape"
-	idCircle      = "aracne/testing_ground/go/shapes.Circle"
-	idCircleArea  = "aracne/testing_ground/go/shapes.(Circle).Area"
-	idCirclePerim = "aracne/testing_ground/go/shapes.(Circle).Perimeter"
-	idCircleScale = "aracne/testing_ground/go/shapes.(Circle).Scale"
-	idDisc        = "aracne/testing_ground/go/shapes.Disc"
-	idDiscArea    = "aracne/testing_ground/go/shapes.(Disc).Area"
-	idRectArea    = "aracne/testing_ground/go/shapes.(Rectangle).Area"
-	idTriangle    = "aracne/testing_ground/go/shapes.Triangle"
-	idTriDescribe = "aracne/testing_ground/go/shapes.(Triangle).Describe"
+	idShape       = "github.com/Rhuan-Marques/aracne/testing_ground/go/shapes.Shape"
+	idCircle      = "github.com/Rhuan-Marques/aracne/testing_ground/go/shapes.Circle"
+	idCircleArea  = "github.com/Rhuan-Marques/aracne/testing_ground/go/shapes.(Circle).Area"
+	idCirclePerim = "github.com/Rhuan-Marques/aracne/testing_ground/go/shapes.(Circle).Perimeter"
+	idCircleScale = "github.com/Rhuan-Marques/aracne/testing_ground/go/shapes.(Circle).Scale"
+	idDisc        = "github.com/Rhuan-Marques/aracne/testing_ground/go/shapes.Disc"
+	idDiscArea    = "github.com/Rhuan-Marques/aracne/testing_ground/go/shapes.(Disc).Area"
+	idRectArea    = "github.com/Rhuan-Marques/aracne/testing_ground/go/shapes.(Rectangle).Area"
+	idTriangle    = "github.com/Rhuan-Marques/aracne/testing_ground/go/shapes.Triangle"
+	idTriDescribe = "github.com/Rhuan-Marques/aracne/testing_ground/go/shapes.(Triangle).Describe"
 
-	idHexagon     = "aracne/testing_ground/go/shapes.Hexagon"
-	idHexagonArea = "aracne/testing_ground/go/shapes.(Hexagon).Area"
+	idHexagon     = "github.com/Rhuan-Marques/aracne/testing_ground/go/shapes.Hexagon"
+	idHexagonArea = "github.com/Rhuan-Marques/aracne/testing_ground/go/shapes.(Hexagon).Area"
 )
 
 // Stable resource IDs for the edge-case packages exercised by G9–G19.
 const (
 	// recursive
-	idRecPing    = "aracne/testing_ground/go/recursive.ping"
-	idRecPong    = "aracne/testing_ground/go/recursive.pong"
-	idRecBounce  = "aracne/testing_ground/go/recursive.Bounce"
-	idRecNodeLen = "aracne/testing_ground/go/recursive.(Node).Length"
+	idRecPing    = "github.com/Rhuan-Marques/aracne/testing_ground/go/recursive.ping"
+	idRecPong    = "github.com/Rhuan-Marques/aracne/testing_ground/go/recursive.pong"
+	idRecBounce  = "github.com/Rhuan-Marques/aracne/testing_ground/go/recursive.Bounce"
+	idRecNodeLen = "github.com/Rhuan-Marques/aracne/testing_ground/go/recursive.(Node).Length"
 
 	// failure (error interface + sentinel)
-	idFailValidator = "aracne/testing_ground/go/failure.Validator"
-	idFailForm      = "aracne/testing_ground/go/failure.Form"
-	idFailValidate  = "aracne/testing_ground/go/failure.(Form).Validate"
-	idFailParseErr  = "aracne/testing_ground/go/failure.ParseError"
-	idFailErrEmpty  = "aracne/testing_ground/go/failure.ErrEmpty"
-	idFailCheck     = "aracne/testing_ground/go/failure.Check"
-	idFailWrap      = "aracne/testing_ground/go/failure.wrap"
+	idFailValidator = "github.com/Rhuan-Marques/aracne/testing_ground/go/failure.Validator"
+	idFailForm      = "github.com/Rhuan-Marques/aracne/testing_ground/go/failure.Form"
+	idFailValidate  = "github.com/Rhuan-Marques/aracne/testing_ground/go/failure.(Form).Validate"
+	idFailParseErr  = "github.com/Rhuan-Marques/aracne/testing_ground/go/failure.ParseError"
+	idFailErrEmpty  = "github.com/Rhuan-Marques/aracne/testing_ground/go/failure.ErrEmpty"
+	idFailCheck     = "github.com/Rhuan-Marques/aracne/testing_ground/go/failure.Check"
+	idFailWrap      = "github.com/Rhuan-Marques/aracne/testing_ground/go/failure.wrap"
 
 	// embedding
-	idEmbRecursivePkg = "aracne/testing_ground/go/recursive"
-	idEmbDecorated    = "aracne/testing_ground/go/embedding.Decorated"
-	idEmbDerived      = "aracne/testing_ground/go/embedding.Derived"
-	idEmbGreet        = "aracne/testing_ground/go/embedding.(Derived).Greet"
-	idEmbBaseHello    = "aracne/testing_ground/go/embedding.(Base).Hello"
+	idEmbRecursivePkg = "github.com/Rhuan-Marques/aracne/testing_ground/go/recursive"
+	idEmbDecorated    = "github.com/Rhuan-Marques/aracne/testing_ground/go/embedding.Decorated"
+	idEmbDerived      = "github.com/Rhuan-Marques/aracne/testing_ground/go/embedding.Derived"
+	idEmbGreet        = "github.com/Rhuan-Marques/aracne/testing_ground/go/embedding.(Derived).Greet"
+	idEmbBaseHello    = "github.com/Rhuan-Marques/aracne/testing_ground/go/embedding.(Base).Hello"
 
 	// dispatch (method value/expr, type assertion/switch)
-	idDispDogSound = "aracne/testing_ground/go/dispatch.(Dog).Sound"
-	idDispCatSound = "aracne/testing_ground/go/dispatch.(Cat).Sound"
-	idDispMValue   = "aracne/testing_ground/go/dispatch.UseMethodValue"
-	idDispMExpr    = "aracne/testing_ground/go/dispatch.UseMethodExpr"
-	idDispAssert   = "aracne/testing_ground/go/dispatch.AssertAnimal"
-	idDispSwitch   = "aracne/testing_ground/go/dispatch.SwitchAnimal"
+	idDispDogSound = "github.com/Rhuan-Marques/aracne/testing_ground/go/dispatch.(Dog).Sound"
+	idDispCatSound = "github.com/Rhuan-Marques/aracne/testing_ground/go/dispatch.(Cat).Sound"
+	idDispMValue   = "github.com/Rhuan-Marques/aracne/testing_ground/go/dispatch.UseMethodValue"
+	idDispMExpr    = "github.com/Rhuan-Marques/aracne/testing_ground/go/dispatch.UseMethodExpr"
+	idDispAssert   = "github.com/Rhuan-Marques/aracne/testing_ground/go/dispatch.AssertAnimal"
+	idDispSwitch   = "github.com/Rhuan-Marques/aracne/testing_ground/go/dispatch.SwitchAnimal"
 
 	// concurrency (defer / go)
-	idConcWork    = "aracne/testing_ground/go/concurrency.Work"
-	idConcSpawn   = "aracne/testing_ground/go/concurrency.Spawn"
-	idConcSelect  = "aracne/testing_ground/go/concurrency.Select"
-	idConcProcess = "aracne/testing_ground/go/concurrency.process"
-	idConcCleanup = "aracne/testing_ground/go/concurrency.cleanup"
+	idConcWork    = "github.com/Rhuan-Marques/aracne/testing_ground/go/concurrency.Work"
+	idConcSpawn   = "github.com/Rhuan-Marques/aracne/testing_ground/go/concurrency.Spawn"
+	idConcSelect  = "github.com/Rhuan-Marques/aracne/testing_ground/go/concurrency.Select"
+	idConcProcess = "github.com/Rhuan-Marques/aracne/testing_ground/go/concurrency.process"
+	idConcCleanup = "github.com/Rhuan-Marques/aracne/testing_ground/go/concurrency.cleanup"
 
 	// visibility (unexported resources)
-	idVisReader      = "aracne/testing_ground/go/visibility.reader"
-	idVisFileReader  = "aracne/testing_ground/go/visibility.fileReader"
-	idVisNewReader   = "aracne/testing_ground/go/visibility.newReader"
-	idVisLoad        = "aracne/testing_ground/go/visibility.Load"
-	idVisDefaultPath = "aracne/testing_ground/go/visibility.defaultPath"
+	idVisReader      = "github.com/Rhuan-Marques/aracne/testing_ground/go/visibility.reader"
+	idVisFileReader  = "github.com/Rhuan-Marques/aracne/testing_ground/go/visibility.fileReader"
+	idVisNewReader   = "github.com/Rhuan-Marques/aracne/testing_ground/go/visibility.newReader"
+	idVisLoad        = "github.com/Rhuan-Marques/aracne/testing_ground/go/visibility.Load"
+	idVisDefaultPath = "github.com/Rhuan-Marques/aracne/testing_ground/go/visibility.defaultPath"
 
 	// inits
-	idInitInit     = "aracne/testing_ground/go/inits.init"
-	idInitConfig   = "aracne/testing_ground/go/inits.Config"
-	idInitReady    = "aracne/testing_ground/go/inits.Ready"
-	idInitReadyVar = "aracne/testing_ground/go/inits.ready"
+	idInitInit     = "github.com/Rhuan-Marques/aracne/testing_ground/go/inits.init"
+	idInitConfig   = "github.com/Rhuan-Marques/aracne/testing_ground/go/inits.Config"
+	idInitReady    = "github.com/Rhuan-Marques/aracne/testing_ground/go/inits.Ready"
+	idInitReadyVar = "github.com/Rhuan-Marques/aracne/testing_ground/go/inits.ready"
 
 	// dotimport
-	idDotShout   = "aracne/testing_ground/go/dotimport.Shout"
-	idDotLoud    = "aracne/testing_ground/go/dotimport.Loud"
-	idDotToUpper = "aracne/testing_ground/go/dotimport.ToUpper" // phantom; must NOT exist as an edge
+	idDotShout   = "github.com/Rhuan-Marques/aracne/testing_ground/go/dotimport.Shout"
+	idDotLoud    = "github.com/Rhuan-Marques/aracne/testing_ground/go/dotimport.Loud"
+	idDotToUpper = "github.com/Rhuan-Marques/aracne/testing_ground/go/dotimport.ToUpper" // phantom; must NOT exist as an edge
 
 	// generics (generic interface)
-	idGenContainer = "aracne/testing_ground/go/generics.Container"
-	idGenBox       = "aracne/testing_ground/go/generics.Box"
+	idGenContainer = "github.com/Rhuan-Marques/aracne/testing_ground/go/generics.Container"
+	idGenBox       = "github.com/Rhuan-Marques/aracne/testing_ground/go/generics.Box"
 
 	// edge (funcvars.go: package-level func-typed vars called through the var)
-	idEdgeColorize        = "aracne/testing_ground/go/edge.Colorize"
-	idEdgeShout           = "aracne/testing_ground/go/edge.Shout"
-	idEdgeHandleVar       = "aracne/testing_ground/go/edge.Handle"
-	idEdgeDecorate        = "aracne/testing_ground/go/edge.Decorate"
-	idEdgeDecorateChecked = "aracne/testing_ground/go/edge.DecorateChecked"
-	idConsumerDecorated   = "aracne/testing_ground/go/consumer.Decorated"
+	idEdgeColorize        = "github.com/Rhuan-Marques/aracne/testing_ground/go/edge.Colorize"
+	idEdgeShout           = "github.com/Rhuan-Marques/aracne/testing_ground/go/edge.Shout"
+	idEdgeHandleVar       = "github.com/Rhuan-Marques/aracne/testing_ground/go/edge.Handle"
+	idEdgeDecorate        = "github.com/Rhuan-Marques/aracne/testing_ground/go/edge.Decorate"
+	idEdgeDecorateChecked = "github.com/Rhuan-Marques/aracne/testing_ground/go/edge.DecorateChecked"
+	idConsumerDecorated   = "github.com/Rhuan-Marques/aracne/testing_ground/go/consumer.Decorated"
 
 	// edge (more.go: iota expr / typed consts / struct tags)
-	idEdgeKB       = "aracne/testing_ground/go/edge.KB"
-	idEdgePriority = "aracne/testing_ground/go/edge.Priority"
-	idEdgeTagged   = "aracne/testing_ground/go/edge.Tagged"
+	idEdgeKB       = "github.com/Rhuan-Marques/aracne/testing_ground/go/edge.KB"
+	idEdgePriority = "github.com/Rhuan-Marques/aracne/testing_ground/go/edge.Priority"
+	idEdgeTagged   = "github.com/Rhuan-Marques/aracne/testing_ground/go/edge.Tagged"
 )
 
 // A new Shape implementer used by the add/remove implementer scenarios.
@@ -594,7 +594,7 @@ func TestAtScaleGo_G20_PackageFuncVars(t *testing.T) {
 			// The extvar arm deliberately emits no uses_package edge, mirroring
 			// resolveUseMissingWarning's extvar case. Cold and incremental must
 			// agree here or assertSameGraph3 fails.
-			assertNoConn(t, topo, mode, idConsumerDecorated, connUsesPkg, "aracne/testing_ground/go/edge")
+			assertNoConn(t, topo, mode, idConsumerDecorated, connUsesPkg, "github.com/Rhuan-Marques/aracne/testing_ground/go/edge")
 
 			// and none of it is reported as missing
 			for _, w := range topo.Warnings {

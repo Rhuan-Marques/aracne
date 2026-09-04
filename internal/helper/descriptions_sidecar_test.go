@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // The sidecar exists so that a change to any resource-ID format cannot destroy

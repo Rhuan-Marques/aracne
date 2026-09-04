@@ -19,9 +19,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"aracne/internal/topology/domain"
-	rust "aracne/internal/topology/rust"
-	"aracne/internal/topology/scanner"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	rust "github.com/Rhuan-Marques/aracne/internal/topology/rust"
+	"github.com/Rhuan-Marques/aracne/internal/topology/scanner"
 )
 
 // RustScanner implements scanner.LanguageScanner for Rust source trees.

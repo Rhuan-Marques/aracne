@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"aracne/internal/topology/contract"
-	js "aracne/internal/topology/javascript"
+	"github.com/Rhuan-Marques/aracne/internal/topology/contract"
+	js "github.com/Rhuan-Marques/aracne/internal/topology/javascript"
 )
 
 // exportRef points an imported name at the topology resource it resolves to.

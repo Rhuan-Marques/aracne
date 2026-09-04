@@ -3,7 +3,7 @@ package scanner
 import (
 	"errors"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // ErrPartialFallback is returned by a PartialUpdater.UpdateFilePartial when it

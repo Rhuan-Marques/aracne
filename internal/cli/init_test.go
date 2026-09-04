@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"aracne/internal/helper"
-	"aracne/internal/toolspec"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/toolspec"
 )
 
 func TestNativePermission(t *testing.T) {

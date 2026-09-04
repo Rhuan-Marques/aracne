@@ -3,7 +3,7 @@ package pyscanner
 import (
 	"sort"
 
-	"aracne/internal/topology/python"
+	"github.com/Rhuan-Marques/aracne/internal/topology/python"
 )
 
 // Matches and rebuilds inheritance relationships between Python classes by resolving base classes and creating bidirectional ConnInherits/ConnInheritedBy edges.

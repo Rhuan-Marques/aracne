@@ -25,7 +25,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // Verdict is the answer to "does this call still fit this signature".

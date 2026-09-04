@@ -6,11 +6,11 @@ import (
 	"sync"
 	"time"
 
-	"aracne/internal/helper"
-	"aracne/internal/prompts"
-	"aracne/internal/topogrep"
-	"aracne/internal/topology"
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/prompts"
+	"github.com/Rhuan-Marques/aracne/internal/topogrep"
+	"github.com/Rhuan-Marques/aracne/internal/topology"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // Filler is the read path's entry point: plan, generate, write, report whether the topology

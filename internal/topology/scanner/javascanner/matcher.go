@@ -4,7 +4,7 @@ import (
 	"sort"
 	"strings"
 
-	java "aracne/internal/topology/java"
+	java "github.com/Rhuan-Marques/aracne/internal/topology/java"
 )
 
 // connExtendsRecords / connImplRecords are private module-node edge kinds that

@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"aracne/internal/helper"
-	"aracne/internal/topology"
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/topology"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 func TestDescriptionsExecutorProfileIsLimited(t *testing.T) {

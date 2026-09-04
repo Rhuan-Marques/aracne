@@ -6,10 +6,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"aracne/internal/helper"
-	"aracne/internal/topology/domain"
-	js "aracne/internal/topology/javascript"
-	"aracne/internal/topology/scanner"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	js "github.com/Rhuan-Marques/aracne/internal/topology/javascript"
+	"github.com/Rhuan-Marques/aracne/internal/topology/scanner"
 )
 
 // JavaScriptScanner is the shared ECMAScript scanner; it drives both JavaScript and

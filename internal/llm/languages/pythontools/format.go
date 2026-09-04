@@ -1,9 +1,9 @@
 package pythontools
 
 import (
-	"aracne/internal/llm/languages/readunit"
+	"github.com/Rhuan-Marques/aracne/internal/llm/languages/readunit"
 
-	"aracne/internal/topology/python"
+	"github.com/Rhuan-Marques/aracne/internal/topology/python"
 )
 
 // Returns a description string or "no description" if empty.

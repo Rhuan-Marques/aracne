@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"aracne/internal/topology"
+	"github.com/Rhuan-Marques/aracne/internal/topology"
 )
 
 // LLM tool to permanently delete a bug report from the topology database.

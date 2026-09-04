@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
 )
 
 // allModes is every mode a project can be in. A test that loops over it fails when a fifth is

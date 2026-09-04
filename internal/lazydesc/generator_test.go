@@ -3,7 +3,7 @@ package lazydesc
 import (
 	"testing"
 
-	"aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
 )
 
 // clearKeys removes every provider key for the duration of a test, so the environment the

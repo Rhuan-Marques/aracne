@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"aracne/internal/llm/tools"
+	"github.com/Rhuan-Marques/aracne/internal/llm/tools"
 )
 
 // MCP JSON-RPC server that listens on stdin/stdout and dispatches requests to the registered tool handlers.

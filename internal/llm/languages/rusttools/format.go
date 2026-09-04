@@ -3,9 +3,9 @@ package rusttools
 import (
 	"strings"
 
-	"aracne/internal/llm/languages/readunit"
+	"github.com/Rhuan-Marques/aracne/internal/llm/languages/readunit"
 
-	"aracne/internal/topology/rust"
+	"github.com/Rhuan-Marques/aracne/internal/topology/rust"
 )
 
 // desc returns "no description" for empty strings, otherwise the input unchanged.

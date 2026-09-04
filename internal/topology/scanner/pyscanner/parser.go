@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"aracne/internal/topology/domain"
-	"aracne/internal/topology/python"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/python"
 )
 
 // Records a Python import statement with the name, optional alias, module path, and relative import level.

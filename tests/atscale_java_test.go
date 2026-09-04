@@ -15,7 +15,7 @@ package tests_test
 import (
 	"testing"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // Stable FQN resource IDs in the Java corpus (from the authoritative scan dump).

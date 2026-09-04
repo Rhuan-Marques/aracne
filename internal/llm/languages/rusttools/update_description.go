@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"aracne/internal/topology/domain"
-	"aracne/internal/topology/rust"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/rust"
 )
 
 // UpdateDescriptionTool updates topology descriptions for Rust resources via LLM

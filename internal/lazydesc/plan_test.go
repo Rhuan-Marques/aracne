@@ -3,8 +3,8 @@ package lazydesc
 import (
 	"testing"
 
-	"aracne/internal/helper"
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // fixture builds a small graph:

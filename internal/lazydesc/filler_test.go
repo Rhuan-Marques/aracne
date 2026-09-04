@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"aracne/internal/helper"
-	"aracne/internal/topology"
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/topology"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // fakeGenerator answers every request with a canned description and records what it was asked.

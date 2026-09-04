@@ -7,8 +7,8 @@ import (
 	"go/token"
 	"strings"
 
-	"aracne/internal/topology/domain"
-	"aracne/internal/topology/golang"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/golang"
 )
 
 // Holds parsed Go file metadata including imports, structs, interfaces, functions, and type definitions.

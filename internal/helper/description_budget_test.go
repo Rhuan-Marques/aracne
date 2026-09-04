@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // The cap is a gate on descriptions coming IN. A rejected write must leave the row

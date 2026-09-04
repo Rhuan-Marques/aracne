@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"aracne/internal/toolspec"
+	"github.com/Rhuan-Marques/aracne/internal/toolspec"
 )
 
 // The guard exists to route work to the aracne tools where they are the better answer. A

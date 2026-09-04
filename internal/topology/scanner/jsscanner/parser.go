@@ -10,9 +10,9 @@ import (
 	tstsx "github.com/smacker/go-tree-sitter/typescript/tsx"
 	tstypescript "github.com/smacker/go-tree-sitter/typescript/typescript"
 
-	"aracne/internal/topology/contract"
-	"aracne/internal/topology/domain"
-	js "aracne/internal/topology/javascript"
+	"github.com/Rhuan-Marques/aracne/internal/topology/contract"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	js "github.com/Rhuan-Marques/aracne/internal/topology/javascript"
 )
 
 // tree-sitter node type names (verified against the bundled javascript + typescript grammars).

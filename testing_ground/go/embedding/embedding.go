@@ -6,7 +6,7 @@
 // its own (promoted methods are not separate resources).
 package embedding
 
-import "aracne/testing_ground/go/recursive"
+import "github.com/Rhuan-Marques/aracne/testing_ground/go/recursive"
 
 // Base is a plain struct with one method, used as an embedding target.
 type Base struct {

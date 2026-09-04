@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"aracne/internal/topology/python"
+	"github.com/Rhuan-Marques/aracne/internal/topology/python"
 )
 
 // pyImportTarget describes the module a single internal import points at,

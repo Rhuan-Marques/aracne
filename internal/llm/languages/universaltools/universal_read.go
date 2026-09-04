@@ -9,10 +9,10 @@ import (
 	"strconv"
 	"strings"
 
-	"aracne/internal/helper"
-	"aracne/internal/topology"
-	"aracne/internal/topology/domain"
-	"aracne/internal/topology/idresolve"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/topology"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/idresolve"
 )
 
 // Holds a resolved resource ID and its domain.Resource metadata for read operations.

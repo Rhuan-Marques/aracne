@@ -31,8 +31,8 @@ import (
 	"testing"
 	"time"
 
-	"aracne/internal/helper"
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // ---------------------------------------------------------------------------
@@ -59,19 +59,25 @@ const (
 // Corpus copy + mutation helpers.
 // ---------------------------------------------------------------------------
 
+// corpusModulePath is the module line of the synthetic go.mod every Go corpus scan
+// is rooted under. It must stay equal to this repo's own module path: Go resource
+// IDs are module-path-prefixed, so the IDs the at-scale tests assert on are only
+// "the same as in the repo" while these two agree.
+const corpusModulePath = "module github.com/Rhuan-Marques/aracne"
+
 // copyCorpus recursively copies <repo>/testing_ground into a fresh temp dir
 // (as <tmp>/testing_ground) and drops a synthetic go.mod at <tmp> so the Go
-// import paths `aracne/testing_ground/go/...` resolve exactly as in the repo.
-// It returns the scan root (<tmp>). Build/cache dirs are skipped so the stale
-// testing_ground/.aracne/topology.db is never copied.
+// import paths `github.com/Rhuan-Marques/aracne/testing_ground/go/...` resolve
+// exactly as in the repo. It returns the scan root (<tmp>). Build/cache dirs are
+// skipped so the stale testing_ground/.aracne/topology.db is never copied.
 func copyCorpus(t *testing.T) string {
 	t.Helper()
 	src := filepath.Join(projectRoot(), "testing_ground")
 	if _, err := os.Stat(src); err != nil {
 		t.Fatalf("testing_ground corpus not found at %s: %v", src, err)
 	}
-	// The copy is rooted in a dir named "aracne" because the synthetic go.mod written
-	// below declares `module aracne`, which is what pins the GO resource IDs.
+	// The copy is rooted in a dir named "aracne" for readability only. What pins the GO
+	// resource IDs is corpusModulePath, written into the synthetic go.mod below.
 	//
 	// It used to be named that for a second reason — Python and JS/TS derived their ID
 	// prefix from the scan-root leaf, so the directory name had to match the real repo's.
@@ -126,13 +132,13 @@ func copyCorpus(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("copy corpus: %v", err)
 	}
-	writeFile(t, filepath.Join(root, "go.mod"), "module aracne\n\ngo 1.25\n")
+	writeFile(t, filepath.Join(root, "go.mod"), corpusModulePath+"\n\ngo 1.25\n")
 	return root
 }
 
 // copyGoCorpus copies only <repo>/testing_ground/go into
 // <tmp>/aracne/testing_ground/go and drops a synthetic go.mod, so a scan rooted
-// at <tmp>/aracne yields the same "aracne/testing_ground/go/..." resource IDs as
+// at <tmp>/aracne yields the same "github.com/Rhuan-Marques/aracne/testing_ground/go/..." resource IDs as
 // the full corpus — but WITHOUT the Python/JS/TS trees. The JS/TS scanner
 // currently aborts the multi-language write (a pre-existing crash); scanning Go
 // in isolation lets Go scenarios run regardless. Returns the scan root.
@@ -177,7 +183,7 @@ func copyGoCorpus(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("copy go corpus: %v", err)
 	}
-	writeFile(t, filepath.Join(root, "go.mod"), "module aracne\n\ngo 1.25\n")
+	writeFile(t, filepath.Join(root, "go.mod"), corpusModulePath+"\n\ngo 1.25\n")
 	return root
 }
 

@@ -6,12 +6,12 @@ import (
 	"testing"
 	"time"
 
-	"aracne/internal/helper"
-	"aracne/internal/topology"
-	"aracne/internal/topology/scanner"
-	"aracne/internal/topology/scanner/goscanner"
-	"aracne/internal/topology/scanner/jsscanner"
-	"aracne/internal/topology/scanner/pyscanner"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/topology"
+	"github.com/Rhuan-Marques/aracne/internal/topology/scanner"
+	"github.com/Rhuan-Marques/aracne/internal/topology/scanner/goscanner"
+	"github.com/Rhuan-Marques/aracne/internal/topology/scanner/jsscanner"
+	"github.com/Rhuan-Marques/aracne/internal/topology/scanner/pyscanner"
 )
 
 func partialTestRegistry() *scanner.Registry {

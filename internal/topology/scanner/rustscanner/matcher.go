@@ -3,7 +3,7 @@ package rustscanner
 import (
 	"strings"
 
-	rust "aracne/internal/topology/rust"
+	rust "github.com/Rhuan-Marques/aracne/internal/topology/rust"
 )
 
 // connImplRecords is a private module-node edge kind that persists each resolved

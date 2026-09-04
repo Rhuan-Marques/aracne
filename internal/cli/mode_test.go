@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"aracne/internal/helper"
-	"aracne/internal/prompts"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/prompts"
 )
 
 // The mode is the single field every generated artifact derives from. These tests pin the

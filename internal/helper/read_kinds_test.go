@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 func TestEffectiveReadKindsDefaults(t *testing.T) {

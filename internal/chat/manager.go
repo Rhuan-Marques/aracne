@@ -13,13 +13,13 @@ import (
 	"sync"
 	"time"
 
-	"aracne/internal/helper"
-	"aracne/internal/llm"
-	"aracne/internal/llm/providers"
-	"aracne/internal/llm/tools"
-	"aracne/internal/topology"
-	"aracne/internal/topology/domain"
-	"aracne/internal/topology/scanner"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/llm"
+	"github.com/Rhuan-Marques/aracne/internal/llm/providers"
+	"github.com/Rhuan-Marques/aracne/internal/llm/tools"
+	"github.com/Rhuan-Marques/aracne/internal/topology"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/scanner"
 )
 
 // Central chat orchestrator managing sessions, tools, scanners, topology, and LLM agents.

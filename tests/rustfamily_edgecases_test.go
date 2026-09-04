@@ -17,8 +17,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"aracne/internal/topology/domain"
-	"aracne/internal/topology/scanner/rustscanner"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/scanner/rustscanner"
 )
 
 // rtScan scans testing_ground/rustfamily in-memory and returns the topology.

@@ -3,7 +3,7 @@ package scanner
 import (
 	"testing"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 type mockScanner struct {

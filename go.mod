@@ -1,4 +1,4 @@
-module aracne
+module github.com/Rhuan-Marques/aracne
 
 go 1.25.0
 

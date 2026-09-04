@@ -1,7 +1,7 @@
 package topogrep
 
 import (
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // The search half of descriptions.lazy.

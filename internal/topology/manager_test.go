@@ -7,15 +7,15 @@ import (
 	"strings"
 	"testing"
 
-	"aracne/internal/helper"
-	"aracne/internal/llm/languages/gotools"
-	"aracne/internal/topology"
-	"aracne/internal/topology/domain"
-	"aracne/internal/topology/golang"
-	"aracne/internal/topology/python"
-	"aracne/internal/topology/scanner"
-	"aracne/internal/topology/scanner/goscanner"
-	"aracne/internal/topology/scanner/pyscanner"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/llm/languages/gotools"
+	"github.com/Rhuan-Marques/aracne/internal/topology"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/golang"
+	"github.com/Rhuan-Marques/aracne/internal/topology/python"
+	"github.com/Rhuan-Marques/aracne/internal/topology/scanner"
+	"github.com/Rhuan-Marques/aracne/internal/topology/scanner/goscanner"
+	"github.com/Rhuan-Marques/aracne/internal/topology/scanner/pyscanner"
 )
 
 // repoScanDB returns a temp DB path for a test that scans the repository root, with a config

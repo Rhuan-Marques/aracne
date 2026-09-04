@@ -4,11 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"aracne/internal/helper"
-	"aracne/internal/lazydesc"
-	"aracne/internal/topogrep"
-	"aracne/internal/topology"
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/lazydesc"
+	"github.com/Rhuan-Marques/aracne/internal/topogrep"
+	"github.com/Rhuan-Marques/aracne/internal/topology"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // LLM tool to search code contents and return topology resource matches.

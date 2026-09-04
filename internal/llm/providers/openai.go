@@ -12,7 +12,7 @@ import (
 	"sort"
 	"strings"
 
-	"aracne/internal/llm"
+	"github.com/Rhuan-Marques/aracne/internal/llm"
 )
 
 // OpenAI LLM provider configuration holding API key, model name, base URL, and reasoning effort setting.

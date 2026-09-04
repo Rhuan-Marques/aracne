@@ -8,9 +8,9 @@ import (
 	"sort"
 	"strings"
 
-	"aracne/internal/topology"
-	"aracne/internal/topology/domain"
-	"aracne/internal/topology/scanner"
+	"github.com/Rhuan-Marques/aracne/internal/topology"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/scanner"
 )
 
 // Tool implementation for the "edit" command. Wraps a TopologyManager and scanner Registry to perform file edits and auto-update the topology database in response.

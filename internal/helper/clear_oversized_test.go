@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // seedDB writes a topology whose descriptions bypass DescriptionForStorage, the way rows

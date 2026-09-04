@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"strings"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // sqliteMaxVariables is a conservative bound on the number of bind parameters

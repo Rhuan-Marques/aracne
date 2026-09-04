@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	"aracne/internal/helper"
-	"aracne/internal/toolspec"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/toolspec"
 )
 
 // Holds OS-specific hook script metadata: name, content, command, and shell type

@@ -6,8 +6,8 @@ import (
 	"os"
 	"strings"
 
-	"aracne/internal/helper"
-	"aracne/internal/shellcmd"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/shellcmd"
 )
 
 // Interception is how aracne reaches an agent that has no MCP tools: it rewrites the shell

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"aracne/internal/topology"
+	"github.com/Rhuan-Marques/aracne/internal/topology"
 )
 
 // LLM tool to dismiss a bug report without deleting it.

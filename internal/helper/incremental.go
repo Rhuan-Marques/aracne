@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // resourceSignature produces a canonical fingerprint of everything WriteDb/

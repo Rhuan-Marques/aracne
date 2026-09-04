@@ -4,10 +4,10 @@ import (
 	"regexp"
 	"strings"
 
-	"aracne/internal/llm/languages/readunit"
-	"aracne/internal/llm/languages/renderstate"
-	"aracne/internal/topology"
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/llm/languages/readunit"
+	"github.com/Rhuan-Marques/aracne/internal/llm/languages/renderstate"
+	"github.com/Rhuan-Marques/aracne/internal/topology"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // skeletonBody renders a whole-file read as the file's shape rather than its text: every

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"aracne/internal/llm"
+	"github.com/Rhuan-Marques/aracne/internal/llm"
 )
 
 func TestDeepSeekRequestUsesOpenAIToolEnvelope(t *testing.T) {

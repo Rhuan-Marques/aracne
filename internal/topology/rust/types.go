@@ -1,6 +1,6 @@
 package rust
 
-import "aracne/internal/topology/domain"
+import "github.com/Rhuan-Marques/aracne/internal/topology/domain"
 
 // FunctionCut combines a RustFunction with its source code snippet (Cut) for
 // context display.

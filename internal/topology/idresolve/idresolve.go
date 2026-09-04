@@ -25,7 +25,7 @@ import (
 	"sort"
 	"strings"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // Tier names, most to least trustworthy. Reported on every result so callers (and tests)

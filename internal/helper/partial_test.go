@@ -6,7 +6,7 @@ import (
 	"sort"
 	"testing"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // buildPartialTopo builds a small two-file topology used by the partial-read

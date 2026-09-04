@@ -3,9 +3,9 @@ package java
 import (
 	"fmt"
 
-	"aracne/internal/helper"
-	"aracne/internal/topology"
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/topology"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // JavaManager wraps a generic topology engine to handle Java analysis and

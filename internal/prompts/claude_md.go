@@ -1,7 +1,7 @@
 package prompts
 
 import (
-	"aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
 )
 
 // ClaudeMdForConfig renders the contract for the mode this project is in.

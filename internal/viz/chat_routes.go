@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"aracne/internal/chat"
+	"github.com/Rhuan-Marques/aracne/internal/chat"
 )
 
 // Lazily initializes and returns the chat Manager, broadcasting events to connected WebSocket clients.

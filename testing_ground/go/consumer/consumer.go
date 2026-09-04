@@ -11,9 +11,9 @@ package consumer
 import (
 	"fmt"
 
-	"aracne/testing_ground/go/edge"
-	"aracne/testing_ground/go/geometry"
-	"aracne/testing_ground/go/shapes"
+	"github.com/Rhuan-Marques/aracne/testing_ground/go/edge"
+	"github.com/Rhuan-Marques/aracne/testing_ground/go/geometry"
+	"github.com/Rhuan-Marques/aracne/testing_ground/go/shapes"
 )
 
 // Report receives the result of geometry.MakeCircle (a shapes.Circle) as a

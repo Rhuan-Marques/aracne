@@ -1,16 +1,16 @@
 package tests_test
 
 import (
-	"aracne/internal/prompts"
 	"encoding/json"
+	"github.com/Rhuan-Marques/aracne/internal/prompts"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"aracne/internal/cli"
-	"aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/cli"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
 )
 
 // enableBugManagement writes a project config with features.bug_management on, so a test can

@@ -20,8 +20,8 @@ import (
 	"strings"
 	"testing"
 
-	"aracne/internal/topology/domain"
-	"aracne/internal/topology/scanner/jsscanner"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/scanner/jsscanner"
 )
 
 // ---------------------------------------------------------------------------

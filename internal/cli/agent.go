@@ -6,9 +6,9 @@ import (
 	"os"
 	"strings"
 
-	"aracne/internal/helper"
-	"aracne/internal/llm/agent"
-	"aracne/internal/llm/providers"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/llm/agent"
+	"github.com/Rhuan-Marques/aracne/internal/llm/providers"
 )
 
 // Runs the AI coding agent with DeepSeek provider, accepting input from CLI args or interactive stdin.

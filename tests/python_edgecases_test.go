@@ -10,7 +10,7 @@ package tests_test
 // works and guard against regressions.
 //
 // These tests scan ONLY the testing_ground/python subtree (rooted so the
-// resource IDs match the full-corpus "aracne/testing_ground/python/..." scheme).
+// resource IDs match the full-corpus "github.com/Rhuan-Marques/aracne/testing_ground/python/..." scheme).
 // This deliberately avoids the other-language trees, whose JS/TS scanner
 // currently aborts the multi-language write — an unrelated, pre-existing bug.
 
@@ -21,7 +21,7 @@ import (
 	"strings"
 	"testing"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // P is the resource-ID prefix for every edgecases resource (functions/classes/
@@ -35,7 +35,7 @@ const P = "testing_ground/python/edgecases/"
 
 // copyPythonCorpus copies <repo>/testing_ground/python into
 // <tmp>/aracne/testing_ground/python and drops a synthetic go.mod, so a scan
-// rooted at <tmp>/aracne yields the same "aracne/testing_ground/python/..."
+// rooted at <tmp>/aracne yields the same "github.com/Rhuan-Marques/aracne/testing_ground/python/..."
 // resource IDs as the full corpus — but WITHOUT the other language trees.
 func copyPythonCorpus(t *testing.T) string {
 	t.Helper()
@@ -72,7 +72,7 @@ func copyPythonCorpus(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("copy python corpus: %v", err)
 	}
-	writeFile(t, filepath.Join(root, "go.mod"), "module aracne\n\ngo 1.25\n")
+	writeFile(t, filepath.Join(root, "go.mod"), corpusModulePath+"\n\ngo 1.25\n")
 	return root
 }
 

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"aracne/internal/helper"
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // Byte budgets for the two tools an agent spends nearly all its context on.

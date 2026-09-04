@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
 )
 
 // interceptingConfig is a project in a mode that rewrites shell READS. The shipped default is

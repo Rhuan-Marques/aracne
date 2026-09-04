@@ -5,9 +5,9 @@ import (
 	"os"
 	"strings"
 
-	"aracne/internal/helper"
-	"aracne/internal/llm/languages/universaltools"
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/llm/languages/universaltools"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // RunRead reads one or more topology resources (functions, types, interfaces, files, ...) and

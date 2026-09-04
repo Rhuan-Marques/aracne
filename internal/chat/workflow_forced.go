@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"aracne/internal/llm"
-	"aracne/internal/llm/tools"
-	"aracne/internal/prompts"
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/llm"
+	"github.com/Rhuan-Marques/aracne/internal/llm/tools"
+	"github.com/Rhuan-Marques/aracne/internal/prompts"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // Launches a workflow (descriptions/bug_hunter/bug_judge/bug_solver) by building tasks, creating a tool call, and running task groups with optional follow-up rounds.

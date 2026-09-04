@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"aracne/internal/topology"
+	"github.com/Rhuan-Marques/aracne/internal/topology"
 )
 
 // addFunctionOutsideAracne writes a change the way everything the guard cannot see does it --

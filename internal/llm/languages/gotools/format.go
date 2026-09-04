@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
-	"aracne/internal/llm/languages/readunit"
+	"github.com/Rhuan-Marques/aracne/internal/llm/languages/readunit"
 
-	"aracne/internal/topology/domain"
-	"aracne/internal/topology/golang"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/golang"
 )
 
 // Returns the input string or "no description" if empty

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"aracne/internal/topology"
+	"github.com/Rhuan-Marques/aracne/internal/topology"
 )
 
 // TestEditApplyStaleEditError checks the concurrent-edit feedback: when an edit

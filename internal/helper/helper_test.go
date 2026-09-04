@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"aracne/internal/topogrep"
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topogrep"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 func TestJSONRoundtrip(t *testing.T) {

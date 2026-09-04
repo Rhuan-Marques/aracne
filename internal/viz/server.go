@@ -17,9 +17,9 @@ import (
 	"sync"
 	"time"
 
-	"aracne/internal/chat"
-	"aracne/internal/helper"
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/chat"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // HTTP server that manages the visualization database, WebSocket connections, and chat initialization.

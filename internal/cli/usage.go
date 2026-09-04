@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
 )
 
 // Prints the full CLI usage documentation for all aracne commands and flags.

@@ -8,13 +8,13 @@ import (
 	"path/filepath"
 	"strings"
 
-	"aracne/internal/helper"
-	"aracne/internal/lazydesc"
-	"aracne/internal/llm/languages/universaltools"
-	"aracne/internal/shellcmd"
-	"aracne/internal/topogrep"
-	"aracne/internal/topology"
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/lazydesc"
+	"github.com/Rhuan-Marques/aracne/internal/llm/languages/universaltools"
+	"github.com/Rhuan-Marques/aracne/internal/shellcmd"
+	"github.com/Rhuan-Marques/aracne/internal/topogrep"
+	"github.com/Rhuan-Marques/aracne/internal/topology"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // RunCmd is `arac cmd -- <command…>`: run a shell read or search, answered from the topology

@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"aracne/internal/llm"
+	"github.com/Rhuan-Marques/aracne/internal/llm"
 )
 
 // setupTaskManager creates a Manager with a mock LLM provider at serverURL (may be "").

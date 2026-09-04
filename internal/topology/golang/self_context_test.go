@@ -3,7 +3,7 @@ package golang
 import (
 	"testing"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // A recursive function records itself in its own Calls(); it must not appear in

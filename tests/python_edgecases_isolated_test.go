@@ -16,7 +16,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // Q is the resource-ID prefix for the isolated mini-corpora (root leaf "proj").

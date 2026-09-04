@@ -1,8 +1,8 @@
 package jstools
 
 import (
-	"aracne/internal/llm/tools"
-	"aracne/internal/topology/javascript"
+	"github.com/Rhuan-Marques/aracne/internal/llm/tools"
+	"github.com/Rhuan-Marques/aracne/internal/topology/javascript"
 )
 
 type Parameter = tools.Parameter

@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"aracne/internal/topology/python"
+	"github.com/Rhuan-Marques/aracne/internal/topology/python"
 )
 
 // The scanner must capture the first-body-statement line and any existing

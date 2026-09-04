@@ -3,7 +3,7 @@ package helper
 import (
 	"testing"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 func TestEffectiveContextFilterDefaults(t *testing.T) {

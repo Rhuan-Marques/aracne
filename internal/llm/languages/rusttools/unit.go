@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
-	"aracne/internal/llm/languages/readunit"
-	"aracne/internal/llm/languages/renderstate"
-	"aracne/internal/topology/domain"
-	"aracne/internal/topology/rust"
+	"github.com/Rhuan-Marques/aracne/internal/llm/languages/readunit"
+	"github.com/Rhuan-Marques/aracne/internal/llm/languages/renderstate"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/rust"
 )
 
 // rustImportBlock renders a group's pooled crate dependencies as `use` comments. Rust has no

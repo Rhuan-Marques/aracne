@@ -1,6 +1,6 @@
 package python
 
-import "aracne/internal/topology/domain"
+import "github.com/Rhuan-Marques/aracne/internal/topology/domain"
 
 // A Python function with its code snippet cut from the source.
 type FunctionCut struct {

@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"aracne/internal/topology"
-	"aracne/internal/topology/domain"
-	"aracne/internal/topology/scanner"
-	"aracne/internal/topology/scanner/goscanner"
+	"github.com/Rhuan-Marques/aracne/internal/topology"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/scanner"
+	"github.com/Rhuan-Marques/aracne/internal/topology/scanner/goscanner"
 )
 
 type warnProj struct {

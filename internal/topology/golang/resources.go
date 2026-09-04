@@ -1,6 +1,6 @@
 package golang
 
-import "aracne/internal/topology/domain"
+import "github.com/Rhuan-Marques/aracne/internal/topology/domain"
 
 type FunctionID = string
 type StructID = string

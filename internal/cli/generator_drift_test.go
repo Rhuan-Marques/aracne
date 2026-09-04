@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"aracne/internal/helper"
-	"aracne/internal/toolspec"
-	"aracne/internal/topology"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/toolspec"
+	"github.com/Rhuan-Marques/aracne/internal/topology"
 )
 
 // The generators write tool NAMES into files the harness reads as allow-lists: Claude's

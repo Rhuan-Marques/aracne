@@ -12,10 +12,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"aracne/internal/helper"
-	"aracne/internal/topology/domain"
-	"aracne/internal/topology/idresolve"
-	"aracne/internal/topology/scanner"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/idresolve"
+	"github.com/Rhuan-Marques/aracne/internal/topology/scanner"
 )
 
 var bugIDCounter int64

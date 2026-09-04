@@ -12,7 +12,7 @@ import (
 	"sort"
 	"strings"
 
-	"aracne/internal/llm"
+	"github.com/Rhuan-Marques/aracne/internal/llm"
 )
 
 // DeepSeek is the LLM provider implementation for DeepSeek's API. It holds the API key, model name, and base URL for making chat completion requests.

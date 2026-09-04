@@ -3,7 +3,7 @@ package chat
 import (
 	"fmt"
 
-	"aracne/internal/llm"
+	"github.com/Rhuan-Marques/aracne/internal/llm"
 )
 
 // Resumes processing a paused task group by running it asynchronously and appending results to the session message thread.

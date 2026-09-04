@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 
-	"aracne/internal/toolspec"
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/toolspec"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 type ScanMode string

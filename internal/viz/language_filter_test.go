@@ -3,7 +3,7 @@ package viz
 import (
 	"testing"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 func TestResourceGraphFiltersByLanguage(t *testing.T) {

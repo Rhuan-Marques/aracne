@@ -3,7 +3,7 @@ package goscanner
 import (
 	"regexp"
 
-	"aracne/internal/topology/golang"
+	"github.com/Rhuan-Marques/aracne/internal/topology/golang"
 )
 
 // Establishes bidirectional implementation relationships between all structs and interfaces in the topology.

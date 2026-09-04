@@ -6,7 +6,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // Holds a resource's ID, name, kind, and pre-read source output for description generation.

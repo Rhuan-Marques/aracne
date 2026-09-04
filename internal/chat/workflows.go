@@ -3,8 +3,8 @@ package chat
 import (
 	"sort"
 
-	"aracne/internal/helper"
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // Represents a resource within a workflow with its ID, name, and resource kind.

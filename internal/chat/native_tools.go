@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"aracne/internal/llm/tools"
-	"aracne/internal/topology"
-	"aracne/internal/topology/scanner"
+	"github.com/Rhuan-Marques/aracne/internal/llm/tools"
+	"github.com/Rhuan-Marques/aracne/internal/topology"
+	"github.com/Rhuan-Marques/aracne/internal/topology/scanner"
 )
 
 // Executes bash commands in a workspace with topology scanning support.

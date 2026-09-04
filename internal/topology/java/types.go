@@ -1,6 +1,6 @@
 package java
 
-import "aracne/internal/topology/domain"
+import "github.com/Rhuan-Marques/aracne/internal/topology/domain"
 
 // FunctionCut combines a JavaMethod with its source code snippet (Cut) for
 // context display.

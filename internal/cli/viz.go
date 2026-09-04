@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"aracne/internal/viz"
+	"github.com/Rhuan-Marques/aracne/internal/viz"
 )
 
 // Starts an HTTP server to visualize the topology graph.

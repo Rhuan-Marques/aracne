@@ -3,7 +3,7 @@ package java
 import (
 	"encoding/json"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // Converts a generic domain topology to a Java-specific topology. Only resources

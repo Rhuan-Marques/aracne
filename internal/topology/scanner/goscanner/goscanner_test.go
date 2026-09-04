@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"aracne/internal/topology/domain"
-	"aracne/internal/topology/golang"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/golang"
 )
 
 func TestGoScannerName(t *testing.T) {

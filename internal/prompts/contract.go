@@ -3,7 +3,7 @@ package prompts
 import (
 	"strings"
 
-	"aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
 )
 
 // The four contracts, one per mode.

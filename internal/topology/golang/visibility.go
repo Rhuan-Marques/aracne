@@ -4,7 +4,7 @@ import (
 	"sort"
 	"strings"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // lineSpan returns the inclusive line count of a location, or 0 when unknown.

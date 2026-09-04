@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"aracne/internal/llm"
+	"github.com/Rhuan-Marques/aracne/internal/llm"
 )
 
 func TestDeepSeekStreamChat_Content(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 func applyLang(t *testing.T, path, src, lang string, res domain.Resource) string {

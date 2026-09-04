@@ -6,14 +6,14 @@ import (
 	"testing"
 	"time"
 
-	"aracne/internal/topology"
-	"aracne/internal/topology/domain"
-	"aracne/internal/topology/scanner"
-	"aracne/internal/topology/scanner/goscanner"
-	"aracne/internal/topology/scanner/javascanner"
-	"aracne/internal/topology/scanner/jsscanner"
-	"aracne/internal/topology/scanner/pyscanner"
-	"aracne/internal/topology/scanner/rustscanner"
+	"github.com/Rhuan-Marques/aracne/internal/topology"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/scanner"
+	"github.com/Rhuan-Marques/aracne/internal/topology/scanner/goscanner"
+	"github.com/Rhuan-Marques/aracne/internal/topology/scanner/javascanner"
+	"github.com/Rhuan-Marques/aracne/internal/topology/scanner/jsscanner"
+	"github.com/Rhuan-Marques/aracne/internal/topology/scanner/pyscanner"
+	"github.com/Rhuan-Marques/aracne/internal/topology/scanner/rustscanner"
 )
 
 // End-to-end warning lifecycle, one table per language.

@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"aracne/internal/topology"
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // Declared-conformance warnings: a type that promises an interface and does not deliver.

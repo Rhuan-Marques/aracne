@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"aracne/internal/helper"
-	"aracne/internal/llm/languages/universaltools"
-	"aracne/internal/toolspec"
-	"aracne/internal/topology"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/llm/languages/universaltools"
+	"github.com/Rhuan-Marques/aracne/internal/toolspec"
+	"github.com/Rhuan-Marques/aracne/internal/topology"
 )
 
 const (

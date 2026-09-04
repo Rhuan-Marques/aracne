@@ -19,8 +19,8 @@ import (
 	"strings"
 	"testing"
 
-	"aracne/internal/topology/domain"
-	"aracne/internal/topology/scanner/javascanner"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/scanner/javascanner"
 )
 
 // jtScanJava scans testing_ground/javafamily in-memory and returns the topology.

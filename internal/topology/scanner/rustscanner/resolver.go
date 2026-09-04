@@ -6,9 +6,9 @@ import (
 	"sort"
 	"strings"
 
-	"aracne/internal/topology/contract"
-	"aracne/internal/topology/domain"
-	rust "aracne/internal/topology/rust"
+	"github.com/Rhuan-Marques/aracne/internal/topology/contract"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	rust "github.com/Rhuan-Marques/aracne/internal/topology/rust"
 )
 
 // crateInfo describes one crate root: its directory and Cargo package name.

@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"aracne/internal/helper"
-	"aracne/internal/topology"
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/topology"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // Dispatches scanner subcommands; routes to RunScannerRun for the "run" action.

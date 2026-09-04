@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 type FileManifest map[string]string

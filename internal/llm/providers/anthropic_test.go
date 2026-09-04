@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"aracne/internal/llm"
+	"github.com/Rhuan-Marques/aracne/internal/llm"
 )
 
 func TestAnthropicStreamChat_Content(t *testing.T) {

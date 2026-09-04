@@ -6,9 +6,9 @@ import (
 	"sort"
 	"strings"
 
-	"aracne/internal/helper"
-	"aracne/internal/topology/domain"
-	"aracne/internal/topology/javascript"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/javascript"
 )
 
 // Tool that lists JavaScript resources without descriptions, filtered by resource kind and processed in batches.

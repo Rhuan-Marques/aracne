@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"aracne/internal/helper"
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 func TestManagerSend_EmitsStreamingDeltas(t *testing.T) {

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"aracne/internal/helper"
-	"aracne/internal/toolspec"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/toolspec"
 )
 
 // RunGuard is the `arac guard` entry point. It supports the Claude Code

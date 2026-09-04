@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // The id-scheme stamp and the alias table are what let a resource-ID format change happen

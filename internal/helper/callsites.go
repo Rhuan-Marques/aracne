@@ -1,8 +1,8 @@
 package helper
 
 import (
-	"aracne/internal/topology/contract"
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/contract"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // ReconcileSignatureWarnings withdraws every signature_changed warning whose caller

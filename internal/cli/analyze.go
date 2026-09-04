@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"aracne/internal/topology/domain"
-	"aracne/internal/topology/golang"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/golang"
 )
 
 // Dispatcher for analysis subcommands; routes "dead-code" to RunAnalyzeDeadCode.

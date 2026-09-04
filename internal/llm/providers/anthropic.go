@@ -11,7 +11,7 @@ import (
 	"os"
 	"strings"
 
-	"aracne/internal/llm"
+	"github.com/Rhuan-Marques/aracne/internal/llm"
 )
 
 // Anthropic LLM provider with API key, model, base URL, and thinking budget configuration.

@@ -3,7 +3,7 @@ package java
 import (
 	"sort"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // simplifyFunction converts a JavaMethod into a lightweight SimplifiedFunction

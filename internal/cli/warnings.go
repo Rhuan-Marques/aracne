@@ -5,7 +5,7 @@ import (
 	"os"
 	"sort"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // Lists topology warnings filtered by source, target, or kind with sorted output and summary counts.

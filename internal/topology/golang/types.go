@@ -1,6 +1,6 @@
 package golang
 
-import "aracne/internal/topology/domain"
+import "github.com/Rhuan-Marques/aracne/internal/topology/domain"
 
 // Wraps a GolangFunction with its source code cut string, providing both the function metadata and the actual source lines for display or analysis.
 type FunctionCut struct {

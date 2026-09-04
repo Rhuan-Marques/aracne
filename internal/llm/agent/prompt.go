@@ -1,11 +1,11 @@
 package agent
 
 import (
-	"aracne/internal/llm/languages/gotools"
-	"aracne/internal/llm/languages/javatools"
-	"aracne/internal/llm/languages/jstools"
-	"aracne/internal/llm/languages/pythontools"
-	"aracne/internal/llm/languages/rusttools"
+	"github.com/Rhuan-Marques/aracne/internal/llm/languages/gotools"
+	"github.com/Rhuan-Marques/aracne/internal/llm/languages/javatools"
+	"github.com/Rhuan-Marques/aracne/internal/llm/languages/jstools"
+	"github.com/Rhuan-Marques/aracne/internal/llm/languages/pythontools"
+	"github.com/Rhuan-Marques/aracne/internal/llm/languages/rusttools"
 )
 
 // Constructs language-specific system prompts for Go, Python, JavaScript, TypeScript, Rust, Java, or multi-language.

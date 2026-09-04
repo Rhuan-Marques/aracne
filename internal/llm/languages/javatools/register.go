@@ -1,8 +1,8 @@
 package javatools
 
 import (
-	"aracne/internal/llm/tools"
-	"aracne/internal/topology/java"
+	"github.com/Rhuan-Marques/aracne/internal/llm/tools"
+	"github.com/Rhuan-Marques/aracne/internal/topology/java"
 )
 
 type Parameter = tools.Parameter

@@ -6,11 +6,11 @@ import (
 	"os"
 	"strings"
 
-	"aracne/internal/helper"
-	"aracne/internal/llm"
-	"aracne/internal/llm/providers"
-	"aracne/internal/prompts"
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/llm"
+	"github.com/Rhuan-Marques/aracne/internal/llm/providers"
+	"github.com/Rhuan-Marques/aracne/internal/prompts"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // Generator turns one batch of targets into descriptions, keyed by resource id.

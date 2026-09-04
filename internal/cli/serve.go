@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"aracne/internal/helper"
-	"aracne/internal/mcp"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/mcp"
 )
 
 // Starts an MCP server exposing topology tools for a specified agent profile.

@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"aracne/internal/chat"
-	"aracne/internal/helper"
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/chat"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 func contextTestIndex(t *testing.T) *graphIndex {

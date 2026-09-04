@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
 )
 
 // StaleIndexError reports that a resource's recorded location no longer fits the file that is

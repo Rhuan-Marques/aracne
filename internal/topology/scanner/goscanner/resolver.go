@@ -7,9 +7,9 @@ import (
 	"sort"
 	"strings"
 
-	"aracne/internal/topology/contract"
-	"aracne/internal/topology/domain"
-	"aracne/internal/topology/golang"
+	"github.com/Rhuan-Marques/aracne/internal/topology/contract"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/golang"
 )
 
 // Analyzes function bodies to extract variable types, interface types, and connection metadata during Go code parsing.

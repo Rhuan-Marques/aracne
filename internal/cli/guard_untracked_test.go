@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"aracne/internal/helper"
-	"aracne/internal/toolspec"
-	"aracne/internal/topology"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/toolspec"
+	"github.com/Rhuan-Marques/aracne/internal/topology"
 )
 
 // scannedProject builds a real project, scans it, and returns its database path. A synthetic

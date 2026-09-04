@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"aracne/internal/cli"
+	"github.com/Rhuan-Marques/aracne/internal/cli"
 )
 
 // Version is the build version, injected at link time:

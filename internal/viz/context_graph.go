@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"strings"
 
-	"aracne/internal/chat"
-	"aracne/internal/toolspec"
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/chat"
+	"github.com/Rhuan-Marques/aracne/internal/toolspec"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // Context-graph endpoint.

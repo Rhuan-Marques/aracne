@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"aracne/internal/llm/languages/readunit"
+	"github.com/Rhuan-Marques/aracne/internal/llm/languages/readunit"
 
-	"aracne/internal/topology/java"
+	"github.com/Rhuan-Marques/aracne/internal/topology/java"
 )
 
 // desc returns "no description" for empty strings, otherwise the input unchanged.

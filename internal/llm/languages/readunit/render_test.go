@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"aracne/internal/llm/languages/renderstate"
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/llm/languages/renderstate"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // unit builds a minimal Unit whose context lists the given neighbour IDs.

@@ -4,7 +4,7 @@ import (
 	"sort"
 	"strings"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // Returns the number of lines spanned by a location, or 0 if the range is invalid.

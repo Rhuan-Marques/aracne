@@ -3,7 +3,7 @@ package chat
 import (
 	"testing"
 
-	"aracne/internal/llm"
+	"github.com/Rhuan-Marques/aracne/internal/llm"
 )
 
 func assistantWithCalls(ids ...string) llm.Message {

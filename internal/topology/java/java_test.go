@@ -3,7 +3,7 @@ package java
 import (
 	"testing"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // Locks in the wire-format strings of the Java connection kinds. These are

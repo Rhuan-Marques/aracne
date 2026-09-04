@@ -12,7 +12,7 @@ import (
 	"sort"
 	"strings"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // Descriptions are the expensive part of a topology: they are LLM-authored, they cost

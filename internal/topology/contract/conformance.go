@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // Signature is a method's declared shape, from either a method resource or an interface's

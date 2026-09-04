@@ -7,9 +7,9 @@ import (
 	"sort"
 	"strings"
 
-	"aracne/internal/helper"
-	"aracne/internal/prompts"
-	"aracne/internal/toolspec"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/prompts"
+	"github.com/Rhuan-Marques/aracne/internal/toolspec"
 )
 
 // defaultChatAgentDefs lists the proprietary-chat sub-agents and the prompt

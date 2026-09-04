@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // GuardLogEnv names a file the guard appends one line to per decision it makes.

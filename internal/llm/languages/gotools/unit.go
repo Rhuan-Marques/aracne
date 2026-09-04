@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
-	"aracne/internal/llm/languages/readunit"
-	"aracne/internal/llm/languages/renderstate"
-	"aracne/internal/topology/domain"
-	"aracne/internal/topology/golang"
+	"github.com/Rhuan-Marques/aracne/internal/llm/languages/readunit"
+	"github.com/Rhuan-Marques/aracne/internal/llm/languages/renderstate"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/golang"
 )
 
 // goImportBlock renders a group's pooled import tokens as one Go import statement.

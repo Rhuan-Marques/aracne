@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"aracne/internal/topology/domain"
-	"aracne/internal/topology/javascript"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/javascript"
 )
 
 // Tool that updates topology descriptions for JavaScript resources via LLM interaction.

@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"aracne/internal/topology/domain"
-	"aracne/internal/topology/python"
-	"aracne/internal/topology/scanner"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/python"
+	"github.com/Rhuan-Marques/aracne/internal/topology/scanner"
 )
 
 // Empty scanner marker struct for Python topology scanning.

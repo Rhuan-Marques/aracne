@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
 )
 
 func TestClaudeNativeEditHookForOS(t *testing.T) {

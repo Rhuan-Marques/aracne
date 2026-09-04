@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"aracne/internal/topology"
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // Dispatcher for bug management subcommands (report, list, acknowledge, dismiss, delete).

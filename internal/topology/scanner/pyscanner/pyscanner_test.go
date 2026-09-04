@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"aracne/internal/topology/domain"
-	"aracne/internal/topology/python"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/python"
 )
 
 func TestResolveValueRef_function(t *testing.T) {

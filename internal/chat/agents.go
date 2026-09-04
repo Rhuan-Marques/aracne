@@ -1,6 +1,6 @@
 package chat
 
-import "aracne/internal/prompts"
+import "github.com/Rhuan-Marques/aracne/internal/prompts"
 
 // Profile metadata for an agent: ID, name, description, and icon.
 type AgentProfile struct {

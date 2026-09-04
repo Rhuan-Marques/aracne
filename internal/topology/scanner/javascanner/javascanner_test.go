@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"aracne/internal/topology/domain"
-	java "aracne/internal/topology/java"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	java "github.com/Rhuan-Marques/aracne/internal/topology/java"
 )
 
 // ---- fixtures -------------------------------------------------------------

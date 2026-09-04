@@ -7,9 +7,9 @@ import (
 	sitter "github.com/smacker/go-tree-sitter"
 	rustgrammar "github.com/smacker/go-tree-sitter/rust"
 
-	"aracne/internal/topology/contract"
-	"aracne/internal/topology/domain"
-	rust "aracne/internal/topology/rust"
+	"github.com/Rhuan-Marques/aracne/internal/topology/contract"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	rust "github.com/Rhuan-Marques/aracne/internal/topology/rust"
 )
 
 // tree-sitter-rust node type names (verified against the bundled grammar via an

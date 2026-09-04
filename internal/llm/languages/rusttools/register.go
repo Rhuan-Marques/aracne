@@ -1,8 +1,8 @@
 package rusttools
 
 import (
-	"aracne/internal/llm/tools"
-	"aracne/internal/topology/rust"
+	"github.com/Rhuan-Marques/aracne/internal/llm/tools"
+	"github.com/Rhuan-Marques/aracne/internal/topology/rust"
 )
 
 type Parameter = tools.Parameter

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"os"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // Serializes a Topology to indented JSON and writes it to a file at the given path. Takes a *Topology and output path string. Returns an error if marshaling or writing fails.

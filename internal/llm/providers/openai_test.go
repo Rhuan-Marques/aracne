@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"aracne/internal/llm"
+	"github.com/Rhuan-Marques/aracne/internal/llm"
 )
 
 func TestOpenAIStreamChat_Content(t *testing.T) {

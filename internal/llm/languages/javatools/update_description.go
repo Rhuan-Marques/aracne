@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"aracne/internal/topology/domain"
-	"aracne/internal/topology/java"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/java"
 )
 
 // UpdateDescriptionTool updates topology descriptions for Java resources via LLM

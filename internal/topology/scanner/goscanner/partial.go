@@ -6,10 +6,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"aracne/internal/helper"
-	"aracne/internal/topology/domain"
-	"aracne/internal/topology/golang"
-	"aracne/internal/topology/scanner"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/golang"
+	"github.com/Rhuan-Marques/aracne/internal/topology/scanner"
 )
 
 // jsonRoundTrip marshals from then unmarshals into to, converting between the

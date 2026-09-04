@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"aracne/internal/llm/tools"
+	"github.com/Rhuan-Marques/aracne/internal/llm/tools"
 )
 
 // Tool that creates sub-tasks for the agent to execute in parallel.

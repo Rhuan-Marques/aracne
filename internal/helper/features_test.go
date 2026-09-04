@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // TestBugManagementDefaultsOff pins the v1 default. An existing project's config has no

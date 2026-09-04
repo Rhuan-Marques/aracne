@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // TestTSReturnTypeFollowingSameFile checks that `const x = f(); x.method()` resolves the method

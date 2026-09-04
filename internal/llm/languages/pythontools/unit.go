@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
-	"aracne/internal/llm/languages/readunit"
-	"aracne/internal/llm/languages/renderstate"
-	"aracne/internal/topology/domain"
-	"aracne/internal/topology/python"
+	"github.com/Rhuan-Marques/aracne/internal/llm/languages/readunit"
+	"github.com/Rhuan-Marques/aracne/internal/llm/languages/renderstate"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/python"
 )
 
 // pyImportBlock renders a group's pooled import tokens as Python import lines.

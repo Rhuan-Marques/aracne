@@ -7,8 +7,8 @@ import (
 	sitter "github.com/smacker/go-tree-sitter"
 	tsjava "github.com/smacker/go-tree-sitter/java"
 
-	"aracne/internal/topology/domain"
-	java "aracne/internal/topology/java"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	java "github.com/Rhuan-Marques/aracne/internal/topology/java"
 )
 
 // hierKind classifies a deferred hierarchy record (resolved to a parent FQN in

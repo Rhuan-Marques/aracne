@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
 )
 
 // untrackedCheckTimeout bounds the topology load this check performs. It runs inside a

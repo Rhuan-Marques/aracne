@@ -3,7 +3,7 @@ package chat
 import (
 	"time"
 
-	"aracne/internal/llm"
+	"github.com/Rhuan-Marques/aracne/internal/llm"
 )
 
 type Mode string

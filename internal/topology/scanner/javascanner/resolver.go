@@ -6,9 +6,9 @@ import (
 	"sort"
 	"strings"
 
-	"aracne/internal/topology/contract"
-	"aracne/internal/topology/domain"
-	java "aracne/internal/topology/java"
+	"github.com/Rhuan-Marques/aracne/internal/topology/contract"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	java "github.com/Rhuan-Marques/aracne/internal/topology/java"
 )
 
 // javaCtx is the resolved project model for a root: external dependency roots and

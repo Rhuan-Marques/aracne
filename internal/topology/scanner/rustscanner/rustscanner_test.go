@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // writeCrate writes a Cargo.toml (package "unit") plus the given src files into a

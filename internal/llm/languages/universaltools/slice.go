@@ -7,10 +7,10 @@ import (
 	"sort"
 	"strings"
 
-	"aracne/internal/helper"
-	"aracne/internal/llm/languages/readunit"
-	"aracne/internal/llm/languages/renderstate"
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/llm/languages/readunit"
+	"github.com/Rhuan-Marques/aracne/internal/llm/languages/renderstate"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // A slice read answers "these lines of this file" the way the shell command that asked for it

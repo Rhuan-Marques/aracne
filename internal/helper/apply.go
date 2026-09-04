@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // Holds a resource description, its name, language, and source location, plus the

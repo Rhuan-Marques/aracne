@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 func TestPythonConnectionKindValues(t *testing.T) {

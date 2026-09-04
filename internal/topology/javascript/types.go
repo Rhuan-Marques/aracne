@@ -1,6 +1,6 @@
 package javascript
 
-import "aracne/internal/topology/domain"
+import "github.com/Rhuan-Marques/aracne/internal/topology/domain"
 
 // Wrapper combining JavaScriptFunction with a code snippet (Cut) for context display.
 type FunctionCut struct {

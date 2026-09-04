@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // CallSitesConn is the connection kind under which a caller stores what it passes to each

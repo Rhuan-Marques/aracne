@@ -3,8 +3,8 @@ package helper
 import (
 	"fmt"
 
-	"aracne/internal/topology/contract"
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/contract"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // conformanceEdges are the two ways a type declares that it must provide an interface's

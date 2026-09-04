@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // A resource reaches SignatureBaseline in two different Go shapes: freshly

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"aracne/internal/topology"
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // LLM tool to list all open bug reports from the topology database.

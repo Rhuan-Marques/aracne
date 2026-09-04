@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"os"
 
-	"aracne/internal/helper"
-	"aracne/internal/lazydesc"
-	"aracne/internal/topogrep"
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/lazydesc"
+	"github.com/Rhuan-Marques/aracne/internal/topogrep"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // Searches file contents with a regex pattern against the topology database, returning

@@ -17,8 +17,8 @@ package lazydesc
 import (
 	"sort"
 
-	"aracne/internal/helper"
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // Target is one resource a fill will try to describe.

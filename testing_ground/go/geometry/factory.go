@@ -5,7 +5,7 @@
 // values, and interface-method fan-out.
 package geometry
 
-import "aracne/testing_ground/go/shapes"
+import "github.com/Rhuan-Marques/aracne/testing_ground/go/shapes"
 
 // MakeCircle returns a shapes.Circle BY VALUE — a cross-package return type.
 // This is the "Package2.FunctionA returns Package1.StructA" edge case.

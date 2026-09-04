@@ -1,6 +1,6 @@
 package rust
 
-import "aracne/internal/topology/domain"
+import "github.com/Rhuan-Marques/aracne/internal/topology/domain"
 
 // Resource ID aliases. All IDs are Rust module paths rooted at the Cargo package
 // name and separated by "::", e.g. "mycrate::shapes::Circle" (struct),

@@ -20,8 +20,8 @@ package readunit
 import (
 	"strings"
 
-	"aracne/internal/llm/languages/renderstate"
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/llm/languages/renderstate"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // Unit is one resolved resource, decomposed into the pieces the batch renderer schedules

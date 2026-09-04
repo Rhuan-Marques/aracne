@@ -1,12 +1,12 @@
 package readunit
 
 import (
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 	"regexp"
 	"sort"
 	"strings"
 
-	"aracne/internal/llm/languages/renderstate"
+	"github.com/Rhuan-Marques/aracne/internal/llm/languages/renderstate"
 )
 
 // Options tunes a batch render.

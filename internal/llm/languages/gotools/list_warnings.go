@@ -6,9 +6,9 @@ import (
 	"sort"
 	"strings"
 
-	"aracne/internal/llm/tools"
-	"aracne/internal/topology/domain"
-	"aracne/internal/topology/golang"
+	"github.com/Rhuan-Marques/aracne/internal/llm/tools"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/golang"
 )
 
 // Wraps a GoManager to implement the ListWarnings LLM tool for retrieving topology validation warnings.

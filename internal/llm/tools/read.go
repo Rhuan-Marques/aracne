@@ -5,9 +5,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"aracne/internal/helper"
-	"aracne/internal/topology"
-	"aracne/internal/topology/idresolve"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/topology"
+	"github.com/Rhuan-Marques/aracne/internal/topology/idresolve"
 )
 
 // ResourceSource returns a resource's raw source text, with no topology context attached.

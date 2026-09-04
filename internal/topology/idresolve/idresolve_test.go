@@ -3,7 +3,7 @@ package idresolve
 import (
 	"testing"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // The point of this package is that a caller's REASONABLE guess at a resource ID resolves.

@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"aracne/internal/toolspec"
+	"github.com/Rhuan-Marques/aracne/internal/toolspec"
 )
 
 // The guard routes work to the aracne tools where they are the better answer. Two kinds of

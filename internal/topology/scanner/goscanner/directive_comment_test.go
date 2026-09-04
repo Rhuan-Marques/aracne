@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"aracne/internal/topology/golang"
+	"github.com/Rhuan-Marques/aracne/internal/topology/golang"
 )
 
 // A //go:embed (or any //go: directive) must never be captured as a resource

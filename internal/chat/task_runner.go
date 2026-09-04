@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"aracne/internal/llm"
-	"aracne/internal/llm/tools"
+	"github.com/Rhuan-Marques/aracne/internal/llm"
+	"github.com/Rhuan-Marques/aracne/internal/llm/tools"
 )
 
 const (

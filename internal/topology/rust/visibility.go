@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"sort"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // simplifyFunction converts a RustFunction into a lightweight SimplifiedFunction

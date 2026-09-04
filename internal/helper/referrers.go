@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // ReferenceConnTypes are the body-resolution edge kinds that mean "this

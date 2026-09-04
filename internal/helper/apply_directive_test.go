@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 func applyOne(t *testing.T, path, src, id, name string, kind domain.ResourceKind, startLine int, desc string) string {

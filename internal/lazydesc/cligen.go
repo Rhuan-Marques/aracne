@@ -8,8 +8,8 @@ import (
 	"os/exec"
 	"strings"
 
-	"aracne/internal/prompts"
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/prompts"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // ProviderClaudeCLI runs a fill through the Claude Code CLI (`claude --print`) instead of an

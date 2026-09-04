@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"sort"
 
-	"aracne/internal/helper"
-	"aracne/internal/topology"
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/topology"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // Manager wrapping a generic topology engine to handle JavaScript/TypeScript analysis and resource queries.

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"aracne/internal/topology/domain"
-	"aracne/internal/topology/python"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/python"
 )
 
 // LLM tool handler that updates a resource's description in the topology database by id and resource kind.

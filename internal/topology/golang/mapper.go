@@ -3,7 +3,7 @@ package golang
 import (
 	"encoding/json"
 
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // Converts a generic domain topology to a Go-specific topology by mapping resources into typed collections.

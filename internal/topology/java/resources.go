@@ -1,6 +1,6 @@
 package java
 
-import "aracne/internal/topology/domain"
+import "github.com/Rhuan-Marques/aracne/internal/topology/domain"
 
 // Resource ID aliases. All IDs are Java fully-qualified names rooted at the
 // in-file `package ...;` declaration and separated by ".", e.g.

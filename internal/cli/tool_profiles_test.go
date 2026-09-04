@@ -4,9 +4,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"aracne/internal/helper"
-	"aracne/internal/toolspec"
-	"aracne/internal/topology"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/toolspec"
+	"github.com/Rhuan-Marques/aracne/internal/topology"
 )
 
 // TestMCPConstructorsMatchToolspecCatalog asserts the registerable-tool table

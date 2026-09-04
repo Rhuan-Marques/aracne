@@ -7,9 +7,9 @@ import (
 	"regexp"
 	"strings"
 
-	"aracne/internal/topology/domain"
-	"aracne/internal/topology/golang"
-	"aracne/internal/topology/scanner"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/golang"
+	"github.com/Rhuan-Marques/aracne/internal/topology/scanner"
 )
 
 // Go AST scanner that parses Go source files to extract function, struct, interface, and variable definitions plus their call relationships.

@@ -1,6 +1,6 @@
 package jsscanner
 
-import js "aracne/internal/topology/javascript"
+import js "github.com/Rhuan-Marques/aracne/internal/topology/javascript"
 
 // matchClassInheritance wires up `class X extends Y` relationships. Base classes
 // are resolved by name: same module first, then any class in the topology. This

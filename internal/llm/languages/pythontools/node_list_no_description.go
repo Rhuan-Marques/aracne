@@ -6,9 +6,9 @@ import (
 	"sort"
 	"strings"
 
-	"aracne/internal/helper"
-	"aracne/internal/topology/domain"
-	"aracne/internal/topology/python"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/python"
 )
 
 // Scans topology for undocumented Python resources and returns them batched by kind.

@@ -5,8 +5,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"aracne/internal/helper"
-	"aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // The guard reports a topology warning by what is NEW IN THE TABLE, not by what its own scan

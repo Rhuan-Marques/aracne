@@ -12,9 +12,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"aracne/internal/topology/domain"
-	java "aracne/internal/topology/java"
-	"aracne/internal/topology/scanner"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	java "github.com/Rhuan-Marques/aracne/internal/topology/java"
+	"github.com/Rhuan-Marques/aracne/internal/topology/scanner"
 )
 
 // JavaScanner implements scanner.LanguageScanner for Java source trees.
