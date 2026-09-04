@@ -14,3 +14,9 @@ config.yaml
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# One-off post-hoc analysis scripts. Each is pinned to a past run, sample or ID
+# scheme, and none is needed to run a benchmark (that is run_benchmark.py plus the
+# bench/ package). Kept on disk for the reasoning in their docstrings; untracked so
+# they stop shipping with the product.
+scripts/oneoff/

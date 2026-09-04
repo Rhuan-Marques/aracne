@@ -1384,6 +1384,13 @@ func EnsureConfig(path string) *Config {
 	}
 	cfg, ok := LoadConfigStrict(path)
 	if !ok {
+		// Say so. A clean break is the right call for a file that cannot be read as this
+		// schema, but doing it silently means a project loses hand-set keys -- a feature it
+		// switched on, an agent's tool list -- and finds out later, from the behaviour. On
+		// stderr because this runs inside hooks whose stdout is parsed as JSON.
+		fmt.Fprintf(os.Stderr,
+			"aracne: %s could not be read as the current config schema and was replaced with "+
+				"defaults. Any keys it set are gone; re-apply them if you need them.\n", path)
 		_ = SaveConfig(cfg, path)
 	}
 	return cfg

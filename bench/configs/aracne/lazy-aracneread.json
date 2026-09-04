@@ -1,9 +1,7 @@
 {
   "mode": "cli",
   "read": {
-    "context_filter": {
-      "hide_no_description": false
-    }
+    "context_filter": "normal"
   },
   "descriptions": {
     "lazy": {

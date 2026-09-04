@@ -10,13 +10,7 @@
   "read": {
     "max_file_size": 33554432,
     "pipe_passthrough": true,
-    "context_filter": {
-      "include_incoming": true,
-      "external_vars_visibility": "normal",
-      "small_functions_visibility": "full",
-      "small_function_threshold": 7,
-      "hide_no_description": false
-    },
+    "context_filter": "full",
     "file_mode": "skeleton",
     "skeleton_threshold": 12,
     "max_symbol_lines": 160

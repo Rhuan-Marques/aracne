@@ -1,12 +1,6 @@
 {
   "read": {
     "max_file_size": 524288,
-    "context_filter": {
-      "include_incoming": true,
-      "external_vars_visibility": "full",
-      "small_functions_visibility": "hidden",
-      "small_function_threshold": 8,
-      "hide_no_description": true
-    }
+    "context_filter": "full"
   }
 }

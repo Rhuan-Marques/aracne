@@ -75,7 +75,6 @@ func RunInit(args []string) {
 	if *claude {
 		initClaudeCode(*global, cfg, *yes)
 	}
-	printBugManagementHint(cfg, configPath)
 }
 
 // Initializes OpenCode integration by configuring MCP servers, permissions, commands, agents, and plugins.
@@ -317,17 +316,6 @@ func countExisting(dir string, names []string) int {
 		}
 	}
 	return n
-}
-
-// printBugManagementHint tells the user the pipeline exists and how to turn it on. A config
-// flag nobody can discover is a feature nobody enables, and nothing rewrites an existing
-// .aracne/config.json to reveal the key.
-func printBugManagementHint(cfg *helper.Config, configPath string) {
-	if cfg.BugManagementEnabled() {
-		return
-	}
-	fmt.Printf("Bug pipeline (bug-hunter/judge/solver) not installed. To enable it, set "+
-		"\"features\": {\"bug_management\": true} in %s and re-run arac init.\n", configPath)
 }
 
 // Converts a boolean permission flag to a string ("allow" or "deny").

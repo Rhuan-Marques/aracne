@@ -9,10 +9,9 @@
 # warning channel actually keys on.
 #
 # WHY NO NUDGE. Three runs, hundreds of shell reads, fifteen nudges fired on this task family,
-# and `arac read` called ZERO times. The nudge costs a line of context after a command the
-# model has already been answered for. This run is the control for that line: same mode, same
-# tasks, nudge off (terminal.shell_read_nudge), so the next aracne_read run with it on has
-# something to be compared against.
+# and `arac read` called ZERO times. This run was the control for that line. The measurement
+# settled it: the shell-read nudge was removed from aracne entirely, so there is no longer a
+# knob here and no arm to compare against -- every `cli` run is now the "no nudge" arm.
 #
 # WHAT IS FIXED SINCE atlas12-read-1, both of which silently distorted that run:
 #   - netshim wraps `git`. Two baselines there cloned the upstream repo, found the commit with
@@ -48,4 +47,4 @@ arm_builtin_tools:
   aracne:   [Bash, Glob]
 
 arm_aracne_config:
-  aracne: lazy-aracneread-nonudge
+  aracne: lazy-aracneread

@@ -3,13 +3,7 @@
   "read": {
     "max_file_size": 33554432,
     "pipe_passthrough": true,
-    "context_filter": {
-      "include_incoming": true,
-      "external_vars_visibility": "full",
-      "small_functions_visibility": "full",
-      "small_function_threshold": 100000,
-      "hide_no_description": false
-    }
+    "context_filter": "full"
   },
   "scanner": { "update_frequency": 200 },
   "descriptions": {
