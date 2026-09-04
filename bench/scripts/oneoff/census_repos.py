@@ -31,7 +31,7 @@ already cloned when the run needs it.
 
 Usage:
   # census the tasks a selector run picked, stopping once 20 in-band repos are found
-  python bench/select_hard_tasks.py --split go --min-files 2 --samples 60 --out cand.jsonl
+  python bench/scripts/oneoff/select_hard_tasks.py --split go --min-files 2 --samples 60 --out cand.jsonl
   python bench/census_repos.py --tasks cand.jsonl --target 20
 """
 from __future__ import annotations

@@ -221,7 +221,7 @@ Two bugs found while building this, both of the "installed and silently doing no
 
 ### Backfilling a run recorded under the old semantics
 
-`bench/backfill_answerkey.py <run> --write`, then `run_benchmark.py rescore --run <run>`. It
+`bench/scripts/oneoff/backfill_answerkey.py <run> --write`, then `run_benchmark.py rescore --run <run>`. It
 reimplements the rule against the STORED transcript shape rather than sharing code with the
 live path, because `summarize` reads a result's `content` and then replaces it with a byte
 count on the way out; the stored form keeps the payload on `tool_use_result` instead.

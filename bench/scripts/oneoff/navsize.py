@@ -33,7 +33,8 @@ def first_touch_rows(results: Path, tmp: Path) -> list[dict]:
     """Delegate to first_touch.py so both reports share one definition of a 'touch'."""
     if not (results / "runs.jsonl").exists():
         return []
-    subprocess.run([sys.executable, "first_touch.py", "--results", str(results),
+    sibling = Path(__file__).resolve().parent / "first_touch.py"
+    subprocess.run([sys.executable, str(sibling), "--results", str(results),
                     "--arm", "baseline", "--out", str(tmp)],
                    capture_output=True, text=True)
     if not tmp.exists():

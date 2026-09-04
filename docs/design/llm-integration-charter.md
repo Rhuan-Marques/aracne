@@ -1,5 +1,11 @@
 # LLM Integration Charter
 
+> **Historical, and stale.** Written when aracne scanned Go only and had three integration
+> modes; there are now six languages and four modes. It is loaded at runtime from the
+> scanned project's root -- a path that only ever feeds `arac agent`, which is not part of
+> 1.0 -- so in practice nothing reads it. It will be rewritten when that harness ships.
+> For current behaviour see `docs/architecture.md` and `docs/modes.md`.
+
 This document defines how AI coding agents operate within the **aracne** system. It serves as the foundational behavioral contract for any LLM integrated with this tool. This text is prepended to every system prompt so the LLM understands its environment, tools, and priorities before any user task is presented.
 
 ---

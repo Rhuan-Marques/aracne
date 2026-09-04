@@ -102,7 +102,7 @@ a total.
 1. **Claude Code** installed and logged in to your Max plan (`claude` on PATH).
    Optional: **OpenCode** (`opencode` on PATH, with a provider key for `deepseek-v4-flash`
    / `gpt-5.4-mini-fast`) to run generation and/or the A/B **off** the Max plan.
-2. **`arac`** on PATH (for the aracne arm): `go build -o bin/arac . && export PATH=$PWD/bin:$PATH`.
+2. **`arac`** on PATH (for the aracne arm): `go build -o bin/arac ./cmd/arac && export PATH=$PWD/bin:$PATH`.
 3. **Python 3.10+** and harness deps: `pip install -r bench/requirements.txt`.
 4. **Docker** (only for grading; not needed with `--no-grade`). A subset still pulls
    multi-GB images per repo — start small and `docker image prune` between languages.

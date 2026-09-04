@@ -1,5 +1,9 @@
 # Plan: `identification_mode` — address resources by line range, not by ID
 
+> **Historical design note.** This plan shipped: the two keys it describes were folded
+> into the four named modes (`mcp`, `aracne_read`, `intercept_id`, `line_range`). Kept for
+> the measurements that motivated it. For current behaviour see `docs/modes.md`.
+
 ## Why
 
 Measured over `ab-prefer-ids-20260902a` (27 repos × 3 arms, all graded):

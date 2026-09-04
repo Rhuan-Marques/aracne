@@ -1,5 +1,9 @@
 # `descriptions.lazy` — descriptions generated on the read path
 
+> **Historical design note.** This plan shipped as `internal/lazydesc` and the
+> `descriptions.lazy` config key. Kept for the reasoning. For current behaviour see
+> `docs/configuration.md`.
+
 ## The problem
 
 A description is only useful once it exists, and today the only way to make one exist is
