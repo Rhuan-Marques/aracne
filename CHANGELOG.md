@@ -30,11 +30,5 @@ First public release.
 - `arac warnings list`, `arac check-updates`, `arac disable`, `arac scanner run`, and
   `arac descriptions export|import`.
 
-### Not included
-
-`features.chat`, `features.bug_management` and `features.agent` ship in the source but are
-off by default. They work and are tested; they are not finished enough to be part of the
-product, and an unproven surface costs every user context on every request.
-
 [Unreleased]: https://github.com/Rhuan-Marques/aracne/compare/v1.0.0...HEAD
 [1.0.0]: https://github.com/Rhuan-Marques/aracne/releases/tag/v1.0.0

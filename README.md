@@ -47,6 +47,10 @@ builds are published:
 Building from source needs **gcc**: the JavaScript, TypeScript, Rust and Java scanners are
 tree-sitter, so CGO is required. SQLite is pure Go.
 
+Scanning **Python** additionally needs a `python3` (or `python`) on `PATH` at run time — that
+scanner drives the interpreter's own parser rather than a grammar, so without one a Python
+project simply yields no topology. Every other language is self-contained in the binary.
+
 ```sh
 git clone https://github.com/Rhuan-Marques/aracne && cd aracne
 make build         # Full
@@ -120,19 +124,10 @@ harness is built to make the comparison honest, including when it is unflatterin
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Build, test, and how to add a language |
 | [bench/README.md](bench/README.md) | The benchmark harness and its statistics |
 
-## Not in 1.0
+## Next up
 
-Three things live in this repository but are switched off by default. They work; they are
-not finished enough to be part of the product, and shipping an unproven surface costs
-every user context on every request. Each is one line of config away
-([docs/configuration.md](docs/configuration.md#features--surfaces-that-are-not-part-of-10)):
-
-- **`features.chat`** — the visualizer's Chat tab and its agent harness.
-- **`features.bug_management`** — the bug-hunter / judge / solver pipeline.
-- **`features.agent`** — `arac agent`, a self-contained REPL against an LLM provider.
-
-Next up: uniting nodes into **functionalities** an agent can generate, maintain, and grep
-for directly.
+Uniting nodes into **functionalities** an agent can generate, maintain, and grep for
+directly.
 
 ## License
 

@@ -104,7 +104,9 @@ testing_ground/   Hand-built multi-language corpus of edge cases (see its README
     then takes one of two paths:
     - **Partial fast-path** (`tryPartialIncremental` + `PartialUpdater`): a single
       changed source file whose edit touches no cross-file signature/identity is
-      persisted as a *scoped delta* without loading the whole graph.
+      persisted as a *scoped delta* without loading the whole graph. **Go only** —
+      `goscanner/partial.go` holds the sole `UpdateFilePartial` in the tree, so the
+      other five languages always take the two-phase path below.
     - **Full two-phase path**: parse every changed file, then re-resolve changed
       files **plus reverse-caller files** of any symbol whose signature/identity
       changed, so body edges (`calls`, `uses_*`) never go stale. Correctness over
@@ -198,27 +200,26 @@ config-resolved tool set is exposed. No API key needed; the host platform brings
 its own model.
 
 ### C. Internal agent (`arac agent`) — `internal/llm/agent` + `providers`
-A self-contained REPL agent that talks **directly to an LLM provider**
-(`RunAgent` uses **DeepSeek**, requiring `DEEPSEEK_API_KEY`; anthropic & openai
-providers also exist). It runs the same topology tool set and a topology-aware
-system prompt, with a sub-agent runner for fan-out (e.g. description executors).
+**Not part of 1.0**, behind `features.agent`. A self-contained REPL against an LLM
+provider. Note that `internal/llm/agent` itself is NOT optional: `descriptions generate`
+uses `agent.New` + `RunSubAgent` for its executor fan-out. Only the REPL entry point
+(`cli/agent.go`) and the per-language `Build*SystemPrompt` chain are exclusive to it.
 
-### D. Web visualizer + chat (`arac viz serve`) — `internal/viz` + `internal/chat`
+### D. Web visualizer (`arac viz serve`) — `internal/viz`
 A local HTTP server (default `127.0.0.1:7331`) serving a **`go:embed`'d static
-SPA** (`internal/viz/static/`: `index.html`, `app.js`, `styles.css`) with two
-screens — **Visualization** (graph) and **Chat** — plus a Settings page.
+SPA** (`internal/viz/static/`: `index.html`, `app.js`, `styles.css`) with the
+**Visualization** (graph) screen and a Settings page.
 HTTP API: `/api/graph`, `/api/neighborhood`, `/api/context-graph`,
 `/api/search`, `/api/node/…`, `/api/summary`, `/api/warnings`, `/api/bugs`,
 `/api/config`, `/api/optimization-rules`, `/api/chat[/…]`, and `/api/ws`
 (websocket for streaming). Graph "modes": *Packages & Modules*, *Data Flow*,
 *Custom*; with language filtering, search, and neighborhood-depth controls.
 
-The **chat backend** (`internal/chat`) is aracne's own agent harness powering
-the viz Chat tab: session store (`.aracne/chat/*.json`), an LLM provider, an
-**agent registry**, **native tools** (`ls`/`bash`/`glob`), a workspace-scoped
-**permission policy**, and **`CreateTasks`** for spawning parallel sub-agents
-(explorer, bug-hunter/judge/solver, descriptions executor). Its tool lists are
-configured entirely under `viz.chat` and are independent of the `llm` section.
+`internal/chat` — a second agent harness powering a viz **Chat** tab — is **not part of
+1.0**, behind `features.chat`, and with it off the tab and its three routes
+(`/api/chat`, `/api/chat/`, `/api/context-graph`) are not served. `internal/viz` is its
+only importer, and `cli/viz.go` is the only importer of `internal/viz`, so `-tags minimal`
+drops the whole subtree.
 
 ## 8. Agent workflows
 
@@ -230,11 +231,9 @@ in-repo skills:
   batches them, and fans out **descriptions-generation-executor** sub-agents that
   read each resource and write a concise description; `descriptions apply` writes
   them back as source doc-comments; `descriptions clear` removes them.
-- **Bug pipeline** — **bug-hunter** scans the topology and files bugs
-  (`pending`); **bug-judge** triages them against dismissed patterns
-  (`acknowledged`/`dismissed`); **bug-solver** fixes acknowledged bugs and
-  deletes them. The main agent orchestrates the fan-out (hence it keeps read-only
-  `bug_list`).
+- **Bug pipeline** — **not part of 1.0**, behind `features.bug_management`: a
+  hunter/judge/solver fan-out over `KnownBug` nodes. With it off, `arac init` writes none
+  of its agents or commands and the `bug_*` tools are not servable.
 
 ## 9. Harness integration & guards (`arac init`)
 
@@ -312,7 +311,11 @@ in the topology and surface through `warnings_list` / `arac warnings list`, and 
 
 - **Go** — stdlib `go/ast` parser; richest support (cross-package return-type
   inference, interface↔struct matching, generics, embedding).
-- **Python** — custom parser; ABC/Protocol/dataclass, inheritance, decorators,
+- **Python** — custom parser that **shells out to `python3`** (then `python`), running an
+  embedded script via `exec.CommandContext` and reading back a JSON AST
+  (`pyscanner/parser.go`, `parse_script.go`). It is the only scanner with a runtime
+  dependency outside the binary: with no interpreter on `PATH` there is no Python
+  topology. ABC/Protocol/dataclass, inheritance, decorators,
   cross-module resolution; *modules-first* (file IDs, `imports_module`).
 - **JavaScript + TypeScript** — share one **tree-sitter (CGO)** scanner, so the
   build **requires gcc**. JS and TS are **independent topologies** (no

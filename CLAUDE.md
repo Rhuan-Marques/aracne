@@ -11,7 +11,6 @@ the core model, and a tour of every subsystem.
 | [`docs/architecture.md`](docs/architecture.md) | What the codebase contains and how it fits together |
 | [`docs/modes.md`](docs/modes.md) | The four integration modes, and why they aren't a cross-product |
 | [`docs/configuration.md`](docs/configuration.md) | Every key in `.aracne/config.json` |
-| [`docs/design/`](docs/design/) | Historical design notes, kept for their reasoning |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | Build, test, and how to add a language |
 
 ## Build and test
