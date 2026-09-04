@@ -12,11 +12,11 @@ import (
 )
 
 // interceptingConfig is a project in a mode that rewrites shell READS. The shipped default is
-// ModeAracneRead, which intercepts searches only, so a read-interception test has to say which
+// ModeCLI, which intercepts searches only, so a read-interception test has to say which
 // mode it is testing rather than lean on the default.
 func interceptingConfig() *helper.Config {
 	cfg := helper.DefaultConfig()
-	cfg.Mode = helper.ModeLineRange
+	cfg.Mode = helper.ModeInterceptLineRanges
 	return cfg
 }
 
@@ -188,9 +188,9 @@ func TestReadInterceptionFollowsTheModeButSearchNeverStops(t *testing.T) {
 		wantReads bool
 	}{
 		{helper.ModeMCP, false},
-		{helper.ModeAracneRead, false},
+		{helper.ModeCLI, false},
 		{helper.ModeInterceptID, true},
-		{helper.ModeLineRange, true},
+		{helper.ModeInterceptLineRanges, true},
 	} {
 		cfg := helper.DefaultConfig()
 		cfg.Mode = tc.mode
@@ -309,7 +309,7 @@ func TestBlockedToolsDenyNothingInTheInterceptingModes(t *testing.T) {
 	root, _ := scannedProject(t)
 	app := filepath.Join(root, "app.go")
 
-	for _, mode := range []string{helper.ModeInterceptID, helper.ModeLineRange} {
+	for _, mode := range []string{helper.ModeInterceptID, helper.ModeInterceptLineRanges} {
 		cfg := blockedIn(mode, "read", "grep", "edit", "write")
 
 		// `od -c` is a read aracne models no spelling of, so nothing else can be suppressing
@@ -323,7 +323,7 @@ func TestBlockedToolsDenyNothingInTheInterceptingModes(t *testing.T) {
 	}
 }
 
-// ModeAracneRead is the third mode where a refusal has somewhere to send the model: `arac read`
+// ModeCLI is the third mode where a refusal has somewhere to send the model: `arac read`
 // is a real command there, and reads are NOT intercepted, so a block is not refusing something
 // aracne was about to hand over.
 //
@@ -336,31 +336,31 @@ func TestBlockedToolsDenyNothingInTheInterceptingModes(t *testing.T) {
 func TestBlockedToolsBiteInAracneReadWhenAsked(t *testing.T) {
 	root, _ := scannedProject(t)
 	app := filepath.Join(root, "app.go")
-	cfg := blockedIn(helper.ModeAracneRead, "read", "grep", "edit", "write")
+	cfg := blockedIn(helper.ModeCLI, "read", "grep", "edit", "write")
 
 	if reason := denyReason(t, cfg, root, "od -c "+app); reason == "" {
-		t.Error("a configured read block must deny in aracne_read, where `arac read` is the surface")
+		t.Error("a configured read block must deny in cli, where `arac read` is the surface")
 	}
 	if reason := denyReason(t, cfg, root, "sed -i s/a/b/ "+app); reason == "" {
-		t.Error("a configured edit block must deny in aracne_read")
+		t.Error("a configured edit block must deny in cli")
 	}
 	// grep is the entry that must NOT bite: aracne answers a search in every mode, so refusing
 	// one denies a command the guard was one step from answering itself.
 	if reason := denyReason(t, cfg, root, "grep -rn Handle "+root); reason != "" {
-		t.Errorf("search is intercepted in aracne_read and must never be refused:\n%s", reason)
+		t.Errorf("search is intercepted in cli and must never be refused:\n%s", reason)
 	}
 }
 
-// And with nothing configured -- the shape every generated project has -- aracne_read denies
+// And with nothing configured -- the shape every generated project has -- cli denies
 // nothing at all.
 func TestAracneReadDeniesNothingByDefault(t *testing.T) {
 	root, _ := scannedProject(t)
 	app := filepath.Join(root, "app.go")
-	cfg := blockedIn(helper.ModeAracneRead)
+	cfg := blockedIn(helper.ModeCLI)
 
 	for _, cmd := range []string{"od -c " + app, "sed -i s/a/b/ " + app, "cat " + app} {
 		if reason := denyReason(t, cfg, root, cmd); reason != "" {
-			t.Errorf("default aracne_read must deny nothing, refused %q:\n%s", cmd, reason)
+			t.Errorf("default cli must deny nothing, refused %q:\n%s", cmd, reason)
 		}
 	}
 }
@@ -369,7 +369,7 @@ func TestAracneReadDeniesNothingByDefault(t *testing.T) {
 // already made; a denial costs it another turn for the same information.
 func TestInterceptionBeatsADenialForTheSameCommand(t *testing.T) {
 	root, _ := scannedProject(t)
-	cfg := blockedIn(helper.ModeLineRange, "read", "grep")
+	cfg := blockedIn(helper.ModeInterceptLineRanges, "read", "grep")
 
 	if reason := denyReason(t, cfg, root, "head -20 "+filepath.Join(root, "app.go")); reason != "" {
 		t.Fatalf("a command aracne can serve was denied instead of rewritten:\n%s", reason)
@@ -427,21 +427,21 @@ func TestNativeToolNudgeFollowsTheSurface(t *testing.T) {
 
 	app := filepath.Join(root, "app.go")
 
-	// ModeAracneRead: nothing intercepts a read, so the nudge names the subcommand that does.
+	// ModeCLI: nothing intercepts a read, so the nudge names the subcommand that does.
 	aracneRead := helper.DefaultConfig()
-	aracneRead.Mode = helper.ModeAracneRead
+	aracneRead.Mode = helper.ModeCLI
 	got := nudge(aracneRead, "Read", map[string]interface{}{"file_path": app})
 	if !strings.Contains(got, "arac read") || strings.Contains(got, "mcp__aracne__") {
-		t.Errorf("aracne_read nudge should point at the subcommand:\n%s", got)
+		t.Errorf("cli nudge should point at the subcommand:\n%s", got)
 	}
 
 	// An intercepting mode names the shell spellings aracne answers instead -- there is no
 	// subcommand to reach for when the command the model just typed is the surface.
 	lineRange := helper.DefaultConfig()
-	lineRange.Mode = helper.ModeLineRange
+	lineRange.Mode = helper.ModeInterceptLineRanges
 	got = nudge(lineRange, "Read", map[string]interface{}{"file_path": app})
 	if !strings.Contains(got, "answered from the topology") || strings.Contains(got, "mcp__aracne__") {
-		t.Errorf("line_range nudge should name the shell forms:\n%s", got)
+		t.Errorf("intercept_line_ranges nudge should name the shell forms:\n%s", got)
 	}
 
 	// ModeInterceptID is the one mode whose nudge may teach ids, because it is the one whose
@@ -452,7 +452,7 @@ func TestNativeToolNudgeFollowsTheSurface(t *testing.T) {
 		t.Errorf("intercept_id nudge should mention resource IDs:\n%s", got)
 	}
 	if got := nudge(lineRange, "Read", map[string]interface{}{"file_path": app}); strings.Contains(got, "resource ID") {
-		t.Errorf("line_range nudge must not re-teach resource IDs:\n%s", got)
+		t.Errorf("intercept_line_ranges nudge must not re-teach resource IDs:\n%s", got)
 	}
 
 	// Where reads ARE intercepted, a Bash read was either already answered by the rewrite or
@@ -524,7 +524,7 @@ func TestReadIsNeverInterceptedIntoAPipe(t *testing.T) {
 	}
 }
 
-// The nudge in ModeAracneRead fires on exactly the commands aracne would have ANSWERED, had
+// The nudge in ModeCLI fires on exactly the commands aracne would have ANSWERED, had
 // that mode intercepted reads.
 //
 // Precision is the whole point. The loose classifier this replaces keyed off "does this look
@@ -535,7 +535,7 @@ func TestReadIsNeverInterceptedIntoAPipe(t *testing.T) {
 func TestShellReadNudgeFiresOnlyWhereAracneCouldHaveAnswered(t *testing.T) {
 	root, dbPath := scannedProject(t)
 	app := filepath.Join(root, "app.go")
-	cfg := blockedIn(helper.ModeAracneRead)
+	cfg := blockedIn(helper.ModeCLI)
 	// An EXISTING file the topology does not know. It has to exist: the scope test asks
 	// whether the target carries nodes, and a path that is not there at all is a different
 	// case (the command will fail on its own).
@@ -593,10 +593,10 @@ func TestShellReadNudgeIsScopedToAracneRead(t *testing.T) {
 		mode string
 		want bool
 	}{
-		{helper.ModeAracneRead, true},
+		{helper.ModeCLI, true},
 		// Already answered the command.
 		{helper.ModeInterceptID, false},
-		{helper.ModeLineRange, false},
+		{helper.ModeInterceptLineRanges, false},
 		// Refuses it with a message that names the tool.
 		{helper.ModeMCP, false},
 	} {
@@ -610,7 +610,7 @@ func TestShellReadNudgeIsScopedToAracneRead(t *testing.T) {
 
 // Switching the shell-read nudge off must leave the model with NO pointer, not a different
 // one. The PostToolUse switch used to reach its ModeMCP fallback through `!InterceptReads()`,
-// which is equally true in ModeAracneRead -- that branch was unreachable for aracne_read only
+// which is equally true in ModeCLI -- that branch was unreachable for cli only
 // because the nudge case above it always matched. Adding `terminal.shell_read_nudge: false`
 // made it reachable, and a benchmark run that asked for no nudge silently got the MCP pointer
 // on every servable shell read instead. The fallback is keyed on the MODE now; this pins it.
@@ -623,10 +623,10 @@ func TestNudgeOffMeansNoNudgeNotADifferentOne(t *testing.T) {
 		wantShell     bool
 		wantMCPBranch bool
 	}{
-		{"aracne_read default nudges the shell read", helper.ModeAracneRead, nil, true, false},
-		{"aracne_read with the nudge off does nothing", helper.ModeAracneRead, &off, false, false},
+		{"cli default nudges the shell read", helper.ModeCLI, nil, true, false},
+		{"cli with the nudge off does nothing", helper.ModeCLI, &off, false, false},
 		{"mcp still gets its own fallback", helper.ModeMCP, &off, false, true},
-		{"line_range answers the command instead", helper.ModeLineRange, &off, false, false},
+		{"intercept_line_ranges answers the command instead", helper.ModeInterceptLineRanges, &off, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := helper.DefaultConfig()
@@ -637,11 +637,11 @@ func TestNudgeOffMeansNoNudgeNotADifferentOne(t *testing.T) {
 				t.Errorf("NudgesShellReads = %v, want %v", got, tc.wantShell)
 			}
 			// The guard's third case. Keyed on the mode, it is MCP-only; keyed on
-			// !InterceptReads() it would also capture aracne_read.
+			// !InterceptReads() it would also capture cli.
 			if got := cfg.EffectiveMode() == helper.ModeMCP; got != tc.wantMCPBranch {
 				t.Errorf("MCP fallback reached = %v, want %v", got, tc.wantMCPBranch)
 			}
-			if tc.mode == helper.ModeAracneRead && tc.nudge == &off {
+			if tc.mode == helper.ModeCLI && tc.nudge == &off {
 				if !cfg.InterceptReads() {
 					t.Log("note: !InterceptReads() is true here -- the old predicate would " +
 						"have fired the MCP pointer on a run that asked for silence")

@@ -12,9 +12,9 @@ import (
 // rework: a combination nobody wrote a contract for still rendered one.
 var allModes = []string{
 	helper.ModeMCP,
-	helper.ModeAracneRead,
+	helper.ModeCLI,
 	helper.ModeInterceptID,
-	helper.ModeLineRange,
+	helper.ModeInterceptLineRanges,
 }
 
 func contractFor(mode string) string {
@@ -54,7 +54,7 @@ func TestEveryContractIsFindableByInit(t *testing.T) {
 func TestEveryContractSaysWhatTheGraphIs(t *testing.T) {
 	for _, mode := range allModes {
 		got := contractFor(mode)
-		// ModeAracneRead says it in prose rather than by naming the file, because the path is
+		// ModeCLI says it in prose rather than by naming the file, because the path is
 		// not something the model ever types there.
 		if !strings.Contains(got, ".aracne/topology.db") &&
 			!strings.Contains(got, "every function, type, interface and variable is indexed") {
@@ -80,26 +80,26 @@ func TestNoContractNamesAnMCPTool(t *testing.T) {
 func TestOnlyInterceptingModesPromiseEnrichedShellReads(t *testing.T) {
 	const promise = "the answer comes back enriched"
 	for _, mode := range allModes {
-		want := mode == helper.ModeInterceptID || mode == helper.ModeLineRange
+		want := mode == helper.ModeInterceptID || mode == helper.ModeInterceptLineRanges
 		if got := strings.Contains(contractFor(mode), promise); got != want {
 			t.Errorf("mode %q: promises enriched shell reads = %v, want %v", mode, got, want)
 		}
 	}
 }
 
-// ModeLineRange dropped the resource-ID vocabulary on measured evidence: the model used an ID as
+// ModeInterceptLineRanges dropped the resource-ID vocabulary on measured evidence: the model used an ID as
 // a command operand 0 times in 408 commands. Re-adding a mention anywhere in its contract --
 // including the `arac read <id>` bullet under "Other" -- spends bytes re-teaching exactly what
 // the mode exists to retire.
 func TestLineRangeContractNeverTeachesResourceIDs(t *testing.T) {
-	got := contractFor(helper.ModeLineRange)
+	got := contractFor(helper.ModeInterceptLineRanges)
 	for _, forbidden := range []string{"Resource ID", "resource ID", "arac read <id>"} {
 		if strings.Contains(got, forbidden) {
-			t.Errorf("line_range contract mentions %q\n%s", forbidden, got)
+			t.Errorf("intercept_line_ranges contract mentions %q\n%s", forbidden, got)
 		}
 	}
 	if !strings.Contains(got, "src/parser.rs:940-1080") {
-		t.Errorf("line_range contract does not show a span to read:\n%s", got)
+		t.Errorf("intercept_line_ranges contract does not show a span to read:\n%s", got)
 	}
 }
 
@@ -112,10 +112,10 @@ func TestTheGuardNoteAppearsOnlyWhereAGuardCanFire(t *testing.T) {
 		cfg.LLM.Any.MainAgent.BlockedTools = []string{"read", "grep"}
 
 		// The two modes whose guard can actually refuse something: ModeMCP, and
-		// ModeAracneRead where `arac read` is a surface a refusal can point at. The
+		// ModeCLI where `arac read` is a surface a refusal can point at. The
 		// intercepting modes answer the command instead, so a guard note there would explain
 		// a denial that never comes.
-		want := mode == helper.ModeMCP || mode == helper.ModeAracneRead
+		want := mode == helper.ModeMCP || mode == helper.ModeCLI
 		if got := strings.Contains(ContractContent(cfg), "## Tool Guard"); got != want {
 			t.Errorf("mode %q: carries a Tool Guard note = %v, want %v", mode, got, want)
 		}
@@ -133,21 +133,21 @@ func TestTheGuardNoteAppearsOnlyWhereAGuardCanFire(t *testing.T) {
 // The three modes that TEACH a search have to say what it additionally reaches, because that
 // is the half a plain grep cannot do and the model has no way to discover.
 //
-// ModeAracneRead is deliberately absent. A shell grep is rewritten to the annotated grep in
+// ModeCLI is deliberately absent. A shell grep is rewritten to the annotated grep in
 // every mode (Config.InterceptGrep), so the capability arrives whether or not the contract
 // names it -- and naming a second spelling of something already automatic costs bytes on every
 // request. The gap that leaves is real and small: a shape the guard will not rewrite
 // (`grep … | wc -l`, `grep -o`) falls back to plain grep, and there the model never learns the
 // annotated one exists.
 func TestContractsThatTeachSearchSayWhatItReaches(t *testing.T) {
-	for _, mode := range []string{helper.ModeMCP, helper.ModeInterceptID, helper.ModeLineRange} {
+	for _, mode := range []string{helper.ModeMCP, helper.ModeInterceptID, helper.ModeInterceptLineRanges} {
 		if !strings.Contains(contractFor(mode), "node names and stored descriptions") {
 			t.Errorf("mode %q: contract never explains what grep additionally searches\n%s",
 				mode, contractFor(mode))
 		}
 	}
-	if strings.Contains(contractFor(helper.ModeAracneRead), "arac grep") {
-		t.Error("aracne_read names a subcommand the model gets for free; those bytes ship on every request")
+	if strings.Contains(contractFor(helper.ModeCLI), "arac grep") {
+		t.Error("cli names a subcommand the model gets for free; those bytes ship on every request")
 	}
 }
 
@@ -158,7 +158,7 @@ func TestAnUnknownModeStillRendersAContract(t *testing.T) {
 	cfg := helper.DefaultConfig()
 	cfg.Mode = "wat"
 	got := ContractContent(cfg)
-	// EffectiveMode normalizes a typo to the DEFAULT mode, which is aracne_read -- so the
+	// EffectiveMode normalizes a typo to the DEFAULT mode, which is cli -- so the
 	// assertion is on the properties every contract must have, not on one mode's wording.
 	if !strings.HasPrefix(got, "# Aracne\n") {
 		t.Errorf("an unknown mode rendered a contract init cannot find:\n%s", got)
@@ -166,7 +166,7 @@ func TestAnUnknownModeStillRendersAContract(t *testing.T) {
 	if !strings.Contains(got, "Good Luck") && !strings.Contains(got, AracneReadClosingLine) {
 		t.Errorf("an unknown mode rendered a contract with no findable ending:\n%s", got)
 	}
-	if got != contractFor(helper.ModeAracneRead) {
+	if got != contractFor(helper.ModeCLI) {
 		t.Error("an unknown mode must render exactly the default mode's contract")
 	}
 }

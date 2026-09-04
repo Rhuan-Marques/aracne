@@ -39,7 +39,7 @@ func behavioralRulesSection() string {
 // line so a re-run REPLACES it instead of stacking a second copy, and `arac disable` uses the
 // same pair to remove it. Without a findable end both fall back to appending.
 //
-// ModeAracneRead closes on its own last instruction instead (prompts.AracneReadClosingLine),
+// ModeCLI closes on its own last instruction instead (prompts.AracneReadClosingLine),
 // which cli matches as well -- see aracIntegrationEndMarkers for why the marker is always a
 // real line of the contract rather than something invisible added for the parser.
 func endingSection() string {

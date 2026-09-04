@@ -14,7 +14,7 @@ First public release.
 
 - **Topology engine** for six languages — Go, Python, JavaScript, TypeScript, Rust, Java —
   with full, incremental and hard scan modes, verified identical by the at-scale suites.
-- **Four integration modes** (`aracne_read`, `intercept_id`, `line_range`, `mcp`) behind a
+- **Four integration modes** (`cli`, `intercept_id`, `intercept_line_ranges`, `mcp`) behind a
   single `mode` key, replacing a cross-product of independent switches that allowed
   combinations which made no sense.
 - **Terminal surface**: `arac cmd` answers shell reads and searches from the topology, and

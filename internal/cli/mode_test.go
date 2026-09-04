@@ -26,10 +26,10 @@ import (
 // capability that mode is FOR, so a marker in the wrong contract is a promise the project
 // cannot keep.
 var modeMarkers = map[string]string{
-	helper.ModeMCP:         "arrive as MCP tools",
-	helper.ModeAracneRead:  "Prefer it over reading whole files or line ranges",
-	helper.ModeInterceptID: "## Resource IDs",
-	helper.ModeLineRange:   "## Line ranges",
+	helper.ModeMCP:                 "arrive as MCP tools",
+	helper.ModeCLI:                 "Prefer it over reading whole files or line ranges",
+	helper.ModeInterceptID:         "## Resource IDs",
+	helper.ModeInterceptLineRanges: "## Line ranges",
 }
 
 func TestEachContractCarriesOnlyItsOwnModesMarker(t *testing.T) {
@@ -53,7 +53,7 @@ func TestEachContractCarriesOnlyItsOwnModesMarker(t *testing.T) {
 }
 
 // Only the intercepting modes may teach the model to read with a shell command, because only
-// they answer one. Telling a ModeMCP or ModeAracneRead project that `sed -n` comes back
+// they answer one. Telling a ModeMCP or ModeCLI project that `sed -n` comes back
 // enriched is a promise nothing in that project keeps.
 func TestOnlyInterceptingModesTeachShellReads(t *testing.T) {
 	const teaches = "Read files the way you normally would"
@@ -62,9 +62,9 @@ func TestOnlyInterceptingModesTeachShellReads(t *testing.T) {
 		want bool
 	}{
 		{helper.ModeMCP, false},
-		{helper.ModeAracneRead, false},
+		{helper.ModeCLI, false},
 		{helper.ModeInterceptID, true},
-		{helper.ModeLineRange, true},
+		{helper.ModeInterceptLineRanges, true},
 	} {
 		cfg := helper.DefaultConfig()
 		cfg.Mode = tc.mode
@@ -102,13 +102,13 @@ func TestInterceptionFollowsTheMode(t *testing.T) {
 		wantBlocks bool
 	}{
 		{helper.ModeMCP, false, true},
-		// ModeAracneRead may block because `arac read` is a real command there and reads are
+		// ModeCLI may block because `arac read` is a real command there and reads are
 		// not intercepted, so a refusal points at a capability the model has rather than at
 		// one it was about to be handed. The two intercepting modes must not: there the
 		// capability arrives AS the command the model typed.
-		{helper.ModeAracneRead, false, true},
+		{helper.ModeCLI, false, true},
 		{helper.ModeInterceptID, true, false},
-		{helper.ModeLineRange, true, false},
+		{helper.ModeInterceptLineRanges, true, false},
 	} {
 		cfg := helper.DefaultConfig()
 		cfg.Mode = tc.mode
@@ -128,7 +128,7 @@ func TestInterceptionFollowsTheMode(t *testing.T) {
 // regression the rework exists to close: ModeMCP must not name declarations by line range,
 // because its `read` tool takes ids and its shell reads are not intercepted.
 func TestOnlyLineRangeModeNamesResourcesBySpan(t *testing.T) {
-	for _, mode := range []string{helper.ModeMCP, helper.ModeAracneRead, helper.ModeInterceptID} {
+	for _, mode := range []string{helper.ModeMCP, helper.ModeCLI, helper.ModeInterceptID} {
 		cfg := helper.DefaultConfig()
 		cfg.Mode = mode
 		if cfg.LineRangeIdentification() {
@@ -136,9 +136,9 @@ func TestOnlyLineRangeModeNamesResourcesBySpan(t *testing.T) {
 		}
 	}
 	cfg := helper.DefaultConfig()
-	cfg.Mode = helper.ModeLineRange
+	cfg.Mode = helper.ModeInterceptLineRanges
 	if !cfg.LineRangeIdentification() {
-		t.Error("line_range mode does not name resources by span")
+		t.Error("intercept_line_ranges mode does not name resources by span")
 	}
 }
 
@@ -146,7 +146,7 @@ func TestOnlyLineRangeModeNamesResourcesBySpan(t *testing.T) {
 // tool for them -- and outside ModeMCP no mode registers anything at all.
 func TestServableToolsFollowTheMode(t *testing.T) {
 	configured := []string{"read", "grep", "edit", "write", "warnings_list"}
-	for _, mode := range []string{helper.ModeAracneRead, helper.ModeInterceptID, helper.ModeLineRange} {
+	for _, mode := range []string{helper.ModeCLI, helper.ModeInterceptID, helper.ModeInterceptLineRanges} {
 		cfg := helper.DefaultConfig()
 		cfg.Mode = mode
 		if got := cfg.ServableMCPTools(configured); len(got) != 0 {
@@ -173,9 +173,9 @@ func TestBlockedToolsAreInertOutsideMCPMode(t *testing.T) {
 		wantBlock bool
 	}{
 		{helper.ModeMCP, true},
-		{helper.ModeAracneRead, true},
+		{helper.ModeCLI, true},
 		{helper.ModeInterceptID, false},
-		{helper.ModeLineRange, false},
+		{helper.ModeInterceptLineRanges, false},
 	} {
 		cfg := helper.DefaultConfig()
 		cfg.Mode = tc.mode
@@ -200,48 +200,8 @@ func TestBlockedToolsAreInertOutsideMCPMode(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Resolution: explicit key, legacy pair, default
+// Resolution: explicit key, default
 // ---------------------------------------------------------------------------
-
-// The legacy mapping preserves what those projects were actually running. "both" lands on an
-// intercepting mode rather than on mcp because on "both" the shell WAS intercepted; the MCP
-// tools it also had are the half being dropped, and dropping them is the point.
-func TestLegacyKeysMapForward(t *testing.T) {
-	for _, tc := range []struct {
-		integration    string
-		identification string
-		want           string
-	}{
-		{"terminal", "", helper.ModeLineRange},
-		{"terminal", "line_range", helper.ModeLineRange},
-		{"terminal", "id", helper.ModeInterceptID},
-		{"both", "line_range", helper.ModeLineRange},
-		{"both", "id", helper.ModeInterceptID},
-		{"mcp", "line_range", helper.ModeMCP},
-		{"mcp", "id", helper.ModeMCP},
-		{"", "id", helper.ModeInterceptID},
-		{"", "line_range", helper.ModeLineRange},
-	} {
-		cfg := &helper.Config{}
-		cfg.Integration.Mode = tc.integration
-		cfg.IdentificationMode = tc.identification
-		if got := cfg.EffectiveMode(); got != tc.want {
-			t.Errorf("integration %q + identification %q => %q, want %q",
-				tc.integration, tc.identification, got, tc.want)
-		}
-	}
-}
-
-// An explicit mode wins over whatever the retired keys still say, so a migrated config does not
-// have to be cleaned before it is correct.
-func TestTheExplicitModeBeatsTheLegacyKeys(t *testing.T) {
-	cfg := &helper.Config{Mode: helper.ModeMCP}
-	cfg.Integration.Mode = "terminal"
-	cfg.IdentificationMode = "id"
-	if got := cfg.EffectiveMode(); got != helper.ModeMCP {
-		t.Errorf("EffectiveMode = %q, want the explicit %q", got, helper.ModeMCP)
-	}
-}
 
 // A config with neither the new key nor either legacy key -- every config written before any of
 // them existed -- resolves to the default, not to nothing.
@@ -260,11 +220,11 @@ func TestAConfigWithNoModeKeysResolvesToTheDefault(t *testing.T) {
 	}
 }
 
-// A file that names nothing BUT the mode is a legitimate hand-written config. Judging it legacy
+// A file that names nothing BUT the mode is a legitimate hand-written config. Judging it stale
 // would overwrite it with defaults -- silently returning the project to the mode it just opted
 // out of.
-func TestAModeOnlyConfigIsNotTreatedAsLegacy(t *testing.T) {
-	for _, body := range []string{`{"mode":"mcp"}`, `{"integration":{"mode":"mcp"}}`} {
+func TestAModeOnlyConfigIsNotTreatedAsStale(t *testing.T) {
+	for _, body := range []string{`{"mode":"mcp"}`} {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "config.json")
 		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
@@ -272,7 +232,7 @@ func TestAModeOnlyConfigIsNotTreatedAsLegacy(t *testing.T) {
 		}
 		cfg, ok := helper.LoadConfigStrict(path)
 		if !ok {
-			t.Fatalf("%s was rejected as legacy and would be overwritten", body)
+			t.Fatalf("%s was rejected as stale and would be overwritten", body)
 		}
 		if !cfg.MCPEnabled() || cfg.InterceptReads() {
 			t.Errorf("%s did not take effect: mode=%q", body, cfg.EffectiveMode())

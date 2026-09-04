@@ -207,9 +207,9 @@ Flags for "init":
   Without flags, initializes both Claude Code and OpenCode.
   The "mode" key in .aracne/config.json decides what init writes:
     mcp           a single "read" MCP tool; shell reads run as themselves
-    aracne_read   no MCP tools; the contract points at "arac read <id>"  (default)
+    cli   no MCP tools; the contract points at "arac read <id>"  (default)
     intercept_id  cat/head/tail/sed -n are answered from the topology and take a resource ID
-    line_range    the same, with every declaration named by the exact lines it spans
+    intercept_line_ranges    the same, with every declaration named by the exact lines it spans
   Shell "grep" is answered by aracne and edits re-sync the topology in all four.
   Agent tools, blocked native tools, plugins, and models are configured in
   .aracne/config.json under "llm" (per-agent mcp_tools / blocked_tools /

@@ -200,7 +200,7 @@ func TestInitBackToTerminalRemovesTheServer(t *testing.T) {
 
 	cfgPath := filepath.Join(dir, ".aracne", "config.json")
 	cfg := helper.LoadConfig(cfgPath)
-	cfg.Mode = helper.ModeLineRange
+	cfg.Mode = helper.ModeInterceptLineRanges
 	if err := helper.SaveConfig(cfg, cfgPath); err != nil {
 		t.Fatal(err)
 	}
@@ -467,7 +467,7 @@ func TestInitMarkdownFiles_ContainIntegrationSection(t *testing.T) {
 	mustRun(t, dir, "init", "-y")
 
 	// The block has to be findable at BOTH ends or `arac init` appends a second copy on its
-	// next run. Which line closes it depends on the mode -- ModeAracneRead ends on its own
+	// next run. Which line closes it depends on the mode -- ModeCLI ends on its own
 	// last instruction rather than the shared one, deliberately: the marker is always a real
 	// line of the contract, never something invisible added for the parser.
 	hasEnding := func(md string) bool {
@@ -545,7 +545,7 @@ func bashCmd(t *testing.T, dir string, args ...string) *exec.Cmd {
 // see but cannot use is noise in it. The cost of that choice is exactly this test: the parser
 // now depends on wording, so the wording is pinned here.
 func TestInitReplacesItsOwnBlockRatherThanStacking(t *testing.T) {
-	for _, mode := range []string{"aracne_read", "mcp", "intercept_id", "line_range"} {
+	for _, mode := range []string{"cli", "mcp", "intercept_id", "intercept_line_ranges"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
 			writeFile(t, filepath.Join(dir, "CLAUDE.md"), "# Mine\n\nabove\n")

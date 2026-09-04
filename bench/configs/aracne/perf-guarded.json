@@ -17,7 +17,6 @@
     "max_symbol_lines": 160
   },
   "scanner": {
-    "mode": "default",
     "update_frequency": 200
   },
   "descriptions": {

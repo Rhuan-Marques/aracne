@@ -155,7 +155,7 @@ var nativeWarnings = map[string]string{}
 // tool for them either.
 //
 // WHY SEPARATE TABLES RATHER THAN ONE WITH SUBSTITUTIONS. The modes do not spell the same
-// read capability differently -- they put it in different places. Under ModeAracneRead the read
+// read capability differently -- they put it in different places. Under ModeCLI the read
 // capability is a subcommand; under the intercepting modes it has no name at all, because it
 // arrives as the shell command the model already typed. Text that says "call X" cannot be
 // find-and-replaced into text that says "the command you just ran is answered"; the result is
@@ -191,7 +191,7 @@ var aracneReadWarnings = withShellWarnings(map[string]string{
 // rather than at `arac grep`: a shell grep is rewritten to the annotated grep in every mode and
 // its results carry `# <id> — <description>` headers for what they name, so the ids are already
 // arriving in work the model does anyway. Naming a subcommand instead would teach a second
-// spelling of something automatic -- which is the reason the aracne_read contract stopped
+// spelling of something automatic -- which is the reason the cli contract stopped
 // mentioning `arac grep` at all, and this line must not reintroduce it.
 const ShellReadNudge = "aracne: `arac read <id>` returns a declaration with its context, for a " +
 	"fraction of the file. Search output prints the ids."

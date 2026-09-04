@@ -15,7 +15,6 @@
     "file_mode": "skeleton"
   },
   "scanner": {
-    "mode": "default",
     "update_frequency": 200
   },
   "descriptions": {

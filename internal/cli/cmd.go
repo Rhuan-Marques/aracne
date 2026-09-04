@@ -176,7 +176,7 @@ func resolveReadOperand(rd *universaltools.Read, cfg *helper.Config, req shellcm
 	// could never answer at all.
 	//
 	// Deliberately ungated by mode. Whether aracne ADVERTISES ids is a contract decision that
-	// ModeLineRange answers differently from ModeInterceptID; whether it ACCEPTS one, having
+	// ModeInterceptLineRanges answers differently from ModeInterceptID; whether it ACCEPTS one, having
 	// already decided to answer this command, is not a decision at all. Refusing an id here
 	// would refuse a question aracne can answer, in favour of a `cat` that will fail.
 	rPath, bodyFrom, bodyTo, err := rd.BodyBounds(operand)

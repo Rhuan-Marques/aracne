@@ -320,14 +320,14 @@ type FeaturesSection struct {
 
 // The four modes of Config.Mode.
 //
-// WHY FOUR MODES AND NOT A CROSS-PRODUCT. These used to be two independent keys --
+// WHY FOUR MODES AND NOT A CROSS-PRODUCT. This was once two independent keys --
 // `integration.mode` (terminal/mcp/both) and `identification_mode` (id/line_range) -- plus five
 // booleans under `terminal`. Nothing folded them together, so combinations existed that made no
-// sense and shipped anyway: `mcp` + `line_range` advertised spans in every grep header while the
-// only reader available was an MCP `read` that takes ids and nothing else, and the contract for
-// that project never mentioned a line range at all. The surfaces are not independent axes; they
-// are four coherent products, and naming them as four is what stops the incoherent fifth from
-// being reachable.
+// sense: `mcp` with line-range addressing advertised spans in every grep header while the only
+// reader available was an MCP `read` that takes ids and nothing else, and the contract for that
+// project never mentioned a line range at all. The surfaces are not independent axes; they are
+// four coherent products, and naming them as four is what stops the incoherent fifth from being
+// reachable. Those keys are gone -- aracne has never had a release that wrote them.
 //
 // Each mode answers three questions at once: which tools exist, which shell commands aracne
 // answers, and what vocabulary the contract teaches. Nothing else may re-decide any of them.
@@ -337,54 +337,21 @@ const (
 	// blocked_tools may block or redirect a native/bash read into aracne -- the only mode in
 	// which blocked_tools does anything at all.
 	ModeMCP = "mcp"
-	// ModeAracneRead ships no MCP tools. The contract points at `arac read <id>` for symbols
+	// ModeCLI ships no MCP tools. The contract points at `arac read <id>` for symbols
 	// and asks the model to prefer it over opening files. Shell reads are left alone; shell
 	// grep is intercepted. It is the default.
-	ModeAracneRead = "aracne_read"
+	ModeCLI = "cli"
 	// ModeInterceptID intercepts the shell reads the model already types (`cat`, `head`,
 	// `tail`, `sed -n`) and answers them from the topology, addressing declarations by
 	// resource ID -- which those commands then accept where they accept a path.
 	ModeInterceptID = "intercept_id"
-	// ModeLineRange intercepts the same commands and answers them the same way, but addresses
+	// ModeInterceptLineRanges intercepts the same commands and answers them the same way, but addresses
 	// declarations by `path:start-end`: the vocabulary the model already uses for code.
-	ModeLineRange = "line_range"
+	ModeInterceptLineRanges = "intercept_line_ranges"
 )
 
-// DefaultMode is what a config with no mode key -- and no legacy key to migrate -- resolves to.
-const DefaultMode = ModeAracneRead
-
-// Identification modes for the legacy Config.IdentificationMode key.
-//
-// Deprecated: superseded by Config.Mode. Kept because an existing config still decodes into it
-// and legacyMode() maps it forward.
-const (
-	// IdentifyLineRange addressed a resource by path and line span.
-	IdentifyLineRange = "line_range"
-	// IdentifyID addressed a resource by its topology ID.
-	IdentifyID = "id"
-)
-
-// Integration modes for the legacy IntegrationSection.Mode key.
-//
-// Deprecated: superseded by Config.Mode. Read only by legacyMode().
-const (
-	// IntegrationTerminal enriched the shell commands the agent already runs.
-	IntegrationTerminal = "terminal"
-	// IntegrationMCP served capabilities as MCP tools.
-	IntegrationMCP = "mcp"
-	// IntegrationBoth served both surfaces at once.
-	IntegrationBoth = "both"
-)
-
-// IntegrationSection is the legacy surface selector.
-//
-// Deprecated: superseded by Config.Mode. An existing config still decodes into it and
-// legacyMode() maps it forward -- "mcp" becomes ModeMCP, and "terminal"/"both" become
-// ModeInterceptID or ModeLineRange depending on the old identification_mode. Nothing reads
-// this field except that mapping.
-type IntegrationSection struct {
-	Mode string `json:"mode"`
-}
+// DefaultMode is what a config with no mode key resolves to.
+const DefaultMode = ModeCLI
 
 // TerminalSection is what is left of the terminal knobs once the mode owns the decisions.
 //
@@ -403,7 +370,7 @@ type TerminalSection struct {
 	MaxOverserve *int `json:"max_overserve"`
 
 	// ShellReadNudge controls the one-line pointer printed after a shell read that
-	// ModeAracneRead leaves alone. Nil means on, which is the behaviour that shipped.
+	// ModeCLI leaves alone. Nil means on, which is the behaviour that shipped.
 	//
 	// It exists to be turned OFF, because whether the line earns its tokens is an empirical
 	// question and the answer so far is no: across three benchmark runs the model issued
@@ -430,14 +397,6 @@ type Config struct {
 	// Absent, it resolves to whatever the legacy integration.mode/identification_mode pair
 	// said, and to DefaultMode when neither is set. EffectiveMode() is the only reader.
 	Mode string `json:"mode"`
-	// Integration is the legacy surface key.
-	//
-	// Deprecated: set Mode instead. Read only by legacyMode().
-	Integration IntegrationSection `json:"integration"`
-	// IdentificationMode is the legacy addressing key.
-	//
-	// Deprecated: set Mode instead. Read only by legacyMode().
-	IdentificationMode string `json:"identification_mode"`
 	// Paths marks directories/files (relative to the topology root) as hidden or
 	// visible. Hidden paths are skipped by the indexing and scan stages in every
 	// mode (default/all/hard). More specific (more internal) rules win, so a
@@ -715,25 +674,13 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("read.kinds: %w", err)
 	}
 	switch strings.ToLower(strings.TrimSpace(c.Mode)) {
-	case "", ModeMCP, ModeAracneRead, ModeInterceptID, ModeLineRange:
+	case "", ModeMCP, ModeCLI, ModeInterceptID, ModeInterceptLineRanges:
 	default:
 		return fmt.Errorf("mode: unknown mode %q (want %s, %s, %s or %s)",
-			c.Mode, ModeMCP, ModeAracneRead, ModeInterceptID, ModeLineRange)
+			c.Mode, ModeMCP, ModeCLI, ModeInterceptID, ModeInterceptLineRanges)
 	}
 	if err := ValidateLazyDescriptions(c.Descriptions.Lazy); err != nil {
 		return err
-	}
-	switch c.Integration.Mode {
-	case "", IntegrationTerminal, IntegrationMCP, IntegrationBoth:
-	default:
-		return fmt.Errorf("integration.mode: unknown mode %q (want terminal, mcp or both). "+
-			"This key is superseded by the top-level \"mode\"", c.Integration.Mode)
-	}
-	switch strings.ToLower(strings.TrimSpace(c.IdentificationMode)) {
-	case "", IdentifyLineRange, IdentifyID:
-	default:
-		return fmt.Errorf("identification_mode: unknown mode %q (want line_range or id). "+
-			"This key is superseded by the top-level \"mode\"", c.IdentificationMode)
 	}
 	checkAgent := func(path string, mcpTools, blockedTools []string) error {
 		if err := toolspec.ValidateMCPTools(mcpTools); err != nil {
@@ -1175,8 +1122,6 @@ func validConfig(c *Config) bool {
 		// project back on the mode it just opted out of. The two retired keys stay on this
 		// list for exactly as long as they are still mapped forward.
 		c.Mode != "" ||
-		c.Integration.Mode != "" ||
-		c.IdentificationMode != "" ||
 		c.Terminal.MaxOverserve != nil
 }
 
@@ -1198,39 +1143,14 @@ func (c *Config) EffectiveMode() string {
 	switch strings.ToLower(strings.TrimSpace(c.Mode)) {
 	case ModeMCP:
 		return ModeMCP
-	case ModeAracneRead:
-		return ModeAracneRead
+	case ModeCLI:
+		return ModeCLI
 	case ModeInterceptID:
 		return ModeInterceptID
-	case ModeLineRange:
-		return ModeLineRange
-	}
-	if m, ok := c.legacyMode(); ok {
-		return m
+	case ModeInterceptLineRanges:
+		return ModeInterceptLineRanges
 	}
 	return DefaultMode
-}
-
-// legacyMode maps a pre-Mode config forward, reporting false when neither legacy key is set.
-//
-// The mapping preserves what those projects actually got, which is why "both" lands on an
-// intercepting mode rather than on ModeMCP: on "both" the shell WAS intercepted, and that is
-// the behaviour the project is running today. The MCP tools it also had are the part being
-// dropped, and dropping them is the point -- "both" is the combination that made the model
-// choose between two answers to the same question.
-func (c *Config) legacyMode() (string, bool) {
-	integration := strings.ToLower(strings.TrimSpace(c.Integration.Mode))
-	identification := strings.ToLower(strings.TrimSpace(c.IdentificationMode))
-	if integration == "" && identification == "" {
-		return "", false
-	}
-	if integration == IntegrationMCP {
-		return ModeMCP, true
-	}
-	if identification == IdentifyID {
-		return ModeInterceptID, true
-	}
-	return ModeLineRange, true
 }
 
 // MCPEnabled reports whether the MCP server is wired and its tools served.
@@ -1240,11 +1160,11 @@ func (c *Config) MCPEnabled() bool { return c.EffectiveMode() == ModeMCP }
 // from the topology instead of by the real command.
 //
 // Only the two intercepting modes do this. In ModeMCP the read capability is a tool, and in
-// ModeAracneRead it is `arac read` -- in both, rewriting the model's `cat` as well would be a
+// ModeCLI it is `arac read` -- in both, rewriting the model's `cat` as well would be a
 // second answer to a question that already has one.
 func (c *Config) InterceptReads() bool {
 	m := c.EffectiveMode()
-	return m == ModeInterceptID || m == ModeLineRange
+	return m == ModeInterceptID || m == ModeInterceptLineRanges
 }
 
 // InterceptGrep reports whether a shell search is answered by the topology-annotated grep.
@@ -1259,7 +1179,7 @@ func (c *Config) InterceptGrep() bool { return true }
 func (c *Config) InterceptShell() bool { return c.InterceptReads() || c.InterceptGrep() }
 
 // AdvertiseResourceIDs reports whether the contract teaches resource IDs as the way to address
-// a declaration. Only ModeInterceptID does; ModeLineRange deliberately stops advertising them
+// a declaration. Only ModeInterceptID does; ModeInterceptLineRanges deliberately stops advertising them
 // (it still accepts them), and the two toolful modes name a tool instead.
 func (c *Config) AdvertiseResourceIDs() bool { return c.EffectiveMode() == ModeInterceptID }
 
@@ -1270,13 +1190,13 @@ func (c *Config) AdvertiseResourceIDs() bool { return c.EffectiveMode() == ModeI
 // move the model can make: the MCP `read` tool takes ids and has no line-range argument, and
 // with shell reads unintercepted there is nothing to answer a `sed` with either. Printing a
 // span there replaced the id in every grep header with a coordinate no available tool accepts.
-func (c *Config) LineRangeIdentification() bool { return c.EffectiveMode() == ModeLineRange }
+func (c *Config) LineRangeIdentification() bool { return c.EffectiveMode() == ModeInterceptLineRanges }
 
 // GuardBlocksNativeReads reports whether blocked_tools may deny a native or bash read and
 // redirect it into aracne.
 //
 // The test is whether a denial has somewhere to SEND the model. ModeMCP does: an MCP `read`
-// tool that is present in its tool list. ModeAracneRead does too: `arac read` is a real
+// tool that is present in its tool list. ModeCLI does too: `arac read` is a real
 // command there, and reads are not intercepted, so a refusal points at a capability the model
 // has rather than refusing something aracne was about to answer anyway.
 //
@@ -1287,13 +1207,13 @@ func (c *Config) LineRangeIdentification() bool { return c.EffectiveMode() == Mo
 // What a mode may block is narrower than the set an operator writes; see BlockableInMode.
 func (c *Config) GuardBlocksNativeReads() bool {
 	m := c.EffectiveMode()
-	return m == ModeMCP || m == ModeAracneRead
+	return m == ModeMCP || m == ModeCLI
 }
 
 // NudgesShellReads reports whether a SHELL read should earn a one-line pointer at the read
 // capability after it runs.
 //
-// ModeAracneRead only, and only because that mode is the one where a shell read is neither
+// ModeCLI only, and only because that mode is the one where a shell read is neither
 // intercepted nor refused: the model types `sed -n 1,200p file.go`, gets the raw file, and
 // nothing in the exchange tells it `arac read` exists. The intercepting modes already
 // answered the command, and ModeMCP refuses it with a message that names the tool -- in both,
@@ -1301,7 +1221,7 @@ func (c *Config) GuardBlocksNativeReads() bool {
 // `terminal.shell_read_nudge: false` switches it off without leaving the mode, so the nudge can
 // be measured against its own absence.
 func (c *Config) NudgesShellReads() bool {
-	if c.EffectiveMode() != ModeAracneRead {
+	if c.EffectiveMode() != ModeCLI {
 		return false
 	}
 	return c.Terminal.ShellReadNudge == nil || *c.Terminal.ShellReadNudge
@@ -1311,7 +1231,7 @@ func (c *Config) NudgesShellReads() bool {
 // refuse.
 //
 // Search is the entry that has to be dropped. InterceptGrep is true in EVERY mode, so a
-// blocked `grep` in ModeAracneRead would deny a command the guard was one step away from
+// blocked `grep` in ModeCLI would deny a command the guard was one step away from
 // answering itself -- the exact two-turns-for-one-question failure interception exists to end.
 // The operator's config is not rejected for it: `blocked_tools: [read, grep]` is a reasonable
 // thing to write when moving a project between modes, and silently keeping the half that
@@ -1350,7 +1270,7 @@ func (c *Config) Surface() toolspec.Surface {
 	switch c.EffectiveMode() {
 	case ModeMCP:
 		return toolspec.SurfaceMCP
-	case ModeAracneRead:
+	case ModeCLI:
 		return toolspec.SurfaceAracneRead
 	case ModeInterceptID:
 		return toolspec.SurfaceInterceptID
@@ -1393,9 +1313,7 @@ func (c *Config) AgentEnabled() bool { return c.Features.Agent }
 func normalizeConfig(c *Config) {
 	// Applies defaults to config fields for scan modes, file limits, visibility filters, descriptions, optimization rules, and LLM agents.
 	// Resolve the mode once and stamp it, so a re-saved config states its surface instead of
-	// leaving it implicit. The legacy keys are deliberately NOT stamped: stamping them would
-	// make every bare config look like a migrated one, and legacyMode() would then answer for
-	// a project that never set either key.
+	// leaving it implicit.
 	c.Mode = c.EffectiveMode()
 	switch c.Scan.Mode {
 	case ScanModeDefault, ScanModeHard, ScanModeAll:

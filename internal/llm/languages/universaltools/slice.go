@@ -72,7 +72,7 @@ func (r *Read) ReadSlice(path string, from, to int) (string, error) {
 
 	covering := nodesCovering(topo, fileID, from, to)
 
-	// THE PROMISE line_range MODE MAKES. Every context entry now advertises a span, so a
+	// THE PROMISE intercept_line_ranges MODE MAKES. Every context entry now advertises a span, so a
 	// model that reads exactly that span must get exactly what the resource read would have
 	// given it -- imports, enclosing type, full context block. When the window contains every
 	// declaration it touches and cuts none of them, it IS a resource read, so serve it as one
@@ -220,7 +220,7 @@ func sliceBody(r *Read, covering []domain.Resource, cut string, from, to int, lo
 // full path buys nothing a reader cannot see: the declaration's own signature sits directly
 // above the marker, and the contract already tells the model a unique trailing part resolves.
 func marker(id string, lines int, loc func(string) string) string {
-	// Under line_range identification the marker names the span, because that is a command
+	// Under intercept_line_ranges identification the marker names the span, because that is a command
 	// the reader can run. Naming the id there would hand back the one token this mode exists
 	// to stop advertising.
 	if loc != nil {

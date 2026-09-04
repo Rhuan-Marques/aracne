@@ -148,9 +148,9 @@ func runClaudeGuardHook(input io.Reader, output io.Writer) {
 			// names the tool, so this is the fallback for the ones blocked_tools let through.
 			//
 			// Tested on the MODE, not on `!InterceptReads()`. That predicate is also true in
-			// ModeAracneRead, which used to be unreachable here only because the case above it
+			// ModeCLI, which used to be unreachable here only because the case above it
 			// always matched that mode. Once `terminal.shell_read_nudge: false` made the case
-			// above skippable, aracne_read fell through to this branch and printed the MCP
+			// above skippable, cli fell through to this branch and printed the MCP
 			// pointer instead of nothing -- so a run that asked for no nudge silently got a
 			// different one.
 			if msg := warningMessage(keys, !blocked[toolspec.ReadToolName], cfg.Surface()); msg != "" {
@@ -338,7 +338,7 @@ func loadGuardConfig(dbPath string) (blocked map[string]bool, exemptPiped bool) 
 	// This is the one place the blocked set is decided -- every denial, every proxied read and
 	// every warning that names a tool flows from it. BlockableInMode drops the entries this
 	// mode must not refuse: in the intercepting modes that is all of them (a block would
-	// refuse a call aracne was about to answer), and in ModeAracneRead it is `grep` alone,
+	// refuse a call aracne was about to answer), and in ModeCLI it is `grep` alone,
 	// which aracne answers there too.
 	blockedSet := toolNameSet(cfg.EffectiveAgent("claude_code", "main").BlockedTools)
 	return cfg.BlockableInMode(blockedSet), cfg.EffectivePipePassthrough()

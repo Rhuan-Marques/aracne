@@ -11,11 +11,11 @@ func TestShellReadNudgeToggle(t *testing.T) {
 		flag *bool
 		want bool
 	}{
-		{"aracne_read default is on", ModeAracneRead, nil, true},
-		{"aracne_read explicit on", ModeAracneRead, &on, true},
-		{"aracne_read switched off", ModeAracneRead, &off, false},
-		{"line_range never nudges", ModeLineRange, nil, false},
-		{"line_range off stays off", ModeLineRange, &off, false},
+		{"cli default is on", ModeCLI, nil, true},
+		{"cli explicit on", ModeCLI, &on, true},
+		{"cli switched off", ModeCLI, &off, false},
+		{"intercept_line_ranges never nudges", ModeInterceptLineRanges, nil, false},
+		{"intercept_line_ranges off stays off", ModeInterceptLineRanges, &off, false},
 		{"mcp never nudges", ModeMCP, &on, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -1,5 +1,5 @@
 {
-  "mode": "aracne_read",
+  "mode": "cli",
   "read": {
     "context_filter": {
       "hide_no_description": false

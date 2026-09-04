@@ -46,11 +46,11 @@ func scannedProject(t *testing.T) (root, dbPath string) {
 		t.Fatalf("scan: %v", err)
 	}
 	// The fixture is a project in an intercepting mode. Without a config on disk the guard
-	// loads defaults, and the default is ModeAracneRead -- which intercepts searches but not
+	// loads defaults, and the default is ModeCLI -- which intercepts searches but not
 	// reads, so every read-interception assertion built on this fixture would go quietly
 	// vacuous rather than fail.
 	cfg := helper.DefaultConfig()
-	cfg.Mode = helper.ModeLineRange
+	cfg.Mode = helper.ModeInterceptLineRanges
 	if err := helper.SaveConfig(cfg, helper.ConfigPath(dbPath)); err != nil {
 		t.Fatal(err)
 	}

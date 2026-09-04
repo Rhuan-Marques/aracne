@@ -89,9 +89,9 @@ should be one decision rather than five independent switches:
 
 | mode | How the agent reaches it |
 |---|---|
-| `aracne_read` *(default)* | No MCP tools. Shell reads run as themselves; the contract points at `arac read`. |
+| `cli` *(default)* | No MCP tools. Shell reads run as themselves; the contract points at `arac read`. |
 | `intercept_id` | `cat`/`head`/`tail`/`sed -n` are answered from the topology and take a resource ID. |
-| `line_range` | The same, with every declaration named by the exact lines it spans. |
+| `intercept_line_ranges` | The same, with every declaration named by the exact lines it spans. |
 | `mcp` | A single `read` MCP tool; shell reads run as themselves. |
 
 Shell `grep` is answered by Aracne in **all four** — it is the one capability with no

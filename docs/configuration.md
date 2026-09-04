@@ -14,7 +14,7 @@ catalog at load/init time, so a typo fails fast instead of silently disabling a 
 - **`terminal`** — two keys. `max_overserve`: the answer must stay within this multiple of
   the bytes the real command would have printed, or `arac cmd` passes through instead.
   `shell_read_nudge` (default on): the one-line pointer printed after a shell read that
-  `aracne_read` leaves alone — it exists to be turned off, so the line can be measured
+  `cli` leaves alone — it exists to be turned off, so the line can be measured
   against its own absence. The five former booleans (`intercept`, `enhance_files`,
   `enhance_resources`, `grep`, `prefer_resource_ids`) are facts about the mode now.
 

@@ -1,5 +1,5 @@
 {
-  "mode": "line_range",
+  "mode": "intercept_line_ranges",
   "read": {
     "context_filter": {
       "hide_no_description": false

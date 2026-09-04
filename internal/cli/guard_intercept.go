@@ -114,7 +114,7 @@ func interceptableSegment(segments []commandSegment, i int, original, dbPath str
 	switch req.Kind {
 	case shellcmd.KindRead:
 		// Only the intercepting modes rewrite a read. In ModeMCP the read capability is a
-		// tool and in ModeAracneRead it is `arac read`; rewriting the model's `cat` on top of
+		// tool and in ModeCLI it is `arac read`; rewriting the model's `cat` on top of
 		// either would be a second answer to a question that already has one.
 		//
 		// The nudge path passes allowReads=true to ask the same question hypothetically --
@@ -293,7 +293,7 @@ func emitPreToolRewrite(output io.Writer, toolInput map[string]interface{}, comm
 // shellReadWouldHaveBeenServed reports whether a Bash command contains a read that aracne
 // could have answered from the topology.
 //
-// The nudge in ModeAracneRead exists because that mode leaves shell reads alone: the model
+// The nudge in ModeCLI exists because that mode leaves shell reads alone: the model
 // types `sed -n 1,200p file.go`, gets the raw file, and never learns that `arac read` would
 // have given it the declaration with its callers instead. But a nudge is only worth its
 // tokens when it is TRUE, and the loose classifier that used to drive it fired on anything

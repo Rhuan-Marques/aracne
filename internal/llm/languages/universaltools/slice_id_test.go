@@ -52,7 +52,7 @@ func TestMarkerAlwaysNamesTheDeclaration(t *testing.T) {
 		}
 	}
 
-	// line_range mode: the marker names the span instead, and falls back to the id form when
+	// intercept_line_ranges mode: the marker names the span instead, and falls back to the id form when
 	// the locator cannot resolve one -- so the name still has to be there.
 	span := func(string) string { return "pkg/shapes.go:120-123" }
 	if got := marker(ids[0], 3, span); !strings.Contains(got, "pkg/shapes.go:120-123") {

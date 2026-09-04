@@ -22,11 +22,11 @@ import (
 
 // ContractContent renders the contract for a project's mode.
 func ContractContent(cfg *helper.Config) string {
-	// ModeAracneRead is written as one continuous document rather than assembled from the
+	// ModeCLI is written as one continuous document rather than assembled from the
 	// shared sections. It has one capability to teach and no tool schemas to lean on, so the
 	// headings were structure around three paragraphs -- and every byte of them is re-sent on
 	// every request.
-	if cfg.EffectiveMode() == helper.ModeAracneRead {
+	if cfg.EffectiveMode() == helper.ModeCLI {
 		return aracneReadContract(cfg)
 	}
 	var b strings.Builder
@@ -72,7 +72,7 @@ func mcpHowItReaches() string {
 		"says the word.\n\n"
 }
 
-// aracneReadContract is the whole document for ModeAracneRead.
+// aracneReadContract is the whole document for ModeCLI.
 //
 // It teaches one subcommand, because in this mode that is the whole of the aracne read
 // surface: nothing intercepts a `cat`, and there is no tool schema to lean on.
@@ -121,7 +121,7 @@ func aracneReadContract(cfg *helper.Config) string {
 	return b.String()
 }
 
-// AracneReadClosingLine is the final line of the ModeAracneRead contract, and the marker cli
+// AracneReadClosingLine is the final line of the ModeCLI contract, and the marker cli
 // uses to find the end of the generated block. Exported so the two cannot drift: a change to
 // the wording here without a matching change there would make every `arac init` append a
 // second contract instead of replacing the first.
@@ -161,7 +161,7 @@ func interceptResourceIDs() string {
 		"entries print the ID of every declaration they name -- feed those straight back.\n\n"
 }
 
-// interceptLineRanges is ModeLineRange's addressing section, and the shortest addressing
+// interceptLineRanges is ModeInterceptLineRanges's addressing section, and the shortest addressing
 // section of the three that have one.
 //
 // The section it replaces spent about a third of the file teaching resource IDs. Measured over
@@ -211,7 +211,7 @@ func contractGuardNote(cfg *helper.Config) string {
 // contractOther carries the two facts that hold in every mode, plus the batch-read bullet
 // wherever naming `arac read <id>` does not undo the mode's own steer.
 //
-// It is dropped under ModeLineRange for exactly that reason -- advertising the id form there
+// It is dropped under ModeInterceptLineRanges for exactly that reason -- advertising the id form there
 // would spend bytes re-teaching the vocabulary that mode exists to retire -- and under ModeMCP,
 // where the read tool's own schema already says it batches.
 func contractOther(cfg *helper.Config) string {

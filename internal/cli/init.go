@@ -111,7 +111,7 @@ func initOpenCode(global bool, cfg *helper.Config, autoYes bool) {
 	if permissionMap == nil {
 		permissionMap = make(map[string]interface{})
 	}
-	// blocked_tools only bites in ModeMCP (see Config.GuardBlocksNativeReads), and OpenCode's
+	// blocked_tools bites in ModeMCP and ModeCLI (see Config.GuardBlocksNativeReads), and OpenCode's
 	// permission block is the same decision spelled for a different harness. Denying a native
 	// read here in a mode whose guard would never deny it is how the two enforcement paths
 	// drift apart -- and the one the operator notices is this one, because it refuses silently.
@@ -237,7 +237,7 @@ func initClaudeCode(global bool, cfg *helper.Config, autoYes bool) {
 // announceMode says which of the four modes this project is in, because the answer decides
 // everything else `arac init` just wrote.
 //
-// It must never be silent. The default is ModeAracneRead, so a project that predates the mode
+// It must never be silent. The default is ModeCLI, so a project that predates the mode
 // key and set neither legacy key loses nothing but gains no interception either -- and an
 // operator who wanted one of the intercepting modes would otherwise discover that as "aracne
 // stopped answering my reads".
@@ -246,15 +246,15 @@ func announceMode(cfg *helper.Config) {
 	case helper.ModeMCP:
 		fmt.Println("Mode: mcp — aracne serves a single `read` MCP tool; shell reads run as themselves.")
 		fmt.Println("  `grep` and edits are still answered by aracne. blocked_tools applies in this mode only.")
-	case helper.ModeAracneRead:
-		fmt.Println("Mode: aracne_read — no MCP tools; the contract points at `arac read <id>` for symbols.")
+	case helper.ModeCLI:
+		fmt.Println("Mode: cli — no MCP tools; the contract points at `arac read <id>` for symbols.")
 		fmt.Println("  Shell reads run as themselves; `grep` and edits are answered by aracne.")
-		fmt.Println("  For intercepted reads, set \"mode\" to \"line_range\" or \"intercept_id\" in .aracne/config.json.")
+		fmt.Println("  For intercepted reads, set \"mode\" to \"intercept_line_ranges\" or \"intercept_id\" in .aracne/config.json.")
 	case helper.ModeInterceptID:
 		fmt.Println("Mode: intercept_id — `cat`/`head`/`tail`/`sed -n` are answered from the topology")
 		fmt.Println("  and take a resource ID where they take a path.")
-	case helper.ModeLineRange:
-		fmt.Println("Mode: line_range — `cat`/`head`/`tail`/`sed -n` are answered from the topology,")
+	case helper.ModeInterceptLineRanges:
+		fmt.Println("Mode: intercept_line_ranges — `cat`/`head`/`tail`/`sed -n` are answered from the topology,")
 		fmt.Println("  and every declaration is named by the exact lines it spans.")
 	}
 }
@@ -690,7 +690,7 @@ const (
 	// upgrading a project rewrites its existing block rather than stacking a new one under it,
 	// and so `arac disable` can still remove a block written by an older binary.
 	AracIntegrationLegacyStart = "# Aracne Project Integration"
-	// AracIntegrationEnd is the closing line every contract but ModeAracneRead writes.
+	// AracIntegrationEnd is the closing line every contract but ModeCLI writes.
 	AracIntegrationEnd = "Good Luck in your task."
 )
 

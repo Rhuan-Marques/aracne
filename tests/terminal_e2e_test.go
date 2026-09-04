@@ -74,10 +74,10 @@ func Total(shapes []Shape) float64 {
 	// An unindexed file, to exercise the out-of-scope branch against a real read.
 	writeFile(t, filepath.Join(root, "NOTES.md"), "alpha\nbeta\ngamma\ndelta\nepsilon\n")
 	mustRun(t, root, "scan", "--hard", "--root", ".", "--output", ".aracne/topology.db")
-	// `arac scan` writes the shipped default, which is ModeAracneRead -- searches intercepted,
+	// `arac scan` writes the shipped default, which is ModeCLI -- searches intercepted,
 	// reads not. These tests are about the read half, so the project has to say which of the
 	// two intercepting modes it is in rather than lean on a default that is neither.
-	setMode(t, root, "line_range")
+	setMode(t, root, "intercept_line_ranges")
 	return root
 }
 

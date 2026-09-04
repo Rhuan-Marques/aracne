@@ -160,7 +160,7 @@ use the **universal** implementations, and only `update_description` /
 ## 7. User-facing surfaces (the harnesses)
 
 There are **five** ways to use aracne, all over the same topology engine. The default is
-`mode: aracne_read`; MCP (B) is opt-in via `mode: "mcp"` or `arac init --mcp`:
+`mode: cli`; MCP (B) is opt-in via `mode: "mcp"` or `arac init --mcp`:
 
 ### A. CLI (`arac <subcommand>`) — `internal/cli`, dispatched from `cmd/arac/main.go`
 Direct, no LLM. Key commands (full list in `usage.go` / `PrintUsage`):
@@ -251,14 +251,14 @@ plugins. Two hooks ship for Claude Code:
     Guard rails: never a second time (`isAracCommand` stops the recursion), never across a pipe,
     a redirect, a heredoc, an `&&`, an env prefix or a wrapper, never a mutation, and never a
     file with no topology nodes.
-  - **`intercept_id` / `line_range`** — the same rewrite additionally covers shell READS
+  - **`intercept_id` / `intercept_line_ranges`** — the same rewrite additionally covers shell READS
     (`cat`/`head`/`tail`/`sed -n`/`awk`) on a target the topology knows.
-  - **`mcp` / `aracne_read`** — reads are left alone. The read capability already has a surface
+  - **`mcp` / `cli`** — reads are left alone. The read capability already has a surface
     in both (a tool, or `arac read`), and rewriting the model's `cat` on top of it would answer
     one question twice.
-  - **`blocked_tools`** applies in **`mcp` and `aracne_read`** (`Config.GuardBlocksNativeReads`):
+  - **`blocked_tools`** applies in **`mcp` and `cli`** (`Config.GuardBlocksNativeReads`):
     the two modes where a refusal has somewhere to send the model — an MCP tool in its list, or
-    `arac read`, which is a real command in `aracne_read` and where reads are not intercepted.
+    `arac read`, which is a real command in `cli` and where reads are not intercepted.
     The two intercepting modes block nothing: there the capability arrives AS the command the
     model typed, so a block would refuse a call aracne was about to answer — the
     two-turns-for-one-question failure interception was built to end. It stays **off by default
@@ -272,7 +272,7 @@ plugins. Two hooks ship for Claude Code:
     `read.pipe_passthrough:false`. Interception is tried first, so a command aracne can serve is
     answered rather than refused however `blocked_tools` reads.
   - The **PostToolUse nudge** fires on native `Read`/`Grep`/`Edit`/`Write`, which interception
-    never sees, and — in `aracne_read` only (`Config.NudgesShellReads`) — on a **shell read**
+    never sees, and — in `cli` only (`Config.NudgesShellReads`) — on a **shell read**
     that mode deliberately leaves alone. That one is gated by the *interception* matcher asked
     hypothetically (`shellReadWouldHaveBeenServed`): it fires only where aracne would have
     answered the command, so it never advertises a capability that would not have applied. It

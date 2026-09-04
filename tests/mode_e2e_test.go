@@ -1,9 +1,6 @@
 package tests_test
 
 import (
-	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -24,37 +21,11 @@ func modeProject(t *testing.T, mode string) string {
 	return root
 }
 
-// setLegacyMode puts a project on the RETIRED key pair, with the new key removed. The removal
-// is the whole point: EffectiveMode prefers an explicit mode, so leaving one behind would make
-// this assert the new key works rather than that the old ones still do.
-func setLegacyMode(t *testing.T, root, integration, identification string) {
-	t.Helper()
-	path := filepath.Join(root, ".aracne", "config.json")
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var cfg map[string]interface{}
-	if err := json.Unmarshal(raw, &cfg); err != nil {
-		t.Fatal(err)
-	}
-	delete(cfg, "mode")
-	cfg["integration"] = map[string]interface{}{"mode": integration}
-	cfg["identification_mode"] = identification
-	out, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, out, 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
 const (
 	modeMCP         = "mcp"
-	modeAracneRead  = "aracne_read"
+	modeAracneRead  = "cli"
 	modeInterceptID = "intercept_id"
-	modeLineRange   = "line_range"
+	modeLineRange   = "intercept_line_ranges"
 )
 
 var everyMode = []string{modeMCP, modeAracneRead, modeInterceptID, modeLineRange}
@@ -127,16 +98,16 @@ func TestSearchHeadersUseTheModesVocabulary(t *testing.T) {
 	lrRoot := modeProject(t, modeLineRange)
 	lrOut := aracCmd(t, lrRoot, "grep", "round", "pkg")
 	if !strings.Contains(lrOut, "pkg/shapes.go:") || !strings.Contains(lrOut, "-") {
-		t.Errorf("line_range: search header does not name a span\n%s", lrOut)
+		t.Errorf("intercept_line_ranges: search header does not name a span\n%s", lrOut)
 	}
 	if strings.Contains(lrOut, "demo/pkg.Circle —") {
-		t.Errorf("line_range: search header still names a resource ID\n%s", lrOut)
+		t.Errorf("intercept_line_ranges: search header still names a resource ID\n%s", lrOut)
 	}
 }
 
-// A context entry carries the span in ModeLineRange and only there. This is the regression the
+// A context entry carries the span in ModeInterceptLineRanges and only there. This is the regression the
 // rework closes: ModeMCP used to print spans its own `read` tool could not accept, and
-// ModeAracneRead would have printed them with nothing at all able to read one.
+// ModeCLI would have printed them with nothing at all able to read one.
 func TestContextEntriesCarrySpansOnlyInLineRangeMode(t *testing.T) {
 	for _, tc := range []struct {
 		mode      string
@@ -162,7 +133,7 @@ func TestContextEntriesCarrySpansOnlyInLineRangeMode(t *testing.T) {
 	}
 }
 
-// `arac read` is the surface ModeAracneRead's contract points at, so it has to work there --
+// `arac read` is the surface ModeCLI's contract points at, so it has to work there --
 // and it stays available in every other mode, because it is the CLI a person uses too.
 func TestAracReadWorksInEveryMode(t *testing.T) {
 	for _, mode := range everyMode {
@@ -220,39 +191,6 @@ func TestInitWritesTheContractForTheMode(t *testing.T) {
 		if !strings.Contains(body, tc.marker) {
 			t.Errorf("mode %q: CLAUDE.md is not that mode's contract (want %q)\n%s",
 				tc.mode, tc.marker, body)
-		}
-	}
-}
-
-// The retired keys still work, silently, so an existing project keeps behaving as it does
-// today without being edited first. This is the migration promise, checked against the binary
-// rather than against the mapping function.
-func TestLegacyKeysStillDriveTheBinary(t *testing.T) {
-	for _, tc := range []struct {
-		integration    string
-		identification string
-		wantFramed     bool
-		wantMarker     string
-	}{
-		{"terminal", "id", true, "## Resource IDs"},
-		{"terminal", "line_range", true, "## Line ranges"},
-		{"both", "id", true, "## Resource IDs"},
-		{"mcp", "line_range", false, "arrive as MCP tools"},
-	} {
-		root := terminalProject(t)
-		setLegacyMode(t, root, tc.integration, tc.identification)
-
-		got := aracCmd(t, root, "tail", "-4", "pkg/shapes.go")
-		framed := strings.Contains(got, "func Total(shapes []Shape) float64 {")
-		if framed != tc.wantFramed {
-			t.Errorf("integration %q + identification %q: framed = %v, want %v\n%s",
-				tc.integration, tc.identification, framed, tc.wantFramed, got)
-		}
-
-		mustRun(t, root, "init", "-y", "--claude")
-		if body := readFile(t, root, "CLAUDE.md"); !strings.Contains(body, tc.wantMarker) {
-			t.Errorf("integration %q + identification %q: contract missing %q\n%s",
-				tc.integration, tc.identification, tc.wantMarker, body)
 		}
 	}
 }
