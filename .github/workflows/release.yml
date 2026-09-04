@@ -1,0 +1,106 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build (e.g. v1.0.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  # CGO rules out cross-compilation, so each platform builds on its own runner and a
+  # final job collects the artifacts. This is more reliable than goreleaser + zig cc for
+  # a tree-sitter dependency, at the cost of no cross-arch matrix on Linux.
+  build:
+    name: build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            ext: ''
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            ext: ''
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+            ext: '.exe'
+    env:
+      CGO_ENABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0   # `git describe` needs history to stamp the version
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Set up C toolchain (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "C:\mingw64\bin" >> "$GITHUB_PATH"
+
+      - name: Build both flavours
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(git describe --tags --always --dirty)"
+          LDFLAGS="-s -w -X main.Version=${VERSION}"
+          BASE="arac-${{ matrix.goos }}-${{ matrix.goarch }}"
+          mkdir -p dist
+          go build -ldflags "$LDFLAGS" -o "dist/${BASE}${{ matrix.ext }}" ./cmd/arac
+          go build -tags minimal -ldflags "$LDFLAGS" -o "dist/${BASE}-basic${{ matrix.ext }}" ./cmd/arac
+
+      - name: Smoke-test the artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="dist/arac-${{ matrix.goos }}-${{ matrix.goarch }}"
+          "${BASE}${{ matrix.ext }}" --version
+          "${BASE}-basic${{ matrix.ext }}" --version
+          # The Basic build must refuse viz rather than pretend to serve it.
+          if "${BASE}-basic${{ matrix.ext }}" viz serve; then
+            echo "Basic build served viz; the minimal tag did not apply"; exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arac-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: publish
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: dist/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true

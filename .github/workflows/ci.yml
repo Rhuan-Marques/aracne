@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      # CGO is mandatory: the JS/TS, Rust and Java scanners are tree-sitter. Linux and
+      # macOS runners already ship a C compiler; Windows needs mingw-w64 on PATH, which
+      # the runner image provides at C:\mingw64\bin.
+      - name: Set up C toolchain (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "C:\mingw64\bin" >> "$GITHUB_PATH"
+
+      - name: Verify module checksums
+        run: go mod verify
+
+      - name: Build (Full)
+        run: go build ./...
+
+      - name: Build (Basic)
+        run: go build -tags minimal ./cmd/arac
+
+      - name: Vet
+        run: |
+          go vet ./...
+          go vet -tags minimal ./...
+
+      - name: Test
+        run: go test ./...
+
+      # The Basic build is a shipped artifact, so it needs its own run: a default
+      # `go test ./...` never compiles under this tag set.
+      - name: Test (Basic)
+        run: go test -tags minimal ./...
+    env:
+      CGO_ENABLED: '1'
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+
+  gofmt:
+    name: gofmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+      # testing_ground/ is excluded on purpose: it is a deliberately malformed corpus and
+      # reformatting it shifts line numbers the at-scale suites assert on.
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l ./cmd ./internal ./tests)
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"; echo "$unformatted"; exit 1
+          fi

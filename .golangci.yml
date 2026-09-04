@@ -1,0 +1,37 @@
+version: "2"
+
+run:
+  build-tags:
+    - ""
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+
+  exclusions:
+    generated: lax
+    paths:
+      # A deliberately malformed multi-language corpus. It exists to be parsed, not to
+      # pass review; the at-scale suites are what hold it to a standard.
+      - testing_ground
+      - bench
+    rules:
+      # Test helpers legitimately ignore errors on cleanup paths.
+      - path: _test\.go
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt
+  exclusions:
+    paths:
+      - testing_ground
+      - bench

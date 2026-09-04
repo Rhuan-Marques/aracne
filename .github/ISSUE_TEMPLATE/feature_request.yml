@@ -1,0 +1,16 @@
+name: Feature request
+description: Suggest a capability
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you hitting?
+      description: Describe the situation, not the solution — the fix may not be the one you have in mind.
+    validations: {required: true}
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like Aracne to do?
+    validations: {required: true}

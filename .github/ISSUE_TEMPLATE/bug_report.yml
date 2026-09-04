@@ -1,0 +1,42 @@
+name: Bug report
+description: Something Aracne got wrong
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `arac --version`
+      placeholder: arac v1.0.0
+    validations: {required: true}
+
+  - type: dropdown
+    id: language
+    attributes:
+      label: Language
+      options: [Go, Python, JavaScript, TypeScript, Rust, Java, Not language-specific]
+    validations: {required: true}
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode
+      description: The `mode` key in .aracne/config.json
+      options: [aracne_read, intercept_id, line_range, mcp, not sure]
+    validations: {required: true}
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: >
+        The smallest source file that shows the problem, and the command you ran.
+        A case that could be added to `testing_ground/` is the most useful report there is.
+      render: shell
+    validations: {required: true}
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened instead
+    validations: {required: true}
