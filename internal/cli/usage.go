@@ -15,7 +15,57 @@ import (
 // half of gating an unshipped feature.
 func PrintUsage() {
 	cfg := helper.LoadConfig(helper.ConfigPath(".aracne/topology.db"))
-	fmt.Println(gateBugUsage(usageText, cfg.BugManagementEnabled()))
+	text := gateBugUsage(usageText, cfg.BugManagementEnabled())
+	text = gateAgentUsage(text, cfg.AgentEnabled())
+	fmt.Println(gateVizUsage(text, vizBuilt))
+}
+
+// gateVizUsage removes the `viz serve` lines and their flag block when this binary was
+// built without the visualizer. The Basic build must not advertise a command whose only
+// possible answer is "wrong binary".
+func gateVizUsage(text string, hasViz bool) string {
+	if hasViz {
+		return text
+	}
+	return dropUsageBlock(text, `Flags for "viz serve"`, func(trimmed string) bool {
+		return strings.HasPrefix(trimmed, "Aracne viz ") || strings.HasPrefix(trimmed, "arac viz ")
+	})
+}
+
+// gateAgentUsage removes the `arac agent` lines when the feature is off. Like `arac bug`,
+// the command stays dispatchable -- this hides it, it does not remove it.
+func gateAgentUsage(text string, agent bool) string {
+	if agent {
+		return text
+	}
+	return dropUsageBlock(text, "", func(trimmed string) bool {
+		return strings.HasPrefix(trimmed, "Aracne agent ") || strings.HasPrefix(trimmed, "arac agent ")
+	})
+}
+
+// dropUsageBlock removes every line drop() selects, plus -- when blockHeading is non-empty --
+// the heading and the indented block that runs from it to the next blank line.
+func dropUsageBlock(text, blockHeading string, drop func(trimmed string) bool) string {
+	var kept []string
+	skipBlock := false
+	for _, line := range strings.Split(text, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if blockHeading != "" && strings.HasPrefix(trimmed, blockHeading) {
+			skipBlock = true
+			continue
+		}
+		if skipBlock {
+			if trimmed == "" {
+				skipBlock = false
+			}
+			continue
+		}
+		if drop(trimmed) {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
 }
 
 // gateBugUsage removes the `arac bug` command lines and their two flag blocks from the
@@ -51,7 +101,7 @@ func gateBugUsage(text string, bugManagement bool) string {
 	return strings.Join(kept, "\n")
 }
 
-const usageText = `arac - Go/Python/JavaScript/TypeScript project topology analyzer
+const usageText = `arac - Go/Python/JavaScript/TypeScript/Rust/Java project topology analyzer
 
 Usage:
   Aracne scan    [flags]    Incremental scan (changed files only); --all for full re-scan, --hard for full rebuild

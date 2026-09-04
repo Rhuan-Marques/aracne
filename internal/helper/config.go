@@ -301,6 +301,22 @@ type FeaturesSection struct {
 	// `arac bug` itself stays dispatchable in both states -- it is the orchestration
 	// channel the generated commands use, and the debugging path.
 	BugManagement bool `json:"bug_management"`
+
+	// Chat enables the viz Chat tab: the /api/chat, /api/chat/ and /api/context-graph
+	// routes, and the Chat nav item in the SPA. Off by default because the chat harness --
+	// its own agent registry, permission policy and sub-agent runner -- is not part of 1.0.
+	//
+	// Unlike the bug pipeline this had no gate at all: the routes were registered
+	// unconditionally, so the only way not to ship Chat was not to ship viz.
+	Chat bool `json:"chat"`
+
+	// Agent enables `arac agent`, the self-contained REPL that talks straight to an LLM
+	// provider. Off by default: it is unproven next to the harnesses that do ship, and it
+	// is the one surface that needs a provider API key of its own.
+	//
+	// This gates the COMMAND, not internal/llm/agent -- `arac descriptions generate` runs
+	// its executors through the same package and is a shipping 1.0 feature.
+	Agent bool `json:"agent"`
 }
 
 // The four modes of Config.Mode.
@@ -1150,7 +1166,7 @@ func validConfig(c *Config) bool {
 		// the one edit a user makes by hand. Without this line the file decodes to all-zero
 		// sentinels, is judged legacy, and EnsureConfig overwrites it with defaults -- so
 		// enabling the feature would silently turn it back off.
-		c.Features.BugManagement ||
+		c.Features.BugManagement || c.Features.Chat || c.Features.Agent ||
 		// A `{"descriptions": {"lazy": false}}` file is the other edit a user makes by
 		// hand, and for the same reason it has to be recognised: judged legacy, it would be
 		// overwritten with defaults and silently turn the feature back on.
@@ -1368,6 +1384,12 @@ func boolOr(p *bool, def bool) bool {
 // Every gate reads it through this method rather than the field, so the flag can grow
 // siblings without a scattered rename.
 func (c *Config) BugManagementEnabled() bool { return c.Features.BugManagement }
+
+// ChatEnabled reports whether the viz Chat tab is turned on for this project.
+func (c *Config) ChatEnabled() bool { return c.Features.Chat }
+
+// AgentEnabled reports whether `arac agent` is turned on for this project.
+func (c *Config) AgentEnabled() bool { return c.Features.Agent }
 
 func normalizeConfig(c *Config) {
 	// Applies defaults to config fields for scan modes, file limits, visibility filters, descriptions, optimization rules, and LLM agents.

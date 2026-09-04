@@ -131,6 +131,12 @@ func (s *Server) bugManagementEnabled() bool {
 	return helper.LoadConfig(helper.ConfigPath(s.dbPath)).BugManagementEnabled()
 }
 
+// chatEnabled reports whether this project has the Chat tab turned on. Read per call for
+// the same reason as bugManagementEnabled.
+func (s *Server) chatEnabled() bool {
+	return helper.LoadConfig(helper.ConfigPath(s.dbPath)).ChatEnabled()
+}
+
 // Starts an HTTP server for topology visualization on the specified address and database path.
 func Listen(addr, dbPath string) error {
 	srv := &http.Server{
@@ -157,11 +163,16 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	mux.HandleFunc("/api/search", s.handleSearch)
 	mux.HandleFunc("/api/node/", s.handleNode)
 	mux.HandleFunc("/api/optimization-rules", s.handleOptimizationRules)
-	mux.HandleFunc("/api/context-graph", s.handleContextGraph)
 	mux.HandleFunc("/api/config", s.handleConfig)
-	mux.HandleFunc("/api/chat", s.handleChat)
-	mux.HandleFunc("/api/chat/", s.handleChat)
 	mux.HandleFunc("/api/warnings", s.handleWarnings)
+	// Chat ships behind features.chat, absent by default. /api/context-graph belongs to it
+	// too: it derives its graph from the resources a chat session's tool calls touched, so
+	// with no chat there is nothing for it to answer from.
+	if s.chatEnabled() {
+		mux.HandleFunc("/api/chat", s.handleChat)
+		mux.HandleFunc("/api/chat/", s.handleChat)
+		mux.HandleFunc("/api/context-graph", s.handleContextGraph)
+	}
 	// The bug pipeline ships behind features.bug_management; with it off the endpoint is
 	// absent (404 via the mux default) rather than serving an empty list, so the disabled
 	// state is verifiable from outside the process.

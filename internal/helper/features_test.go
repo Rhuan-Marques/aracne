@@ -125,3 +125,55 @@ func TestDeleteBugRejectsMissingID(t *testing.T) {
 		t.Fatal("deleting an unknown bug id must error")
 	}
 }
+
+// TestChatAndAgentDefaultOff pins the 1.0 defaults for the two surfaces that are in the
+// tree but not in the product.
+func TestChatAndAgentDefaultOff(t *testing.T) {
+	if DefaultConfig().ChatEnabled() {
+		t.Error("features.chat must default to false")
+	}
+	if DefaultConfig().AgentEnabled() {
+		t.Error("features.agent must default to false")
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte(`{"scan":{"mode":"default"},"read":{"max_file_size":1024}}`), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	cfg := LoadConfig(path)
+	if cfg.ChatEnabled() || cfg.AgentEnabled() {
+		t.Fatal("a config with no features key must decode with chat and agent off")
+	}
+}
+
+// TestFeaturesOnlyChatAndAgentSurviveEnsureConfig runs the migration edge above for the two
+// new flags. validConfig tests each feature bit by name, so a flag added without being added
+// there loads correctly and is then silently reset by the next EnsureConfig -- the failure is
+// invisible until someone's hand-enabled feature turns itself back off.
+func TestFeaturesOnlyChatAndAgentSurviveEnsureConfig(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		json string
+		got  func(*Config) bool
+	}{
+		{"chat", `{"features":{"chat":true}}`, (*Config).ChatEnabled},
+		{"agent", `{"features":{"agent":true}}`, (*Config).AgentEnabled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(path, []byte(tc.json), 0o644); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			if !tc.got(LoadConfig(path)) {
+				t.Fatal("a features-only config must load with the feature on")
+			}
+			if !tc.got(EnsureConfig(path)) {
+				t.Fatal("EnsureConfig overwrote a hand-enabled feature with defaults")
+			}
+			if !tc.got(LoadConfig(path)) {
+				t.Fatal("the on-disk file lost the feature after EnsureConfig")
+			}
+		})
+	}
+}

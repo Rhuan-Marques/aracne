@@ -14,7 +14,9 @@ var AracBin string
 
 func TestMain(m *testing.M) {
 	bin := filepath.Join(os.TempDir(), "Arac_test_"+randSuffix()+".exe")
-	cmd := exec.Command("go", "build", "-o", bin, ".")
+	// ./cmd/arac, not ".", since the main package moved out of the repo root. Built with
+	// default tags, so these tests exercise the Full build.
+	cmd := exec.Command("go", "build", "-o", bin, "./cmd/arac")
 	cmd.Dir = projectRoot()
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {

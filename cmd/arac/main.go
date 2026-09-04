@@ -29,6 +29,9 @@ func main() {
 	case "scan":
 		cli.RunScan(os.Args[2:])
 	case "agent":
+		// Gated by features.agent, and dispatchable either way -- same contract as
+		// `arac bug`. An unlisted command is the "unlisted" half of gating an unshipped
+		// feature; refusing to dispatch it would also break the debugging path.
 		cli.RunAgent(os.Args[2:])
 	case "serve":
 		cli.RunServe(os.Args[2:])

@@ -1672,8 +1672,20 @@
   function loadAppConfig() {
     return api('/api/config').then(function (config) {
       state.appConfig = config || {};
+      applyFeatureGates();
       renderNeedDescriptionSettings();
     }).catch(showError);
+  }
+
+  // Chat ships behind features.chat. The server already refuses /api/chat with the feature
+  // off, so this only removes the nav item that would lead somewhere broken -- the gate is
+  // server-side, this is the SPA agreeing with it.
+  function applyFeatureGates() {
+    var features = (state.appConfig && state.appConfig.features) || {};
+    var navChat = el('navChat');
+    if (navChat) navChat.hidden = !features.chat;
+    var path = window.location.pathname;
+    if (!features.chat && (path === '/chat' || path.indexOf('/chat/') === 0)) navigate('/graph', true);
   }
 
   function renderNeedDescriptionSettings() {

@@ -475,3 +475,86 @@ func getJSON(t *testing.T, url string, out any) {
 		t.Fatalf("decode %s: %v", url, err)
 	}
 }
+
+// writeChatConfig writes a config with only features.chat set, so a Chat assertion cannot
+// accidentally pass because some unrelated default also happened to be on.
+func writeChatConfig(t *testing.T, dbPath string, chat bool) {
+	t.Helper()
+	cfg := helper.DefaultConfig()
+	cfg.Features.Chat = chat
+	if err := helper.SaveConfig(cfg, helper.ConfigPath(dbPath)); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+}
+
+func chatTestServer(t *testing.T, chat bool) *httptest.Server {
+	t.Helper()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "topology.db")
+	topo := &domain.Topology{
+		Root:     dir,
+		Language: "go",
+		Resources: map[string]domain.Resource{
+			"pkg/a.Fn": {ID: "pkg/a.Fn", Kind: domain.ResourceFunction, Name: "Fn"},
+		},
+		Warnings: map[string]domain.TopologyWarning{},
+	}
+	if err := helper.WriteDb(topo, dbPath); err != nil {
+		t.Fatalf("WriteDb: %v", err)
+	}
+	writeChatConfig(t, dbPath, chat)
+	server := httptest.NewServer(NewServer(dbPath))
+	t.Cleanup(server.Close)
+	return server
+}
+
+// TestChatSurfaceIsGated pins the disabled half. Chat is not part of 1.0, and unlike the
+// bug pipeline it had no gate at all -- the routes were registered unconditionally, so the
+// only way not to ship it was not to ship viz. /api/context-graph is included because it
+// belongs to Chat: it derives its graph from a chat session's tool calls.
+func TestChatSurfaceIsGated(t *testing.T) {
+	server := chatTestServer(t, false)
+
+	for _, path := range []string{"/api/chat", "/api/chat/", "/api/context-graph"} {
+		resp, err := http.Get(server.URL + path)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			t.Errorf("chat off: %s must not be registered, got %d", path, resp.StatusCode)
+		}
+	}
+}
+
+// TestChatSurfaceEnabled is the other half: with the flag on the routes come back, so the
+// gate is proven to be the flag and not something incidentally broken.
+func TestChatSurfaceEnabled(t *testing.T) {
+	server := chatTestServer(t, true)
+
+	resp, err := http.Get(server.URL + "/api/context-graph")
+	if err != nil {
+		t.Fatalf("GET /api/context-graph: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		t.Fatalf("chat on: /api/context-graph must be registered, got 404")
+	}
+}
+
+// TestConfigExposesFeatures pins the contract the SPA relies on to hide the Chat tab:
+// /api/config must carry the features block. Without it applyFeatureGates() reads
+// undefined and hides Chat even where it is turned on.
+func TestConfigExposesFeatures(t *testing.T) {
+	server := chatTestServer(t, true)
+
+	var cfg struct {
+		Features struct {
+			Chat bool `json:"chat"`
+		} `json:"features"`
+	}
+	getJSON(t, server.URL+"/api/config", &cfg)
+	if !cfg.Features.Chat {
+		t.Fatal("/api/config must expose features.chat so the SPA can gate the nav item")
+	}
+}

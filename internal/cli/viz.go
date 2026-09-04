@@ -1,3 +1,5 @@
+//go:build !minimal
+
 package cli
 
 import (
@@ -7,6 +9,14 @@ import (
 
 	"github.com/Rhuan-Marques/aracne/internal/viz"
 )
+
+// vizBuilt reports whether this binary carries the web visualizer.
+//
+// This file is the ONLY importer of internal/viz, which is in turn the only importer of
+// internal/chat -- so tagging it out is what makes the Basic build: the linker drops both
+// packages and the 2.7 MB `go:embed static/*` payload with them. Nothing else needs a tag.
+// `go build ./...` and `go test ./...` still compile and exercise both packages.
+const vizBuilt = true
 
 // Starts an HTTP server to visualize the topology graph.
 func RunViz(args []string) {
