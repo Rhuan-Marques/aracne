@@ -34,7 +34,7 @@ testing_ground/              Multi-language edge-case corpus the test suite scan
 .claude/ .opencode/          Harness integrations: agents, slash commands, hooks, plugins, MCP config
 internal/
   cli/            Every `arac <cmd>` entry point (scan, serve, viz, agent, init, read, grep,
-                  cmd, edit, write, descriptions, bug, analyze, guard, update-file, …) + tool-registry wiring
+                  cmd, edit, write, descriptions, bug, guard, update-file, …) + tool-registry wiring
   shellcmd/       Pure argv→request parser for the terminal surface: decides whether a shell
                   read/search is one aracne models, and what window it asked for. Anything with
                   a flag it does not model is KindPassthrough — see §7E.
@@ -167,7 +167,7 @@ Direct, no LLM. Key commands (full list in `usage.go` / `PrintUsage`):
 `scan` (`--all`/`--hard`/`--default`/`--debug`), `read`/`grep`,
 `resource list`, `node count`, `warnings list`, `bug <report|list|acknowledge|
 dismiss|delete>`, `descriptions <generate|apply|clear>`, `update-file`,
-`update-description`, `edit`/`write` (stdin JSON), `analyze dead-code`,
+`update-description`, `edit`/`write` (stdin JSON),
 `check-updates`, `init`, `disable`, `guard`, `serve`, `viz serve`, `agent`.
 
 ### E. Terminal surface (the default) — `internal/cli/cmd.go` + `internal/shellcmd`

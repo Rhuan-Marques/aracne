@@ -73,7 +73,7 @@ arac read internal/server.Handler       # a resource, with its context
 arac grep "retry"                       # searches names, descriptions AND contents
 arac resource list --kind interface
 arac warnings list                      # what drifted since the last scan
-arac analyze dead-code
+arac scanner run                        # keep the topology current in the background
 arac viz serve                          # the graph, in a browser (Full build)
 ```
 

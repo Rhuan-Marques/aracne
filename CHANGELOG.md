@@ -27,7 +27,7 @@ First public release.
 - **Harness integration** (`arac init`) for Claude Code and OpenCode: contract, hooks,
   agents, commands, MCP config.
 - **Two published builds** — Full (with the visualizer) and Basic (`-tags minimal`).
-- `arac analyze dead-code`, `arac warnings list`, `arac check-updates`, and
+- `arac warnings list`, `arac check-updates`, `arac disable`, `arac scanner run`, and
   `arac descriptions export|import`.
 
 ### Not included

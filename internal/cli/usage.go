@@ -109,6 +109,8 @@ Usage:
   Aracne serve   [flags]    Start MCP server (for OpenCode / Claude Code integration)
   Aracne viz serve [flags]  Start local topology graph visualization UI
   Aracne init    [flags]    Initialize topology integration (--claude, --opencode, --global)
+  arac disable   [flags]    Remove the aracne integration this project's init wrote (--claude, --opencode, --global, --all)
+  arac scanner run [--db <path>]  Watch the tree and keep the topology current in the background
   Aracne descriptions generate [flags]  Generate descriptions for targeted undocumented resources
   Aracne descriptions apply            Write topology descriptions back into source as doc comments
   Aracne descriptions clear [flags]    Clear stored topology descriptions (--oversized: only over-budget ones)
@@ -131,14 +133,13 @@ Usage:
   arac edit                 Edit a file (reads JSON from stdin: {"file_path", "old_string", "new_string"})
   arac write                Write a file (reads JSON from stdin: {"file_path", "content"})
   arac check-updates [--json] Index health: which files drifted from the topology since the last scan (exit 1 if stale)
-  Aracne analyze dead-code [flags]  Find unused functions, structs, interfaces, named types, and variables
 
 Flags for "scan":
   -root <path>    Root folder of the project (default ".")
   -output <file>  Output SQLite database path (default ".aracne/topology.db")
   --all           Re-scan all files (preserves descriptions)
   --hard          Force full rebuild from scratch (clears descriptions and bugs)
-  --default       Force default incremental scan (overrides .aracne/config.json scan.mode)
+  --default       Force the incremental scan (what a bare "arac scan" already does)
   --debug         Compare warnings before and after scan, print differences
   --verbose, -v   List the changed files detected during an incremental scan
   --workers <n>   Max files parsed concurrently during a full scan (0 = auto, one per CPU); lower to cap peak RAM
@@ -215,14 +216,6 @@ Flags for "init":
   .aracne/config.json under "llm" (per-agent mcp_tools / blocked_tools /
   plugins, merged from "<any>" + the per-harness "claude_code"/"opencode"
   blocks). Edit that file to customize what each agent can do.
-
-Flags for "analyze dead-code":
-  --db <path>           Topology database path (default ".aracne/topology.db")
-  --kind <kind>         Resource kind filter: function, struct, interface, named_type, variable
-  --package <path>      Package path filter (e.g. aracne/internal/cli)
-  --certain-only        Only report unexported dead code (safe to delete)
-  --exported-only       Only report exported dead code (may have external users)
-  --json                Output as JSON
 
   Examples:
     Aracne scan -root ./myproject -output myproject.db
