@@ -37,18 +37,16 @@ wholesale by the overlay; nested objects are merged.
   overlay does change it
 - `terminal.max_overserve` — the over-serve ceiling
 - `mode` — **the arm's product**: which tools exist, which shell commands aracne answers, and
-  what vocabulary the contract teaches. One of `mcp`, `aracne_read`, `intercept_id`,
-  `line_range`; see "The four modes" below. It takes effect through
+  what vocabulary the contract teaches. One of `mcp`, `cli`, `intercept_id`,
+  `intercept_line_ranges`; see "The four modes" below. It takes effect through
   `fixtures.sync_agent_contract`, which re-runs `arac init --claude -y` after the overlay is
   applied: that is what writes (or removes) `.mcp.json` and regenerates CLAUDE.md for the mode.
   Without that step an overlay could set the mode and still ship another mode's contract.
 
-  The retired `integration.mode` + `identification_mode` pair still maps forward silently, so an
-  older arm config keeps running — but a NEW arm should say `mode`, because the old pair could
-  express combinations that no longer exist (`mcp` + `line_range` printed spans that its own
-  `read` tool could not accept).
+  The retired `integration.mode` + `identification_mode` pair is **gone**: it no longer maps
+  forward, and an arm config still carrying it sets no mode at all. Say `mode`.
 
-**Frozen at prepare (no effect via a run-time overlay):** `scan.mode`, `scanner.*`, the *content*
+**Frozen at prepare (no effect via a run-time overlay):** `scanner.*`, the *content*
 of generated descriptions (`descriptions.kinds`), and `paths` — these are baked into the topology
 DB when fixtures are prepared/frozen. To benchmark those, re-prepare fixtures with the config.
 
@@ -94,7 +92,7 @@ the original reason for trimming the built-in surface.
 guard only blocks where a refusal has an MCP tool to send the model to. In the intercepting arms
 a denial would refuse a command aracne was about to answer.
 
-### The question `intercept_id` vs `line_range` settles
+### The question `intercept_id` vs `intercept_line_ranges` settles
 
 These two differ in exactly one thing — what a search result and a `# CONTEXT:` entry CALL a
 declaration — and that used to be a contract sentence toggled by `terminal.prefer_resource_ids`
@@ -104,8 +102,8 @@ declaration — and that used to be a contract sentence toggled by `terminal.pre
 That A/B failed its own manipulation check: over `ab-prefer-ids-20260902a` the model used a
 resource ID as a command operand **0 times in 408 shell commands**, and every one of those
 commands addressed code as file+line. `intercept_id` is the honest version of the ID arm — it
-does not merely ask for IDs, it prints them everywhere the model looks — and `line_range` is the
-alternative that speaks the vocabulary the model already uses.
+does not merely ask for IDs, it prints them everywhere the model looks — and
+`intercept_line_ranges` is the alternative that speaks the vocabulary the model already uses.
 
 **Why these values** (all read live at run time):
 - `read.context_filter`: `include_incoming: true` adds a `# USED BY:` section; `small_functions_visibility: "full"` inlines small neighbor bodies; a high `small_function_threshold` makes more neighbors qualify; `hide_no_description: false` keeps undocumented neighbors. Never use `"hidden"` — it *drops* information. The requested resource's own code is always rendered first and is never truncated; only the trailing context can be cut by the harness, which is why `perf-balanced` keeps external vars `normal` (their full source is a large "token wall" that dilutes the more valuable relationship info).

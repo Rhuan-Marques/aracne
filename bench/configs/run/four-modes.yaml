@@ -12,9 +12,9 @@
 # nothing else:
 #
 #   mcp           one MCP `read`; shell reads run as themselves; shell grep intercepted
-#   aracne_read   no tools; the contract points at `arac read <id>`; reads run as themselves
+#   cli           no tools; the contract points at `arac read <id>`; reads run as themselves
 #   intercept_id  cat/head/tail/sed -n answered from the topology, addressed by resource ID
-#   line_range    the same, addressed by `path:start-end`
+#   intercept_line_ranges  the same, addressed by `path:start-end`
 #
 # EQUAL SURFACES, AND WHY IT MATTERS. Every prior comparison was decided by the arms' tool lists
 # rather than by aracne: batched-20260901a's -45% was an aracne arm on `--tools Bash` (5,427
@@ -28,16 +28,16 @@
 # No `baseline_from`: a control measured under a different prefix is the precise mistake above.
 #
 # THE QUESTION EACH PAIR ANSWERS.
-#   aracne_read  vs baseline       is a topology read worth reaching for at all, when nothing
+#   cli          vs baseline       is a topology read worth reaching for at all, when nothing
 #                                  forces it? (the default mode, and the honest floor)
-#   intercept_id vs aracne_read    does answering the command the model already typed beat
+#   intercept_id vs cli           does answering the command the model already typed beat
 #                                  offering a subcommand it has to choose?
-#   line_range   vs intercept_id   the addressing question, isolated. Over
+#   intercept_line_ranges vs intercept_id  the addressing question, isolated. Over
 #                                  ab-prefer-ids-20260902a the model used a resource ID as a
 #                                  command operand 0 times in 408 shell commands and addressed
 #                                  code as file+line in all 408 -- so this pair is the one the
 #                                  evidence already points at, and the one worth confirming.
-#   mcp          vs aracne_read    does a tool schema buy anything a contract sentence does not?
+#   mcp          vs cli           does a tool schema buy anything a contract sentence does not?
 
 samples: 8
 oversample: 4
