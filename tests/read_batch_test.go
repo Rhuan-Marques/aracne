@@ -304,11 +304,16 @@ func TestReadAcceptsFileScopedSymbolID(t *testing.T) {
 // A line range is deliberately NOT served -- Read.Parameters records that walking a file in
 // windows was the most expensive habit an earlier benchmark found. The miss has to teach the
 // id instead, or the model just retries the same shape.
+//
+// It teaches from a FAILURE: nothing was read, so `arac read` exits non-zero. A read that
+// returns no source and exits 0 is a command claiming it did its job.
 func TestReadLineRangeRedirectsToTheEnclosingID(t *testing.T) {
 	dir := readProject(t)
 
-	out := mustRun(t, dir, "read", "pkg/shapes.go:1-40")
-
+	out, err := runLtp(t, dir, "read", "pkg/shapes.go:1-40")
+	if err == nil {
+		t.Fatalf("a read that resolved nothing should exit non-zero:\n%s", out)
+	}
 	if !strings.Contains(out, "# UNRESOLVED:") {
 		t.Fatalf("a line range should not resolve:\n%s", out)
 	}

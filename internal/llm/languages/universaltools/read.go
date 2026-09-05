@@ -2,6 +2,7 @@ package universaltools
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -157,11 +158,15 @@ func readArgs(args json.RawMessage) ([]string, bool, error) {
 	return nil, false, fmt.Errorf("invalid arguments: ids must be a string or an array of strings")
 }
 
-// ReadIDsOptions lets a caller override what the tool reads. The CLI uses it: `arac read` is
-// the human surface, so read.kinds -- which exists to narrow what a MODEL is offered -- must
-// not lock a person out of their own topology.
+// ReadIDsOptions lets a caller override what the tool reads.
+//
+// Kinds is an override no PRODUCT surface uses any more. read.kinds is the project's answer to
+// "what may be read here", and every entrance -- the MCP tool, `arac read`, an intercepted
+// shell read, the denial proxy -- narrows through the configured set. It stays for tests, and
+// for a future caller that genuinely reads outside the project's own policy.
 type ReadIDsOptions struct {
-	// Kinds overrides read.kinds. Nil uses the configured set.
+	// Kinds overrides read.kinds. Nil uses the configured set, which is what every caller
+	// in the product passes.
 	Kinds []domain.ResourceKind
 	// ForcedKind narrows ID resolution to a single kind (the CLI's --kind).
 	ForcedKind domain.ResourceKind
@@ -170,12 +175,65 @@ type ReadIDsOptions struct {
 }
 
 // Run is the tool entry point: parse the id list, then hand off to ReadIDs.
+//
+// An all-unresolved read comes back as an ordinary answer, not a failed tool call. A model
+// that mistyped every id it asked for is owed the "did you mean" candidates and the
+// index-health note -- that report IS the useful reply, and turning it into a tool error would
+// spend a turn teaching the model nothing.
 func (r *Read) Run(args json.RawMessage) (string, error) {
 	ids, full, err := readArgs(args)
 	if err != nil {
 		return "", err
 	}
-	return r.ReadIDs(ids, ReadIDsOptions{ForceFullFile: full})
+	out, err := r.ReadIDs(ids, ReadIDsOptions{ForceFullFile: full})
+	var unresolved *UnresolvedError
+	if errors.As(err, &unresolved) {
+		return unresolved.Report, nil
+	}
+	return out, err
+}
+
+// UnresolvedError is a read in which NOTHING resolved: every id was a typo, a path that is not
+// there, or -- since read.kinds gates every entrance -- a kind this project does not allow.
+//
+// The report is the same text a partially successful batch prints under "# UNRESOLVED:",
+// carried as an error rather than as output so the surfaces that must FAIL can. `arac read`
+// exits non-zero on it and an intercepted shell read refuses on it, instead of printing an
+// explanation and calling that success.
+type UnresolvedError struct {
+	// Report is the reader-facing text: one line per id, plus the index-health note when the
+	// database is the likelier culprit than the ids.
+	Report string
+}
+
+func (e *UnresolvedError) Error() string { return strings.TrimSpace(e.Report) }
+
+// ReadKinds is the project's read.kinds, folded the way the gate folds it -- a method reads as
+// a function.
+//
+// Exported because one read entrance never reaches the gate inside ReadIDs: a WINDOWED shell
+// read (`head -20 pkg.Thing`) renders a slice of a file rather than a unit built from an id,
+// so it applies the same gate itself. See cli.resolveReadOperand.
+func (r *Read) ReadKinds() map[domain.ResourceKind]bool {
+	return kindSet(r.cfgOrLoad().EffectiveReadKinds())
+}
+
+// KindOf is the kind an id resolves to, or "" when it resolves to nothing. An operand that
+// resolves to nothing is not a refusal -- it is the passthrough case, and the caller decides
+// that -- so the two answers are deliberately different.
+func (r *Read) KindOf(id string) domain.ResourceKind {
+	target, _, err := resolveReadTargetWith(r.mgr, id, func(domain.Resource) bool { return true })
+	if err != nil {
+		return ""
+	}
+	return target.res.Kind
+}
+
+// KindRefusal is the error every entrance gives for a kind read.kinds does not allow, so the
+// tool, the CLI and the shell all say the same thing about the same setting.
+func KindRefusal(kind domain.ResourceKind, kinds []domain.ResourceKind) error {
+	return fmt.Errorf("resolves to a %s, which read.kinds does not allow (allowed: %s)",
+		kind, kindNames(kinds))
 }
 
 // ReadIDs resolves every id, renders the bodies grouped by declaring file, then ONE shared
@@ -279,6 +337,11 @@ func (r *Read) ReadIDs(rawIDs []string, opt ReadIDsOptions) (string, error) {
 		// output, and the model has no way to tell which recovery is the cheap one.
 		if note := r.indexHealthNote(); note != "" {
 			out += note + "\n"
+		}
+		// Nothing came back at all: the report is the whole answer, so hand it up as a
+		// failure. Callers that would rather narrate than fail unwrap it -- see Run.
+		if len(units) == 0 {
+			return "", &UnresolvedError{Report: out}
 		}
 	}
 	if out == "" {
@@ -421,9 +484,7 @@ func (r *Read) unitFor(topo *domain.Topology, topoErr error, id string, allowed 
 		}
 		if resolveErr == nil {
 			if !allowed[target.res.Kind] {
-				return readunit.Unit{}, "", fmt.Errorf(
-					"resolves to a %s, which read.kinds does not allow (allowed: %s)",
-					target.res.Kind, kindNames(kinds))
+				return readunit.Unit{}, "", KindRefusal(target.res.Kind, kinds)
 			}
 			u, buildNote, buildErr := r.buildUnit(topo, target, filter, st, fileMode, smallThreshold)
 			if se, stale := topology.AsStaleIndex(buildErr); stale {

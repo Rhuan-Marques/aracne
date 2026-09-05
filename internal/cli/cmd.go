@@ -40,7 +40,17 @@ func RunCmd(args []string) {
 		os.Exit(1)
 	}
 
-	if out, status, ok := serveCommand(argv); ok {
+	out, status, refusal, ok := serveCommand(argv)
+	// A refusal is aracne saying no to a command it UNDERSTOOD, which is a different answer
+	// from having nothing to add. It goes to stderr with a non-zero status because that is
+	// what the command it replaced would have done, and because passing it through instead
+	// would run `cat` on a resource id and report "No such file or directory" -- a true
+	// sentence about the wrong thing.
+	if refusal != nil {
+		fmt.Fprintf(os.Stderr, "arac cmd: %v\n", refusal)
+		os.Exit(1)
+	}
+	if ok {
 		fmt.Print(out)
 		// A search that found nothing exits 1, the way grep and rg do. Callers -- and agents
 		// -- branch on that status, so an answer that always succeeds is a changed command.
@@ -56,14 +66,19 @@ func RunCmd(args []string) {
 //
 // Every gate below returns false rather than an approximation. The command the caller typed is
 // always a correct answer; a topology-framed answer to a question aracne misread is not.
-func serveCommand(argv []string) (string, int, bool) {
+//
+// The one exception is the refusal in the third return. "aracne has nothing to add" and
+// "read.kinds says this may not be read here" are opposite answers that were once the same
+// `false`: the first hands the command back to the shell, and the second must not, because
+// the shell would then answer a question about a resource id as though it were a filename.
+func serveCommand(argv []string) (out string, status int, refusal error, ok bool) {
 	req := shellcmd.Parse(argv)
 	if req.Kind == shellcmd.KindPassthrough {
-		return "", 0, false
+		return "", 0, nil, false
 	}
 	dbPath := guardDBPath("")
 	if !fileExists(dbPath) {
-		return "", 0, false
+		return "", 0, nil, false
 	}
 	cfg := helper.LoadConfig(helper.ConfigPath(dbPath))
 	// Reads are answered only in the two intercepting modes. Searches are answered in all
@@ -71,12 +86,12 @@ func serveCommand(argv []string) (string, int, bool) {
 	// surface offers and no plain grep can find, so there is never a mode in which handing a
 	// search back to the real binary is the better answer.
 	if req.Kind == shellcmd.KindRead && !cfg.InterceptReads() {
-		return "", 0, false
+		return "", 0, nil, false
 	}
 
 	mgr := topology.New()
 	if err := mgr.Load(dbPath); err != nil {
-		return "", 0, false
+		return "", 0, nil, false
 	}
 	// The registry is passed so a read can re-parse a single file whose recorded span has
 	// drifted, rather than handing back a range error the caller cannot act on.
@@ -84,92 +99,122 @@ func serveCommand(argv []string) (string, int, bool) {
 
 	switch req.Kind {
 	case shellcmd.KindRead:
-		out, ok := serveRead(rd, cfg, req, dbPath)
-		return out, 0, ok
+		out, refusal, ok := serveRead(rd, cfg, req, dbPath)
+		return out, 0, refusal, ok
 	case shellcmd.KindGrep:
-		return serveGrep(mgr, cfg, req)
+		gOut, gStatus, gOK := serveGrep(mgr, cfg, req)
+		return gOut, gStatus, nil, gOK
 	}
-	return "", 0, false
+	return "", 0, nil, false
 }
 
 // serveRead answers a read command. Every operand must be answerable: a half-enhanced
 // `cat a.go b.go`, part topology and part raw bytes, is harder to read than either.
+//
+// One refused operand refuses the whole command, and for the same reason: `cat a.go pkg.Thing`
+// cannot be half an answer and half a "no".
 func serveRead(rd *universaltools.Read, cfg *helper.Config,
-	req shellcmd.Request, dbPath string) (string, bool) {
+	req shellcmd.Request, dbPath string) (string, error, bool) {
 
 	blocks := make([]string, 0, len(req.Operands))
 	for _, operand := range req.Operands {
-		out, ok := serveOneRead(rd, cfg, req, operand, dbPath)
+		out, refusal, ok := serveOneRead(rd, cfg, req, operand, dbPath)
+		if refusal != nil {
+			return "", fmt.Errorf("%s: %w", operand, refusal), false
+		}
 		if !ok {
-			return "", false
+			return "", nil, false
 		}
 		blocks = append(blocks, out)
 	}
 	if len(blocks) == 0 {
-		return "", false
+		return "", nil, false
 	}
 	answer := strings.Join(blocks, "\n")
 	if !withinBudget(answer, rawWindowBytes(req, req.Operands), cfg) {
-		return "", false
+		return "", nil, false
 	}
-	return answer, true
+	return answer, nil, true
 }
 
 // serveOneRead answers a read for a single operand: a path aracne indexes, or a resource ID.
 func serveOneRead(rd *universaltools.Read, cfg *helper.Config,
-	req shellcmd.Request, operand, dbPath string) (string, bool) {
+	req shellcmd.Request, operand, dbPath string) (string, error, bool) {
 
-	path, from, to, ok := resolveReadOperand(rd, cfg, req, operand, dbPath)
+	path, from, to, refusal, ok := resolveReadOperand(rd, cfg, req, operand, dbPath)
+	if refusal != nil {
+		return "", refusal, false
+	}
 	if !ok {
-		return "", false
+		return "", nil, false
 	}
 	// A whole-file (or whole-resource) request goes through the ordinary read, which already
 	// applies read.file_mode. Re-implementing it here as a 1..N slice would emit the file
 	// verbatim plus a context block -- strictly more than `cat`, which is the exact regression
 	// skeleton mode exists to prevent.
+	//
+	// No Kinds override: read.kinds gates this surface like every other one. The gate has
+	// already run in resolveReadOperand, which is where the WINDOWED branch below can also
+	// reach it, so this call agreeing with it is belt and braces rather than the check.
 	if req.Window.Mode == shellcmd.WholeFile {
-		out, err := rd.ReadIDs([]string{operand}, universaltools.ReadIDsOptions{Kinds: helper.AllReadKinds()})
+		out, err := rd.ReadIDs([]string{operand}, universaltools.ReadIDsOptions{})
 		if err != nil || strings.TrimSpace(out) == "" {
-			return "", false
+			return "", nil, false
 		}
-		return out, true
+		return out, nil, true
 	}
 	out, err := rd.ReadSlice(path, from, to)
 	if err != nil || strings.TrimSpace(out) == "" {
-		return "", false
+		return "", nil, false
 	}
-	return out, true
+	return out, nil, true
 }
 
 // resolveReadOperand turns one operand plus the command's window into an absolute line range
-// in a file, or reports that aracne should stay out of the way.
+// in a file, or reports that aracne should stay out of the way -- or that read.kinds refuses
+// what the operand named.
 //
 // The two cases the brief calls out are both here. A path aracne indexes is windowed against
 // the FILE; a resource ID is windowed against that resource's BODY, so `head -20 app.Flask`
 // means the first twenty lines of the class rather than of whatever file holds it.
+//
+// WHY THE read.kinds GATE LIVES HERE and not one layer down. The whole-file branch would reach
+// it on its own -- it calls ReadIDs, which gates. The WINDOWED branch never does: it renders a
+// slice of a file through ReadSlice, which is addressed by path and line and knows nothing
+// about the id the caller typed. Gating both at the point where the operand is still an
+// operand is the only place the two branches can be made to agree.
 func resolveReadOperand(rd *universaltools.Read, cfg *helper.Config, req shellcmd.Request,
-	operand, dbPath string) (path string, from, to int, ok bool) {
+	operand, dbPath string) (path string, from, to int, refusal error, ok bool) {
+
+	kinds := cfg.EffectiveReadKinds()
+	allowed := rd.ReadKinds()
 
 	if info, err := os.Stat(operand); err == nil {
 		if info.IsDir() {
-			return "", 0, 0, false
+			return "", 0, 0, nil, false
 		}
 		abs, absErr := filepath.Abs(operand)
 		if absErr != nil {
-			return "", 0, 0, false
+			return "", 0, 0, nil, false
 		}
 		// An unindexed file is Case 3: aracne would answer it with the same raw bytes the
 		// command prints, minus the window. There is nothing to trade for the interception.
 		tracked, tErr := helper.TrackedFiles(dbPath, []string{abs})
 		if tErr != nil || !tracked[abs] {
-			return "", 0, 0, false
+			return "", 0, 0, nil, false
+		}
+		// A tracked file read is a read of kind "file", and a project that took "file" out of
+		// read.kinds has said not to serve one. Refused rather than passed through: passing
+		// through would print the file, which is the thing the setting just declined.
+		if !allowed[domain.ResourceFile] {
+			return "", 0, 0, universaltools.KindRefusal(domain.ResourceFile, kinds), false
 		}
 		total := countFileLines(abs)
 		if total == 0 {
-			return "", 0, 0, false
+			return "", 0, 0, nil, false
 		}
 		f, t, wOK := resolveWindow(req.Window, 1, total)
-		return abs, f, t, wOK
+		return abs, f, t, nil, wOK
 	}
 
 	// Not a path on disk. It may be a resource ID -- the one operand a plain shell command
@@ -177,14 +222,22 @@ func resolveReadOperand(rd *universaltools.Read, cfg *helper.Config, req shellcm
 	//
 	// Deliberately ungated by mode. Whether aracne ADVERTISES ids is a contract decision that
 	// ModeInterceptLineRanges answers differently from ModeInterceptID; whether it ACCEPTS one, having
-	// already decided to answer this command, is not a decision at all. Refusing an id here
-	// would refuse a question aracne can answer, in favour of a `cat` that will fail.
+	// already decided to answer this command, is not a decision at all.
+	//
+	// It is NOT ungated by kind. An id that resolves to a kind read.kinds excludes is refused
+	// here, and the refusal is the answer: handing `cat pkg.SomeType` back to the shell gets
+	// "No such file or directory", which reads as "you typed the id wrong" when the truth is
+	// that the project does not serve that kind. An id that resolves to NOTHING is the other
+	// case and still passes through -- there is no policy in a typo.
+	if kind := rd.KindOf(operand); kind != "" && !allowed[kind] {
+		return "", 0, 0, universaltools.KindRefusal(kind, kinds), false
+	}
 	rPath, bodyFrom, bodyTo, err := rd.BodyBounds(operand)
 	if err != nil || rPath == "" {
-		return "", 0, 0, false
+		return "", 0, 0, nil, false
 	}
 	f, t, wOK := resolveWindow(req.Window, bodyFrom, bodyTo)
-	return rPath, f, t, wOK
+	return rPath, f, t, nil, wOK
 }
 
 // resolveWindow maps a command's window onto an absolute, inclusive line range inside

@@ -46,14 +46,19 @@ type LazyDescriptions struct {
 	BatchSize *int `json:"batch_size,omitempty"`
 	// Parallel is how many batches are in flight at once.
 	Parallel *int `json:"parallel,omitempty"`
-	// Model overrides the model the fill runs on. Absent falls back to the model configured
-	// for the descriptions-generation-executor agent, which is where a project already says
-	// what it wants descriptions written by.
-	Model string `json:"model,omitempty"`
-	// Provider names the API to call ("anthropic", "openai", "deepseek"), or "claude_cli" to
-	// generate through the Claude Code CLI on the user's subscription instead of an API key
-	// (see lazydesc.ProviderClaudeCLI). Absent is inferred
-	// from the model, so naming a model is normally enough.
+	// Provider and BaseURL are the OLD spelling of settings that now live on the
+	// descriptions section itself, because the sweep needs them too (see
+	// DescriptionsSection). They are still read, and still mean exactly what they meant, so
+	// a config written before the move keeps describing with what it named -- the section
+	// keys simply win where both are set. New configs should use the section keys; nothing
+	// writes these.
+	//
+	// There was a `model` here too, and it is gone from both spellings: the model is the
+	// descriptions-generation-executor agent's, and only its.
+
+	// Provider names the API to call ("anthropic", "openai", "deepseek"), or "cli" for a
+	// command. Absent is inferred from the executor's model, so naming a model there is
+	// normally enough.
 	Provider string `json:"provider,omitempty"`
 	// BaseURL points the provider at a different endpoint -- a gateway, a proxy, or a
 	// self-hosted model speaking one of the three wire formats. Absent uses the provider's
@@ -101,8 +106,8 @@ func (l LazyDescriptions) MarshalJSON() ([]byte, error) {
 // tuned reports whether any knob beyond the switch carries a value.
 func (l LazyDescriptions) tuned() bool {
 	return l.MaxNodes != nil || l.TimeoutSeconds != nil || l.BatchSize != nil ||
-		l.Parallel != nil || strings.TrimSpace(l.Model) != "" ||
-		strings.TrimSpace(l.Provider) != "" || strings.TrimSpace(l.BaseURL) != ""
+		l.Parallel != nil || strings.TrimSpace(l.Provider) != "" ||
+		strings.TrimSpace(l.BaseURL) != ""
 }
 
 // ResolvedLazyDescriptions is LazyDescriptions with every default applied, so the fill path
@@ -116,6 +121,9 @@ type ResolvedLazyDescriptions struct {
 	Model          string
 	Provider       string
 	BaseURL        string
+	// CLICommand is the argv `provider: "cli"` runs, already split into words. Empty for
+	// every other provider, and for "cli" it is what makes the generator buildable at all.
+	CLICommand []string
 }
 
 // Resolve applies the defaults.
@@ -126,7 +134,6 @@ func (l LazyDescriptions) Resolve() ResolvedLazyDescriptions {
 		TimeoutSeconds: DefaultLazyTimeoutSeconds,
 		BatchSize:      DefaultLazyBatchSize,
 		Parallel:       DefaultLazyParallel,
-		Model:          strings.TrimSpace(l.Model),
 		Provider:       strings.ToLower(strings.TrimSpace(l.Provider)),
 		BaseURL:        strings.TrimSpace(l.BaseURL),
 	}
@@ -159,12 +166,27 @@ func (c *Config) LazyDescriptionsEnabled() bool {
 	return c.Descriptions.Lazy.Resolve().Enabled
 }
 
-// EffectiveLazyDescriptions resolves the lazy settings for a harness, filling the model in
-// from the descriptions-generation-executor agent when the lazy block does not name one.
+// EffectiveLazyDescriptions resolves the description settings for a harness: the lazy
+// tuning knobs, plus the one provider choice both entry points share.
 //
-// That fallback is the whole reason the executor's model is not restated here: a project that
-// already said "write my descriptions with haiku" has said it once, and a second place to say
-// it again is a second place for the two to disagree.
+// The TRANSPORT has two tiers, and each exists for a reason.
+//
+//  1. `descriptions.provider` / `.base_url` / `.cli_provider_command` -- the current
+//     spelling, and the only one the sweep ever had a way to honour.
+//  2. `descriptions.lazy.{provider,base_url}` -- where those settings used to live. Read so
+//     a config written before the move keeps describing with what it named; a silently
+//     ignored key would have looked like the feature breaking.
+//
+// The MODEL has exactly one tier: the descriptions-generation-executor agent
+// (`llm.<harness>.agents.descriptions-generation-executor.model`, "haiku" out of the box).
+// It is not a fallback and there is nothing to override it with. That agent is where the
+// sweep already runs, so a project that said "write my descriptions with haiku" has said it
+// once -- and a config key that said it a second time was a second place for the two to
+// disagree, with no way to see which one won.
+//
+// The command is split here, once, rather than at each transport: a config carrying an
+// unparseable command resolves to no command at all, which the generator reports as "not
+// configured" instead of running half an argv.
 func (c *Config) EffectiveLazyDescriptions(harness string) ResolvedLazyDescriptions {
 	if c == nil {
 		return LazyDescriptions{Enabled: boolPtr(false)}.Resolve()
@@ -173,17 +195,24 @@ func (c *Config) EffectiveLazyDescriptions(harness string) ResolvedLazyDescripti
 		harness = DefaultLazyHarness
 	}
 	out := c.Descriptions.Lazy.Resolve()
-	if out.Model == "" {
-		if agent := c.EffectiveAgent(harness, DescriptionsExecutorAgent); agent.Model != "" &&
-			agent.Model != InheritsModel {
-			out.Model = strings.TrimSpace(agent.Model)
-		}
+	if p := strings.ToLower(strings.TrimSpace(c.Descriptions.Provider)); p != "" {
+		out.Provider = p
+	}
+	if u := strings.TrimSpace(c.Descriptions.BaseURL); u != "" {
+		out.BaseURL = u
+	}
+	out.CLICommand, _ = SplitCommand(c.Descriptions.CLIProviderCommand)
+	if agent := c.EffectiveAgent(harness, DescriptionsExecutorAgent); agent.Model != "" &&
+		agent.Model != InheritsModel {
+		out.Model = strings.TrimSpace(agent.Model)
 	}
 	return out
 }
 
-// DescriptionsExecutorAgent is the configured agent whose model, and whose house style, the
-// lazy fill borrows.
+// DescriptionsExecutorAgent is the configured agent whose model, and whose house style, both
+// description entry points use. Its model is THE description model: the sweep runs as this
+// agent, and the lazy fill reads the same field so the two cannot describe with different
+// models.
 const DescriptionsExecutorAgent = "descriptions-generation-executor"
 
 // DefaultLazyHarness is the harness block a fill resolves its model against when the caller
@@ -195,15 +224,115 @@ const DescriptionsExecutorAgent = "descriptions-generation-executor"
 // said which model writes its descriptions.
 const DefaultLazyHarness = "claude_code"
 
-// ValidateLazyDescriptions rejects a provider name nothing can serve. A typo here would
-// otherwise be invisible: the fill would find no provider, decline silently, and the project
-// would conclude the feature does not work.
-func ValidateLazyDescriptions(l LazyDescriptions) error {
-	switch strings.ToLower(strings.TrimSpace(l.Provider)) {
-	case "", "anthropic", "openai", "deepseek", "claude_cli":
-		return nil
-	default:
-		return fmt.Errorf("descriptions.lazy.provider: unknown provider %q "+
-			"(want anthropic, openai, deepseek or claude_cli)", l.Provider)
+// ProviderNameCLI runs a command of the project's choosing -- see
+// DescriptionsSection.CLIProviderCommand -- instead of calling an API.
+//
+// Declared here, underneath lazydesc, and aliased by lazydesc.ProviderCLI, so the name a
+// config validates against and the name the transport dispatches on are one string and cannot
+// drift.
+const ProviderNameCLI = "cli"
+
+// ProviderNameClaudeCLI is the retired name for what "cli" now does. It is recognised only to
+// be rejected with instructions: a project carrying it would otherwise be told "unknown
+// provider" about a key it was told to write, and the fix -- one command it has to guess -- is
+// exactly what the error can spell out.
+const ProviderNameClaudeCLI = "claude_cli"
+
+// ClaudeCLIReplacementCommand is what `provider: "claude_cli"` used to run, as a command the
+// project can paste into cli_provider_command.
+const ClaudeCLIReplacementCommand = "claude --print --max-turns 1"
+
+// ValidateDescriptionProvider rejects a provider name nothing can serve, and a "cli" that
+// names no command.
+//
+// A typo here would otherwise be invisible: generation would find no provider, decline
+// silently, and the project would conclude the feature does not work. The empty-command case
+// is the same failure with a shorter fuse -- `provider: "cli"` alone is a project that has
+// asked for a transport and forgotten to say what to run.
+func ValidateDescriptionProvider(d DescriptionsSection) error {
+	provider := strings.ToLower(strings.TrimSpace(d.Provider))
+	key := "descriptions.provider"
+	if provider == "" {
+		// Fall back to the old spelling so a legacy typo is still caught, and named as the
+		// key the project actually wrote.
+		provider = strings.ToLower(strings.TrimSpace(d.Lazy.Provider))
+		key = "descriptions.lazy.provider"
 	}
+	switch provider {
+	case "", "anthropic", "openai", "deepseek":
+	case ProviderNameClaudeCLI:
+		return fmt.Errorf("%s: %q was replaced by %q; write:\n"+
+			"  \"descriptions\": {\"provider\": %q, \"cli_provider_command\": %q}",
+			key, ProviderNameClaudeCLI, ProviderNameCLI,
+			ProviderNameCLI, ClaudeCLIReplacementCommand)
+	case ProviderNameCLI:
+		if argv, err := SplitCommand(d.CLIProviderCommand); err != nil {
+			return fmt.Errorf("descriptions.cli_provider_command: %w", err)
+		} else if len(argv) == 0 {
+			return fmt.Errorf("%s: %q needs descriptions.cli_provider_command, "+
+				"e.g. \"claude -p\"", key, ProviderNameCLI)
+		}
+	default:
+		return fmt.Errorf("%s: unknown provider %q "+
+			"(want anthropic, openai, deepseek or %s)",
+			key, provider, ProviderNameCLI)
+	}
+	return nil
+}
+
+// SplitCommand splits a configured command line into argv.
+//
+// It is argv, not a shell line: single and double quotes group words, a backslash escapes the
+// next character, and nothing else is special. Running it through `sh -c` instead would buy
+// pipes and variable expansion nobody asked for, hand a config file the power to run arbitrary
+// shell, and stop working on a machine without a shell -- while the thing actually wanted here
+// is "claude -p" with its flags.
+func SplitCommand(command string) ([]string, error) {
+	var (
+		argv    []string
+		word    strings.Builder
+		started bool
+		quote   rune
+		escaped bool
+	)
+	flush := func() {
+		if started {
+			argv = append(argv, word.String())
+			word.Reset()
+			started = false
+		}
+	}
+	for _, r := range command {
+		switch {
+		case escaped:
+			word.WriteRune(r)
+			escaped = false
+			started = true
+		case r == '\\' && quote != '\'':
+			escaped = true
+			started = true
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			} else {
+				word.WriteRune(r)
+			}
+		case r == '\'' || r == '"':
+			quote = r
+			started = true
+		case r == ' ' || r == '\t' || r == '\n' || r == '\r':
+			flush()
+		default:
+			word.WriteRune(r)
+			started = true
+		}
+	}
+	if quote != 0 {
+		return nil, fmt.Errorf("unbalanced %c quote in %q", quote, command)
+	}
+	if escaped {
+		return nil, fmt.Errorf("trailing backslash in %q", command)
+	}
+	flush()
+	return argv, nil
 }

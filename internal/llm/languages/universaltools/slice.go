@@ -81,8 +81,13 @@ func (r *Read) ReadSlice(path string, from, to int) (string, error) {
 	// A window that slices a declaration keeps the framed form: there the restriction is
 	// right, because the caller asked for part of something and the context of the whole
 	// would answer a question they did not ask.
+	//
+	// The promotion runs through the ordinary gate, so read.kinds still decides: a window over
+	// a kind the project does not allow is not promoted, and falls to the framed form below.
+	// It is not refused here -- the caller asked for lines of a FILE, and cli.resolveReadOperand
+	// has already applied the gate to whatever the operand named.
 	if ids := whollyContained(covering, from, to); len(ids) > 0 {
-		if out, err := r.ReadIDs(ids, ReadIDsOptions{Kinds: helper.AllReadKinds()}); err == nil &&
+		if out, err := r.ReadIDs(ids, ReadIDsOptions{}); err == nil &&
 			strings.TrimSpace(out) != "" {
 			return out, nil
 		}

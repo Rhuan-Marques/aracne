@@ -86,14 +86,24 @@ const (
 // Configuration for file read operations, including max file size, context filtering, and shell command passthrough behavior.
 type ReadSection struct {
 	MaxFileSize int64 `json:"max_file_size"`
-	// Kinds is the allow-list of resource kinds the MCP `read` TOOL will return.
+	// Kinds is the allow-list of resource kinds that may be READ, at every entrance.
 	//
-	// SCOPE: the MCP tool, and nothing else. Every other read path passes AllReadKinds()
-	// explicitly -- `arac read` (cli/read.go), an intercepted shell read (cli/cmd.go), the
-	// denial proxy (cli/guard_proxy.go) and the slice reader. That is deliberate: the setting
-	// exists to narrow what a MODEL is offered through a tool schema, not to lock a person
-	// out of their own topology. The consequence is that in every mode but ModeMCP this key
-	// has no effect, because no other mode registers the tool it governs.
+	// SCOPE: all of them. The MCP `read` tool, `arac read`, an intercepted shell read
+	// (`cat`/`head`/`sed -n`, by path or by resource id), the windowed slice reader and the
+	// denial proxy all narrow through this set.
+	//
+	// It used to gate the MCP tool ALONE -- every other path passed AllReadKinds() explicitly,
+	// on the reasoning that the key existed to narrow what a MODEL is offered through a tool
+	// schema and should not lock a person out of their own topology. That made it two policies
+	// under one name, and left it with no effect at all in three of the four modes: the mode
+	// where a project most wants to say "do not read named types here" is an intercepting one,
+	// where there is no tool schema to narrow and every read arrives as a `cat`.
+	//
+	// A refused id is an ERROR, not a fallback. The shell surfaces do not hand the command
+	// back to the real binary, because `cat` on a resource id answers "No such file or
+	// directory" -- which reads as "you mistyped the id" when the truth is that the project
+	// does not serve that kind. An operand that resolves to NOTHING is the other case and
+	// still passes through: there is no policy in a typo.
 	//
 	// It replaced the per-agent read_function/read_struct/read_interface/... tool lists:
 	// splitting one capability across eight tool names made models pick the wrong one. An ID
@@ -169,6 +179,35 @@ type DescriptionsSection struct {
 	// show it, instead of only in an `arac descriptions generate` sweep. On by default.
 	// See config_lazy.go; it accepts `true`/`false` or an object of tuning knobs.
 	Lazy LazyDescriptions `json:"lazy"`
+
+	// Provider, BaseURL and CLIProviderCommand say WHO writes a description. They sit on
+	// the section rather than under `lazy` because both entry points -- the lazy fill on the
+	// read path and the `arac descriptions generate` sweep -- describe the same resources
+	// into the same database, and a project that has answered "which provider writes my
+	// descriptions" has answered it for both. Two places to say it was two places for them
+	// to disagree, and the sweep was the one that could not say "use the CLI" at all.
+	//
+	// There is deliberately no `model` here. WHICH model writes the descriptions is already
+	// said by the descriptions-generation-executor agent
+	// (`llm.<harness>.agents.descriptions-generation-executor.model`, "haiku" out of the
+	// box), and that agent is not optional -- the sweep runs as it. A second spelling of one
+	// answer is a second place for the two to disagree, and the one that lost was invisible.
+	// See EffectiveLazyDescriptions.
+	//
+	// The old spelling (`lazy.provider` / `lazy.base_url`) is still read, and still means
+	// what it meant, so an existing config keeps working; these win when both are set.
+
+	// Provider names the transport: "anthropic", "openai" or "deepseek" for an API key, or
+	// "cli" to run CLIProviderCommand. Absent is inferred from the executor's model.
+	Provider string `json:"provider,omitempty"`
+	// BaseURL points an API provider at a different endpoint -- a gateway, a proxy, or a
+	// self-hosted model speaking one of the three wire formats. Ignored by "cli".
+	BaseURL string `json:"base_url,omitempty"`
+	// CLIProviderCommand is the command `provider: "cli"` runs, e.g. "claude -p". It is
+	// argv, not a shell line: words split on whitespace, with quoting honoured, and no
+	// pipes or redirection. The prompt arrives on stdin, the descriptions are read from
+	// stdout. Required by "cli" and ignored by every other provider.
+	CLIProviderCommand string `json:"cli_provider_command,omitempty"`
 }
 
 // GrepSection tunes `grep` / `arac grep`.
@@ -652,7 +691,7 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("read.context_filter: unknown value %q (want %s, %s or %s)",
 			c.Read.ContextFilter, ContextFilterOff, ContextFilterNormal, ContextFilterFull)
 	}
-	if err := ValidateLazyDescriptions(c.Descriptions.Lazy); err != nil {
+	if err := ValidateDescriptionProvider(c.Descriptions); err != nil {
 		return err
 	}
 	checkAgent := func(path string, mcpTools, blockedTools []string) error {
@@ -1088,6 +1127,10 @@ func validConfig(c *Config) bool {
 		// hand, and for the same reason it has to be recognised: judged legacy, it would be
 		// overwritten with defaults and silently turn the feature back on.
 		c.Descriptions.Lazy.Enabled != nil ||
+		// And `{"descriptions":{"provider":"cli","cli_provider_command":"claude -p"}}` is
+		// the third: naming the describer is a hand edit too, and a file that says only
+		// that must not be mistaken for a legacy one and overwritten back to "no provider".
+		strings.TrimSpace(c.Descriptions.Provider) != "" ||
 		// Same reasoning for the mode: `{"mode":"mcp"}` is a legitimate hand-written file,
 		// and treating it as legacy would overwrite it with defaults -- silently putting the
 		// project back on the mode it just opted out of. The two retired keys stay on this

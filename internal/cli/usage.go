@@ -167,6 +167,13 @@ Flags for "descriptions generate":
   --regen_oversized       Rewrite existing descriptions that overrun their kind's character
                           budget (function/method 120, type 100, variable 80) instead of
                           describing undocumented resources
+  --cli [command]         Describe by running a command (prompt on stdin, descriptions on
+                          stdout) instead of calling an API with a key. Quote a command with
+                          flags: --cli "codex exec". Bare --cli runs "claude -p" and asks
+                          first, because that spends your CLI subscription rather than an
+                          API key -- possibly a separate pool of credits; check with your
+                          provider. Overrides descriptions.provider for this run
+  -y                      Auto-confirm the bare --cli prompt
 
 Flags for "descriptions export":
   --out <path>            Sidecar to write (default .aracne/descriptions.jsonl)

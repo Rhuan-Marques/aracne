@@ -113,6 +113,9 @@ export type ID = string | number;
 `)
 
 	mustRun(t, dir, "scan", "-root", dir)
+	// read.kinds gates every read entrance, and named_type is off by default. --kind narrows
+	// which resource an id resolves to; it does not grant a kind the project excluded.
+	allowReadKinds(t, dir, "file", "function", "struct", "interface", "named_type")
 	id := "types.ID"
 	out := mustRun(t, dir, "read", "--kind", "named_type", id)
 	if !strings.Contains(out, "ID") {

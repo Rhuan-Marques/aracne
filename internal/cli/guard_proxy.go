@@ -86,7 +86,10 @@ func proxyRead(command, dbPath string) string {
 		}
 		cfg := helper.LoadConfig(helper.ConfigPath(dbPath))
 		rd := universaltools.NewRead(mgr, cfg, false, nil)
-		opt := universaltools.ReadIDsOptions{Kinds: helper.AllReadKinds()}
+		// read.kinds gates this surface like every other. The proxy is an ADDITION to a
+		// denial message, so a kind the project does not allow simply yields no proxy answer
+		// -- the denial still goes out, just without an aracne read attached to it.
+		opt := universaltools.ReadIDsOptions{}
 
 		var out string
 		// A window is a narrower question than the file, so ask it first. An empty result

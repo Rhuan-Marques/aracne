@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -32,13 +33,23 @@ func RunRead() {
 	manager, reg := InitRegistry(".aracne/topology.db")
 
 	cfg := helper.EnsureConfig(helper.ConfigPath(manager.DbPath()))
-	// The CLI is the human/bash surface, so it reads every kind regardless of read.kinds --
-	// that setting exists to narrow what a MODEL is offered, not to lock a person out.
+	// read.kinds gates this surface too. It used to pass AllReadKinds, on the reasoning that
+	// the setting existed to narrow what a MODEL is offered and should not lock a person out
+	// of their own topology -- but a project-wide "what may be read here" that the project's
+	// own CLI ignores is two policies wearing one name, and the one that got tested by hand
+	// was never the one the agent ran under.
 	out, err := universaltools.NewRead(manager, cfg, false, reg).ReadIDs(ids, universaltools.ReadIDsOptions{
-		Kinds:         helper.AllReadKinds(),
 		ForcedKind:    forcedKind,
 		ForceFullFile: full,
 	})
+	// Nothing resolved -- a typo, a missing file, or a kind read.kinds refuses. The report is
+	// the error text, and it goes to stderr with a non-zero status: `arac read` is a shell
+	// command, and a shell command that found nothing must not exit 0 saying so on stdout.
+	var unresolved *universaltools.UnresolvedError
+	if errors.As(err, &unresolved) {
+		fmt.Fprint(os.Stderr, unresolved.Report)
+		os.Exit(1)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)

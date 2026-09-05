@@ -81,10 +81,21 @@ arac scanner run                        # keep the topology current in the backg
 arac viz serve                          # the graph, in a browser (Full build)
 ```
 
-**Description generation** needs one of `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` or
-`DEEPSEEK_API_KEY`. Descriptions are also generated lazily, at the moment a read or a
-search is about to show a node, so a repo warms up as you work in it. Everything else —
-scanning, reading, grepping, the visualizer — needs no key at all.
+**Description generation** takes one of `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` or
+`DEEPSEEK_API_KEY` — or no key at all, if you point it at a CLI you are already logged into:
+
+```jsonc
+// .aracne/config.json
+"descriptions": { "provider": "cli", "cli_provider_command": "claude -p" }
+```
+
+or, for one run and without touching the config, `arac descriptions generate --cli` (which
+asks first — it spends your CLI subscription, not an API key).
+
+Descriptions are also generated lazily, at the moment a read or a search is about to show a
+node, so a repo warms up as you work in it; the sweep and the lazy fill read that same one
+provider block ([configuration.md](docs/configuration.md#who-writes-the-descriptions)).
+Everything else — scanning, reading, grepping, the visualizer — needs no key at all.
 
 ## The four modes
 

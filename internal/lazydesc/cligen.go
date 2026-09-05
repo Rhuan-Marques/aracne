@@ -4,16 +4,15 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 
+	"github.com/Rhuan-Marques/aracne/internal/helper"
 	"github.com/Rhuan-Marques/aracne/internal/prompts"
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
-// ProviderClaudeCLI runs a fill through the Claude Code CLI (`claude --print`) instead of an
-// HTTP API.
+// The CLI transport: describe a batch by running a command instead of calling an HTTP API.
 //
 // WHY. The API providers need an API key, which is a separate thing to buy from the Claude
 // Code subscription a user is already paying for -- and the benchmark harness has always
@@ -21,46 +20,51 @@ import (
 // a project that can sweep descriptions could not lazily fill them. This closes that gap: the
 // same auth, the same quota, no key.
 //
-// It is the LAST resort in the probe order, because it is slower per batch (a process launch
-// and a full CLI startup, versus one HTTP request) and its quota is the interactive one the
-// user is also typing into. An API key, where present, stays preferred.
-const ProviderClaudeCLI = "claude_cli"
+// It is never reached by inference. An API key, where present, stays preferred, because a CLI
+// run is slower per batch (a process launch and a full CLI startup, versus one HTTP request)
+// and its quota is the interactive one the user is also typing into.
+// ProviderCLI runs whatever `descriptions.cli_provider_command` names. The prompt goes in on
+// stdin and the reply is read from stdout, which is the whole contract -- any command that
+// answers a prompt on stdout can write this project's descriptions.
+//
+// There used to be a second name, `claude_cli`, that prefilled the Claude Code invocation. It
+// is gone: it was one transport wearing two names, and the prefilled half could not be seen,
+// tuned or pointed at anything else. `cli` with "claude --print --max-turns 1" is the same run
+// with the command in the config where the project can read it.
+const ProviderCLI = helper.ProviderNameCLI
 
-// claudeCLIModel maps a configured model onto what `claude --model` accepts. The CLI takes its
-// own short aliases, so a config that already says "haiku" needs no translation, while a full
-// API id has to be handed over as-is for the CLI to resolve or reject.
-func claudeCLIModel(model string) string {
-	m := strings.ToLower(strings.TrimSpace(model))
-	switch m {
-	case "", "haiku", "claude-haiku-4-5":
-		return "haiku"
-	case "sonnet", "claude-sonnet-4-6":
-		return "sonnet"
-	case "opus", "claude-opus-4-8":
-		return "opus"
+// IsCLIProvider reports whether a config asks for a CLI transport rather than an API.
+//
+// Exported because the choice changes the SHAPE of a generation run, not just its transport:
+// `arac descriptions generate` drives an agent loop over an llm.Provider, and there is no
+// agent loop to drive over a command that answers once. The sweep asks this before it decides
+// which of the two runners to build.
+func IsCLIProvider(cfg helper.ResolvedLazyDescriptions) bool {
+	return strings.EqualFold(strings.TrimSpace(cfg.Provider), ProviderCLI)
+}
+
+// NewCLIGenerator builds the CLI transport for a config, or (nil, error) when it cannot run.
+//
+// A missing binary is an error rather than a silent nil so the sweep can say WHY it is not
+// describing anything. The lazy fill, which has nowhere to print that, drops it -- see
+// GeneratorFactory.
+func NewCLIGenerator(cfg helper.ResolvedLazyDescriptions) (Generator, error) {
+	if !IsCLIProvider(cfg) {
+		return nil, fmt.Errorf("provider %q is not a CLI transport", cfg.Provider)
 	}
-	return model
-}
-
-// claudeCLIAvailable reports whether the CLI can be used as a generator.
-func claudeCLIAvailable() bool {
-	_, err := exec.LookPath(claudeCLIBinary())
-	return err == nil
-}
-
-// claudeCLIBinary is the executable to run, overridable for tests and for a project that
-// ships the CLI somewhere unusual.
-func claudeCLIBinary() string {
-	if v := strings.TrimSpace(os.Getenv("ARACNE_CLAUDE_CLI")); v != "" {
-		return v
+	if len(cfg.CLICommand) == 0 {
+		return nil, fmt.Errorf("descriptions provider %q needs cli_provider_command", ProviderCLI)
 	}
-	return "claude"
+	g := &cliGenerator{argv: append([]string(nil), cfg.CLICommand...)}
+	if _, err := exec.LookPath(g.argv[0]); err != nil {
+		return nil, fmt.Errorf("cli provider: %w", err)
+	}
+	return g, nil
 }
 
-// cliGenerator describes a batch by shelling out to `claude --print`.
+// cliGenerator describes a batch by running a command: prompt on stdin, reply on stdout.
 type cliGenerator struct {
-	bin   string
-	model string
+	argv []string
 }
 
 // Describe sends one batch and parses the reply.
@@ -80,16 +84,14 @@ func (g *cliGenerator) Describe(ctx context.Context, batch Batch) (map[string]st
 		wanted[req.ID] = req.Kind
 	}
 
-	// --max-turns 1 keeps this a single completion: the batch already carries every resource's
-	// source inline, so there is nothing for a tool call to fetch, and a fill that started
-	// exploring the repository would be a fill that can trigger a fill.
-	cmd := exec.CommandContext(ctx, g.bin,
-		"--print",
-		"--model", g.model,
-		"--max-turns", "1",
-		"--append-system-prompt", prompts.LazyDescriptionsPrompt(),
-	)
-	cmd.Stdin = strings.NewReader(prompts.LazyDescriptionsInput(resources, batch.Exemplars))
+	// Instructions and batch go in as one stream. No flag for a system prompt is common to
+	// every CLI, and one stdin is: a transport that works for anything the project points it
+	// at is worth more here than a flag that works for one vendor.
+	input := prompts.LazyDescriptionsPrompt() + "\n\n" +
+		prompts.LazyDescriptionsInput(resources, batch.Exemplars)
+
+	cmd := exec.CommandContext(ctx, g.argv[0], g.argv[1:]...)
+	cmd.Stdin = strings.NewReader(input)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 
@@ -98,7 +100,7 @@ func (g *cliGenerator) Describe(ctx context.Context, batch Batch) (map[string]st
 		if len(detail) > 200 {
 			detail = detail[:200]
 		}
-		return nil, fmt.Errorf("claude cli: %w: %s", err, detail)
+		return nil, fmt.Errorf("%s: %w: %s", g.argv[0], err, detail)
 	}
 	return prompts.ParseLazyDescriptions(out.String(), wanted), nil
 }

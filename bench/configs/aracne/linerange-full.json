@@ -5,10 +5,10 @@
     "file_mode": "full"
   },
   "descriptions": {
+    "provider": "cli",
+    "cli_provider_command": "claude --print --model haiku --max-turns 1",
     "lazy": {
       "enabled": true,
-      "provider": "claude_cli",
-      "model": "haiku",
       "max_nodes": 40,
       "timeout_seconds": 180,
       "batch_size": 12,

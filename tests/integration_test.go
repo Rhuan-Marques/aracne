@@ -2,6 +2,7 @@ package tests_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -69,6 +70,42 @@ func mustRun(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("Aracne %v failed: %v\n%s", args, err, out)
 	}
 	return out
+}
+
+// allowReadKinds rewrites read.kinds in place. It edits the file rather than regenerating it
+// so everything else `arac scan` decided about the project survives -- the same reason
+// setMode does.
+//
+// Tests need it because read.kinds now gates EVERY read entrance, so a suite about a kind the
+// default set leaves out (named_type, package, variable, dependency) has to say so.
+func allowReadKinds(t *testing.T, root string, kinds ...string) {
+	t.Helper()
+	path := filepath.Join(root, ".aracne", "config.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	read, _ := cfg["read"].(map[string]any)
+	if read == nil {
+		read = map[string]any{}
+		cfg["read"] = read
+	}
+	list := make([]any, 0, len(kinds))
+	for _, k := range kinds {
+		list = append(list, k)
+	}
+	read["kinds"] = list
+	out, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, out, 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func writeFile(t *testing.T, path, content string) {

@@ -438,7 +438,6 @@ func TestLazyEndToEndThroughARealProvider(t *testing.T) {
 	dir := lazyProject(t)
 	mgr, cfg := lazyEnv(t, dir, true)
 	cfg.Descriptions.Lazy.Provider = "anthropic"
-	cfg.Descriptions.Lazy.Model = "haiku"
 	cfg.Descriptions.Lazy.BaseURL = server.URL
 
 	// No WithFiller: the read builds its own filler from the config, exactly as it does in

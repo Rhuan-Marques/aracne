@@ -1,7 +1,11 @@
 package cli
 
 import (
+	"context"
 	"database/sql"
+	"flag"
+	"io"
+	"reflect"
 
 	_ "modernc.org/sqlite"
 	"os"
@@ -10,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/lazydesc"
 	"github.com/Rhuan-Marques/aracne/internal/topology"
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
@@ -186,5 +191,217 @@ func writeOversizedDescription(t *testing.T, dbPath, id, description string) {
 	defer db.Close()
 	if _, err := db.Exec("UPDATE resources SET description = ? WHERE id = ?", description, id); err != nil {
 		t.Fatalf("seed oversized description: %v", err)
+	}
+}
+
+// fakeDescriptionGenerator answers a batch from a canned map, so the sweep's CLI path can be
+// exercised without launching anything.
+type fakeDescriptionGenerator struct {
+	replies map[string]string
+	seen    []string
+}
+
+func (g *fakeDescriptionGenerator) Describe(ctx context.Context, batch lazydesc.Batch) (map[string]string, error) {
+	out := map[string]string{}
+	for _, req := range batch.Resources {
+		g.seen = append(g.seen, req.ID)
+		if d, ok := g.replies[req.ID]; ok {
+			out[req.ID] = d
+		}
+	}
+	return out, nil
+}
+
+// The CLI-provider sweep writes what the reply carried, straight into the topology, and leaves
+// what it did not carry undescribed for the next wave to re-list. That partial-success reading
+// is the contract the agent runner already has; a CLI run must not trade it for all-or-nothing.
+func TestCLIDescriptionRunnerWritesWhatCameBack(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "topology.db")
+	loc := domain.Location{Path: "x.go", StartsAt: 1, EndsAt: 20}
+	topo := &domain.Topology{Root: ".", Language: "go", Resources: map[string]domain.Resource{
+		"fn:alpha": {ID: "fn:alpha", Name: "Alpha", Kind: domain.ResourceFunction, Location: loc},
+		"fn:beta":  {ID: "fn:beta", Name: "Beta", Kind: domain.ResourceFunction, Location: loc},
+	}}
+	if err := helper.WriteDb(topo, dbPath); err != nil {
+		t.Fatalf("WriteDb: %v", err)
+	}
+	manager := topology.New()
+	if err := manager.Load(dbPath); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	gen := &fakeDescriptionGenerator{replies: map[string]string{"fn:alpha": "Normalizes a tag"}}
+	runner := &cliDescriptionRunner{gen: gen, manager: manager}
+	batch := []descriptionResource{
+		{ID: "fn:alpha", Name: "Alpha", Kind: domain.ResourceFunction},
+		{ID: "fn:beta", Name: "Beta", Kind: domain.ResourceFunction},
+	}
+	text, err := runner.Run(batch, nil, 0)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(text, "fn:alpha") {
+		t.Errorf("the batch report should name what it wrote, got %q", text)
+	}
+	if len(gen.seen) != 2 {
+		t.Errorf("the generator should see the whole batch, saw %v", gen.seen)
+	}
+
+	written, err := manager.ReadAll()
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if got := written.Resources["fn:alpha"].Description; got != "Normalizes a tag" {
+		t.Errorf("fn:alpha description = %q", got)
+	}
+	if got := written.Resources["fn:beta"].Description; got != "" {
+		t.Errorf("fn:beta was not described in the reply, got %q", got)
+	}
+}
+
+// `descriptions.provider: "cli"` is the one config both entry points read, so the sweep must
+// build the CLI runner from it -- and must not need an API key to do it.
+func TestNewDescriptionRunnerPicksTheCLITransport(t *testing.T) {
+	if _, err := os.Stat("/bin/cat"); err != nil {
+		t.Skip("needs a real binary on disk")
+	}
+	for _, k := range []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_API_KEY"} {
+		t.Setenv(k, "")
+	}
+	cfg := helper.DefaultConfig()
+	cfg.Descriptions.Provider = "cli"
+	cfg.Descriptions.CLIProviderCommand = "/bin/cat -"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("a cli provider with a command must validate: %v", err)
+	}
+
+	runner, label, err := newDescriptionRunner(nil, nil, cfg,
+		cfg.EffectiveLazyDescriptions(helper.DefaultLazyHarness), "go")
+	if err != nil {
+		t.Fatalf("newDescriptionRunner: %v", err)
+	}
+	if _, ok := runner.(*cliDescriptionRunner); !ok {
+		t.Fatalf("expected the CLI runner, got %T", runner)
+	}
+	if !strings.Contains(label, "/bin/cat") {
+		t.Errorf("the run should announce what it describes with, got %q", label)
+	}
+}
+
+// `--cli` takes an optional value, which the flag package cannot express on its own. Both
+// spellings have to survive the pre-pass: bare, and with a quoted command.
+func TestExpandCLIFlagValue(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   []string
+		want []string
+	}{
+		{"bare", []string{"--cli"}, []string{"--cli"}},
+		{"with a command", []string{"--cli", "codex exec"}, []string{"--cli=codex exec"}},
+		{"single dash", []string{"-cli", "codex exec"}, []string{"-cli=codex exec"}},
+		{"already joined", []string{"--cli=codex exec"}, []string{"--cli=codex exec"}},
+		{"followed by a flag", []string{"--cli", "--parallel", "2"}, []string{"--cli", "--parallel", "2"}},
+		{"among others", []string{"--parallel", "2", "--cli", "claude -p", "-y"},
+			[]string{"--parallel", "2", "--cli=claude -p", "-y"}},
+		{"after a terminator", []string{"--", "--cli", "x"}, []string{"--", "--cli", "x"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := expandCLIFlagValue(tc.in); !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("expandCLIFlagValue(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// The three states of the flag: absent, bare (the default, which must ask), and given.
+func TestCLICommandFlagStates(t *testing.T) {
+	parse := func(args ...string) *cliCommandFlag {
+		t.Helper()
+		f := &cliCommandFlag{}
+		fs := flag.NewFlagSet("t", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		fs.Var(f, "cli", "")
+		fs.Bool("parallel", false, "")
+		if err := fs.Parse(expandCLIFlagValue(args)); err != nil {
+			t.Fatalf("parse %q: %v", args, err)
+		}
+		return f
+	}
+	if f := parse(); f.set {
+		t.Error("no --cli must leave the transport to the config")
+	}
+	if f := parse("--cli"); !f.set || f.command != "" {
+		t.Errorf("bare --cli = %+v, want set with no command", f)
+	}
+	if f := parse("--cli", "codex exec"); !f.set || f.command != "codex exec" {
+		t.Errorf(`--cli "codex exec" = %+v`, f)
+	}
+}
+
+// The flag overrides whatever the config says, and a bare one is confirmed before it spends
+// anything. -y stands in for the answer here; the prompt itself needs a terminal.
+func TestApplyCLIOverride(t *testing.T) {
+	cfg := helper.ResolvedLazyDescriptions{Provider: "anthropic", Model: "claude-haiku-4-5"}
+	if err := applyCLIOverride(&cfg, "codex exec", false); err != nil {
+		t.Fatalf("an explicit command must not need confirming: %v", err)
+	}
+	if cfg.Provider != helper.ProviderNameCLI {
+		t.Errorf("provider = %q, want %q", cfg.Provider, helper.ProviderNameCLI)
+	}
+	if want := []string{"codex", "exec"}; !reflect.DeepEqual(cfg.CLICommand, want) {
+		t.Errorf("CLICommand = %q, want %q", cfg.CLICommand, want)
+	}
+
+	// The default, confirmed.
+	bare := helper.ResolvedLazyDescriptions{Provider: "anthropic"}
+	if err := applyCLIOverride(&bare, "", true); err != nil {
+		t.Fatalf("applyCLIOverride: %v", err)
+	}
+	if want := []string{"claude", "-p"}; !reflect.DeepEqual(bare.CLICommand, want) {
+		t.Errorf("the bare default = %q, want %q", bare.CLICommand, want)
+	}
+
+	if err := applyCLIOverride(&cfg, `claude "oops`, false); err == nil {
+		t.Error("an unparseable command must be an error, not a truncated argv")
+	}
+}
+
+// Nothing is spent on a guess. With no terminal to ask, the bare default refuses and names the
+// two spellings that need no answer; with a terminal, a "no" cancels and a "y" proceeds.
+func TestBareCLIDefaultIsConfirmed(t *testing.T) {
+	realTerminal, realReader := stdinIsTerminal, promptReader
+	t.Cleanup(func() { stdinIsTerminal, promptReader = realTerminal, realReader })
+
+	stdinIsTerminal = func() bool { return false }
+	unattended := helper.ResolvedLazyDescriptions{}
+	err := applyCLIOverride(&unattended, "", false)
+	if err == nil {
+		t.Fatal("an unconfirmed default must not run")
+	}
+	if !strings.Contains(err.Error(), "claude -p") {
+		t.Errorf("the refusal should name the command to pass explicitly, got %v", err)
+	}
+	if unattended.Provider != "" {
+		t.Errorf("a refused override must not have changed the transport, got %q", unattended.Provider)
+	}
+
+	stdinIsTerminal = func() bool { return true }
+	for _, answer := range []string{"n\n", "\n", ""} {
+		promptReader = strings.NewReader(answer)
+		declined := helper.ResolvedLazyDescriptions{}
+		if err := applyCLIOverride(&declined, "", false); err == nil {
+			t.Errorf("answering %q must cancel", answer)
+		}
+		if declined.CLICommand != nil {
+			t.Errorf("answering %q must leave the transport alone", answer)
+		}
+	}
+	promptReader = strings.NewReader("y\n")
+	accepted := helper.ResolvedLazyDescriptions{}
+	if err := applyCLIOverride(&accepted, "", false); err != nil {
+		t.Fatalf("answering yes must proceed: %v", err)
+	}
+	if want := []string{"claude", "-p"}; !reflect.DeepEqual(accepted.CLICommand, want) {
+		t.Errorf("CLICommand = %q, want %q", accepted.CLICommand, want)
 	}
 }

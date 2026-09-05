@@ -49,21 +49,26 @@ type Request struct {
 // unconfigured project is simply a project where lazy generation does nothing, and reporting
 // it as a failure on every read would turn a switched-off feature into noise.
 var GeneratorFactory = func(cfg helper.ResolvedLazyDescriptions) (Generator, error) {
-	// An explicit `provider: "claude_cli"` skips the key probe entirely.
-	if strings.EqualFold(strings.TrimSpace(cfg.Provider), ProviderClaudeCLI) {
-		if !claudeCLIAvailable() {
+	// An explicit CLI provider skips the key probe entirely.
+	if IsCLIProvider(cfg) {
+		// The error is dropped for the same reason the caller drops one: a fill runs
+		// inside a read, and "claude is not on PATH" printed into a read's output would
+		// be noise in the answer to a different question. `arac descriptions generate`
+		// calls NewCLIGenerator directly and does report it.
+		gen, err := NewCLIGenerator(cfg)
+		if err != nil {
 			return nil, nil
 		}
-		return &cliGenerator{bin: claudeCLIBinary(), model: claudeCLIModel(cfg.Model)}, nil
+		return gen, nil
 	}
 	if provider, model, ok := resolveProvider(cfg); ok {
 		return &llmGenerator{provider: provider, model: model}, nil
 	}
-	// Deliberately NOT a fallback. `provider: "claude_cli"` has to be asked for, because it
-	// spends the user's interactive Claude Code quota and adds a process launch to a read --
-	// surprising a project that simply has no API key with both, on every cold read, is worse
-	// than the feature staying off. TestGeneratorFactoryReturnsNothingWhenUnconfigured pins
-	// that contract.
+	// Deliberately NOT a fallback. A CLI provider has to be asked for, because it spends the
+	// user's interactive Claude Code quota and adds a process launch to a read -- surprising
+	// a project that simply has no API key with both, on every cold read, is worse than the
+	// feature staying off. TestGeneratorFactoryReturnsNothingWhenUnconfigured pins that
+	// contract.
 	return nil, nil
 }
 
@@ -171,6 +176,13 @@ var providerProbeOrder = []string{providerAnthropic, providerOpenAI, providerDee
 // Returns ok=false when nothing at all is configured; see resolveProvider for why that is not
 // an error.
 func ResolveDescriptionProvider(cfg helper.ResolvedLazyDescriptions) (llm.Provider, string, bool) {
+	// A named CLI provider is not an API provider that failed to resolve, so it must not
+	// fall through to the environment probe below: a project that asked to describe through
+	// `claude -p` and happens to hold an OpenAI key asked for `claude -p`. Callers check
+	// IsCLIProvider first; this is the guard for the ones that forget.
+	if IsCLIProvider(cfg) {
+		return nil, "", false
+	}
 	if provider, model, ok := resolveProvider(cfg); ok {
 		return provider, model, true
 	}
