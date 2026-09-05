@@ -20,8 +20,26 @@ import (
 // the tool schemas, and an intercepting contract's job is done by the output itself; what
 // survives in each is only what the model cannot work out from what it is already shown.
 
-// ContractContent renders the contract for a project's mode.
-func ContractContent(cfg *helper.Config) string {
+// ContractContent renders the contract for a project's mode, at its configured verbosity.
+//
+// This is the ONLY contract there is. CLAUDE.md, AGENTS.md and the system prompt aracne's own
+// harness sends are the same document, produced here: the contract is surface-shaped, not
+// harness-shaped, and the two things that legitimately vary -- which capabilities the mode has,
+// and how much is said about them -- are both arguments to this function.
+//
+// languages are the topology's languages, most significant first, and may be empty: `arac init`
+// can run before the first scan. Only ContractVerbosityHigh reads them; the terse contract says
+// nothing that changes with the language.
+func ContractContent(cfg *helper.Config, languages []string) string {
+	if cfg.EffectiveContractVerbosity() == helper.ContractVerbosityHigh {
+		return highContract(cfg, languages)
+	}
+	return lowContract(cfg)
+}
+
+// lowContract renders ContractVerbosityLow: what the graph is, how it reaches this surface, and
+// the one or two facts the model cannot derive from what it is already shown.
+func lowContract(cfg *helper.Config) string {
 	// ModeCLI is written as one continuous document rather than assembled from the
 	// shared sections. It has one capability to teach and no tool schemas to lean on, so the
 	// headings were structure around three paragraphs -- and every byte of them is re-sent on

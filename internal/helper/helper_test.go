@@ -1199,3 +1199,38 @@ func TestDefaultDescriptionKindsMatchConfig(t *testing.T) {
 		}
 	}
 }
+
+// contract_verbosity is validated at load/init time, the same way mode is, so a typo fails
+// fast and loudly instead of silently costing a project the long contract it asked for.
+func TestValidateRejectsAnUnknownContractVerbosity(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.ContractVerbosity = "verbose"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate accepted contract_verbosity \"verbose\"")
+	}
+	for _, ok := range []string{"", ContractVerbosityLow, ContractVerbosityHigh, "HIGH", " low "} {
+		cfg.ContractVerbosity = ok
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("Validate rejected contract_verbosity %q: %v", ok, err)
+		}
+	}
+}
+
+// EffectiveContractVerbosity resolves a typo to the DEFAULT rather than failing, for the same
+// reason EffectiveMode does: a config aracne cannot read must never leave a project with no
+// contract. The default it falls back to has to be the cheap one -- every byte of the contract
+// is re-sent on every request, so a typo must not silently quadruple that.
+func TestEffectiveContractVerbosityFallsBackToLow(t *testing.T) {
+	for _, in := range []string{"", "verbose", "medium", "  "} {
+		cfg := DefaultConfig()
+		cfg.ContractVerbosity = in
+		if got := cfg.EffectiveContractVerbosity(); got != ContractVerbosityLow {
+			t.Errorf("contract_verbosity %q resolved to %q, want %q", in, got, ContractVerbosityLow)
+		}
+	}
+	cfg := DefaultConfig()
+	cfg.ContractVerbosity = " HIGH "
+	if got := cfg.EffectiveContractVerbosity(); got != ContractVerbosityHigh {
+		t.Errorf("contract_verbosity %q resolved to %q, want %q", " HIGH ", got, ContractVerbosityHigh)
+	}
+}

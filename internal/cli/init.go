@@ -69,16 +69,21 @@ func RunInit(args []string) {
 	}
 	announceMode(cfg)
 
+	// Read from the database rather than scanned for: init must stay cheap and must work on a
+	// fresh checkout. An empty result is the honest answer there, and the contract renders its
+	// language-free form -- the next `arac init` after a scan fills it in.
+	languages := TopologyLanguages(".aracne/topology.db")
+
 	if *opencode {
-		initOpenCode(*global, cfg, *yes)
+		initOpenCode(*global, cfg, *yes, languages)
 	}
 	if *claude {
-		initClaudeCode(*global, cfg, *yes)
+		initClaudeCode(*global, cfg, *yes, languages)
 	}
 }
 
 // Initializes OpenCode integration by configuring MCP servers, permissions, commands, agents, and plugins.
-func initOpenCode(global bool, cfg *helper.Config, autoYes bool) {
+func initOpenCode(global bool, cfg *helper.Config, autoYes bool, languages []string) {
 	configPath, configDir, agentsMdPath := opencodePaths(global)
 	os.MkdirAll(configDir, 0755)
 	mainEff := cfg.EffectiveAgent("opencode", "main")
@@ -164,12 +169,12 @@ func initOpenCode(global bool, cfg *helper.Config, autoYes bool) {
 	// same way Claude Code's guard hook is: it is what keeps the graph current for the call
 	// that is about to read it, on whichever surface the project is on.
 	writeOpenCodePreToolScanPlugin(filepath.Join(configDir, "plugins"), autoYes)
-	writeMarkdownIntegrationFile(agentsMdPath, "OpenCode AGENTS.md", prompts.AgentsMdForConfig(cfg))
+	writeMarkdownIntegrationFile(agentsMdPath, "OpenCode AGENTS.md", prompts.AgentsMdForConfig(cfg, languages))
 	fmt.Println("[OpenCode] Restart OpenCode to activate the topology workflow.")
 }
 
 // Initializes Claude Code integration by configuring MCP servers, commands, agents, plugins, and guard hooks.
-func initClaudeCode(global bool, cfg *helper.Config, autoYes bool) {
+func initClaudeCode(global bool, cfg *helper.Config, autoYes bool, languages []string) {
 	mcpConfigPath, commandsDir, agentsDir, claudeMdPath := claudePaths(global)
 	claudeBaseDir := filepath.Dir(commandsDir)
 	mainEff := cfg.EffectiveAgent("claude_code", "main")
@@ -229,7 +234,7 @@ func initClaudeCode(global bool, cfg *helper.Config, autoYes bool) {
 	if cfg.MCPEnabled() {
 		writeClaudePermissions(filepath.Join(claudeBaseDir, "settings.json"), cfg)
 	}
-	writeMarkdownIntegrationFile(claudeMdPath, "Claude Code CLAUDE.md", prompts.ClaudeMdForConfig(cfg))
+	writeMarkdownIntegrationFile(claudeMdPath, "Claude Code CLAUDE.md", prompts.ClaudeMdForConfig(cfg, languages))
 	fmt.Println("[Claude Code] Restart Claude Code to activate the topology workflow.")
 }
 

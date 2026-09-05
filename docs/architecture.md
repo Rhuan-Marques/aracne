@@ -203,7 +203,12 @@ its own model.
 **Not part of 1.0**, behind `features.agent`. A self-contained REPL against an LLM
 provider. Note that `internal/llm/agent` itself is NOT optional: `descriptions generate`
 uses `agent.New` + `RunSubAgent` for its executor fan-out. Only the REPL entry point
-(`cli/agent.go`) and the per-language `Build*SystemPrompt` chain are exclusive to it.
+(`cli/agent.go`) is exclusive to it. Its system prompt is **not** its own: `agent.BuildPrompt`
+is `prompts.ContractContent`, the same document `arac init` writes into `CLAUDE.md` and
+`AGENTS.md`. The five per-language `Build*SystemPrompt` constants it used to send are gone —
+they re-said what a read returns and how an ID is spelled, in words no other surface could
+reach, so a change to the read output had to be made twice. What they said that the contract
+did not is `contract_verbosity: "high"` (see [configuration.md](configuration.md)).
 
 ### D. Web visualizer (`arac viz serve`) — `internal/viz`
 A local HTTP server (default `127.0.0.1:7331`) serving a **`go:embed`'d static
@@ -369,7 +374,13 @@ in the topology and surface through `warnings_list` / `arac warnings list`, and 
 - The CLI is the index: to find what a command does, start at the `case` in
   `cmd/arac/main.go`, jump to `internal/cli/<name>.go`.
 - To change *what a resource lookup returns*, look at `internal/llm/languages/*`
-  (formatting/context) and `internal/topology/<lang>/*` (graph building).
+  (formatting/context) and `internal/topology/<lang>/*` (graph building). If the shape of the
+  answer changes, `internal/prompts/languages.go` describes it to the model and has to change
+  with it.
+- To change *what a model is told about this project*, there is one place:
+  `internal/prompts/contract.go` (terse) and `contract_high.go` (long). `CLAUDE.md`,
+  `AGENTS.md` and `arac agent`'s system prompt all render from it, and a test asserts they are
+  byte-identical.
 - To change *what gets stored or how incremental scans behave*, look at
   `internal/topology/manager.go` + `internal/helper/{db,incremental,partial,manifest}.go`.
 - To change *which tools an agent gets*, edit `.aracne/config.json` (validated

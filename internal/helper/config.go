@@ -391,6 +391,35 @@ const (
 // DefaultMode is what a config with no mode key resolves to.
 const DefaultMode = ModeCLI
 
+// The two contract verbosities.
+//
+// WHY A DIAL AND NOT TWO DOCUMENTS. There used to be two: the contract in this package, written
+// into CLAUDE.md and AGENTS.md, and a second family of per-language system prompts under
+// internal/llm/languages that aracne's own harness sent instead. They described the same
+// topology, the same read output and the same discipline, in different words -- so every change
+// to what a read RETURNS had to be made twice, and the copy nobody was looking at was the one
+// that went stale. They are one document now, and this key is the only thing that differs
+// between the two audiences that wanted them apart.
+const (
+	// ContractVerbosityLow is the terse contract: what the graph is, how it reaches this
+	// surface, and the one or two facts the model cannot derive from what it is already
+	// shown. It is the default because every byte of it is re-sent on every request, and on a
+	// harness with tool schemas and a system prompt of its own most of the long version is
+	// already said.
+	ContractVerbosityLow = "low"
+	// ContractVerbosityHigh is the long contract: the same mode-shaped skeleton, plus the
+	// language's read output format, its ID vocabulary, its semantics, and the full
+	// guidelines. It is what a harness with no prompt of its own needs, and what a project
+	// running a weaker model may want on any surface.
+	ContractVerbosityHigh = "high"
+)
+
+// DefaultContractVerbosity is what a config with no contract_verbosity key resolves to.
+//
+// Low, because the contract's cost is per-request and the long version's value is not: a
+// harness that already tells the model how to read code pays for the long one twice.
+const DefaultContractVerbosity = ContractVerbosityLow
+
 // TerminalSection is what is left of the terminal knobs once the mode owns the decisions.
 //
 // It held five booleans -- intercept, enhance_files, enhance_resources, grep,
@@ -425,6 +454,12 @@ type Config struct {
 	// Absent, it resolves to whatever the legacy integration.mode/identification_mode pair
 	// said, and to DefaultMode when neither is set. EffectiveMode() is the only reader.
 	Mode string `json:"mode"`
+	// ContractVerbosity is how much of the contract to render: "low" (the default) or
+	// "high". It is orthogonal to Mode -- the mode decides WHICH capabilities the contract
+	// may name, this decides how much is said about them -- and it is the same answer for
+	// CLAUDE.md, AGENTS.md and aracne's own harness, which all render one document.
+	// EffectiveContractVerbosity() is the only reader.
+	ContractVerbosity string `json:"contract_verbosity"`
 	// Paths marks directories/files (relative to the topology root) as hidden or
 	// visible. Hidden paths are skipped by the indexing and scan stages in every
 	// mode (default/all/hard). More specific (more internal) rules win, so a
@@ -685,6 +720,12 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("mode: unknown mode %q (want %s, %s, %s or %s)",
 			c.Mode, ModeMCP, ModeCLI, ModeInterceptID, ModeInterceptLineRanges)
 	}
+	switch strings.ToLower(strings.TrimSpace(c.ContractVerbosity)) {
+	case "", ContractVerbosityLow, ContractVerbosityHigh:
+	default:
+		return fmt.Errorf("contract_verbosity: unknown value %q (want %s or %s)",
+			c.ContractVerbosity, ContractVerbosityLow, ContractVerbosityHigh)
+	}
 	switch strings.ToLower(strings.TrimSpace(c.Read.ContextFilter)) {
 	case "", ContextFilterOff, ContextFilterNormal, ContextFilterFull:
 	default:
@@ -911,6 +952,10 @@ func DefaultConfig() *Config {
 		// Stamped explicitly rather than left to the default: a written config should say
 		// which of the four products it is, not make the reader know what absence means.
 		Mode: DefaultMode,
+		// Stamped for the same reason as Mode: the dial that decides how big every
+		// request's contract is should be visible in the file, not inferred from a
+		// missing key.
+		ContractVerbosity: DefaultContractVerbosity,
 		Terminal: TerminalSection{
 			MaxOverserve: intPtr(DefaultTerminalMaxOverserve),
 		},
@@ -1165,6 +1210,19 @@ func (c *Config) EffectiveMode() string {
 		return ModeInterceptLineRanges
 	}
 	return DefaultMode
+}
+
+// EffectiveContractVerbosity resolves contract_verbosity, defaulting to
+// DefaultContractVerbosity.
+//
+// An unrecognized value falls through to the default rather than failing, for the same reason
+// EffectiveMode does: a config aracne cannot read must never leave a project with no contract
+// at all. Validate() is where a typo is reported.
+func (c *Config) EffectiveContractVerbosity() string {
+	if strings.ToLower(strings.TrimSpace(c.ContractVerbosity)) == ContractVerbosityHigh {
+		return ContractVerbosityHigh
+	}
+	return ContractVerbosityLow
 }
 
 // MCPEnabled reports whether the MCP server is wired and its tools served.

@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/Rhuan-Marques/aracne/internal/helper"
 	"github.com/Rhuan-Marques/aracne/internal/llm"
 	"github.com/Rhuan-Marques/aracne/internal/llm/tools"
+	"github.com/Rhuan-Marques/aracne/internal/prompts"
 )
 
 type mockProvider struct {
@@ -33,20 +35,30 @@ func (m *mockTool) Run(args json.RawMessage) (string, error) {
 	return "tool_result", nil
 }
 
-func TestBuildPrompt(t *testing.T) {
-	prompt := BuildPrompt("go")
-	if prompt == "" {
-		t.Error("expected non-empty Go prompt")
+// The harness's system prompt is the project's contract, not a per-language constant of its
+// own. What used to be five `Build<Lang>SystemPrompt` functions here (plus a "multi" case that
+// concatenated all five) is one call into prompts, so a change to what a read returns reaches
+// this harness and CLAUDE.md together or not at all.
+func TestBuildPromptIsTheProjectContract(t *testing.T) {
+	cfg := helper.DefaultConfig()
+	for _, languages := range [][]string{{"go"}, {"python"}, {"go", "rust"}, nil, {"unknown"}} {
+		got := BuildPrompt(cfg, languages)
+		if got == "" {
+			t.Fatalf("languages %v: empty system prompt", languages)
+		}
+		if want := prompts.ContractContent(cfg, languages); got != want {
+			t.Errorf("languages %v: system prompt has drifted from the contract", languages)
+		}
 	}
+}
 
-	promptPy := BuildPrompt("python")
-	if promptPy == "" {
-		t.Error("expected non-empty Python prompt")
-	}
-
-	promptDefault := BuildPrompt("unknown")
-	if promptDefault == "" {
-		t.Error("expected non-empty default prompt")
+// The dial reaches this harness too -- it is the surface the long contract was written for.
+func TestBuildPromptFollowsContractVerbosity(t *testing.T) {
+	low := helper.DefaultConfig()
+	high := helper.DefaultConfig()
+	high.ContractVerbosity = helper.ContractVerbosityHigh
+	if len(BuildPrompt(high, []string{"go"})) <= len(BuildPrompt(low, []string{"go"})) {
+		t.Error(`contract_verbosity "high" did not lengthen the harness system prompt`)
 	}
 }
 
@@ -79,7 +91,7 @@ func TestToToolDefinitionsEmpty(t *testing.T) {
 func TestNew(t *testing.T) {
 	provider := &mockProvider{}
 	registry := tools.NewRegistry()
-	agent := New(provider, registry, "go")
+	agent := New(provider, registry, helper.DefaultConfig(), []string{"go"})
 
 	if agent == nil {
 		t.Fatal("expected non-nil agent")
@@ -92,7 +104,7 @@ func TestNew(t *testing.T) {
 func TestSetMaxIterations(t *testing.T) {
 	provider := &mockProvider{}
 	registry := tools.NewRegistry()
-	agent := New(provider, registry, "go")
+	agent := New(provider, registry, helper.DefaultConfig(), []string{"go"})
 
 	agent.SetMaxIterations(10)
 	if agent.maxIterations != 10 {

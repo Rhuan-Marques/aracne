@@ -63,11 +63,6 @@ func RunGenerateDescriptions(args []string) {
 	manager, reg := InitRegistry(".aracne/topology.db")
 	cfg := helper.EnsureConfig(helper.ConfigPath(".aracne/topology.db"))
 
-	lang := GetLanguage(manager)
-	if topo, _ := manager.ReadAll(); topo != nil && topo.Language != "" {
-		lang = topo.Language
-	}
-
 	// Resolved from the one `descriptions` provider block the lazy fill also reads. This
 	// used to be providers.NewDeepSeek() outright, so the sweep needed DEEPSEEK_API_KEY
 	// while the lazy path over the same descriptions already accepted Anthropic, OpenAI or
@@ -82,7 +77,7 @@ func RunGenerateDescriptions(args []string) {
 			os.Exit(1)
 		}
 	}
-	runner, describedWith, err := newDescriptionRunner(manager, reg, cfg, descCfg, lang)
+	runner, describedWith, err := newDescriptionRunner(manager, reg, cfg, descCfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
@@ -336,7 +331,7 @@ type descriptionRunner interface {
 // An unbuildable provider is fatal here, unlike on the lazy path where it is silence: `arac
 // descriptions generate` was asked for by a person who is waiting for descriptions, and
 // exiting with "claude: not found" beats printing "done" over an empty sweep.
-func newDescriptionRunner(manager *topology.TopologyManager, reg *scanner.Registry, cfg *helper.Config, descCfg helper.ResolvedLazyDescriptions, lang string) (descriptionRunner, string, error) {
+func newDescriptionRunner(manager *topology.TopologyManager, reg *scanner.Registry, cfg *helper.Config, descCfg helper.ResolvedLazyDescriptions) (descriptionRunner, string, error) {
 	// Say what is wrong with the provider name before saying nothing is configured. A
 	// retired or misspelled name resolves to no provider, and "set an API key" is the wrong
 	// advice for a project that named one and got the spelling wrong.
@@ -368,21 +363,28 @@ func newDescriptionRunner(manager *topology.TopologyManager, reg *scanner.Regist
 		provider: provider,
 		manager:  manager,
 		toolMap:  registryToolMap(toolReg),
-		lang:     lang,
+		cfg:      cfg,
+		// The executor only ever runs through RunSubAgent, which sends the executor
+		// prompt and never the project contract -- so these shape a system prompt this
+		// runner does not use. They are passed anyway because agent.New is one
+		// constructor: a runner that fabricated a config to satisfy it would be the
+		// place a real caller later inherited the wrong contract from.
+		languages: TopologyLanguagesFor(manager),
 	}, model, nil
 }
 
 // agentDescriptionRunner is the API-provider runner: a sub-agent per batch, writing through
 // the update_description tool.
 type agentDescriptionRunner struct {
-	provider llm.Provider
-	manager  *topology.TopologyManager
-	toolMap  map[string]tools.Tool
-	lang     string
+	provider  llm.Provider
+	manager   *topology.TopologyManager
+	toolMap   map[string]tools.Tool
+	cfg       *helper.Config
+	languages []string
 }
 
 func (r *agentDescriptionRunner) Run(batch []descriptionResource, topo *domain.Topology, exemplarLimit int) (string, error) {
-	a := agent.New(r.provider, tools.NewRegistry(), r.lang)
+	a := agent.New(r.provider, tools.NewRegistry(), r.cfg, r.languages)
 	a.SetMaxIterations(len(batch)*4 + 10)
 	input := descriptionExecutorInput(batch, makeResourceReader(r.manager), batchExemplars(batch, topo, exemplarLimit))
 	return a.RunSubAgent(prompts.DescriptionsGenerationExecutorPrompt(), input, r.toolMap)

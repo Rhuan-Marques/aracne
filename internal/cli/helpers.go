@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Rhuan-Marques/aracne/internal/helper"
 	"github.com/Rhuan-Marques/aracne/internal/topology"
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 	"github.com/Rhuan-Marques/aracne/internal/topology/scanner"
@@ -39,6 +40,47 @@ func GetLanguage(manager *topology.TopologyManager) string {
 		return topo.Language
 	}
 	return "go"
+}
+
+// TopologyLanguages returns the languages the topology was scanned in, most significant first,
+// for the contract that gets written about it.
+//
+// It never scans and never creates a database. `arac init` is the caller that matters and it
+// legitimately runs before the first scan -- on a fresh checkout there is nothing to report and
+// an empty slice is the honest answer, which the high-verbosity contract renders as its
+// language-free form. Reporting "go" there (the way GetLanguage does, because a tool
+// constructor has to pick something) would write Go's ID vocabulary into a Python project's
+// CLAUDE.md.
+func TopologyLanguages(dbPath string) []string {
+	if _, err := os.Stat(dbPath); err != nil {
+		return nil
+	}
+	topo, err := helper.ReadDb(dbPath)
+	if err != nil || topo == nil {
+		return nil
+	}
+	if len(topo.Languages) > 0 {
+		return topo.Languages
+	}
+	if topo.Language != "" {
+		return []string{topo.Language}
+	}
+	return nil
+}
+
+// TopologyLanguagesFor is TopologyLanguages for a caller that already has the manager open.
+func TopologyLanguagesFor(manager *topology.TopologyManager) []string {
+	topo, err := manager.ReadAll()
+	if err != nil || topo == nil {
+		return nil
+	}
+	if len(topo.Languages) > 0 {
+		return topo.Languages
+	}
+	if topo.Language != "" {
+		return []string{topo.Language}
+	}
+	return nil
 }
 
 // Initializes topology manager and scanner registry, performing initial scan if needed.

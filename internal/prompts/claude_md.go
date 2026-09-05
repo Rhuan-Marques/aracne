@@ -10,14 +10,26 @@ import (
 // APPENDED a terminal section when both surfaces were on, which is how a project ended up being
 // told about `mcp__aracne__grep` and an intercepted `cat` in the same document. Mode "both" is
 // gone, and with it the only case that needed splicing.
-func ClaudeMdForConfig(cfg *helper.Config) string {
-	return ContractContent(cfg)
+func ClaudeMdForConfig(cfg *helper.Config, languages []string) string {
+	return ContractContent(cfg, languages)
 }
 
 // AgentsMdForConfig is ClaudeMdForConfig for OpenCode. The contract is surface-shaped, not
 // harness-shaped, so the two are the same document.
-func AgentsMdForConfig(cfg *helper.Config) string {
-	return ContractContent(cfg)
+func AgentsMdForConfig(cfg *helper.Config, languages []string) string {
+	return ContractContent(cfg, languages)
+}
+
+// SystemPromptForConfig is the same document again, for aracne's own harness.
+//
+// It used to be five per-language constants under internal/llm/languages that no other surface
+// could see. They said what a read returns, how an ID is spelled and how to spend a context
+// window -- all of it true of every surface, none of it reachable from CLAUDE.md -- so a change
+// to the read output had to be made twice and the copy nobody was reading went stale. There is
+// nothing left for a harness-specific spelling to say: what differs between harnesses is the
+// mode they are in and how much they need said, and both are already config.
+func SystemPromptForConfig(cfg *helper.Config, languages []string) string {
+	return ContractContent(cfg, languages)
 }
 
 func behavioralRulesSection() string {

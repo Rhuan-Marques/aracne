@@ -276,7 +276,7 @@ func TestNewDescriptionRunnerPicksTheCLITransport(t *testing.T) {
 	}
 
 	runner, label, err := newDescriptionRunner(nil, nil, cfg,
-		cfg.EffectiveLazyDescriptions(helper.DefaultLazyHarness), "go")
+		cfg.EffectiveLazyDescriptions(helper.DefaultLazyHarness))
 	if err != nil {
 		t.Fatalf("newDescriptionRunner: %v", err)
 	}

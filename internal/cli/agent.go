@@ -35,13 +35,7 @@ func RunAgent(args []string) {
 	cfg := helper.EnsureConfig(helper.ConfigPath(".aracne/topology.db"))
 	toolReg := BuildToolRegistry(manager, reg, cfg, "claude_code", "main")
 
-	lang := GetLanguage(manager)
-	topo, _ := manager.ReadAll()
-	if topo != nil {
-		lang = topo.Language
-	}
-
-	a := agent.New(provider, toolReg, lang)
+	a := agent.New(provider, toolReg, cfg, TopologyLanguagesFor(manager))
 
 	input := strings.Join(args, " ")
 	if input != "" {

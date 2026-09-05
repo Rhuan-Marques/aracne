@@ -6,6 +6,26 @@ with defaults rather than half-migrated.
 
 The one key that matters most, **`mode`**, has its own page: [modes.md](modes.md).
 
+**`contract_verbosity`** (`low` (the default) / `high`) is the other dial that shapes what a
+model is told. It sits next to `mode` at the top level because there is exactly one contract:
+`CLAUDE.md`, `AGENTS.md` and the system prompt `arac agent` sends are the same bytes, rendered
+by `prompts.ContractContent`. `mode` decides *which* capabilities that document may name;
+`contract_verbosity` decides *how much* it says about them.
+
+- **`low`** — what the graph is, how it reaches this surface, and the one or two facts the
+  model cannot derive from what it is already shown. Roughly 1-2 KB, and every byte of it is
+  re-sent on every request, which is why it is the default: on a harness with tool schemas and
+  a system prompt of its own, most of the long version is paid for twice.
+- **`high`** — the same mode-shaped document at length: what a read returns and how to read a
+  `# CONTEXT:` block, how the project's language spells a resource ID, what the graph's edges
+  mean in that language, and the full guidelines. Roughly 4-5 KB. Reach for it on a harness
+  with no prompt of its own, or with a model that needs the read discipline spelled out.
+
+The language halves come from the topology's own languages, read from the database at
+`arac init` time (`internal/prompts/languages.go`). A project scanned in several languages gets
+each one's section; a project scanned in none yet — a fresh checkout, before the first scan —
+gets the language-free form, and the next `arac init` after a scan fills it in.
+
 Every tool name in this file is validated against the [`toolspec`](architecture.md#6-the-tool-catalog-internaltoolspec)
 catalog at load/init time, so a typo fails fast instead of silently disabling a tool.
 

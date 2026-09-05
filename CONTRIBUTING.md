@@ -70,9 +70,13 @@ Roughly, in this order — every existing language followed the same path:
 2. **A typed topology** in `internal/topology/<lang>/`, and the language's rules in
    `internal/topology/contract/<lang>.go` — how a call site is recorded and when a
    signature change still fits.
-3. **Rendering** in `internal/llm/languages/<lang>tools/`, then register it in
+3. **Contract profile** in `internal/prompts/languages.go` — how the language spells a
+   resource ID, what a read of it looks like, and what its edges mean. This is what the
+   `contract_verbosity: "high"` contract teaches about the language; without it the project
+   gets the language-free contract.
+4. **Rendering** in `internal/llm/languages/<lang>tools/`, then register it in
    `universaltools/read.go` and `internal/cli/tool_profiles.go`.
-4. **Corpus + tests**: a `testing_ground/<lang>family/` subtree of edge cases, an
+5. **Corpus + tests**: a `testing_ground/<lang>family/` subtree of edge cases, an
    `tests/atscale_<lang>_test.go` running all three scan modes against it, and a
    `tests/<lang>family_edgecases_test.go`.
 

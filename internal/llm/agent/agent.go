@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/Rhuan-Marques/aracne/internal/helper"
 	"github.com/Rhuan-Marques/aracne/internal/llm"
 	"github.com/Rhuan-Marques/aracne/internal/llm/tools"
 )
@@ -19,12 +20,17 @@ type Agent struct {
 	maxIterations int
 }
 
-// Creates a new Agent with the given LLM provider, tool registry, and language. Initializes the system prompt and sets the default max iterations (20).
-func New(provider llm.Provider, registry *tools.Registry, language string) *Agent {
+// Creates a new Agent with the given LLM provider, tool registry, project config and topology
+// languages. Initializes the system prompt and sets the default max iterations (20).
+//
+// It takes the config rather than a bare language string because the system prompt IS the
+// project's contract now (see BuildPrompt): the mode decides which capabilities it may name and
+// contract_verbosity decides how much it says about them, and both live in the config.
+func New(provider llm.Provider, registry *tools.Registry, cfg *helper.Config, languages []string) *Agent {
 	return &Agent{
 		provider:      provider,
 		registry:      registry,
-		messages:      []llm.Message{{Role: "system", Content: BuildPrompt(language)}},
+		messages:      []llm.Message{{Role: "system", Content: BuildPrompt(cfg, languages)}},
 		maxIterations: defaultMaxIterations,
 	}
 }

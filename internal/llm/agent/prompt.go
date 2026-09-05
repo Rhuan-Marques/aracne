@@ -1,31 +1,25 @@
 package agent
 
 import (
-	"github.com/Rhuan-Marques/aracne/internal/llm/languages/gotools"
-	"github.com/Rhuan-Marques/aracne/internal/llm/languages/javatools"
-	"github.com/Rhuan-Marques/aracne/internal/llm/languages/jstools"
-	"github.com/Rhuan-Marques/aracne/internal/llm/languages/pythontools"
-	"github.com/Rhuan-Marques/aracne/internal/llm/languages/rusttools"
+	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/prompts"
 )
 
-// Constructs language-specific system prompts for Go, Python, JavaScript, TypeScript, Rust, Java, or multi-language.
-func BuildPrompt(language string) string {
-	switch language {
-	case "go":
-		return gotools.BuildGoSystemPrompt()
-	case "python":
-		return pythontools.BuildPythonSystemPrompt()
-	case "javascript":
-		return jstools.BuildJavaScriptSystemPrompt()
-	case "typescript":
-		return jstools.BuildTypeScriptSystemPrompt()
-	case "rust":
-		return rusttools.BuildRustSystemPrompt()
-	case "java":
-		return javatools.BuildJavaSystemPrompt()
-	case "multi":
-		return gotools.BuildGoSystemPrompt() + "\n\n" + pythontools.BuildPythonSystemPrompt() + "\n\n" + jstools.BuildJavaScriptSystemPrompt() + "\n\n" + jstools.BuildTypeScriptSystemPrompt() + "\n\n" + rusttools.BuildRustSystemPrompt() + "\n\n" + javatools.BuildJavaSystemPrompt()
-	default:
-		return gotools.BuildGoSystemPrompt()
-	}
+// BuildPrompt is the system prompt aracne's own harness sends.
+//
+// It is `prompts.ContractContent` and nothing else. This function used to dispatch on the
+// topology's language to one of five `Build<Lang>SystemPrompt` constants under
+// internal/llm/languages, each of which re-said what a read returns, how an ID is spelled and
+// how to spend a context window -- the same claims CLAUDE.md and AGENTS.md were already
+// making, in different words, with no way for a change to one to reach the other. The "multi"
+// case concatenated all five, which sent the model six competing descriptions of one read
+// format.
+//
+// The two things those prompts said that the contract did not are arguments now:
+// `contract_verbosity: "high"` restores their length, and languages carries the per-language
+// half. What is gone is the LLM_INTEGRATION_CHARTER.md prepend -- an undocumented optional file
+// no other surface read, whose content would have had to land above the `# Aracne` heading
+// that `arac init` and `arac disable` locate a generated block by.
+func BuildPrompt(cfg *helper.Config, languages []string) string {
+	return prompts.SystemPromptForConfig(cfg, languages)
 }

@@ -4,6 +4,11 @@
 which tools exist, which shell commands aracne answers, and what vocabulary the generated
 contract teaches — and every artifact `arac init` writes derives from it.
 
+It decides *which* capabilities the contract may name. How much the contract says about them is
+the other dial, `contract_verbosity`, documented in
+[configuration.md](configuration.md); the two are orthogonal, and both settings of the second
+render from this same four-way switch.
+
 | mode | MCP tools | shell reads | shell grep | `blocked_tools` | addressing |
 |------|-----------|-------------|------------|-----------------|------------|
 | `mcp` | one `read` (+ `warnings_list`, `bug_*`) | run as themselves | intercepted | **active** | resource IDs |

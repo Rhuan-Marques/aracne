@@ -25,7 +25,14 @@ First public release.
   the read path, against Anthropic, OpenAI or DeepSeek.
 - **Web visualizer** (`arac viz serve`) with graph, neighborhood and search views.
 - **Harness integration** (`arac init`) for Claude Code and OpenCode: contract, hooks,
-  agents, commands, MCP config.
+  agents, commands, MCP config. `CLAUDE.md`, `AGENTS.md` and the system prompt `arac agent`
+  sends are one document, rendered from a single source — there is no harness-specific
+  spelling of the contract to keep in sync.
+- **`contract_verbosity`** (`low` (the default) / `high`) — how much that contract says.
+  `high` is the long form: what a read returns and how to read a `# CONTEXT:` block, how the
+  project's language spells a resource ID, what the graph's edges mean in it, and the full
+  guidelines. It is orthogonal to `mode`, which still decides which capabilities the contract
+  may name at all.
 - **Two published builds** — Full (with the visualizer) and Basic (`-tags minimal`).
 - `arac warnings list`, `arac check-updates`, `arac disable`, `arac scanner run`, and
   `arac descriptions export|import`.

@@ -36,7 +36,7 @@ func TestEachContractCarriesOnlyItsOwnModesMarker(t *testing.T) {
 	for mode, own := range modeMarkers {
 		cfg := helper.DefaultConfig()
 		cfg.Mode = mode
-		got := prompts.ClaudeMdForConfig(cfg)
+		got := prompts.ClaudeMdForConfig(cfg, []string{"go"})
 
 		if !strings.Contains(got, own) {
 			t.Errorf("mode %q: contract is missing its own marker %q\n%s", mode, own, got)
@@ -68,7 +68,7 @@ func TestOnlyInterceptingModesTeachShellReads(t *testing.T) {
 	} {
 		cfg := helper.DefaultConfig()
 		cfg.Mode = tc.mode
-		if got := strings.Contains(prompts.ClaudeMdForConfig(cfg), teaches); got != tc.want {
+		if got := strings.Contains(prompts.ClaudeMdForConfig(cfg, []string{"go"}), teaches); got != tc.want {
 			t.Errorf("mode %q: teaches shell reads = %v, want %v", tc.mode, got, tc.want)
 		}
 	}
@@ -76,13 +76,36 @@ func TestOnlyInterceptingModesTeachShellReads(t *testing.T) {
 
 // Every byte of every contract is re-sent on every request. The ceiling is a tripwire, not a
 // target: it catches a contract that grows a section back rather than one that is a little long.
+//
+// It guards the DEFAULT verbosity, which is the one a project gets without asking for it. The
+// long contract has no budget by design -- a project that sets contract_verbosity to "high" has
+// chosen to pay for the paragraphs -- but it is measured below, because "high" quietly becoming
+// the thing every session sends is the failure this number exists to catch.
 func TestNoContractExceedsItsBudget(t *testing.T) {
 	const budget = 2400
 	for mode := range modeMarkers {
 		cfg := helper.DefaultConfig()
 		cfg.Mode = mode
-		if n := len(prompts.ClaudeMdForConfig(cfg)); n > budget {
+		if got := cfg.EffectiveContractVerbosity(); got != helper.ContractVerbosityLow {
+			t.Fatalf("the default verbosity is %q; the budget below no longer guards what ships by default", got)
+		}
+		if n := len(prompts.ClaudeMdForConfig(cfg, []string{"go"})); n > budget {
 			t.Errorf("mode %q contract is %d bytes, over the %d budget", mode, n, budget)
+		}
+	}
+}
+
+// The long contract is what an operator opts into, so it gets a ceiling of its own -- loose
+// enough to be an opt-in and tight enough to catch a section that has stopped being a contract
+// and started being documentation.
+func TestTheHighContractStaysWithinItsOwnCeiling(t *testing.T) {
+	const ceiling = 12000
+	for mode := range modeMarkers {
+		cfg := helper.DefaultConfig()
+		cfg.Mode = mode
+		cfg.ContractVerbosity = helper.ContractVerbosityHigh
+		if n := len(prompts.ClaudeMdForConfig(cfg, []string{"go", "python"})); n > ceiling {
+			t.Errorf("mode %q high contract is %d bytes, over the %d ceiling", mode, n, ceiling)
 		}
 	}
 }
