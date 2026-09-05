@@ -37,6 +37,14 @@ func RunScan(args []string) {
 	cfgPath := helper.ConfigPath(*output)
 	cfg := helper.EnsureConfig(cfgPath)
 
+	// Install the path-visibility and scan.ignore filters up front: the language
+	// detection and progress-bar sizing below both walk the tree before the scan
+	// itself installs them (TopologyManager.applyPathVisibility), and an ignored
+	// tree must be invisible to every walk, not just the parsing one. The scan
+	// re-installs them, so this is idempotent.
+	domain.SetActivePathVisibility(domain.BuildPathVisibility(*root, cfg.Paths))
+	domain.SetActiveIgnore(domain.BuildIgnoreMatcher(*root, cfg.Scan.Ignore))
+
 	explicitFlags := make(map[string]bool)
 	fs.Visit(func(f *flag.Flag) {
 		explicitFlags[f.Name] = true
@@ -326,6 +334,13 @@ func countSourceFiles(root string, reg *scanner.Registry) int {
 					return filepath.SkipDir
 				}
 				if strings.HasPrefix(name, ".") {
+					return filepath.SkipDir
+				}
+				// IsSourceFile below already rejects ignored files one by one,
+				// which keeps the count correct -- but only pruning the
+				// directory keeps the walk from descending into a large ignored
+				// tree just to reject every file in it.
+				if domain.PathPruneDir(path) {
 					return filepath.SkipDir
 				}
 			}

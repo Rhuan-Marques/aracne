@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // Python import classification used to ask a single question: does this import's first
@@ -105,6 +107,12 @@ func discoverImportRoots(absRoot string) *importRoots {
 		}
 		name := d.Name()
 		if path != absRoot && (pyRootSkipDirs[name] || strings.HasPrefix(name, ".")) {
+			return filepath.SkipDir
+		}
+		// An ignored directory holds no import roots: its packages are never
+		// parsed, so letting one name a root would only invent import targets
+		// that resolve to nothing.
+		if path != absRoot && domain.PathPruneDir(path) {
 			return filepath.SkipDir
 		}
 		if path == absRoot || !hasInit(path) {

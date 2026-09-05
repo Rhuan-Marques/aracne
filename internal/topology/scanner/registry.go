@@ -4,6 +4,8 @@ import (
 	"io/fs"
 	"path/filepath"
 	"strings"
+
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // Registry of LanguageScanner instances supporting multiple programming languages. Key field: scanners (list of registered scanners for each supported language).
@@ -55,7 +57,15 @@ func (r *Registry) DetectFile(path string) LanguageScanner {
 	return nil
 }
 
-// Checks whether a directory tree contains any files matching a scanner's supported extensions, skipping standard exclusion directories.
+// Checks whether a directory tree contains any files matching a scanner's
+// supported extensions, skipping standard exclusion directories and anything
+// excluded by the project's scan.ignore / path-visibility rules. A directory the
+// scan would never parse must not be able to detect a language either --
+// otherwise an ignored corpus (a benchmark tree, a vendored sample project)
+// makes every language it contains look like a language of the project.
+//
+// The walk stops at the first match: one hit is the whole answer, so there is no
+// reason to keep descending.
 func scannerHasFiles(root string, s LanguageScanner) bool {
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
@@ -63,7 +73,7 @@ func scannerHasFiles(root string, s LanguageScanner) bool {
 	}
 	found := false
 	filepath.WalkDir(absRoot, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || found {
+		if err != nil {
 			return nil
 		}
 		if d.IsDir() {
@@ -71,13 +81,22 @@ func scannerHasFiles(root string, s LanguageScanner) bool {
 			if name == ".git" || name == ".aracne" || name == "node_modules" || name == "vendor" || name == "__pycache__" {
 				return filepath.SkipDir
 			}
+			// The root itself is never pruned by its own basename: WalkDir does
+			// not visit ancestors, so a repo that happens to live under an
+			// ignored-looking directory must still detect its languages.
+			if path != absRoot && domain.PathPruneDir(path) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if domain.PathHidden(path) {
 			return nil
 		}
 		ext := strings.ToLower(filepath.Ext(path))
 		for _, supported := range s.Extensions() {
 			if ext == strings.ToLower(supported) {
 				found = true
-				return nil
+				return filepath.SkipAll
 			}
 		}
 		return nil
