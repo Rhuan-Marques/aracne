@@ -3,9 +3,12 @@ package cli
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"flag"
 	"io"
 	"reflect"
+	"sync"
+	"time"
 
 	_ "modernc.org/sqlite"
 	"os"
@@ -15,6 +18,7 @@ import (
 
 	"github.com/Rhuan-Marques/aracne/internal/helper"
 	"github.com/Rhuan-Marques/aracne/internal/lazydesc"
+	"github.com/Rhuan-Marques/aracne/internal/progress"
 	"github.com/Rhuan-Marques/aracne/internal/topology"
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
@@ -404,4 +408,126 @@ func TestBareCLIDefaultIsConfirmed(t *testing.T) {
 	if want := []string{"claude", "-p"}; !reflect.DeepEqual(accepted.CLICommand, want) {
 		t.Errorf("CLICommand = %q, want %q", accepted.CLICommand, want)
 	}
+}
+
+// The bar is resolved once, from the pending count and the terminal, before any wave starts.
+func TestShowDescriptionProgress(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		mode       string
+		isTerminal bool
+		pending    int
+		want       bool
+	}{
+		{"auto on a terminal with work", helper.ProgressAuto, true, 12, true},
+		{"auto with a single resource", helper.ProgressAuto, true, 1, true},
+		{"auto with nothing pending", helper.ProgressAuto, true, 0, false},
+		{"auto when piped", helper.ProgressAuto, false, 12, false},
+		{"always when piped", helper.ProgressAlways, false, 12, true},
+		{"never on a terminal", helper.ProgressNever, true, 12, false},
+		{"unset reads as auto", "", true, 12, true},
+		{"a misspelling reads as auto", "  ALWAYs-ish ", false, 12, false},
+		{"case and padding are forgiven", "  NEVER ", true, 12, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := showDescriptionProgress(tc.mode, tc.isTerminal, tc.pending); got != tc.want {
+				t.Fatalf("showDescriptionProgress(%q, %v, %d) = %v, want %v", tc.mode, tc.isTerminal, tc.pending, got, tc.want)
+			}
+		})
+	}
+}
+
+// blockingRunner answers one batch immediately and holds every other one until the test lets
+// go, which is how a wave whose batches finish at different times is written down.
+type blockingRunner struct {
+	release chan struct{}
+	first   sync.Once
+	done    chan struct{} // closed once the fast batch has been answered
+}
+
+func (r *blockingRunner) Run(batch []descriptionResource, _ *domain.Topology, _ int) (string, error) {
+	fast := false
+	r.first.Do(func() {
+		fast = true
+		close(r.done)
+	})
+	if fast {
+		return "wrote " + batch[0].ID, nil
+	}
+	<-r.release
+	return "wrote " + batch[0].ID, nil
+}
+
+// The bar has to move when a batch lands, not when the wave ends. The wave used to wait for
+// every worker before draining its results, which is invisible to a bar -- so this pins the
+// draining: with one batch answered and the rest still running, the bar is already past zero.
+func TestBatchWaveAdvancesTheBarBeforeTheWaveEnds(t *testing.T) {
+	runner := &blockingRunner{release: make(chan struct{}), done: make(chan struct{})}
+	batches := [][]descriptionResource{
+		{{ID: "fn:a", Name: "A", Kind: domain.ResourceFunction}},
+		{{ID: "fn:b", Name: "B", Kind: domain.ResourceFunction}},
+		{{ID: "fn:c", Name: "C", Kind: domain.ResourceFunction}},
+	}
+
+	var bar progress.Reporter
+	bar.SetOutput(io.Discard)
+	bar.SetEnabled(true)
+	bar.StartPhase("describing", len(batches))
+
+	collected := make(chan []descriptionBatchResult, 1)
+	go func() { collected <- runDescriptionBatchWave(runner, batches, 3, nil, 0, &bar) }()
+
+	<-runner.done
+	// The fast batch is answered; the other two are still blocked. Give the collector a
+	// moment to see it, then assert the bar moved while the wave is demonstrably unfinished.
+	deadline := time.After(2 * time.Second)
+	for bar.Done() == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("the bar never advanced while batches were still running")
+		case <-time.After(time.Millisecond):
+		}
+	}
+
+	close(runner.release)
+	select {
+	case results := <-collected:
+		if len(results) != len(batches) {
+			t.Fatalf("the wave collected %d results, want %d", len(results), len(batches))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the wave never finished")
+	}
+	if got := bar.Done(); got != len(batches) {
+		t.Fatalf("bar advanced to %d, want %d", got, len(batches))
+	}
+}
+
+// A batch that fails still advances the bar: it spent the wave's wall clock, and what it cost
+// is reported by the summary and by the next wave re-listing what is still missing.
+func TestBatchWaveCountsFailedBatches(t *testing.T) {
+	runner := failingRunner{}
+	batches := [][]descriptionResource{
+		{{ID: "fn:a"}, {ID: "fn:b"}},
+		{{ID: "fn:c"}},
+	}
+
+	var bar progress.Reporter
+	bar.SetOutput(io.Discard)
+	bar.SetEnabled(true)
+	bar.StartPhase("describing", 3)
+
+	results := runDescriptionBatchWave(runner, batches, 2, nil, 0, &bar)
+	if len(results) != 2 {
+		t.Fatalf("collected %d results, want 2", len(results))
+	}
+	if got := bar.Done(); got != 3 {
+		t.Fatalf("bar advanced to %d, want 3 -- failures count too", got)
+	}
+}
+
+type failingRunner struct{}
+
+func (failingRunner) Run([]descriptionResource, *domain.Topology, int) (string, error) {
+	return "", errors.New("executor blew up")
 }

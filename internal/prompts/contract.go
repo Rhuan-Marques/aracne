@@ -27,7 +27,7 @@ import (
 // harness-shaped, and the two things that legitimately vary -- which capabilities the mode has,
 // and how much is said about them -- are both arguments to this function.
 //
-// languages are the topology's languages, most significant first, and may be empty: `arac init`
+// languages are the topology's languages, most significant first, and may be empty: `arac setup`
 // can run before the first scan. Only ContractVerbosityHigh reads them; the terse contract says
 // nothing that changes with the language.
 func ContractContent(cfg *helper.Config, languages []string) string {
@@ -132,7 +132,7 @@ func aracneReadContract(cfg *helper.Config) string {
 	// init and disable find to locate the end of this block.
 	b.WriteString(contractGuardNote(cfg))
 	// The last line, and the block's end marker. It is a real instruction rather than a
-	// delimiter dressed as one: `arac init` needs to find where its block stops so a re-run
+	// delimiter dressed as one: `arac setup` needs to find where its block stops so a re-run
 	// replaces it instead of stacking a second copy, and every candidate for that job is
 	// re-sent to the model on every request -- so it had better be a line worth sending.
 	b.WriteString(AracneReadClosingLine + "\n")
@@ -141,7 +141,7 @@ func aracneReadContract(cfg *helper.Config) string {
 
 // AracneReadClosingLine is the final line of the ModeCLI contract, and the marker cli
 // uses to find the end of the generated block. Exported so the two cannot drift: a change to
-// the wording here without a matching change there would make every `arac init` append a
+// the wording here without a matching change there would make every `arac setup` append a
 // second contract instead of replacing the first.
 const AracneReadClosingLine = "Parallelise multiple reads and edits in a single command when possible."
 

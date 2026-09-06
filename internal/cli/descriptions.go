@@ -16,6 +16,7 @@ import (
 	"github.com/Rhuan-Marques/aracne/internal/llm"
 	"github.com/Rhuan-Marques/aracne/internal/llm/agent"
 	"github.com/Rhuan-Marques/aracne/internal/llm/tools"
+	"github.com/Rhuan-Marques/aracne/internal/progress"
 	"github.com/Rhuan-Marques/aracne/internal/prompts"
 	"github.com/Rhuan-Marques/aracne/internal/topology"
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
@@ -55,13 +56,30 @@ func RunGenerateDescriptions(args []string) {
 	maxRetries := fs.Int("max-retries", defaultDescriptionMaxRetries, "Maximum executor attempts per resource")
 	includeNotVisibleFlag := fs.Bool("include-not-visible", false, "Include resources the read context filter would not render as a normal line (small functions / external vars set full or hidden)")
 	regenOversized := fs.Bool("regen_oversized", false, "Rewrite existing descriptions that overrun their kind's character budget instead of describing undocumented resources")
+	progressFlag := fs.String("progress", helper.ProgressAuto, "Progress bar: auto (on a terminal when there is anything to describe), always, or never")
 	cliFlag := &cliCommandFlag{}
 	fs.Var(cliFlag, "cli", "Describe through a command instead of an API key: `--cli \"codex exec\"`, or bare --cli for "+defaultDescribeCLICommand+" (asks first)")
 	autoYes := fs.Bool("y", false, "Auto-confirm the bare --cli prompt")
 	fs.Parse(expandCLIFlagValue(args))
 
 	manager, reg := InitRegistry(".aracne/topology.db")
-	cfg := helper.EnsureConfig(helper.ConfigPath(".aracne/topology.db"))
+	configPath := helper.ConfigPath(".aracne/topology.db")
+	cfg := helper.EnsureConfig(configPath)
+
+	// Who writes the descriptions is `arac init`'s question now, not this command's.
+	//
+	// It used to be asked here, on the first sweep, and that was the wrong place by the time
+	// there was a right one: someone running `arac descriptions generate` has asked for
+	// descriptions, not for a setup interview, and the flow ended with a question ("now, or
+	// lazily?") whose "lazily" answer simply abandoned the command they had just run. The
+	// questions are the same questions; they are asked once, by the command whose whole job
+	// is asking them.
+	//
+	// --cli is the exception, as it always was: the flag IS the answer for that run.
+	if !cliFlag.set && len(missingDescriptionAnswers(&cfg.Descriptions)) > 0 {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", unansweredSetupError(&cfg.Descriptions))
+		os.Exit(1)
+	}
 
 	// Resolved from the one `descriptions` provider block the lazy fill also reads. This
 	// used to be providers.NewDeepSeek() outright, so the sweep needed DEEPSEEK_API_KEY
@@ -136,20 +154,39 @@ func RunGenerateDescriptions(args []string) {
 		return
 	}
 
-	if err := runDescriptionGeneration(manager, runner, cfg.Descriptions.Kinds, *batchSize, *parallel, *maxRetries, cfg.Descriptions.StyleExemplars, filter, includeNotVisible, *regenOversized); err != nil {
+	// The bar is resolved from the pending count taken above, so a run with nothing to do
+	// never draws one, and the wave bars below inherit an already-answered question.
+	var bar progress.Reporter
+	bar.SetEnabled(showDescriptionProgress(*progressFlag, stderrIsTerminal(), len(pending)))
+
+	if err := runDescriptionGeneration(manager, runner, cfg.Descriptions.Kinds, *batchSize, *parallel, *maxRetries, cfg.Descriptions.StyleExemplars, filter, includeNotVisible, *regenOversized, &bar); err != nil {
 		fmt.Fprintf(os.Stderr, "\nError: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Println("done")
 }
 
-// defaultDescribeCLICommand is what a bare `--cli` runs.
+// showDescriptionProgress resolves `--progress` for a generation run.
 //
-// `claude -p` and not the fuller `claude --print --model haiku --max-turns 1`: a default is a
-// suggestion, and the moment it starts pinning a model it is making a spending decision on the
-// user's behalf that they did not type. A project that wants the tuned invocation writes it,
-// in the flag or in cli_provider_command, where it can read what it is paying for.
-const defaultDescribeCLICommand = "claude -p"
+// "auto" asks only for a terminal and for there to be something to describe. `arac scan`'s
+// auto additionally wants a project above a file threshold, because a bar over fifteen files
+// is gone before it is read; here every unit of the total is an LLM call worth seconds, so a
+// single pending resource is already a long enough wait to want one. Off a terminal it stays
+// off in either command for the same reason: the bar redraws with carriage returns, which are
+// noise in a log or a pipe.
+//
+// An unrecognised value reads as auto rather than as an error, matching how the scan flag
+// treats one -- the bar is not worth failing a sweep that has an API key and a plan.
+func showDescriptionProgress(mode string, isTerminal bool, pending int) bool {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case helper.ProgressAlways:
+		return true
+	case helper.ProgressNever:
+		return false
+	default:
+		return isTerminal && pending > 0
+	}
+}
 
 // cliCommandFlag is `--cli`, which takes an OPTIONAL command.
 //
@@ -353,10 +390,7 @@ func newDescriptionRunner(manager *topology.TopologyManager, reg *scanner.Regist
 	}
 	provider, model, ok := lazydesc.ResolveDescriptionProvider(descCfg)
 	if !ok {
-		return nil, "", fmt.Errorf("no LLM provider configured for description generation.\n"+
-			"Set one of %s, or name a provider in .aracne/config.json:\n"+
-			"  \"descriptions\": {\"provider\": \"cli\", \"cli_provider_command\": \"claude -p\"}",
-			strings.Join(lazydesc.ProviderKeyEnvNames(), ", "))
+		return nil, "", unresolvedProviderError(descCfg)
 	}
 	toolReg := BuildToolRegistry(manager, reg, cfg, "claude_code", helper.DescriptionsExecutorAgent)
 	return &agentDescriptionRunner{
@@ -371,6 +405,29 @@ func newDescriptionRunner(manager *topology.TopologyManager, reg *scanner.Regist
 		// place a real caller later inherited the wrong contract from.
 		languages: TopologyLanguagesFor(manager),
 	}, model, nil
+}
+
+// unresolvedProviderError explains a provider that resolved to nothing.
+//
+// The two cases read very differently to the person in front of it. A project that answered
+// the setup questions has a provider and a variable name, and what went wrong is that the
+// variable is empty -- so the error names THAT variable and the export that fixes it, rather
+// than listing three vendors' keys as if nothing had been chosen. A project with no provider
+// at all (a config hand-edited back to blank, or a run that skipped the questions) gets the
+// broader message, because for it the question really is still open.
+func unresolvedProviderError(descCfg helper.ResolvedLazyDescriptions) error {
+	if helper.IsAPIProvider(descCfg.Provider) {
+		env := helper.APIKeyEnvFor(descCfg)
+		return fmt.Errorf("descriptions provider %q: %s is empty or unset.\n"+
+			"  export %s=...\n"+
+			"Or name a different variable in .aracne/config.json:\n"+
+			"  \"descriptions\": {\"api_key_env\": \"...\"}",
+			descCfg.Provider, env, env)
+	}
+	return fmt.Errorf("no LLM provider configured for description generation.\n"+
+		"Set one of %s, or name a provider in .aracne/config.json:\n"+
+		"  \"descriptions\": {\"provider\": \"cli\", \"cli_provider_command\": %q}",
+		strings.Join(lazydesc.ProviderKeyEnvNames(), ", "), defaultDescribeCLICommand)
 }
 
 // agentDescriptionRunner is the API-provider runner: a sub-agent per batch, writing through
@@ -464,7 +521,7 @@ func batchExemplars(batch []descriptionResource, topo *domain.Topology, exemplar
 // still qualifies is re-batched. That works for a rewrite because update_description REJECTS
 // an over-budget write, so a failed shrink leaves the old description standing and the
 // resource simply comes back in the next round instead of leaving a hole.
-func runDescriptionGeneration(manager *topology.TopologyManager, runner descriptionRunner, targets []domain.ResourceKind, batchSize, parallel, maxRetries, exemplarLimit int, filter domain.ContextFilter, includeNotVisible, regenOversized bool) error {
+func runDescriptionGeneration(manager *topology.TopologyManager, runner descriptionRunner, targets []domain.ResourceKind, batchSize, parallel, maxRetries, exemplarLimit int, filter domain.ContextFilter, includeNotVisible, regenOversized bool, bar *progress.Reporter) error {
 	attempts := make(map[string]int)
 	failed := make(map[string]string)
 
@@ -504,7 +561,18 @@ func runDescriptionGeneration(manager *topology.TopologyManager, runner descript
 		if exemplarLimit > 0 {
 			topo, _ = manager.ReadAll()
 		}
-		results := runDescriptionBatchWave(runner, batches, parallel, topo, exemplarLimit)
+		// One bar per wave rather than one for the whole run, because the wave is the only
+		// span whose total is known: what the next wave has to do is whatever this one did
+		// not finish, and that is not countable until this one is over. The "Starting N
+		// executor batch(es)" line above already frames each wave, so a single-wave run --
+		// which is most of them -- reads as one bar for the run.
+		label := "describing"
+		if regenOversized {
+			label = "rewriting"
+		}
+		bar.StartPhase(label, len(retryable))
+		results := runDescriptionBatchWave(runner, batches, parallel, topo, exemplarLimit, bar)
+		bar.EndPhase()
 		for _, result := range results {
 			if result.Err != nil {
 				fmt.Fprintf(os.Stderr, "Executor batch failed (%d resources): %v\n", len(result.Batch), result.Err)
@@ -517,8 +585,9 @@ func runDescriptionGeneration(manager *topology.TopologyManager, runner descript
 	}
 }
 
-// Runs description generation for resource batches in parallel through the run's runner and collects results.
-func runDescriptionBatchWave(runner descriptionRunner, batches [][]descriptionResource, parallel int, topo *domain.Topology, exemplarLimit int) []descriptionBatchResult {
+// Runs description generation for resource batches in parallel through the run's runner and
+// collects results, advancing bar as each batch lands.
+func runDescriptionBatchWave(runner descriptionRunner, batches [][]descriptionResource, parallel int, topo *domain.Topology, exemplarLimit int, bar *progress.Reporter) []descriptionBatchResult {
 	if parallel > len(batches) {
 		parallel = len(batches)
 	}
@@ -537,15 +606,28 @@ func runDescriptionBatchWave(runner descriptionRunner, batches [][]descriptionRe
 		}()
 	}
 
-	for _, batch := range batches {
-		jobs <- batch
-	}
-	close(jobs)
-	wg.Wait()
-	close(results)
+	// Feeding moves off this goroutine so the collection below can run WHILE the wave does.
+	// This used to fill the queue, wait for every worker, and only then drain a buffered
+	// channel -- which is fine for a summary printed at the end, and useless to a bar, which
+	// has to hear about a finished batch at the moment it finishes rather than at the moment
+	// the slowest one does. The results channel stays buffered, so a worker never waits on
+	// the consumer either way.
+	go func() {
+		for _, batch := range batches {
+			jobs <- batch
+		}
+		close(jobs)
+		wg.Wait()
+		close(results)
+	}()
 
 	collected := make([]descriptionBatchResult, 0, len(batches))
 	for result := range results {
+		// A failed batch advances the bar too. It measures the wave's attempts, and a batch
+		// that came back empty spent the same wall clock as one that worked; what it cost is
+		// in the summary the caller prints and in the next wave, which re-lists whatever is
+		// still missing.
+		bar.Add(len(result.Batch))
 		collected = append(collected, result)
 	}
 	return collected

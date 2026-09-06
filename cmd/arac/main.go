@@ -39,6 +39,8 @@ func main() {
 		cli.RunViz(os.Args[2:])
 	case "init":
 		cli.RunInit(os.Args[2:])
+	case "setup":
+		cli.RunSetup(os.Args[2:])
 	case "disable":
 		cli.RunDisable(os.Args[2:])
 	case "descriptions":

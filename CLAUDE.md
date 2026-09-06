@@ -31,28 +31,32 @@ the core model, and a tour of every subsystem.
 
 ## Build and test
 
-```sh
-make build        # Full  (engine + web visualizer)
-make build-basic  # Basic (engine only, -tags minimal)
-make test         # go test ./...
-```
-
-CGO is required — the JS/TS, Rust and Java scanners are tree-sitter, so you need `gcc`.
+`make build` (Full), `make build-basic` (Basic, `-tags minimal`), `make test`. CGO is
+required — the JS/TS, Rust and Java scanners are tree-sitter, so you need `gcc`.
+[CONTRIBUTING.md](CONTRIBUTING.md) has the rest, including what to run before a PR.
 
 ## Two things that will bite you
 
-- **`testing_ground/` is load-bearing.** ~20 test files scan it and assert on resource IDs
-  keyed to the literal `testing_ground/<lang>/…` prefix. It is deliberately full of edge
-  cases and deliberately *not* gofmt-clean; reformatting it shifts line numbers the
-  at-scale suites check.
+- **`testing_ground/` is load-bearing and deliberately not gofmt-clean.** ~20 test files
+  scan it and assert on resource IDs keyed to the literal `testing_ground/<lang>/…`
+  prefix; reformatting it shifts line numbers those suites check. Never
+  `gofmt -w .` at the repo root.
 - **Go resource IDs are module-path-prefixed.** They begin
-  `github.com/Rhuan-Marques/aracne/…`. The at-scale harness pins them with
-  `corpusModulePath` in `tests/atscale_harness_test.go`, which must stay equal to the
-  module line in `go.mod`.
+  `github.com/Rhuan-Marques/aracne/…`, pinned by `corpusModulePath` in
+  `tests/atscale_harness_test.go`, which must stay equal to `go.mod`'s module line.
 
-## Note for agents
+## Note on the block above
 
-Everything above the `---` in a *generated* CLAUDE.md is the injected integration
-contract, written by `arac init` from `.aracne/config.json`. This file is aracne's own
-repo documentation and carries no contract — the contract lives in
-`internal/prompts/contract.go`.
+The `# Aracne` section at the top of this file, down to its closing line, is the
+**injected integration contract** — `arac setup` renders it from
+`internal/prompts/contract.go` (or `contract_high.go`) plus `.aracne/config.json`, and
+rewrites it in place on every run. Edit the generator, not this file; an edit here is
+overwritten by the next `arac setup`.
+
+There is no comment delimiter around it. `arac setup` finds the block by its opening
+heading (`AracIntegrationStart`) and by whichever real closing line the contract ends on
+(`aracIntegrationEndMarkers`, `internal/cli/setup.go`) — a marker the model can see but
+cannot use would be noise in a document that is re-sent on every request. Everything below
+this heading is aracne's own repo documentation, written by hand.
+
+`AGENTS.md` carries the same two halves for OpenCode.

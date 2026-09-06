@@ -186,7 +186,7 @@ func TestInitWritesTheContractForTheMode(t *testing.T) {
 		{modeLineRange, "## Line ranges"},
 	} {
 		root := modeProject(t, tc.mode)
-		mustRun(t, root, "init", "-y", "--claude")
+		mustRun(t, root, "setup", "-y", "--claude")
 		body := readFile(t, root, "CLAUDE.md")
 		if !strings.Contains(body, tc.marker) {
 			t.Errorf("mode %q: CLAUDE.md is not that mode's contract (want %q)\n%s",

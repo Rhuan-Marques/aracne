@@ -120,13 +120,18 @@ func TestLazyDescriptionsZeroValues(t *testing.T) {
 	}
 }
 
-// The model is the description executor's, and only the executor's -- out of the box haiku on
-// claude_code, and whatever the project renames it to after that. There is no descriptions.model
-// to override it with, which is the point: one answer, in the place the sweep already runs.
+// The model is the description executor's, and only the executor's. There is no
+// descriptions.model to override it with, which is the point: one answer, in the place the
+// sweep already runs.
+//
+// Out of the box there is no model at all, and that is load-bearing rather than an omission:
+// a model pinned here also picks the PROVIDER by inference, so a stock "haiku" made every
+// unconfigured project resolve to Anthropic and fail on a key it was never asked for. Blank
+// is what lets `arac descriptions generate` notice it has been told nothing and ask.
 func TestLazyDescriptionsTakesTheExecutorModel(t *testing.T) {
 	cfg := DefaultConfig()
-	if got := cfg.EffectiveLazyDescriptions("claude_code").Model; got != "haiku" {
-		t.Fatalf("model = %q, want the executor's haiku", got)
+	if got := cfg.EffectiveLazyDescriptions("claude_code").Model; got != "" {
+		t.Fatalf("model = %q, want no model out of the box", got)
 	}
 	agents := cfg.LLM.ClaudeCode.Agents
 	agents[DescriptionsExecutorAgent] = AgentConfig{Model: "gpt-5.4-mini"}
@@ -139,8 +144,9 @@ func TestLazyDescriptionsTakesTheExecutorModel(t *testing.T) {
 // CLI surfaces have no harness of their own and would otherwise silently lose the setting.
 func TestLazyDescriptionsEmptyHarnessUsesDefault(t *testing.T) {
 	cfg := DefaultConfig()
-	if got := cfg.EffectiveLazyDescriptions("").Model; got != "haiku" {
-		t.Fatalf("model = %q, want haiku via the default harness", got)
+	cfg.LLM.ClaudeCode.Agents[DescriptionsExecutorAgent] = AgentConfig{Model: "sonnet"}
+	if got := cfg.EffectiveLazyDescriptions("").Model; got != "sonnet" {
+		t.Fatalf("model = %q, want the claude_code executor's model via the default harness", got)
 	}
 }
 
@@ -184,7 +190,7 @@ func TestLazyDescriptionsNilConfig(t *testing.T) {
 	}
 }
 
-// Every accepted provider must validate in both spellings, or `arac init` rejects the whole
+// Every accepted provider must validate in both spellings, or `arac setup` rejects the whole
 // config and writes nothing -- which is how a benchmark run silently lost its .mcp.json and
 // its regenerated contract while still reporting a mode it was not running.
 func TestDescriptionProviderNamesValidate(t *testing.T) {

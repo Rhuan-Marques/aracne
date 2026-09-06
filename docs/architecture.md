@@ -25,35 +25,51 @@ See [§11](#11-building-testing-running).
 
 ```
 cmd/arac/main.go             Subcommand dispatcher → internal/cli.*
-docs/                        This reference, modes.md, configuration.md, design/ (historical)
-CLAUDE.md / AGENTS.md        Injected integration contract, written by `arac init`
+docs/                        This reference, modes.md, configuration.md
+CLAUDE.md / AGENTS.md        This repo's own orientation docs, each carrying the injected
+                             contract block `arac setup` writes into them — see §9
 bench/                       Paired A/B benchmark harness (Python). Not in any build.
 testing_ground/              Multi-language edge-case corpus the test suite scans.
 .aracne/                     Per-project state: topology.db, config.json, file_manifest.json,
                              optimization_rules.json, providers.json, agents/*.md, chat/*.json
 .claude/ .opencode/          Harness integrations: agents, slash commands, hooks, plugins, MCP config
 internal/
-  cli/            Every `arac <cmd>` entry point (scan, serve, viz, agent, init, read, grep,
-                  cmd, edit, write, descriptions, bug, guard, update-file, …) + tool-registry wiring
+  cli/            Every `arac <cmd>` entry point (scan, serve, viz, agent, init, setup, read,
+                  grep, cmd, edit, write, descriptions, bug, guard, update-file, …) + tool-registry wiring
+  tui/            The full-screen, arrow-key question flow `arac init` asks through: raw mode,
+                  the alternate screen, key decoding, and one picker widget. See §9.
   shellcmd/       Pure argv→request parser for the terminal surface: decides whether a shell
                   read/search is one aracne models, and what window it asked for. Anything with
-                  a flag it does not model is KindPassthrough — see §7E.
+                  a flag it does not model is KindPassthrough — see §7B.
   topology/       The engine
     domain/         Pure model: Resource, Topology, ResourceKind, TopologyWarning, KnownBug, Location, Visibility, Cut
+    contract/       Per-language signature rules: what a call site records and when a signature
+                    change still fits it. Drives `signature_changed` — see §3.
+    idresolve/      Turns whatever a caller thinks an ID is into the one the graph holds:
+                    trailing-part match, wrong root prefix, wrong separator, ranked candidates
     scanner/        Registry + LanguageScanner/PartialUpdater interfaces
-      goscanner/      Go parser (stdlib go/ast, go/parser, go/token)
-      pyscanner/      Python parser (custom, no external grammar)
+      goscanner/      Go parser (stdlib go/ast, go/parser, go/token) + the only UpdateFilePartial
+      pyscanner/      Python parser (drives the `python3` on PATH — see §10)
       jsscanner/      JS + TS parser (tree-sitter via CGO — needs gcc)
-    golang/ python/ javascript/   Per-language managers + mapper/connections/resources/visibility (graph builders)
+      rustscanner/    Rust parser (tree-sitter)
+      javascanner/    Java parser (tree-sitter)
+    golang/ python/ javascript/ rust/ java/
+                    Per-language managers + mapper/connections/resources/visibility (graph builders)
   helper/         Storage + plumbing: sqlite/db, manifest, incremental & partial writes, config, apply/edit, normalize
+  lazydesc/       The read-path description fill: plans the nodes a response will name,
+                  generates the missing ones, waits for them to land, re-renders. See §8.
+  progress/       One in-place progress bar, shared by `arac scan` and `descriptions generate`
   llm/
     provider.go     Provider interface (Chat / StreamChat) + message/tool types
     providers/      anthropic, openai, deepseek implementations
     agent/          Internal REPL agent loop + sub-agent runner
     tools/          MCP tool implementations (read*, grep, edit, write, bug_*, warnings_list, ls) + Registry
-    languages/      Per-language tool flavors: gotools / jstools / pythontools / universaltools
+    languages/      Per-language tool flavors: gotools / jstools / pythontools / rusttools /
+                    javatools / universaltools, over two shared pieces —
+      readunit/       the language-neutral shape one resolved resource takes into a response
+      renderstate/    per-response bookkeeping so the same bytes are never rendered twice
   mcp/            JSON-RPC 2.0 MCP server over stdio (initialize / tools/list / tools/call)
-  chat/           Proprietary chat engine behind the viz UI (sessions, native tools, CreateTasks sub-agents)
+  chat/           Chat engine behind the viz Chat tab (sessions, native tools, CreateTasks sub-agents)
   viz/            HTTP server + go:embed'd static SPA (graph + chat) + websocket + context-graph
   prompts/        Generators for CLAUDE.md/AGENTS.md, agent .md files, slash commands, system prompts
   toolspec/       Single source of truth catalog of tool names (MCP vs chat vs blockable-native)
@@ -127,8 +143,9 @@ longer than the rest of this reference:
 - **[modes.md](modes.md)** — `mode`, the one dial: which tools exist, which shell
   commands aracne answers, what the generated contract teaches. Read this one first.
 - **[configuration.md](configuration.md)** — every other section: `terminal`, `scan`,
-  `scanner`, `read`, `descriptions`, `llm`, `viz`, `paths`, and the `features` block
-  that gates the surfaces outside 1.0.
+  `scanner`, `read`, `grep`, `descriptions`, `llm`, `viz`, `paths`, and the `features`
+  block that gates the optional surfaces. `contract_verbosity` — how much the generated
+  contract says — is documented there too.
 
 Every tool name in the config is validated against the **`toolspec`** catalog at
 load/init time so typos fail fast.
@@ -162,17 +179,23 @@ use the **universal** implementations, and only `update_description` /
 ## 7. User-facing surfaces (the harnesses)
 
 There are **five** ways to use aracne, all over the same topology engine. The default is
-`mode: cli`; MCP (B) is opt-in via `mode: "mcp"` or `arac init --mcp`:
+`mode: cli`; the MCP server (C) is opt-in via `mode: "mcp"`, which `arac init` asks about:
 
 ### A. CLI (`arac <subcommand>`) — `internal/cli`, dispatched from `cmd/arac/main.go`
-Direct, no LLM. Key commands (full list in `usage.go` / `PrintUsage`):
-`scan` (`--all`/`--hard`/`--default`/`--debug`), `read`/`grep`,
-`resource list`, `node count`, `warnings list`, `bug <report|list|acknowledge|
-dismiss|delete>`, `descriptions <generate|apply|clear>`, `update-file`,
-`update-description`, `edit`/`write` (stdin JSON),
-`check-updates`, `init`, `disable`, `guard`, `serve`, `viz serve`, `agent`.
+Direct, no LLM. `usage.go` / `PrintUsage` is the full list and the authority; it gates the
+`bug`, `agent` and `viz serve` blocks on the feature flags and the build tag, so what a given
+binary prints is what that binary can do. Grouped:
 
-### E. Terminal surface (the default) — `internal/cli/cmd.go` + `internal/shellcmd`
+| | |
+|---|---|
+| Scan | `scan` (`--all`/`--hard`/`--default`/`--debug`/`--workers`/`--progress`), `scanner run` |
+| Read & search | `read`, `grep`, `cmd -- <command…>`, `resource list`, `node count` |
+| Descriptions | `descriptions <generate\|apply\|clear\|export\|import>`, `update-description` |
+| Mutate | `edit`, `write` (stdin JSON), `update-file` |
+| Health | `warnings list`, `check-updates`, `bug <report\|list\|acknowledge\|dismiss\|delete>` |
+| Integration | `init`, `setup`, `disable`, `guard`, `serve`, `viz serve`, `agent` |
+
+### B. Terminal surface (the default) — `internal/cli/cmd.go` + `internal/shellcmd`
 The shell IS the tool surface. `arac cmd -- <command…>` runs a shell read or search and answers
 it from the topology when it can: the exact lines the command asked for, framed by the
 signature of whatever declaration they sit inside (with an elision marker for what was left
@@ -185,30 +208,20 @@ does not model (`head -c`, `tail -f`, `grep -o`, `sed` substitutions) and for th
 transform rather than window (`nl`, `tac`, `xxd`, `od`, `hexdump`, `strings`); `arac cmd` also
 passes through for an unindexed file, an over-budget answer or a missing database, and execs
 the real binary with its exit status. That fidelity is what makes interception safe on by
-default — `tests/terminal_e2e_test.go` asserts byte-identical output for those cases.
+default: everything aracne does not model runs exactly as it would have, and
+`tests/terminal_e2e_test.go` asserts byte-identical output for those cases.
 
 The agent never types `arac cmd` itself. The `arac guard` PreToolUse hook rewrites its Bash
 call via `hookSpecificOutput.updatedInput` (`internal/cli/guard_intercept.go`), so the model
 writes `head -40 file.go` and reads real stdout. See §9.
 
-### B. MCP server (`arac serve`) — `internal/mcp`
+### C. MCP server (`arac serve`) — `internal/mcp`
 JSON-RPC 2.0 over **stdio** (`initialize`, `tools/list`, `tools/call`). This is
 how **Claude Code** and **OpenCode** consume aracne (configured in `.mcp.json` /
-`opencode.json`). Flags: `--tool-profile` (`main`, `all`, or a configured agent
+`.opencode/opencode.json`). Flags: `--tool-profile` (`main`, `all`, or a configured agent
 name) and `--harness` (`claude_code`|`opencode`) — together they select which
 config-resolved tool set is exposed. No API key needed; the host platform brings
 its own model.
-
-### C. Internal agent (`arac agent`) — `internal/llm/agent` + `providers`
-**Not part of 1.0**, behind `features.agent`. A self-contained REPL against an LLM
-provider. Note that `internal/llm/agent` itself is NOT optional: `descriptions generate`
-uses `agent.New` + `RunSubAgent` for its executor fan-out. Only the REPL entry point
-(`cli/agent.go`) is exclusive to it. Its system prompt is **not** its own: `agent.BuildPrompt`
-is `prompts.ContractContent`, the same document `arac init` writes into `CLAUDE.md` and
-`AGENTS.md`. The five per-language `Build*SystemPrompt` constants it used to send are gone —
-they re-said what a read returns and how an ID is spelled, in words no other surface could
-reach, so a change to the read output had to be made twice. What they said that the contract
-did not is `contract_verbosity: "high"` (see [configuration.md](configuration.md)).
 
 ### D. Web visualizer (`arac viz serve`) — `internal/viz`
 A local HTTP server (default `127.0.0.1:7331`) serving a **`go:embed`'d static
@@ -220,11 +233,22 @@ HTTP API: `/api/graph`, `/api/neighborhood`, `/api/context-graph`,
 (websocket for streaming). Graph "modes": *Packages & Modules*, *Data Flow*,
 *Custom*; with language filtering, search, and neighborhood-depth controls.
 
-`internal/chat` — a second agent harness powering a viz **Chat** tab — is **not part of
-1.0**, behind `features.chat`, and with it off the tab and its three routes
-(`/api/chat`, `/api/chat/`, `/api/context-graph`) are not served. `internal/viz` is its
-only importer, and `cli/viz.go` is the only importer of `internal/viz`, so `-tags minimal`
-drops the whole subtree.
+`internal/chat` — a second agent harness powering a viz **Chat** tab — is **off by default**
+behind `features.chat`, and with it off the tab and its three routes (`/api/chat`,
+`/api/chat/`, `/api/context-graph`) are not served. `internal/viz` is its only importer, and
+`cli/viz.go` is the only importer of `internal/viz`, so `-tags minimal` drops the whole
+subtree.
+
+### E. Internal agent (`arac agent`) — `internal/llm/agent` + `providers`
+A self-contained REPL against an LLM provider, **off by default** behind `features.agent`. It
+is the one surface that needs a provider API key of its own.
+
+The flag gates the **command**, not the package. `internal/llm/agent` is not optional:
+`descriptions generate` runs its executor fan-out through `agent.New` + `RunSubAgent`, so only
+the REPL entry point (`cli/agent.go`) is exclusive to the feature. Its system prompt is not its
+own either — `agent.BuildPrompt` returns `prompts.ContractContent`, the same document
+`arac setup` writes into `CLAUDE.md` and `AGENTS.md`, at whatever
+[`contract_verbosity`](configuration.md#contract_verbosity) the project set.
 
 ## 8. Agent workflows
 
@@ -236,15 +260,24 @@ in-repo skills:
   batches them, and fans out **descriptions-generation-executor** sub-agents that
   read each resource and write a concise description; `descriptions apply` writes
   them back as source doc-comments; `descriptions clear` removes them.
-- **Bug pipeline** — **not part of 1.0**, behind `features.bug_management`: a
-  hunter/judge/solver fan-out over `KnownBug` nodes. With it off, `arac init` writes none
-  of its agents or commands and the `bug_*` tools are not servable.
+- **Bug pipeline** — **off by default**, behind `features.bug_management`: a
+  hunter/judge/solver fan-out over `KnownBug` nodes. With it off, `arac setup` writes none
+  of its agents or commands, the `bug_*` tools are not servable, and the `arac bug` usage
+  block does not print. `arac bug` itself stays dispatchable either way — it is the channel
+  the generated slash commands orchestrate through, and the debugging path.
 
-## 9. Harness integration & guards (`arac init`)
+## 9. Harness integration & guards (`arac init` / `arac setup`)
 
-`arac init` (flags `--claude`, `--opencode`, `--global`, `-y`) wires aracne into
+Two commands, split along one line: **`arac init`** asks (`internal/cli/init.go`,
+`init_questions.go`, drawn by `internal/tui`) and **`arac setup`** writes
+(`internal/cli/setup.go`). The wizard collects the six answers, saves them to
+`.aracne/config.json`, scans, and then calls `runSetup` itself; every later re-render is
+`arac setup` alone. `arac setup` READS `mode` and never writes it — the command that
+re-renders an integration must not be able to change which integration a project has.
+
+`arac setup` (flags `--claude`, `--opencode`, `--global`, `-y`) wires aracne into
 a project: generates the injected **CLAUDE.md / AGENTS.md**, the MCP config
-(`.mcp.json` / `opencode.json`), agent + command markdown, and harness hooks/
+(`.mcp.json` / `.opencode/opencode.json`), agent + command markdown, and harness hooks/
 plugins. Two hooks ship for Claude Code:
 
 - **`arac-guard.sh`** → `arac guard --claude-hook`: the **Tool Guard**. What it does depends
@@ -277,10 +310,9 @@ plugins. Two hooks ship for Claude Code:
     answered rather than refused however `blocked_tools` reads.
   - The **PostToolUse nudge** fires on native `Read`/`Grep`/`Edit`/`Write`, which interception
     never sees, and names the surface the mode actually has (`toolspec.WarningForSurface`).
-    A **shell** read earns nothing: `cli` used to print a one-line pointer at `arac read`
-    after one, and it was removed because it did not work — across three benchmark runs the
-    nudge fired on hundreds of servable shell reads and `arac read` was called exactly zero
-    times. The MCP fallback below it is keyed on the *mode* rather than on
+    A **shell** read earns no nudge in any mode: benchmarking found the pointer fired hundreds
+    of times against servable shell reads without moving the model onto `arac read` once, so it
+    is pure per-call cost. The MCP fallback below it is keyed on the *mode* rather than on
     `!InterceptReads()`, which is also true in `cli`; keying it on the predicate would print
     the MCP pointer after a read `cli` was never going to refuse. Note that
     `grep`/`edit`/`write` guidance is the `arac` subcommand in *every* mode including `mcp`,
@@ -305,7 +337,7 @@ Freshness itself is not a plugin. **Before** every tool call the guard sees, it 
 matches the code on disk — including changes nothing in the session made, like a
 `git checkout`, a rebase or an editor save. Claude Code gets this from the PreToolUse
 guard hook itself; OpenCode gets `arac-pre-tool-scan.js`, a plugin installed
-unconditionally by `arac init` whose `tool.execute.before` runs `arac guard --pre-scan`.
+unconditionally by `arac setup` whose `tool.execute.before` runs `arac guard --pre-scan`.
 Both read the same config key at call time, so `scan.pre_tool: "none"` disables it on
 both surfaces without re-running init. The pre-call scan reports nothing (a PreToolUse
 hook cannot address the model without blocking it); the warnings it finds are persisted
@@ -338,12 +370,11 @@ in the topology and surface through `warnings_list` / `arac warnings list`, and 
 
 ## 11. Building, testing, running
 
-- **Build**: `make build` (or `go build -o bin/arac ./cmd/arac`). **CGO must be
-  enabled** — the JS/TS, Rust and Java scanners are tree-sitter, so a C compiler
-  (`gcc`) is required. SQLite is pure-Go (`modernc.org/sqlite`), no C SQLite.
-- **Two builds.** The default is **Full**. `make build-basic`
-  (`-tags minimal`) produces **Basic**: the same engine and every language, with
-  no web visualizer and no embedded SPA.
+The commands themselves live in [CONTRIBUTING.md](../CONTRIBUTING.md); what follows is why
+they are shaped the way they are.
+
+- **Two builds.** The default is **Full**; `make build-basic` (`-tags minimal`) produces
+  **Basic** — the same engine and every language, with no web visualizer and no embedded SPA.
 
   | Build | Command | Front-end |
   |---|---|---|
@@ -353,7 +384,8 @@ in the topology and surface through `warnings_list` / `arac warnings list`, and 
   The seam is one file: `internal/cli/viz.go` is the only importer of
   `internal/viz` (which is in turn the only importer of `internal/chat`), so
   tagging it out drops the whole subtree — `go:embed` payload included — from
-  the binary. `go build ./...` and `go test ./...` still cover both.
+  the binary. `go build ./...` and `go test ./...` still cover both, which is why
+  `make test-minimal` exists: a default `go test ./...` does not exercise the tag.
 - **Front-end**: the SPA is plain hand-written HTML/JS/CSS embedded via
   `go:embed` — no bundler, no npm install. Rebuild the Go binary to pick up
   static changes.
@@ -363,7 +395,8 @@ in the topology and surface through `warnings_list` / `arac warnings list`, and 
   modelled — and, just as importantly, which are not; `internal/cli/guard_intercept_test.go`
   pins what the hook may and may not rewrite; `tests/terminal_e2e_test.go` drives `arac cmd`
   against a real scanned project including the byte-identical passthrough cases;
-  per-scanner tests under `tests/` and each `*scanner/`; `internal/**/_test.go`.
+  `internal/cli/generator_drift_test.go` and `tests/setup_test.go` pin the generated
+  markdown; per-scanner tests under `tests/` and each `*scanner/`; `internal/**/_test.go`.
 - **`testing_ground/`** is a deliberately edge-case-dense corpus (one topology
   per language family) used to exercise live edit/scan; see
   `testing_ground/README.md` for the resource-ID formats and the parser corner
@@ -378,9 +411,9 @@ in the topology and surface through `warnings_list` / `arac warnings list`, and 
   answer changes, `internal/prompts/languages.go` describes it to the model and has to change
   with it.
 - To change *what a model is told about this project*, there is one place:
-  `internal/prompts/contract.go` (terse) and `contract_high.go` (long). `CLAUDE.md`,
-  `AGENTS.md` and `arac agent`'s system prompt all render from it, and a test asserts they are
-  byte-identical.
+  `internal/prompts/contract.go` (`low`) and `contract_high.go` (`high`), with the per-language
+  halves in `languages.go`. `CLAUDE.md`, `AGENTS.md` and `arac agent`'s system prompt all
+  render from it, and `internal/prompts/contract_test.go` asserts they are byte-identical.
 - To change *what gets stored or how incremental scans behave*, look at
   `internal/topology/manager.go` + `internal/helper/{db,incremental,partial,manifest}.go`.
 - To change *which tools an agent gets*, edit `.aracne/config.json` (validated

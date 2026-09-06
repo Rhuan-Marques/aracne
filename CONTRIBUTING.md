@@ -7,10 +7,16 @@ and Java scanners are tree-sitter. SQLite is pure Go, so there is no C SQLite to
 
 ```sh
 git clone https://github.com/Rhuan-Marques/aracne && cd aracne
-make build     # Full build  -> bin/arac
-make test      # the whole suite, ~1-2 minutes
-make help      # every target
+make build       # Full build  -> bin/arac
+make build-basic # Basic build -> bin/arac-basic (-tags minimal, no visualizer)
+make test        # the whole suite, ~1-2 minutes
+make help        # every target
 ```
+
+Both builds ship. They are the same engine and the same six languages; Basic drops the web
+visualizer and its embedded SPA. The seam is one file — `internal/cli/viz.go` is the only
+importer of `internal/viz` — so `-tags minimal` takes the whole subtree with it. See
+[docs/architecture.md §11](docs/architecture.md#11-building-testing-running).
 
 There is no front-end build step. The visualizer is hand-written HTML/JS/CSS in
 `internal/viz/static/`, embedded with `go:embed` — rebuild the Go binary to pick up a
@@ -50,12 +56,13 @@ internal/
   llm/languages/   how a resource is rendered back (per language)
   shellcmd/        argv -> request parser for the terminal surface
   helper/          config, SQLite, manifest, incremental/partial scan
+  lazydesc/        the read-path description fill
   viz/, chat/      the web visualizer and its chat harness (Full build only)
   prompts/         every generated agent/contract/command markdown
 tests/             cross-package integration + the at-scale suites
 testing_ground/    the multi-language corpus those suites scan
 bench/             the A/B benchmark harness (Python). Not in any build.
-docs/              architecture, modes, configuration, and design history
+docs/              architecture, modes, configuration
 ```
 
 Start at the `case` in `cmd/arac/main.go` and jump to `internal/cli/<name>.go`; the CLI is

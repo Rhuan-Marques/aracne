@@ -45,7 +45,7 @@ func GetLanguage(manager *topology.TopologyManager) string {
 // TopologyLanguages returns the languages the topology was scanned in, most significant first,
 // for the contract that gets written about it.
 //
-// It never scans and never creates a database. `arac init` is the caller that matters and it
+// It never scans and never creates a database. `arac setup` is the caller that matters and it
 // legitimately runs before the first scan -- on a fresh checkout there is nothing to report and
 // an empty slice is the honest answer, which the high-verbosity contract renders as its
 // language-free form. Reporting "go" there (the way GetLanguage does, because a tool

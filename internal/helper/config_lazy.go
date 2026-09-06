@@ -121,6 +121,9 @@ type ResolvedLazyDescriptions struct {
 	Model          string
 	Provider       string
 	BaseURL        string
+	// APIKeyEnv is the environment variable the API key is read from, or "" to use the
+	// provider's own default name. Empty for "cli", which authenticates itself.
+	APIKeyEnv string
 	// CLICommand is the argv `provider: "cli"` runs, already split into words. Empty for
 	// every other provider, and for "cli" it is what makes the generator buildable at all.
 	CLICommand []string
@@ -178,11 +181,13 @@ func (c *Config) LazyDescriptionsEnabled() bool {
 //     ignored key would have looked like the feature breaking.
 //
 // The MODEL has exactly one tier: the descriptions-generation-executor agent
-// (`llm.<harness>.agents.descriptions-generation-executor.model`, "haiku" out of the box).
-// It is not a fallback and there is nothing to override it with. That agent is where the
-// sweep already runs, so a project that said "write my descriptions with haiku" has said it
-// once -- and a config key that said it a second time was a second place for the two to
-// disagree, with no way to see which one won.
+// (`llm.<harness>.agents.descriptions-generation-executor.model`). It is not a fallback and
+// there is nothing to override it with. That agent is where the sweep already runs, so a
+// project that said "write my descriptions with haiku" has said it once -- and a config key
+// that said it a second time was a second place for the two to disagree, with no way to see
+// which one won. Out of the box it is unset, and stays unset: a model pinned there also picks
+// the PROVIDER by inference, so a default here is a vendor chosen for a project that has not
+// been asked yet.
 //
 // The command is split here, once, rather than at each transport: a config carrying an
 // unparseable command resolves to no command at all, which the generator reports as "not
@@ -200,6 +205,9 @@ func (c *Config) EffectiveLazyDescriptions(harness string) ResolvedLazyDescripti
 	}
 	if u := strings.TrimSpace(c.Descriptions.BaseURL); u != "" {
 		out.BaseURL = u
+	}
+	if env := strings.TrimSpace(c.Descriptions.APIKeyEnv); env != "" {
+		out.APIKeyEnv = env
 	}
 	out.CLICommand, _ = SplitCommand(c.Descriptions.CLIProviderCommand)
 	if agent := c.EffectiveAgent(harness, DescriptionsExecutorAgent); agent.Model != "" &&
@@ -219,10 +227,64 @@ const DescriptionsExecutorAgent = "descriptions-generation-executor"
 // has no harness of its own to name -- which is most of them: `arac read`, `arac grep` and
 // `arac cmd` are the shell, not a harness.
 //
-// claude_code, because that is the block DefaultConfig pins the executor's model in ("haiku"),
-// and a fill that resolved against <any> would ignore the one place a project has already
-// said which model writes its descriptions.
+// claude_code, because that is the block a project pins the executor's model in, and a fill
+// that resolved against <any> would ignore the one place a project has already said which
+// model writes its descriptions.
 const DefaultLazyHarness = "claude_code"
+
+// The API transports, by the name a config writes in `descriptions.provider`.
+//
+// They live here, next to ProviderNameCLI and underneath lazydesc, for the same reason it
+// does: the name a config validates against, the name a prompt offers, and the name the
+// transport dispatches on are one string and cannot be allowed to drift into three.
+const (
+	ProviderNameAnthropic = "anthropic"
+	ProviderNameOpenAI    = "openai"
+	ProviderNameDeepSeek  = "deepseek"
+)
+
+// APIProviderNames lists the API transports in the order a chooser offers them.
+//
+// Anthropic first because it is the one aracne's own default model belongs to; OpenAI second
+// because its wire format is the one most third-party vendors serve, so it is the answer for
+// far more endpoints than the company it is named after.
+func APIProviderNames() []string {
+	return []string{ProviderNameAnthropic, ProviderNameOpenAI, ProviderNameDeepSeek}
+}
+
+// IsAPIProvider reports whether a name is one of the HTTP transports (as opposed to
+// ProviderNameCLI, or nothing at all).
+func IsAPIProvider(provider string) bool {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case ProviderNameAnthropic, ProviderNameOpenAI, ProviderNameDeepSeek:
+		return true
+	}
+	return false
+}
+
+// DefaultAPIKeyEnv is the environment variable a provider reads its key from when
+// `descriptions.api_key_env` names none. Empty for a provider with no key of its own.
+func DefaultAPIKeyEnv(provider string) string {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case ProviderNameAnthropic:
+		return "ANTHROPIC_API_KEY"
+	case ProviderNameOpenAI:
+		return "OPENAI_API_KEY"
+	case ProviderNameDeepSeek:
+		return "DEEPSEEK_API_KEY"
+	}
+	return ""
+}
+
+// APIKeyEnvFor is the variable a resolved config actually reads its key from: what the
+// project named, or the provider's own default. One function so the prompt that asks for it,
+// the resolver that reads it, and any error that names it cannot disagree.
+func APIKeyEnvFor(cfg ResolvedLazyDescriptions) string {
+	if env := strings.TrimSpace(cfg.APIKeyEnv); env != "" {
+		return env
+	}
+	return DefaultAPIKeyEnv(cfg.Provider)
+}
 
 // ProviderNameCLI runs a command of the project's choosing -- see
 // DescriptionsSection.CLIProviderCommand -- instead of calling an API.
@@ -259,7 +321,7 @@ func ValidateDescriptionProvider(d DescriptionsSection) error {
 		key = "descriptions.lazy.provider"
 	}
 	switch provider {
-	case "", "anthropic", "openai", "deepseek":
+	case "", ProviderNameAnthropic, ProviderNameOpenAI, ProviderNameDeepSeek:
 	case ProviderNameClaudeCLI:
 		return fmt.Errorf("%s: %q was replaced by %q; write:\n"+
 			"  \"descriptions\": {\"provider\": %q, \"cli_provider_command\": %q}",
@@ -273,9 +335,8 @@ func ValidateDescriptionProvider(d DescriptionsSection) error {
 				"e.g. \"claude -p\"", key, ProviderNameCLI)
 		}
 	default:
-		return fmt.Errorf("%s: unknown provider %q "+
-			"(want anthropic, openai, deepseek or %s)",
-			key, provider, ProviderNameCLI)
+		return fmt.Errorf("%s: unknown provider %q (want %s or %s)",
+			key, provider, strings.Join(APIProviderNames(), ", "), ProviderNameCLI)
 	}
 	return nil
 }

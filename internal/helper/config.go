@@ -189,20 +189,37 @@ type DescriptionsSection struct {
 	//
 	// There is deliberately no `model` here. WHICH model writes the descriptions is already
 	// said by the descriptions-generation-executor agent
-	// (`llm.<harness>.agents.descriptions-generation-executor.model`, "haiku" out of the
-	// box), and that agent is not optional -- the sweep runs as it. A second spelling of one
-	// answer is a second place for the two to disagree, and the one that lost was invisible.
-	// See EffectiveLazyDescriptions.
+	// (`llm.<harness>.agents.descriptions-generation-executor.model`), and that agent is not
+	// optional -- the sweep runs as it. A second spelling of one answer is a second place for
+	// the two to disagree, and the one that lost was invisible. Out of the box it is blank,
+	// and a blank model means the provider's own cheap tier rather than a vendor chosen by a
+	// default nobody typed. See EffectiveLazyDescriptions.
 	//
 	// The old spelling (`lazy.provider` / `lazy.base_url`) is still read, and still means
 	// what it meant, so an existing config keeps working; these win when both are set.
 
 	// Provider names the transport: "anthropic", "openai" or "deepseek" for an API key, or
-	// "cli" to run CLIProviderCommand. Absent is inferred from the executor's model.
+	// "cli" to run CLIProviderCommand.
+	//
+	// Absent means UNANSWERED, and nothing guesses on the project's behalf. `arac
+	// descriptions generate` asks -- API key or a command, which wire format, which
+	// variable holds the key -- and writes the answers back here, so the second run reads
+	// what the first one was told. The lazy fill on the read path stays silent and simply
+	// does nothing until that has happened: a read is not the place to ask a question.
 	Provider string `json:"provider,omitempty"`
 	// BaseURL points an API provider at a different endpoint -- a gateway, a proxy, or a
 	// self-hosted model speaking one of the three wire formats. Ignored by "cli".
 	BaseURL string `json:"base_url,omitempty"`
+	// APIKeyEnv is the environment variable the API key is read from, e.g. a shared
+	// "LLM_API_KEY" or a per-project one. Absent falls back to the provider's own name
+	// (ANTHROPIC_API_KEY / OPENAI_API_KEY / DEEPSEEK_API_KEY), which is what every config
+	// written before this key existed relies on.
+	//
+	// It is a separate question from `provider` because the two stopped being the same
+	// answer the moment a gateway spoke one vendor's format while billing another's key:
+	// "which format" and "which key" are only accidentally related, and a project pointing
+	// `openai` at a proxy needs to say both. Ignored by "cli", which authenticates itself.
+	APIKeyEnv string `json:"api_key_env,omitempty"`
 	// CLIProviderCommand is the command `provider: "cli"` runs, e.g. "claude -p". It is
 	// argv, not a shell line: words split on whitespace, with quoting honoured, and no
 	// pipes or redirection. The prompt arrives on stdin, the descriptions are read from
@@ -329,7 +346,7 @@ type VizSection struct {
 // absent section means every feature is off, which is what an existing project's config
 // decodes to -- so adding a feature here never turns something on for an existing user.
 type FeaturesSection struct {
-	// BugManagement enables the bug pipeline as a whole: `arac init` writes the
+	// BugManagement enables the bug pipeline as a whole: `arac setup` writes the
 	// bug-hunter/judge/solver agents and their commands, the bug_* MCP tools become
 	// servable, the `arac bug` usage block prints, and viz exposes /api/bugs and bug
 	// counts. Off by default: the pipeline is unproven and its tool schemas are context
@@ -984,13 +1001,19 @@ func DefaultConfig() *Config {
 				},
 			},
 			OpenCode: LLMHarness{Agents: map[string]AgentConfig{}},
-			// Description generation is high-volume and low-difficulty: run the
-			// Claude Code executor on the fast/cheap tier by default. Safe to
-			// pin here because Claude Code runs Claude models; other harnesses
-			// inherit and stay configurable.
-			ClaudeCode: LLMHarness{Agents: map[string]AgentConfig{
-				"descriptions-generation-executor": {Model: "haiku"},
-			}},
+			// No model pinned for the descriptions executor, deliberately.
+			//
+			// It used to be "haiku", which read as a harmless cheap-tier default and was
+			// not one: the description provider is INFERRED from this model when nothing
+			// names one, so a config that had answered nothing still resolved to
+			// Anthropic. A project with no ANTHROPIC_API_KEY got silence from the lazy
+			// fill and "no LLM provider configured" from the sweep, with no way to tell
+			// that a default it never wrote had chosen a vendor for it. Blank here means
+			// blank everywhere, which is what lets `arac descriptions generate` notice it
+			// has never been told anything and ask. A project that wants a specific model
+			// still writes it here; without one, the provider's own cheap tier is used
+			// (lazydesc.providerFallbackModel).
+			ClaudeCode: LLMHarness{Agents: map[string]AgentConfig{}},
 		},
 		Viz: VizSection{
 			Graph: VizGraph{OptimizationRules: ".aracne/optimization_rules.json"},

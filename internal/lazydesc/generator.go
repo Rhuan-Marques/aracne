@@ -118,17 +118,18 @@ func (g *llmGenerator) chat(ctx context.Context, messages []llm.Message) (*llm.C
 	return g.provider.Chat(messages, nil)
 }
 
-// Provider names accepted in descriptions.lazy.provider.
+// Provider names accepted in descriptions.provider. Aliases of the helper constants, which is
+// where a config validates them, so the dispatch below and the validation cannot drift.
 const (
-	providerAnthropic = "anthropic"
-	providerOpenAI    = "openai"
-	providerDeepSeek  = "deepseek"
+	providerAnthropic = helper.ProviderNameAnthropic
+	providerOpenAI    = helper.ProviderNameOpenAI
+	providerDeepSeek  = helper.ProviderNameDeepSeek
 )
 
 // modelAliases maps the short names a project actually writes in its config onto the model ids
-// the APIs want. `llm.<harness>.agents.descriptions-generation-executor.model` is "haiku" out
-// of the box -- a Claude Code sub-agent alias -- and that string has to mean something here
-// too, or the one place a project already states its description model would be unusable.
+// the APIs want. `llm.<harness>.agents.descriptions-generation-executor.model` is written as a
+// Claude Code sub-agent alias ("haiku", "sonnet"), and those strings have to mean something
+// here too, or the one place a project states its description model would be unusable.
 var modelAliases = map[string]struct{ provider, model string }{
 	"haiku":  {providerAnthropic, "claude-haiku-4-5"},
 	"sonnet": {providerAnthropic, "claude-sonnet-4-6"},
@@ -138,12 +139,9 @@ var modelAliases = map[string]struct{ provider, model string }{
 	"flash":  {providerDeepSeek, "deepseek-v4-flash"},
 }
 
-// providerKeyEnv is the environment variable each provider's key comes from.
-var providerKeyEnv = map[string]string{
-	providerAnthropic: "ANTHROPIC_API_KEY",
-	providerOpenAI:    "OPENAI_API_KEY",
-	providerDeepSeek:  "DEEPSEEK_API_KEY",
-}
+// providerKeyEnv is the environment variable each provider's key comes from when the config
+// names none of its own. `descriptions.api_key_env` overrides it -- see helper.APIKeyEnvFor.
+func providerKeyEnv(provider string) string { return helper.DefaultAPIKeyEnv(provider) }
 
 // providerFallbackModel is what a provider named without a model runs.
 var providerFallbackModel = map[string]string{
@@ -154,7 +152,7 @@ var providerFallbackModel = map[string]string{
 
 // providerProbeOrder is the order an unconfigured project is probed in: cheapest capable model
 // first, since a lazy fill is a small, mechanical, latency-sensitive job.
-var providerProbeOrder = []string{providerAnthropic, providerOpenAI, providerDeepSeek}
+var providerProbeOrder = helper.APIProviderNames()
 
 // ResolveDescriptionProvider works out which LLM to describe with, for any caller that needs
 // one -- the lazy filler and the `arac descriptions generate` sweep both go through it.
@@ -165,13 +163,11 @@ var providerProbeOrder = []string{providerAnthropic, providerOpenAI, providerDee
 // already accepted four -- made the product's answer to "how do I describe my repo?" depend
 // on which of two entry points you happened to find.
 //
-// Unlike the lazy fill it falls back to probing the environment when the CONFIGURED provider
-// has no key. The two want different things from the same resolution: a lazy fill is a side
-// effect of a read and must decline silently rather than surprise anyone, while `arac
-// descriptions generate` is an explicit request, so reaching for the key the user actually
-// has beats refusing over one they merely configured. Without this, the stock config -- which
-// pins the executor to "haiku", i.e. Anthropic -- refuses a project holding only a DeepSeek
-// key, which is the exact case the command supported before it was generalised.
+// Unlike the lazy fill it falls back to probing the environment when an INFERRED provider has
+// no key. The two want different things from the same resolution: a lazy fill is a side effect
+// of a read and must decline silently rather than surprise anyone, while `arac descriptions
+// generate` is an explicit request, so reaching for the key the user actually has beats
+// refusing over one nobody chose. An explicitly named provider is exempt -- see below.
 //
 // Returns ok=false when nothing at all is configured; see resolveProvider for why that is not
 // an error.
@@ -186,6 +182,14 @@ func ResolveDescriptionProvider(cfg helper.ResolvedLazyDescriptions) (llm.Provid
 	if provider, model, ok := resolveProvider(cfg); ok {
 		return provider, model, true
 	}
+	// A provider the project NAMED is an answer, not a guess, so it is never swapped for
+	// another vendor behind the user's back -- they were asked which one, and this is what
+	// they said. The fallback below is for the other case: a provider that was only ever
+	// inferred (from the executor's model, or from nothing at all), where reaching for the
+	// key the machine actually holds beats refusing over one nobody chose.
+	if strings.TrimSpace(cfg.Provider) != "" {
+		return nil, "", false
+	}
 	// Keep the caller's base URL: it is transport, not provider choice, and a project that
 	// proxies its LLM traffic still proxies it when the key came from the environment.
 	return resolveProvider(helper.ResolvedLazyDescriptions{BaseURL: cfg.BaseURL})
@@ -196,7 +200,7 @@ func ResolveDescriptionProvider(cfg helper.ResolvedLazyDescriptions) (llm.Provid
 func ProviderKeyEnvNames() []string {
 	names := make([]string, 0, len(providerProbeOrder))
 	for _, p := range providerProbeOrder {
-		names = append(names, providerKeyEnv[p])
+		names = append(names, providerKeyEnv(p))
 	}
 	return names
 }
@@ -218,18 +222,30 @@ func resolveProvider(cfg helper.ResolvedLazyDescriptions) (llm.Provider, string,
 	if name == "" {
 		name = inferProvider(model)
 	}
-	if name == "" {
+	// The variable the project named, where it named one. A gateway that speaks the OpenAI
+	// format while billing its own key is the case this exists for: the wire format and the
+	// key are separate answers, and tying the second to the first meant such a project had
+	// to export OPENAI_API_KEY holding a credential OpenAI never issued.
+	keyEnv := ""
+	if name != "" {
+		keyEnv = helper.APIKeyEnvFor(helper.ResolvedLazyDescriptions{
+			Provider: name, APIKeyEnv: cfg.APIKeyEnv,
+		})
+	} else {
+		// Nothing named a provider, so the environment picks one -- and it picks by the
+		// STANDARD variable names, not by a configured one: api_key_env answers "where is
+		// the key for the provider I chose", and there is no chosen provider here.
 		for _, candidate := range providerProbeOrder {
-			if os.Getenv(providerKeyEnv[candidate]) != "" {
-				name = candidate
+			if os.Getenv(providerKeyEnv(candidate)) != "" {
+				name, keyEnv = candidate, providerKeyEnv(candidate)
 				break
 			}
 		}
 	}
-	if name == "" {
+	if name == "" || keyEnv == "" {
 		return nil, "", false
 	}
-	key := os.Getenv(providerKeyEnv[name])
+	key := os.Getenv(keyEnv)
 	if key == "" {
 		return nil, "", false
 	}

@@ -10,7 +10,7 @@ import (
 // suite happens to run in cannot decide the answer.
 func clearKeys(t *testing.T) {
 	t.Helper()
-	for _, env := range providerKeyEnv {
+	for _, env := range ProviderKeyEnvNames() {
 		t.Setenv(env, "")
 	}
 }
@@ -25,8 +25,8 @@ func TestResolveProviderNeedsAKey(t *testing.T) {
 	}
 }
 
-// "haiku" is what DefaultConfig pins the description executor to, so it has to mean something
-// here -- the whole model fallback rests on it.
+// "haiku" is how a project spells the description executor's model in its config, so it has to
+// mean something here -- the whole model fallback rests on it.
 func TestResolveProviderExpandsAliases(t *testing.T) {
 	clearKeys(t)
 	t.Setenv("ANTHROPIC_API_KEY", "k")

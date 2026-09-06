@@ -235,7 +235,7 @@ var languageProfiles = map[string]languageProfile{
 // profilesFor resolves the topology's languages to their profiles, in the order given, keeping
 // only the ones aracne has a scanner (and therefore a profile) for and dropping duplicates.
 //
-// An unknown or empty list is not an error and must not be: `arac init` can legitimately run
+// An unknown or empty list is not an error and must not be: `arac setup` can legitimately run
 // before the first scan, and a project may be written in something no scanner reads yet. The
 // caller renders the language-free contract in that case -- everything in it that is true of
 // every language is still true.

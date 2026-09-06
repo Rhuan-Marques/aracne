@@ -29,7 +29,7 @@ import (
 func highContract(cfg *helper.Config, languages []string) string {
 	profiles := profilesFor(languages)
 	var b strings.Builder
-	// The H1 is how `arac init` finds this block again to REPLACE it and how `arac disable`
+	// The H1 is how `arac setup` finds this block again to REPLACE it and how `arac disable`
 	// finds it to remove it, in every mode and at either verbosity.
 	b.WriteString("# Aracne\n\n")
 	b.WriteString(highIntro(profiles))

@@ -1,16 +1,27 @@
 # Configuration — `.aracne/config.json`
 
-Written by `arac init`, read by everything (`internal/helper/config.go`). A free-form
-schema and a clean break from older formats: an invalid or outdated file is overwritten
-with defaults rather than half-migrated.
+Written by `arac init`, rendered into integration files by `arac setup`, and read by
+everything (`internal/helper/config.go`). The schema is free-form: an invalid file is
+overwritten with defaults rather than half-migrated.
 
-The one key that matters most, **`mode`**, has its own page: [modes.md](modes.md).
+Every tool name in this file is validated against the
+[`toolspec`](architecture.md#6-the-tool-catalog-internaltoolspec) catalog at load/init time,
+so a typo fails fast instead of silently disabling a tool.
 
-**`contract_verbosity`** (`low` (the default) / `high`) is the other dial that shapes what a
-model is told. It sits next to `mode` at the top level because there is exactly one contract:
-`CLAUDE.md`, `AGENTS.md` and the system prompt `arac agent` sends are the same bytes, rendered
-by `prompts.ContractContent`. `mode` decides *which* capabilities that document may name;
-`contract_verbosity` decides *how much* it says about them.
+## The two top-level dials
+
+### `mode`
+
+Which tools exist, which shell commands aracne answers, and what vocabulary the generated
+contract teaches. It has its own page: **[modes.md](modes.md)**. Absent resolves to `cli`.
+
+### `contract_verbosity`
+
+`low` (the default) or `high`. It sits next to `mode` at the top level because there is
+exactly one contract: `CLAUDE.md`, `AGENTS.md` and the system prompt `arac agent` sends are
+the same bytes, rendered by `prompts.ContractContent`. `mode` decides *which* capabilities
+that document may name; `contract_verbosity` decides *how much* it says about them. The two
+are orthogonal, and both settings render from the same four-way mode switch.
 
 - **`low`** — what the graph is, how it reaches this surface, and the one or two facts the
   model cannot derive from what it is already shown. Roughly 1-2 KB, and every byte of it is
@@ -22,73 +33,162 @@ by `prompts.ContractContent`. `mode` decides *which* capabilities that document 
   with no prompt of its own, or with a model that needs the read discipline spelled out.
 
 The language halves come from the topology's own languages, read from the database at
-`arac init` time (`internal/prompts/languages.go`). A project scanned in several languages gets
-each one's section; a project scanned in none yet — a fresh checkout, before the first scan —
-gets the language-free form, and the next `arac init` after a scan fills it in.
-
-Every tool name in this file is validated against the [`toolspec`](architecture.md#6-the-tool-catalog-internaltoolspec)
-catalog at load/init time, so a typo fails fast instead of silently disabling a tool.
+`arac setup` time (`internal/prompts/languages.go`). A project scanned in several languages
+gets each one's section; a project scanned in none yet — a fresh checkout, before the first
+scan — gets the language-free form, and the next `arac setup` after a scan fills it in.
+(`arac init` scans before it writes, so a wizard-generated contract already names the
+languages.)
 
 ## Sections
 
-- **`terminal`** — one key. `max_overserve`: the answer must stay within this multiple of
-  the bytes the real command would have printed, or `arac cmd` passes through instead. The
-  five former booleans (`intercept`, `enhance_files`, `enhance_resources`, `grep`,
-  `prefer_resource_ids`) are facts about the mode now.
+### `scan` & `scanner`
 
-- **`scan`** / **`scanner`** — `scan.ignore`, `scan.workers` and `scan.progress` (each also
-  a flag on `arac scan`, which wins); `scanner.update_frequency` for the `arac scanner run`
-  watch loop; and
-  **`scan.pre_tool`** (`default` (the default) / `none` / `full` / `hard`) — the scan
-  the guard runs *before* every tool call it sees, on both harnesses. `default` is
-  an incremental scan, so the usual case (nothing changed since the last call) is a
-  no-op; `none` switches the freshness guarantee off for projects that keep the
-  topology current another way (e.g. `arac scanner run`).
-- **`read`** — `max_file_size`; **`kinds`** (allow-list of resource kinds that may be read —
-  default `file`, `function`, `struct`, `interface`; also accepts `named_type`, `package`,
-  `dependency`, `variable`). It gates **every** read entrance, in every mode: the MCP `read`
-  tool, `arac read`, an intercepted shell read (`cat`, `head`, `sed -n` — by path *or* by
-  resource ID), and the denial proxy. An id that resolves to a kind outside the list is
-  refused, naming the kind and the allowed set, and the refusal exits non-zero rather than
-  falling back to the plain command. An operand that resolves to *nothing* is a different
-  answer and still passes through — there is no policy in a typo. `--kind` narrows which
-  resource an id resolves to; it does not grant a kind the list excludes.
-  **`context_filter`** — one of `off`, `normal` (the default) or `full`: how verbosely the
-  `# CONTEXT:` block renders a read's neighbours. `full` also adds the `# USED BY:` section
-  and keeps undescribed neighbours. **`file_mode`** (`full` / `skeleton`) decides what a
-  whole-**file** read returns; the default depends on the surface — `skeleton` everywhere
-  except `mcp`, which defaults to `full` — with `skeleton_threshold` and `max_symbol_lines`
-  bounding what elides. **`pipe_passthrough`** (whether the guard exempts piped reads like
-  `cmd | tail`).
-- **`descriptions`** — which `kinds` to document + `style_exemplars` count; **who writes
-  them** (`provider`, `base_url`, `cli_provider_command` — see
-  [below](#who-writes-the-descriptions)); and
-  **`lazy`** (default **true**): generate a missing description at the moment a read or a
-  search is about to show it, instead of only in an `arac descriptions generate` sweep. The
-  read plans the nodes its `# CONTEXT:` / `# USED BY:` sections will name, generates the
-  missing ones with the description-executor's model (`haiku` by default), waits for them to
-  land in the DB, and re-renders; a search does the same for the nodes it found by name or by
-  content. Reads get slower on a cold repo and converge on the old speed as it warms up. `lazy`
-  accepts `true`/`false` or an object (`enabled`, `max_nodes`, `timeout_seconds`,
-  `batch_size`, `parallel`), and is a no-op when nothing is configured to write with. See
-  `internal/lazydesc`.
-- **`llm`** — per-harness agent config under `<any>` / `opencode` / `claude_code`,
-  each with `main_agent` + named `agents`. Fields: `model`, `mcp_tools`,
-  `blocked_tools`, `plugins`, `params`. Resolution: per-harness block beats
-  `<any>`; `"<inherits>"`/absent fields fall back to the main agent
-  (`EffectiveAgent`). This is what `arac init` and `arac serve --tool-profile`
-  consult to decide what each agent can do.
-- **`viz`** — `graph.optimization_rules`, the path to the graph's optimization-rules file.
-- **`paths`** — a list of `{path, hidden}` rules (paths relative to the topology
-  root) that hide/show subtrees. Hidden paths are skipped by the indexing stage
-  (file discovery / manifest) and the scan stage in every mode (default/all/hard).
-  More specific (more internal) rules win, so a parent can be hidden while a
-  nested child stays visible (e.g. hide `my_example` but keep
-  `my_example/another_layer`). Resolved by `domain.PathVisibility` and installed
-  as the active filter by the topology manager before each scan.
+| key | default | meaning |
+|---|---|---|
+| `scan.ignore` | `[]` | `.gitignore`-style globs skipped on every walk — discovery, manifest, parsing, and language detection. No `!` negation; use `paths` to re-include a subtree. |
+| `scan.workers` | `0` (NumCPU) | Max files parsed concurrently during a full scan. Lower it to cap peak RAM. |
+| `scan.progress` | `auto` | `auto` (on a terminal, above 15 files), `always`, `never`. |
+| `scan.pre_tool` | `default` | The scan the guard runs *before* every tool call it sees, on both harnesses. `default` is incremental, so the usual case — nothing changed since the last call — is a no-op. `none` switches the freshness guarantee off for projects keeping the topology current another way (e.g. `arac scanner run`). `full` and `hard` exist for completeness. An unrecognized value resolves to `default`. |
+| `scanner.update_frequency` | `200` (ms) | How often `arac scanner run` polls for changes. |
 
-Every tool name in the config is validated against the **`toolspec`** catalog at
-load/init time so typos fail fast.
+`ignore`, `workers` and `progress` are each also a flag on `arac scan`, which wins for that
+run.
+
+### `read`
+
+| key | default | meaning |
+|---|---|---|
+| `max_file_size` | `524288` | Files above this are neither read nor indexed. |
+| `kinds` | `["file","function","struct","interface"]` | Allow-list of resource kinds that may be read. Also accepts `named_type`, `package`, `dependency`, `variable`. An explicit `[]` is rejected by validation. |
+| `context_filter` | `normal` | `off` (the code asked for, nothing around it), `normal` (each neighbour as `id: description`, undescribed ones omitted), `full` (neighbours as fenced source cuts, undescribed ones kept, plus a `# USED BY:` section). |
+| `file_mode` | `skeleton`, except `full` in `mcp` | What a whole-*file* read returns. `skeleton` is each top-level declaration's signature with large bodies elided. |
+| `skeleton_threshold` | `12` (lines) | How long a declaration may be before `skeleton` elides its body. |
+| `max_symbol_lines` | `160` (lines) | Caps a *symbol* body the same way. `0` means no cap; absence and an explicit `0` are distinguishable. |
+| `pipe_passthrough` | `true` | Exempt read/grep commands consuming piped stdin (`cmd \| tail`) from the guard — they operate on command output, which aracne cannot serve. |
+
+**`kinds` gates every read entrance, in every mode**: the MCP `read` tool, `arac read`, an
+intercepted shell read (`cat`, `head`, `sed -n` — by path *or* by resource ID), and the denial
+proxy. An id that resolves to a kind outside the list is refused, naming the kind and the
+allowed set, and the refusal exits non-zero rather than falling back to the plain command. An
+operand that resolves to *nothing* is a different answer and still passes through. `--kind`
+narrows which resource an id resolves to; it does not grant a kind the list excludes.
+
+**Why `mcp` defaults `file_mode` to `full`.** A model that has only seen signatures must not
+build an `edit` `old_string` from them, and on the MCP surface a file read is often the only
+thing it sees before editing.
+
+### `grep`
+
+| key | default | meaning |
+|---|---|---|
+| `description_kinds` | `["function","method","struct","interface"]` | Which kinds may match the pattern on their stored *description*. |
+
+A node found by its description is returned even when its source contains no matching line,
+which is the whole point — descriptions live only in the topology database. The default is the
+same set aracne *writes* descriptions for. `file`, `package` and `variable` are excluded
+because their descriptions are thin or auto-seeded from doc comments and flood results without
+answering anything. Absent means the default set; an explicit `[]` disables description
+matching entirely.
+
+### `terminal`
+
+| key | default | meaning |
+|---|---|---|
+| `max_overserve` | `4` | The answer must stay within this multiple of the bytes the real command would have printed, or `arac cmd` passes through instead. `0` or negative disables the check. |
+
+A window is a narrow question, and an answer disproportionate to it is not a cheaper read — it
+is a way to spend the context window on one `head -1`. `guard_proxy.go` makes the same trade
+for a denied native read.
+
+### `descriptions`
+
+| key | default | meaning |
+|---|---|---|
+| `kinds` | `["function","method","struct","interface"]` | Which kinds the description workflows target and the no-description tools list. |
+| `style_exemplars` | `1` | How many already-written neighbour descriptions to feed the executor as house-style anchors. `0` disables. |
+| `include_not_visible` | `false` | When false, skip undocumented targets `read.context_filter` would not render anyway. |
+| `lazy` | `true` | See below. |
+| `provider`, `base_url`, `api_key_env`, `cli_provider_command` | — | [Who writes the descriptions](#who-writes-the-descriptions). |
+
+**`lazy`** generates a missing description at the moment a read or a search is about to show
+it, instead of only in an `arac descriptions generate` sweep. The read plans the nodes its
+`# CONTEXT:` / `# USED BY:` sections will name, generates the missing ones with the
+description-executor's model, waits for them to land in the database, and re-renders; a search
+does the same for the nodes it found by name or by content. Reads are slower on a cold repo
+and converge on the old speed as it warms up. See `internal/lazydesc`.
+
+It accepts **both** JSON shapes for one key — a bare `true`/`false`, or an object — and is
+written back in whichever you used:
+
+| field | default | meaning |
+|---|---|---|
+| `enabled` | `true` | The switch. |
+| `max_nodes` | `40` | Nodes one fill may describe. `≤ 0` means no cap. |
+| `timeout_seconds` | `120` | Bounds the whole fill, not one batch. `≤ 0` disables the deadline. |
+| `batch_size` | `5` | Resources per completion. Non-positive keeps the default. |
+| `parallel` | `4` | Batches in flight at once. Non-positive keeps the default. |
+
+With nothing configured to write with, the lazy fill is a silent no-op rather than an error.
+
+### `llm`
+
+Per-harness agent config under `<any>` / `opencode` / `claude_code`, each with a `main_agent`
+and a map of named `agents`.
+
+| field | type | meaning |
+|---|---|---|
+| `model` | string | Model for this agent. `"<inherits>"` copies the main agent's. |
+| `mcp_tools` | string[] | Which MCP tools this agent gets. Validated against the catalog, then filtered through `Config.ServableMCPTools`, which drops the shell-served ones and returns nothing outside `mcp` mode. |
+| `blocked_tools` | string[] | Native tools to deny: `read`, `grep`, `edit`, `write`, `bash`. Empty by default. Only bites in `mcp` and `cli`; `grep` is additionally dropped outside `mcp`. |
+| `plugins` | string[] | Currently one: `edit-update-db-plugin`, which installs the native-edit topology-sync hook. |
+| `params` | map[string]int | Integer knobs — `max-batch-size` for the description executor, `thinking` for chat sub-agents. Non-positive falls back to the default. |
+
+Resolution: the per-harness block beats `<any>`; an absent field or the sentinel
+`"<inherits>"` falls back to the main agent (`EffectiveAgent`). This is what `arac setup` and
+`arac serve --tool-profile` consult to decide what each agent can do.
+
+The main agent's default set is `read` + `warnings_list`
+(`helper.DefaultAgentMCPTools`); the description executor's is `read` +
+`update_description`.
+
+### `viz`
+
+| key | default | meaning |
+|---|---|---|
+| `graph.optimization_rules` | `.aracne/optimization_rules.json` | Where the graph's collapse rules live. |
+| `chat.main_agent`, `chat.agents` | — | The Chat tab's agents: a flat `tools` list plus optional `model` and `params`, with no mcp/native split. Only read when `features.chat` is on. |
+
+### `features`
+
+Optional surfaces that are not part of the default product. An **absent section means every
+feature is off**, which is what an existing project's config decodes to — so adding a feature
+here never turns something on for an existing user.
+
+| key | default | turns on |
+|---|---|---|
+| `bug_management` | `false` | The bug pipeline: `arac setup` writes the hunter/judge/solver agents and their commands, the `bug_*` tools become servable, the `arac bug` usage block prints, and viz exposes `/api/bugs`. `arac bug` stays dispatchable either way. |
+| `chat` | `false` | The viz Chat tab: the `/api/chat`, `/api/chat/` and `/api/context-graph` routes, and the Chat nav item. |
+| `agent` | `false` | `arac agent`, the self-contained REPL. This gates the *command*, not `internal/llm/agent` — `descriptions generate` runs its executors through the same package. |
+
+> A new flag needs adding to `validConfig` as well as to the struct. See the comment there for
+> the silent failure that omission causes.
+
+### `paths`
+
+A list of `{path, hidden}` rules, relative to the topology root, that hide or show subtrees.
+Hidden paths are skipped by the indexing stage (file discovery, manifest) and the scan stage in
+every mode. **More specific rules win**, so a parent can be hidden while a nested child stays
+visible — which is the thing `scan.ignore` cannot express, since it has no negation:
+
+```jsonc
+"paths": [
+  { "path": "my_example",               "hidden": true  },
+  { "path": "my_example/another_layer", "hidden": false }
+]
+```
+
+Resolved by `domain.PathVisibility` and installed as the active filter by the topology manager
+before each scan.
 
 ## Who writes the descriptions
 
@@ -98,41 +198,140 @@ section itself:
 
 | key | meaning |
 |---|---|
-| `provider` | `anthropic` \| `openai` \| `deepseek` \| `cli`. Absent: inferred from the executor's model, else from whichever API key is in the environment. |
+| `provider` | `anthropic` \| `openai` \| `deepseek` \| `cli`. **Absent means unanswered**, and `arac init` asks — see [the setup questions](#the-setup-questions). A typo, or `cli` with no command, is rejected by validation. |
 | `base_url` | A gateway or proxy for the API providers. Ignored by the CLI ones. |
+| `api_key_env` | The environment variable the API key is read from. Absent falls back to the provider's own name (`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY`). Ignored by `cli`. |
 | `cli_provider_command` | The command `provider: "cli"` runs. Required by it, ignored by everything else. |
 
 They live on the section rather than under `lazy` because both entry points describe the same
-resources into the same database: a project that has answered "who writes my descriptions"
-has answered it once, for both.
+resources into the same database: a project that has answered "who writes my descriptions" has
+answered it once, for both.
 
-**The model is not here.** It is the `descriptions-generation-executor` agent's, and only its:
+`api_key_env` is a separate question from `provider` because the two are only accidentally
+related. A great many vendors and gateways serve the *OpenAI format* while billing a key
+OpenAI never issued, and a project pointed at one should not have to store that credential in
+a variable named after a company it is not paying.
+
+A provider the project **named** is never silently swapped for another vendor whose key
+happens to be in the environment — it was asked, and that is the answer. (A provider that was
+only ever *inferred* still falls back to the key the machine actually holds, for the sweep;
+the lazy fill never falls back at all.)
+
+The three API providers read `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `DEEPSEEK_API_KEY`
+unless `api_key_env` names another variable. Nothing else in aracne needs a key.
+
+### The setup questions
+
+Nothing is guessed. A fresh config names no provider and pins no model, and `arac init` asks —
+full screen, with the arrow keys, one question per screen:
+
+```
+   ▄▀█ █▀█ ▄▀█ █▀▀ █▄░█ █▀▀
+   █▀█ █▀▄ █▀█ █▄▄ █░▀█ ██▄
+
+  Who writes your descriptions?                                              3/6
+
+  Aracne describes every function, type and file so a read can show you what its
+  neighbours are without opening them. Something has to write those, and it
+  costs money either way -- so it is asked rather than assumed.
+
+  > An API key     Call a provider's HTTP API.
+    A CLI command
+                   Bills the key's balance, per token. Fastest, and the only
+                   option that parallelises properly.
+
+                   You will be asked which wire format the endpoint speaks and
+                   which environment variable holds the key.
+
+  ↑/↓ move   ⏎ select   esc cancel
+```
+
+**An API key** asks which *wire format* the endpoint speaks (`anthropic` / `openai` /
+`deepseek` — the format, not necessarily the company), then which environment variable holds
+the key, offering that provider's usual name. **A CLI command** asks for the command, offering
+`claude -p`, with what a CLI run actually spends spelled out beside it. Every open question
+offers the default as the first row and `Other:` as the second, where you type; Enter on an
+empty `Other:` says so and keeps the question open.
+
+Then the model, written to the `descriptions-generation-executor` agent (see
+[below](#the-model-is-not-here)). It defaults to the chosen provider's cheap tier —
+`claude-haiku-5`, `gpt-5.4-mini`, `deepseek-v4-flash`. On the CLI branch it offers `haiku`
+instead — the same model, spelled the way a command line wants it, because that answer is
+appended to a command rather than sent as a request field. There is one more rule there, since
+the CLI transport reads its model from the *command* and from nowhere else:
+
+- A command that already names one (`claude -p --model sonnet`) **answers this question**. The
+  model question is skipped and `sonnet` is recorded.
+- Otherwise the answer is appended back onto the command — but only for `claude -p` /
+  `claude --print`, whose flag aracne actually knows. `codex exec` and a hand-written script
+  are left exactly as typed: guessing a flag onto someone else's program is how a wizard turns
+  a working command into one that exits 2.
+
+Question five — describe the repository now, or lazily as you read — **saves nothing**. Lazy
+generation is on either way (`descriptions.lazy`, default `true`); the question only decides
+whether this run also sweeps before it finishes. Enter means **now** at 800 source files or
+fewer and **lazily** above that, which is a wall-clock judgement rather than a cost one: a
+small repository is minutes and is better off fully described, while a large one becomes a
+long unattended job whose benefit all arrives at the end. It is a *file* count and not a
+resource count because the questions come before the scan; roughly ten describable resources
+per source file is what aracne's own corpora come out at. Either answer is available at either
+size.
+
+Three things deliberately never reach these questions:
+
+- **The lazy fill on the read path.** A read is not the place to stop and ask which vendor to
+  bill, so it stays silent and does nothing until `arac init` — or a hand-written config — has
+  answered.
+- **`arac descriptions generate`.** The sweep asks nothing at all. Someone running it has asked
+  for descriptions, not for a setup interview. An unconfigured project is told to run
+  `arac init`, given the keys to write by hand, and the command exits non-zero — on a terminal
+  and off it:
+
+  ```
+  $ arac descriptions generate
+  Error: descriptions generation is not configured.
+
+  Run `arac init` to set it up, or write it into .aracne/config.json yourself:
+
+    "descriptions": {"provider": "anthropic", "api_key_env": "ANTHROPIC_API_KEY"}
+    "descriptions": {"provider": "cli", "cli_provider_command": "claude -p"}
+
+  (providers: anthropic, openai, deepseek, cli)
+  ```
+- **`--cli`.** The flag *is* the answer for that run, and it still works on a project that has
+  answered nothing.
+
+**An unattended `arac init`** is refused rather than half-run. A pipe, a cron job or CI gets a
+message naming `arac setup` and the config keys it would have set, and exits non-zero; nothing
+is written, not even the `.aracne` directory. A full-screen prompt with nobody at it is a hang.
+
+### The model is not here
+
+It is the `descriptions-generation-executor` agent's, and only its:
 
 ```jsonc
-{ "llm": { "claude_code": { "agents": {
-  "descriptions-generation-executor": { "model": "haiku" }
+{ "llm": { "<any>": { "agents": {
+  "descriptions-generation-executor": { "model": "claude-haiku-5" }
 } } } }
 ```
 
-That is what `arac init` writes, and it is the model both entry points describe with — the
-sweep *runs* as that agent, and the lazy fill reads the same field. There was a
-`descriptions.model` that said it a second time; it is gone. One answer in one place cannot
-disagree with itself, and when the two did disagree there was nothing on screen to say which
-had won.
+That is the model both entry points describe with — the sweep *runs* as that agent, and the
+lazy fill reads the same field. There is no `descriptions.model`: one answer in one place
+cannot disagree with itself, and when two of them disagree there is nothing on screen to say
+which won.
 
-> The older spelling — `descriptions.lazy.provider`, `.base_url` — is still read and still
-> means what it meant, so an existing config keeps working. The section keys win where both
-> are set.
->
-> One name did go: **`provider: "claude_cli"`**, which was `cli` with the Claude invocation
-> prefilled and unreadable. It is rejected with the command that replaces it —
-> `"provider": "cli", "cli_provider_command": "claude --print --max-turns 1"` — rather than
-> silently doing nothing.
+`arac init` writes it under `<any>` rather than under a harness block, because `EffectiveAgent`
+merges `<any>` underneath whichever harness asks: one write covers Claude Code, OpenCode, and
+the read-path lazy fill (which resolves against `claude_code` by default).
 
-The three API providers read `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `DEEPSEEK_API_KEY`
-respectively. Nothing else in aracne needs a key.
+**It is unset out of the box**, and writing it is optional: without one, the chosen provider's
+own fallback is used (`claude-haiku-4-5`, `gpt-5.4-mini`, `deepseek-v4-flash` — see
+`lazydesc.providerFallbackModel`). Unset is load-bearing rather than an omission: a model
+pinned here also picks the *provider* by inference, so a stock value would answer a setup
+question on the project's behalf — and then fail naming a vendor the project never chose,
+about a key it had no reason to hold.
 
-### Describing with the Claude CLI, no API key
+### Describing with a CLI, no API key
 
 An API key is a separate thing to buy from the Claude Code subscription you are probably
 already paying for. `provider: "cli"` spends the subscription instead: aracne runs a command,
@@ -147,46 +346,39 @@ writes the batch to its **stdin**, and reads the descriptions off its **stdout**
 }
 ```
 
-That is the whole setup. `claude` must be on `PATH` and already logged in
-(`claude` once, interactively, is enough). Both entry points now use it:
+That is the whole setup. `claude` must be on `PATH` and already logged in (`claude` once,
+interactively, is enough). Both entry points then use it:
 
 ```sh
 arac descriptions generate    # the sweep, through `claude -p`
 arac read internal/server.go  # a lazy fill, through the same command
 ```
 
-Pinning a model and keeping the CLI from wandering off to explore the repo is worth doing —
-the batch already carries every resource's source, so there is nothing for a tool call to
-fetch:
+Pinning a model and capping the turns is worth doing — the batch already carries every
+resource's source, so there is nothing for a tool call to fetch. It does not have to be Claude;
+any command that answers a prompt on stdout will do:
 
 ```jsonc
 "cli_provider_command": "claude -p --model haiku --max-turns 1"
-```
-
-It does not have to be Claude. Any command that answers a prompt on stdout will do:
-
-```jsonc
 "cli_provider_command": "codex exec"
 ```
 
 **What to know before switching:**
 
 - **It is argv, not a shell line.** Words split on whitespace, `'` and `"` group, `\` escapes.
-  No pipes, no redirection, no `$VAR`.
+  No pipes, no redirection, no `$VAR` — running it through a shell would hand a config file
+  the power to run arbitrary shell, to buy expansion nobody asked for.
 - **It spends interactive quota** — the same quota you are typing into — and adds a process
   launch per batch. That is why it is never inferred: aracne uses it only when asked.
 - **The command must answer in one shot.** Its stdin carries the instructions and the batch;
   its stdout is parsed as `<resource id> :: <description>` lines, and anything else is
   ignored. A CLI that needs a flag to be non-interactive needs that flag here.
 - **Lazy fills are on the read path.** A cold repo with a CLI provider means a process launch
-  inside a read; `descriptions.lazy.timeout_seconds` (default 120) bounds it, and
-  `descriptions.lazy.parallel` (default 4) decides how many run at once. Sweeping the repo
-  once with `arac descriptions generate` first makes this a non-issue.
+  inside a read; `descriptions.lazy.timeout_seconds` bounds it and `parallel` decides how many
+  run at once. Sweeping once with `arac descriptions generate` first makes this a non-issue.
 
-### One run, without touching the config
-
-`arac descriptions generate --cli` describes the repository through a command for that run
-only, overriding whatever `descriptions.provider` says:
+**For one run, without touching the config**, `arac descriptions generate --cli` overrides
+whatever `descriptions.provider` says:
 
 ```sh
 arac descriptions generate --cli "claude -p"       # a command you named

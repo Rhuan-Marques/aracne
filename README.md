@@ -44,31 +44,38 @@ builds are published:
 | **Full** | Engine, all six languages, and the web visualizer (`arac viz serve`) |
 | **Basic** | The same engine and languages, no front-end — a smaller binary for CI and servers |
 
-Building from source needs **gcc**: the JavaScript, TypeScript, Rust and Java scanners are
-tree-sitter, so CGO is required. SQLite is pure Go.
+Building from source needs **gcc** — the JavaScript, TypeScript, Rust and Java scanners are
+tree-sitter, so CGO is required. SQLite is pure Go. See
+[CONTRIBUTING.md](CONTRIBUTING.md#setup).
 
-Scanning **Python** additionally needs a `python3` (or `python`) on `PATH` at run time — that
+Scanning **Python** additionally needs a `python3` (or `python`) on `PATH` at run time: that
 scanner drives the interpreter's own parser rather than a grammar, so without one a Python
 project simply yields no topology. Every other language is self-contained in the binary.
-
-```sh
-git clone https://github.com/Rhuan-Marques/aracne && cd aracne
-make build         # Full
-make build-basic   # Basic
-```
 
 ## Quickstart
 
 ```sh
 cd your-project
-arac init --claude       # or --opencode, or both
-arac scan                # build the topology
-arac descriptions generate   # describe it (needs an LLM key, see below)
+arac init
 ```
 
-That is the whole setup. `arac init` writes the integration for your harness — the
-contract block in `CLAUDE.md`/`AGENTS.md`, the hooks, and the config — and from then on
-your agent's ordinary `grep` and `cat` are answered from the topology.
+That is the whole setup. `arac init` is an interactive, full-screen flow that asks the six
+questions a project actually has to answer — which harness, how the agent should reach your
+code, who writes the descriptions and with which model, whether to describe the repository now
+or lazily as you read, and how much the generated contract should say. It then saves them to
+`.aracne/config.json`, scans the project, and writes the integration for your harness: the
+contract block in `CLAUDE.md`/`AGENTS.md`, the hooks, and the config. From then on your
+agent's ordinary `grep` and `cat` are answered from the topology.
+
+Answer with the arrow keys and Enter; Escape cancels without writing anything. It needs a
+terminal — in a pipe or in CI, use `arac setup`, which writes the same files from whatever
+`.aracne/config.json` already says and asks nothing:
+
+```sh
+arac setup --claude      # or --opencode, or neither for both
+```
+
+Re-run `arac setup` after editing the config by hand. It reads `mode` and never writes it.
 
 You can drive it yourself too:
 
@@ -81,21 +88,22 @@ arac scanner run                        # keep the topology current in the backg
 arac viz serve                          # the graph, in a browser (Full build)
 ```
 
-**Description generation** takes one of `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` or
-`DEEPSEEK_API_KEY` — or no key at all, if you point it at a CLI you are already logged into:
+**Description generation** is the one part that needs a model, and nothing is assumed about
+which. `arac init` asks — an API key or a CLI you are already logged into, and which model —
+and writes the answer into `.aracne/config.json`, so it is asked once:
 
 ```jsonc
-// .aracne/config.json
+// .aracne/config.json, after answering
+"descriptions": { "provider": "openai", "api_key_env": "OPENAI_API_KEY" }
 "descriptions": { "provider": "cli", "cli_provider_command": "claude -p" }
 ```
 
-or, for one run and without touching the config, `arac descriptions generate --cli` (which
-asks first — it spends your CLI subscription, not an API key).
+The CLI answer needs no API key at all — it spends the subscription behind a tool you already
+use. Descriptions are also generated lazily, as a read or a search is about to show a node, so
+a repo warms up as you work in it.
 
-Descriptions are also generated lazily, at the moment a read or a search is about to show a
-node, so a repo warms up as you work in it; the sweep and the lazy fill read that same one
-provider block ([configuration.md](docs/configuration.md#who-writes-the-descriptions)).
-Everything else — scanning, reading, grepping, the visualizer — needs no key at all.
+Everything else — scanning, reading, grepping, the visualizer — needs no key.
+[configuration.md](docs/configuration.md#who-writes-the-descriptions) has the whole story.
 
 ## The four modes
 
@@ -109,9 +117,8 @@ should be one decision rather than five independent switches:
 | `intercept_line_ranges` | The same, with every declaration named by the exact lines it spans. |
 | `mcp` | A single `read` MCP tool; shell reads run as themselves. |
 
-Shell `grep` is answered by Aracne in **all four** — it is the one capability with no
-competing surface, because no read tool answers *"which node is described as X"*. Edits
-re-sync the graph in all four too. See [docs/modes.md](docs/modes.md).
+Shell `grep` is answered by Aracne in **all four**, and edits re-sync the graph in all four.
+See [docs/modes.md](docs/modes.md).
 
 ## Does it work?
 

@@ -31,7 +31,7 @@ func RunServe(args []string) {
 	// model is told about tools it will never be offered.
 	if !cfg.MCPEnabled() {
 		fmt.Fprintf(os.Stderr, "aracne: mode %q serves no MCP tools. Set \"mode\": \"mcp\" in "+
-			".aracne/config.json (or run `arac init --mcp`) to wire the server, or remove the "+
+			".aracne/config.json (or run `arac init`) to wire the server, or remove the "+
 			"aracne entry from this harness's MCP config.\n", cfg.EffectiveMode())
 		os.Exit(1)
 	}

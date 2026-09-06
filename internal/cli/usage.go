@@ -108,8 +108,9 @@ Usage:
   Aracne agent   [prompt]   Run the AI coding agent
   Aracne serve   [flags]    Start MCP server (for OpenCode / Claude Code integration)
   Aracne viz serve [flags]  Start local topology graph visualization UI
-  Aracne init    [flags]    Initialize topology integration (--claude, --opencode, --global)
-  arac disable   [flags]    Remove the aracne integration this project's init wrote (--claude, --opencode, --global, --all)
+  Aracne init    [flags]    Set this repository up: asks the setup questions, scans, writes the integration
+  Aracne setup   [flags]    Write the integration files from the current config (--claude, --opencode, --global)
+  arac disable   [flags]    Remove the aracne integration this project's setup wrote (--claude, --opencode, --global, --all)
   arac scanner run [--db <path>]  Watch the tree and keep the topology current in the background
   Aracne descriptions generate [flags]  Generate descriptions for targeted undocumented resources
   Aracne descriptions apply            Write topology descriptions back into source as doc comments
@@ -160,10 +161,15 @@ Flags for "grep":
   .aracne/config.json (default: function,method,struct,interface; [] disables it).
 
 Flags for "descriptions generate":
+  (Who writes the descriptions is asked by "arac init" and read from .aracne/config.json
+   here. An unconfigured project is told to run it, and given the keys to write by hand;
+   the sweep itself asks nothing. --cli answers for one run without saving.)
   --targets <kinds>       Comma-separated resource kinds overriding config descriptions.kinds (default: function,method,struct,interface,file)
   --batch-size <n>        Maximum resources assigned to each description executor (default 5)
   --parallel <n>          Maximum description executors to run concurrently (default 4)
   --max-retries <n>       Maximum executor attempts per resource (default 3)
+  --progress <mode>       Progress bar: auto (on a terminal when there is anything to
+                          describe), always, or never (default auto)
   --regen_oversized       Rewrite existing descriptions that overrun their kind's character
                           budget (function/method 120, type 100, variable 80) instead of
                           describing undocumented resources
@@ -206,14 +212,27 @@ Flags for "bug list":
   --state <state> Filter by state: pending, acknowledged, dismissed
 
 Flags for "init":
-  --claude              Initialize Claude Code integration
-  --opencode            Initialize OpenCode integration
+  --global              Install the integration to user level rather than into this project
+
+  A full-screen, interactive setup. It asks six questions -- which harness, which mode,
+  who writes the descriptions and with which model, whether to describe the repository
+  now or lazily as you read, and how much the generated contract should say -- then
+  saves them to .aracne/config.json, scans the project, and writes the integration.
+  Answer with the arrow keys and Enter; Escape cancels without writing anything.
+
+  It needs a terminal. In a pipe, a cron job or CI it refuses and names "arac setup",
+  which does the same writing with no questions.
+
+Flags for "setup":
+  --claude              Write the Claude Code integration
+  --opencode            Write the OpenCode integration
   --global              Install to user-level (applies across all projects)
-  --mcp                 Wire the MCP server (sets "mode" to "mcp" in .aracne/config.json)
   -y                    Auto-confirm all replacement prompts
 
-  Without flags, initializes both Claude Code and OpenCode.
-  The "mode" key in .aracne/config.json decides what init writes:
+  Without flags, writes both. This is the command to re-run after editing
+  .aracne/config.json: it renders the commands, the agents, the guard hook, the MCP
+  entry and the contract in CLAUDE.md / AGENTS.md from whatever the config says.
+  It READS the "mode" key and never writes it:
     mcp           a single "read" MCP tool; shell reads run as themselves
     cli   no MCP tools; the contract points at "arac read <id>"  (default)
     intercept_id  cat/head/tail/sed -n are answered from the topology and take a resource ID
@@ -227,8 +246,9 @@ Flags for "init":
   Examples:
     Aracne scan -root ./myproject -output myproject.db
     Aracne agent "list all structs"
-    Aracne init --claude
-    Aracne init --opencode
+    Aracne init
+    Aracne setup --claude
+    Aracne setup --opencode
     Aracne viz serve
     Aracne serve --tool-profile descriptions-generation-executor
     Aracne descriptions generate

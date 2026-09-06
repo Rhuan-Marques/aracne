@@ -19,7 +19,7 @@ import (
 // `contract_verbosity: "high"` restores their length, and languages carries the per-language
 // half. What is gone is the LLM_INTEGRATION_CHARTER.md prepend -- an undocumented optional file
 // no other surface read, whose content would have had to land above the `# Aracne` heading
-// that `arac init` and `arac disable` locate a generated block by.
+// that `arac setup` and `arac disable` locate a generated block by.
 func BuildPrompt(cfg *helper.Config, languages []string) string {
 	return prompts.SystemPromptForConfig(cfg, languages)
 }

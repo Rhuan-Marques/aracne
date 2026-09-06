@@ -43,7 +43,7 @@ func contractForAt(mode, verbosity string) string {
 }
 
 // Every contract opens with the same heading and closes on a line cli can find, because those
-// two are what `arac init` uses to REPLACE its block instead of stacking a second copy, and
+// two are what `arac setup` uses to REPLACE its block instead of stacking a second copy, and
 // what `arac disable` uses to remove it. A contract that loses either silently starts
 // duplicating itself on every init.
 //
@@ -72,7 +72,7 @@ func TestEveryContractIsFindableByInit(t *testing.T) {
 }
 
 // findAracIntegrationEnd takes the EARLIEST closing marker it finds after the opening heading,
-// so a contract that ends on one marker while carrying the other in its BODY makes `arac init`
+// so a contract that ends on one marker while carrying the other in its BODY makes `arac setup`
 // replace only the first half of its own block -- and append the rest on every run after that.
 //
 // The long contract is where this becomes possible: it says everything the terse one says, at
@@ -332,7 +332,7 @@ func TestTheHighContractTeachesOnlyTheProjectsLanguages(t *testing.T) {
 	}
 }
 
-// `arac init` legitimately runs before the first scan, so the languages list is empty on a
+// `arac setup` legitimately runs before the first scan, so the languages list is empty on a
 // fresh checkout. The contract still has to be a whole contract: everything in it that is true
 // of every language is still true, and a builder that returned "" for a missing language would
 // strip the project's guidance without saying anything.
