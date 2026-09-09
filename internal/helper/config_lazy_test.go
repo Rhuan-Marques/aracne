@@ -2,6 +2,8 @@ package helper
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -169,11 +171,7 @@ func TestLazyDescriptionsValidatesProvider(t *testing.T) {
 // legacy, EnsureConfig would overwrite it with defaults and silently turn the feature back on
 // -- the exact failure the features/mode entries in validConfig already guard against.
 func TestLazyOnlyConfigIsNotMistakenForLegacy(t *testing.T) {
-	var cfg Config
-	if err := json.Unmarshal([]byte(`{"descriptions":{"lazy":false}}`), &cfg); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if !validConfig(&cfg) {
+	if !validConfig([]byte(`{"descriptions":{"lazy":false}}`)) {
 		t.Fatal("a lazy-only config should be recognised as the new schema")
 	}
 }
@@ -286,12 +284,8 @@ func TestDescriptionProviderMovedUpFromLazy(t *testing.T) {
 // A config whose only hand edit is the provider must not be mistaken for a legacy file and
 // overwritten with defaults -- the same trap `{"descriptions":{"lazy":false}}` was in.
 func TestProviderOnlyConfigIsNotLegacy(t *testing.T) {
-	var cfg Config
-	if err := json.Unmarshal([]byte(`{"descriptions":{"provider":"cli",`+
-		`"cli_provider_command":"claude -p"}}`), &cfg); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if !validConfig(&cfg) {
+	if !validConfig([]byte(`{"descriptions":{"provider":"cli",` +
+		`"cli_provider_command":"claude -p"}}`)) {
 		t.Fatal("a provider-only config is a legitimate new-schema file")
 	}
 }
@@ -319,5 +313,68 @@ func TestSplitCommand(t *testing.T) {
 	}
 	if _, err := SplitCommand(`claude "oops`); err == nil {
 		t.Error("an unbalanced quote must be an error, not a truncated argv")
+	}
+}
+
+// SaveConfig has to be atomic, because of what EnsureConfig does to a config it cannot read.
+// os.WriteFile truncates first: interrupted in between, it leaves a zero-byte config.json,
+// validConfig then finds no known key, and EnsureConfig replaces the file with defaults --
+// so a torn write silently destroys the project's mode, feature flags, ignore rules and agent
+// tool lists. This asserts no truncated intermediate state is ever visible on disk.
+func TestSaveConfigNeverLeavesATruncatedFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	cfg := DefaultConfig()
+	cfg.Mode = ModeInterceptID
+	cfg.Scan.Ignore = []string{"generated/**"}
+	if err := SaveConfig(cfg, path); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+
+	stop := make(chan struct{})
+	bad := make(chan string, 1)
+	go func() {
+		for {
+			select {
+			case <-stop:
+				close(bad)
+				return
+			default:
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				continue // the rename window: the file is briefly the old inode, never absent
+			}
+			if !validConfig(data) {
+				select {
+				case bad <- string(data):
+				default:
+				}
+				return
+			}
+		}
+	}()
+
+	for i := 0; i < 200; i++ {
+		if err := SaveConfig(cfg, path); err != nil {
+			t.Fatalf("SaveConfig: %v", err)
+		}
+	}
+	close(stop)
+	if torn, ok := <-bad; ok {
+		t.Fatalf("a reader saw a config that does not parse as the current schema: %q", torn)
+	}
+
+	// And the settings survived every rewrite.
+	loaded, ok := LoadConfigStrict(path)
+	if !ok {
+		t.Fatal("the config no longer parses as the current schema")
+	}
+	if loaded.EffectiveMode() != ModeInterceptID {
+		t.Fatalf("mode = %q, want %q", loaded.EffectiveMode(), ModeInterceptID)
+	}
+	if len(loaded.Scan.Ignore) != 1 || loaded.Scan.Ignore[0] != "generated/**" {
+		t.Fatalf("scan.ignore = %v, want [generated/**]", loaded.Scan.Ignore)
 	}
 }

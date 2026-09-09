@@ -279,26 +279,54 @@ func (r *Read) sliceUnit(topo *domain.Topology, fileID string, covering []domain
 		Body:   body,
 		Covers: append(coveringIDs(covering), members...),
 	}
-	u.Context = neighborContext(domain.OutgoingNeighbors(topo, members, map[string]bool{fileID: true}))
+	u.Context = neighborContext(domain.OutgoingNeighbors(topo, members, map[string]bool{fileID: true}),
+		r.cfgOrLoad().EffectiveContextFilter())
 	return u
 }
 
-// whollyContained returns the covering declarations when the window contains ALL of them
-// entirely, and nil otherwise.
+// whollyContained returns the covering declarations when the window is EXACTLY them, and nil
+// otherwise.
 //
-// All-or-nothing on purpose: a window holding one whole function plus the first three lines of
-// the next is not a resource read, and answering it as one would silently drop the fragment the
-// caller could see in their own editor.
+// Two conditions, and the second one is the whole point. Every covering declaration must fit
+// inside the window -- otherwise the caller asked for part of something, and promoting would
+// hand back the whole of it. And the window must hold nothing BUT those declarations: every
+// line of it has to belong to one.
+//
+// THE SECOND CONDITION WAS MISSING, and it cost the caller lines they had asked for. A Go
+// file's package clause and import block belong to no declaration, so `head -12 f.go` -- a
+// window whose first eight lines are exactly that preamble -- satisfied "every covering
+// declaration fits" on the strength of one interface at lines 9-11, promoted to a read of
+// that interface, and returned three lines where twelve were asked for. Nothing marked the
+// other nine as missing, because as far as the promoted read was concerned they were never
+// requested.
 func whollyContained(covering []domain.Resource, from, to int) []string {
 	if len(covering) == 0 {
 		return nil
 	}
-	out := make([]string, 0, len(covering))
-	for _, res := range covering {
+	sorted := append([]domain.Resource(nil), covering...)
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].Location.StartsAt != sorted[j].Location.StartsAt {
+			return sorted[i].Location.StartsAt < sorted[j].Location.StartsAt
+		}
+		return sorted[i].Location.EndsAt > sorted[j].Location.EndsAt
+	})
+	out := make([]string, 0, len(sorted))
+	// next is the first line of the window not yet accounted for by a declaration.
+	next := from
+	for _, res := range sorted {
 		if res.Location.StartsAt < from || res.Location.EndsAt > to {
-			return nil
+			return nil // the window cuts this declaration
+		}
+		if res.Location.StartsAt > next {
+			return nil // a line of the window belongs to no declaration
+		}
+		if res.Location.EndsAt >= next {
+			next = res.Location.EndsAt + 1
 		}
 		out = append(out, res.ID)
+	}
+	if next <= to {
+		return nil // the window runs past the last declaration
 	}
 	return out
 }

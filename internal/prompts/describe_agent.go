@@ -37,11 +37,18 @@ type DescriptionExemplar struct {
 }
 
 // Returns prompt instructions for the descriptions-generation executor sub-agent, directing it to write concise resource descriptions and update them via the topology database.
+//
+// IT NAMES NO TOOL DIRECTLY. This used to say "call **read**", and in Claude Code the agent's
+// aracne tool registers as `read_resource` whenever the harness keeps its own reader -- so
+// `read` resolved to the NATIVE file reader, which has no `resource_id` parameter, while the
+// `## Tools` listing rendered just above this text said `read_resource`. toolspec's own note on
+// ResolveToolNames calls that mismatch out as a wasted turn. The bug-judge prompt already
+// solved it by pointing at the listing instead; this does the same.
 func DescriptionsGenerationExecutorPrompt() string {
 	return `You write snappy, accurate descriptions for the resources in your assigned batch — nothing else.
 
 ## Loop (per assigned resource)
-1. Use the source if it is already provided; otherwise call **read** with its ` + "`resource_id`" + `.
+1. Use the source if it is already provided; otherwise read it with your aracne lookup tool (named in the Tools list above), passing its ` + "`resource_id`" + `.
 2. Glance at neighbors only when the resource alone is unclear.
 3. Write the shortest description that is still accurate. One line, within the character budget in your task prompt — update_description rejects anything over it. Cut articles and filler before you cut facts.
 4. Call **update_description** immediately.

@@ -214,8 +214,8 @@ func TestGlobAndTypeFilters(t *testing.T) {
 	check(Options{Pattern: "needle", Root: dir}, 4, "no filter")
 	check(Options{Pattern: "needle", Root: dir, Type: "go"}, 3, "type=go")
 	check(Options{Pattern: "needle", Root: dir, Type: "ts"}, 1, "type=ts")
-	check(Options{Pattern: "needle", Root: dir, Glob: "*.go"}, 3, "glob=*.go")
-	check(Options{Pattern: "needle", Root: dir, Glob: "**/*_test.go"}, 1, "glob=**/*_test.go")
+	check(Options{Pattern: "needle", Root: dir, Globs: []string{"*.go"}}, 3, "glob=*.go")
+	check(Options{Pattern: "needle", Root: dir, Globs: []string{"**/*_test.go"}}, 1, "glob=**/*_test.go")
 }
 
 func TestUnknownTypeIsAnError(t *testing.T) {
@@ -260,12 +260,42 @@ func TestContextLines(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := res.Matches[0]
-	if len(m.Before) != 2 || m.Before[0] != "one" || m.Before[1] != "two" {
-		t.Fatalf("before context wrong: %v", m.Before)
+	// Context is keyed by ABSOLUTE line number, which is what makes a context row printable
+	// with the number it actually has. The needle is line 3.
+	ctx := res.Context[res.Matches[0].Path]
+	for line, want := range map[int]string{1: "one", 2: "two", 4: "four", 5: "five"} {
+		if ctx[line] != want {
+			t.Fatalf("context line %d = %q, want %q (all: %v)", line, ctx[line], want, ctx)
+		}
 	}
-	if len(m.After) != 2 || m.After[0] != "four" || m.After[1] != "five" {
-		t.Fatalf("after context wrong: %v", m.After)
+	// The matching line is never context: it is rendered as a match.
+	if _, ok := ctx[3]; ok {
+		t.Fatalf("the matching line was also stored as context: %v", ctx)
+	}
+	// Rendered, every row carries its own number and the file's own text.
+	out := FormatResult(res, Options{Mode: OutputContent, Before: 2, After: 2})
+	for _, want := range []string{"-1-one", "-2-two", ":3:needle", "-4-four", "-5-five"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("rendered context missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// Two matches inside one context window used to render their overlapping neighbours twice,
+// each window numbered by its first line. Keyed by line number, a line can be neither
+// duplicated nor misnumbered.
+func TestOverlappingContextWindowsRenderEachLineOnce(t *testing.T) {
+	dir := t.TempDir()
+	writeTree(t, dir, map[string]string{"a.txt": "one\nneedle\nthree\nneedle\nfive\n"})
+	res, err := SearchWith(Options{Pattern: "needle", Root: dir, Before: 1, After: 1}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := FormatResult(res, Options{Mode: OutputContent, Before: 1, After: 1})
+	for _, row := range []string{"-1-one", ":2:needle", "-3-three", ":4:needle", "-5-five"} {
+		if n := strings.Count(out, row); n != 1 {
+			t.Errorf("row %q appears %d times, want once:\n%s", row, n, out)
+		}
 	}
 }
 
@@ -299,15 +329,39 @@ func TestZeroMatchesSaysSoInsteadOfReturningEmpty(t *testing.T) {
 	}
 }
 
-func TestLeadingIndentationIsTrimmed(t *testing.T) {
+// A match row carries the file's line, indentation included.
+//
+// THIS TEST USED TO ASSERT THE OPPOSITE. Trimming the leading whitespace saved a few bytes
+// per row and cost two things worth more than they were: in Python the indentation IS the
+// block structure, so a trimmed row cannot say which branch the hit is in; and a model that
+// pastes a row into an edit as the text to replace gets a string the file does not contain.
+// A search result is a quotation, and a quotation that silently reformats is not one.
+func TestAMatchRowKeepsTheLinesIndentation(t *testing.T) {
 	dir := t.TempDir()
 	writeTree(t, dir, map[string]string{"a.go": "func f() {\n\t\t\tneedle\n}\n"})
 	res, err := SearchWith(Options{Pattern: "needle", Root: dir}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Matches[0].Text != "needle" {
-		t.Fatalf("want trimmed text, got %q", res.Matches[0].Text)
+	if res.Matches[0].Text != "\t\t\tneedle" {
+		t.Fatalf("want the file's line verbatim, got %q", res.Matches[0].Text)
+	}
+}
+
+// A trailing CR is a line terminator, not content: it is dropped from what is matched and
+// from what is reported, so a CRLF checkout does not lose every `$`-anchored pattern.
+func TestATrailingCarriageReturnIsNotContent(t *testing.T) {
+	dir := t.TempDir()
+	writeTree(t, dir, map[string]string{"a.txt": "needle here\r\nplain\r\n"})
+	res, err := SearchWith(Options{Pattern: "here$", Root: dir}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Matches) != 1 {
+		t.Fatalf("a CRLF file lost its anchored match: %+v", res.Matches)
+	}
+	if res.Matches[0].Text != "needle here" {
+		t.Fatalf("text = %q, want the CR dropped", res.Matches[0].Text)
 	}
 }
 
@@ -616,19 +670,38 @@ func TestNodeRowsObeyGlobAndPathScoping(t *testing.T) {
 	}
 }
 
-func TestNodeRowsSurfaceInFileAndCountModes(t *testing.T) {
+// A node row belongs in content mode and nowhere else.
+//
+// THIS TEST USED TO ASSERT THE OPPOSITE, and the opposite is a wrong answer. A node row
+// exists because the pattern matched a NAME or a stored DESCRIPTION -- prose that lives in
+// the topology DB and not in the file. In content mode it arrives under a header naming the
+// node, which is the one thing a plain grep cannot do. In a file list or a count there is no
+// header and no way to tell: `grep -rl` would name files that do not contain the string, and
+// the caller's next move is to open them; `grep -rc` would answer "1" where the real count
+// is 0. A count has to be a count.
+func TestNodeRowsStayOutOfFileAndCountModes(t *testing.T) {
 	dir := t.TempDir()
 	writeTree(t, dir, map[string]string{"a.go": "package a\n\nfunc A() {}\n"})
-	res, err := SearchWith(Options{Pattern: "needle", Root: dir, Mode: OutputFiles},
-		nodeTopo(domain.Resource{
-			ID: "a.A", Kind: domain.ResourceFunction, Name: "A", Description: "the needle",
-			Location: domain.Location{Path: filepath.Join(dir, "a.go"), StartsAt: 3, EndsAt: 3},
-		}))
+	topo := nodeTopo(domain.Resource{
+		ID: "a.A", Kind: domain.ResourceFunction, Name: "A", Description: "the needle",
+		Location: domain.Location{Path: filepath.Join(dir, "a.go"), StartsAt: 3, EndsAt: 3},
+	})
+	res, err := SearchWith(Options{Pattern: "needle", Root: dir, Mode: OutputFiles}, topo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Files) != 1 || res.Counts[res.Files[0]] != 1 {
-		t.Fatalf("a description-only hit must still list its file: %+v %+v", res.Files, res.Counts)
+	if len(res.Files) != 0 || len(res.Counts) != 0 {
+		t.Fatalf("a description-only hit is not a textual match: %+v %+v", res.Files, res.Counts)
+	}
+	if res.Found(OutputFiles) {
+		t.Error("files mode must report nothing found, so the exit status stays 1")
+	}
+	// The row itself is still there, and content mode still renders it with its header.
+	if len(res.Matches) != 1 || !res.Matches[0].NodeHit {
+		t.Fatalf("the node row itself must survive: %+v", res.Matches)
+	}
+	if !res.Found(OutputContent) {
+		t.Error("content mode found a node row and must report it as a hit")
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Rhuan-Marques/aracne/internal/helper"
 	"github.com/Rhuan-Marques/aracne/internal/topology"
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 	"github.com/Rhuan-Marques/aracne/internal/topology/scanner"
@@ -215,7 +216,10 @@ func (e *Edit) applyBatch(ops []editOp, waited bool) (string, error) {
 	// Phase 2: commit. A write failure here can still leave earlier files written, which is
 	// why phase 1 exists -- by this point the only remaining causes are disk-level.
 	for _, abs := range order {
-		if err := os.WriteFile(abs, []byte(pending[abs]), 0644); err != nil {
+		// Atomic per file: interrupted between truncate and write, os.WriteFile leaves a
+		// half-written source file, and phase 1 exists precisely so this phase cannot leave
+		// the repository in a state the model does not know about. See helper.AtomicWriteFile.
+		if err := helper.AtomicWriteFile(abs, []byte(pending[abs]), 0644); err != nil {
 			return "", fmt.Errorf("write file %s: %w", abs, err)
 		}
 	}
@@ -248,31 +252,52 @@ func (e *Edit) apply(filePath, oldString, newString string, replaceAll, waited b
 // applyOne resolves a single edit against the content it is handed, returning the new content.
 // It never touches disk, so the caller decides whether the batch commits.
 func applyOne(content string, op editOp, waited bool) (string, error) {
-	oldString := op.OldString
-	if !strings.Contains(content, oldString) {
-		normalizedContent := strings.ReplaceAll(content, "\r\n", "\n")
-		normalizedOld := strings.ReplaceAll(oldString, "\r\n", "\n")
-		if !strings.Contains(normalizedContent, normalizedOld) {
-			if waited {
-				return "", fmt.Errorf("old_string not found in %s — another agent changed this file while your edit was queued; re-read the resource and retry with the current text", op.FilePath)
-			}
-			return "", fmt.Errorf("old_string not found in %s", op.FilePath)
+	oldString, newString, ok := matchLineEndings(content, op.OldString, op.text())
+	if !ok {
+		if waited {
+			return "", fmt.Errorf("old_string not found in %s — another agent changed this file while your edit was queued; re-read the resource and retry with the current text", op.FilePath)
 		}
-		oldString = normalizedOld
-		content = normalizedContent
+		return "", fmt.Errorf("old_string not found in %s", op.FilePath)
 	}
 
 	// Require a unique match unless the caller opted into replacing every one. Silently taking
 	// the first of several matches is a wrong edit that looks like a successful one, and it is
-	// worse for a deletion than a replacement. The count runs on the same (possibly
-	// CRLF-normalized) content used for the replacement below.
+	// worse for a deletion than a replacement.
 	if occurrences := strings.Count(content, oldString); occurrences > 1 && !op.ReplaceAll {
 		return "", fmt.Errorf("old_string matched %d times in %s — include more surrounding context so it matches exactly once, or pass replace_all: true", occurrences, op.FilePath)
 	}
 	if op.ReplaceAll {
-		return strings.ReplaceAll(content, oldString, op.text()), nil
+		return strings.ReplaceAll(content, oldString, newString), nil
 	}
-	return strings.Replace(content, oldString, op.text(), 1), nil
+	return strings.Replace(content, oldString, newString, 1), nil
+}
+
+// matchLineEndings finds the spelling of old_string that occurs in THIS file's bytes, and
+// converts new_string to the same convention. It reports false when neither spelling occurs.
+//
+// WHY IT REWRITES THE STRINGS AND NOT THE FILE. The previous fallback normalized the whole
+// FILE to LF and edited that, so a one-hunk edit against a CRLF file committed the entire file
+// with its line endings changed -- a whole-file diff, and a conflict on every line for anyone
+// with `* text=auto`. The file's bytes are the one thing an edit must leave alone outside its
+// hunk, so the conversion belongs on the caller's strings.
+//
+// The mismatch is not hypothetical in either direction: a model that has read through any
+// aracne surface holds LF text for a CRLF file, and a model that pasted from a CRLF terminal
+// holds CRLF text for an LF file.
+func matchLineEndings(content, oldString, newString string) (string, string, bool) {
+	if strings.Contains(content, oldString) {
+		return oldString, newString, true
+	}
+	toLF := func(s string) string { return strings.ReplaceAll(s, "\r\n", "\n") }
+	toCRLF := func(s string) string { return strings.ReplaceAll(toLF(s), "\n", "\r\n") }
+
+	if crlf := toCRLF(oldString); crlf != oldString && strings.Contains(content, crlf) {
+		return crlf, toCRLF(newString), true
+	}
+	if lf := toLF(oldString); lf != oldString && strings.Contains(content, lf) {
+		return lf, toLF(newString), true
+	}
+	return "", "", false
 }
 
 // editLabel names the failing edit. A one-edit call keeps the old bare wording, so a caller

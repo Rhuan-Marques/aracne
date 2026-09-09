@@ -306,7 +306,8 @@ func (m *Manager) runAgentTask(ctx context.Context, sessionID, groupID, taskID s
 			return
 		}
 
-		assistantMsg := llm.Message{Role: "assistant", Content: resp.Content, ToolCalls: resp.ToolCalls}
+		assistantMsg := llm.Message{Role: "assistant", Content: resp.Content,
+			ToolCalls: resp.ToolCalls, Thinking: resp.Thinking}
 		messages = append(messages, assistantMsg)
 		m.appendTaskAssistantMessage(sessionID, groupID, taskID, resp.Content, resp.Reasoning, messages)
 

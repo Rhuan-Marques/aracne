@@ -25,9 +25,13 @@ func TestStripAracneIntegrationSegment(t *testing.T) {
 			want:  "# Some Doc\n\ncontent\n",
 		},
 		{
-			name:  "only start marker",
+			// A block whose closing line the reader edited away is still aracne's block,
+			// and `arac setup` has always replaced it up to the next top-level heading.
+			// `arac disable` used to return the content unchanged and print "already
+			// clean", leaving the whole contract in a file it claimed to have cleaned.
+			name:  "start marker, closing line edited away",
 			input: "# Aracne Project Integration\n\ncontent\n",
-			want:  "# Aracne Project Integration\n\ncontent\n",
+			want:  "",
 		},
 		{
 			name:  "both markers mid-file",
@@ -117,6 +121,26 @@ func TestRemoveAracneHookFromSettings(t *testing.T) {
 			input: `{"hooks": {"PreToolUse": [{"matcher": "Read|Grep|Edit|Write|Bash", "hooks": [{"command": "arac-guard.sh"}]}, {"matcher": "Bash", "hooks": [{"command": "my-linter"}]}], "PostToolUse": [{"matcher": "Edit|Write|MultiEdit", "hooks": [{"command": "arac update-file"}]}, {"matcher": "Read|Grep|Edit|Write|Bash", "hooks": [{"command": "arac-guard.sh"}]}]}}`,
 			want:  `{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"command": "my-linter"}]}]}}`,
 		},
+		// Ownership is decided by the command WORD and by the script names setup writes,
+		// never by a substring. The test used to be strings.Contains(cmd, "arac"), which
+		// matched every one of these and deleted them from a settings file aracne does not
+		// own -- with no backup, in the command whose whole promise is that it removes only
+		// what setup added.
+		{
+			name: "user hooks whose commands merely contain \"arac\" are kept",
+			input: `{"hooks": {"PostToolUse": [` +
+				`{"matcher": "Edit", "hooks": [{"command": "characterize.sh --fix"}]},` +
+				`{"matcher": "Edit", "hooks": [{"command": "/opt/bin/barracuda-lint"}]},` +
+				`{"matcher": "Bash", "hooks": [{"command": "~/aracnid/run.sh check"}]},` +
+				`{"matcher": "Read", "hooks": [{"command": "echo not-arac-guard.sh"}]}` +
+				`]}}`,
+			want: `{"hooks": {"PostToolUse": [` +
+				`{"matcher": "Edit", "hooks": [{"command": "characterize.sh --fix"}]},` +
+				`{"matcher": "Edit", "hooks": [{"command": "/opt/bin/barracuda-lint"}]},` +
+				`{"matcher": "Bash", "hooks": [{"command": "~/aracnid/run.sh check"}]},` +
+				`{"matcher": "Read", "hooks": [{"command": "echo not-arac-guard.sh"}]}` +
+				`]}}`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -180,6 +204,8 @@ func TestDisableOpenCode(t *testing.T) {
   "permission": {
     "read": "deny",
     "edit": "deny",
+    "bash": "deny",
+    "webfetch": "deny",
     "aracne_*": "deny",
     "aracne_read": "allow",
     "aracne_edit": "allow",
@@ -228,6 +254,15 @@ func TestDisableOpenCode(t *testing.T) {
 	if strings.Contains(config, `"aracne_`) {
 		t.Fatalf("opencode.json should have no aracne_ permissions:\n%s", config)
 	}
+	// Disable un-gates what aracne gated and touches NOTHING else. It used to assign a fresh
+	// allow-everything map over the whole block, which deleted keys the operator had set --
+	// a webfetch denial went with it, and a structured bash policy collapsed to "allow".
+	if !strings.Contains(config, `"webfetch": "deny"`) {
+		t.Fatalf("opencode.json must keep permission keys aracne never wrote:\n%s", config)
+	}
+	if strings.Contains(config, `"grep"`) || strings.Contains(config, `"write"`) {
+		t.Fatalf("opencode.json must not gain permission keys setup never writes:\n%s", config)
+	}
 
 	checkEmptyDir(t, ".opencode/commands", "OpenCode commands")
 	checkEmptyDir(t, ".opencode/agents", "OpenCode agents")
@@ -275,9 +310,27 @@ func TestDisableClaudeCode(t *testing.T) {
 		os.WriteFile(filepath.Join(".claude/agents", agent), []byte("content"), 0644)
 	}
 	os.WriteFile(".claude/hooks/arac-update-file.ps1", []byte("hook"), 0644)
+	os.WriteFile(".claude/hooks/arac-guard.sh", []byte("hook"), 0755)
+	os.WriteFile(".claude/hooks/arac-guard.ps1", []byte("hook"), 0644)
 
+	// The guard hook is what makes aracne intercept shell commands: a PreToolUse
+	// entry whose matcher includes Bash, plus its twin on PostToolUse. It is in the
+	// fixture so the assertions below prove disable takes interception with it.
 	settingsContent := `{
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Read|Grep|Edit|Write|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-guard.sh",
+            "shell": "bash",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Edit|Write|MultiEdit",
@@ -287,6 +340,17 @@ func TestDisableClaudeCode(t *testing.T) {
             "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-update-file.ps1",
             "shell": "powershell",
             "timeout": 60
+          }
+        ]
+      },
+      {
+        "matcher": "Read|Grep|Edit|Write|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-guard.sh",
+            "shell": "bash",
+            "timeout": 30
           }
         ]
       }
@@ -308,10 +372,15 @@ func TestDisableClaudeCode(t *testing.T) {
 	checkEmptyDir(t, ".claude/commands", "Claude commands")
 	checkEmptyDir(t, ".claude/agents", "Claude agents")
 	checkEmptyDir(t, ".claude/hooks", "Claude hooks")
+	checkFileNotExist(t, ".claude/hooks/arac-guard.sh", "Claude guard hook script")
+	checkFileNotExist(t, ".claude/hooks/arac-guard.ps1", "Claude guard hook script")
 
-	settingsData, _ := os.ReadFile(".claude/settings.json")
-	if strings.TrimSpace(string(settingsData)) != "{}" {
-		t.Fatalf("settings.json should be empty, got:\n%s", string(settingsData))
+	// A settings.json holding nothing but `{}` is residue: aracne created the file and
+	// nothing of anyone else's is in it, so an uninstall that claims to be complete takes it
+	// with it. A file with any user content left is only edited, never removed.
+	if _, err := os.Stat(".claude/settings.json"); err == nil {
+		settingsData, _ := os.ReadFile(".claude/settings.json")
+		t.Fatalf("settings.json aracne created should be removed, got:\n%s", string(settingsData))
 	}
 
 	claudeMdData, _ := os.ReadFile("CLAUDE.md")
@@ -475,6 +544,83 @@ func TestRunDisableAllFlag(t *testing.T) {
 	if strings.TrimSpace(string(mcpData)) != "{}" {
 		t.Fatal("--all should disable Claude Code")
 	}
+}
+
+// TestSetupThenDisableRemovesShellInterception is the round trip: whatever `arac
+// setup` writes today, `arac disable` has to take back. Every other disable test
+// works from a hand-written fixture, and a fixture can only assert about the
+// artifacts its author remembered -- a guard hook setup starts writing under a new
+// name would keep intercepting shell commands with every one of them still green.
+//
+// Terminal interception has exactly one entry point per harness. On Claude Code it
+// is the PreToolUse hook that runs `arac guard`, which is where interceptCommand
+// rewrites the command into `arac cmd -- ...`; on OpenCode it is the pre-tool
+// plugin plus the bash permission's read/grep deny patterns. All of them below.
+func TestSetupThenDisableRemovesShellInterception(t *testing.T) {
+	dir := t.TempDir()
+	prevDir, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer os.Chdir(prevDir)
+	// Nothing may reach the real home directory, even though this is the local install.
+	t.Setenv("HOME", filepath.Join(dir, "home"))
+	os.MkdirAll(".aracne", 0755)
+
+	runSetup(true, true, false, true)
+
+	// The round trip proves nothing unless setup installed interception to begin with.
+	if !hasAracneHook(t, ".claude/settings.json") {
+		t.Fatal("setup wrote no aracne hook into .claude/settings.json; nothing to disable")
+	}
+
+	RunDisable([]string{"-y", "--all"})
+
+	if hasAracneHook(t, ".claude/settings.json") {
+		data, _ := os.ReadFile(".claude/settings.json")
+		t.Fatalf("disable left an aracne hook in settings.json:\n%s", data)
+	}
+	checkFileNotExist(t, ".claude/hooks/arac-guard.sh", "Claude guard hook script")
+	checkFileNotExist(t, ".claude/hooks/arac-guard.ps1", "Claude guard hook script")
+	checkFileNotExist(t, ".opencode/plugins/arac-pre-tool-scan.js", "OpenCode pre-tool scan plugin")
+
+	// Nothing may be left that still refuses a shell read. A config aracne created from
+	// nothing and has now emptied is removed outright; one the operator already had keeps its
+	// own keys, un-gated back to "allow".
+	if _, err := os.Stat(".opencode/opencode.json"); err == nil {
+		permission, _ := readJSONConfig(".opencode/opencode.json")["permission"].(map[string]interface{})
+		if bash := permission["bash"]; bash != "allow" {
+			t.Fatalf("opencode permission.bash = %v, want \"allow\" (a deny map still refuses shell reads)", bash)
+		}
+	}
+
+	// The contract is the other half of interception: it is what tells the model the
+	// shell reads it types are answered from the topology.
+	for _, path := range []string{"CLAUDE.md", "AGENTS.md"} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		if findAracIntegrationStart(string(data)) >= 0 {
+			t.Fatalf("%s still carries the integration contract:\n%s", path, data)
+		}
+	}
+}
+
+// hasAracneHook reports whether any PreToolUse/PostToolUse entry in a Claude
+// settings file still runs an aracne command.
+func hasAracneHook(t *testing.T, settingsPath string) bool {
+	t.Helper()
+	hooks, _ := readJSONConfig(settingsPath)["hooks"].(map[string]interface{})
+	for _, event := range []string{"PreToolUse", "PostToolUse"} {
+		entries, _ := hooks[event].([]interface{})
+		for _, entry := range entries {
+			if isAracneHookEntry(entry) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func checkEmptyDir(t *testing.T, dir, label string) {

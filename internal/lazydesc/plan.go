@@ -26,6 +26,10 @@ type Target struct {
 	ID   string
 	Name string
 	Kind domain.ResourceKind
+	// Fingerprint is what makes a RECORDED failure expire. A resource whose name, kind or
+	// span has moved is different code and deserves a fresh attempt; one that has not is the
+	// same refusal a second provider call would buy again. See helper.DescriptionAttempts.
+	Fingerprint string
 	// rank orders the cap: lower is kept first. See seedRank.
 	rank int
 }
@@ -200,7 +204,8 @@ func collect(topo *domain.Topology, seedRank map[string]int, opt PlanOptions) []
 		if !helper.ShouldDescribe(res, targetSet, opt.Filter, opt.IncludeNotVisible) {
 			continue
 		}
-		out = append(out, Target{ID: id, Name: res.Name, Kind: res.Kind, rank: rank})
+		out = append(out, Target{ID: id, Name: res.Name, Kind: res.Kind,
+			Fingerprint: helper.DescriptionAttemptFingerprint(res), rank: rank})
 	}
 	// Rank first, then id: a stable order is what makes two identical reads describe the same
 	// nodes, which is what makes the cap reproducible instead of arbitrary.

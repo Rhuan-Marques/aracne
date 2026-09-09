@@ -8,6 +8,21 @@ type Message struct {
 	Content    string     `json:"content"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	// Thinking carries an assistant turn's extended-reasoning blocks so they can be sent
+	// back on the NEXT request. Anthropic requires that when extended thinking is on and the
+	// turn made a tool call: the assistant message has to arrive with its thinking blocks
+	// and their signatures intact, or the request is rejected. Dropping them is why the
+	// thinking-budget chat agents -- bug-hunter, bug-judge, bug-solver -- could not survive
+	// their own first tool call. Providers without the concept ignore the field.
+	Thinking []ThinkingBlock `json:"thinking,omitempty"`
+}
+
+// ThinkingBlock is one extended-reasoning block, with the provider's signature over it. The
+// signature is opaque and must be round-tripped byte for byte; a block without one cannot be
+// re-sent.
+type ThinkingBlock struct {
+	Thinking  string `json:"thinking"`
+	Signature string `json:"signature"`
 }
 
 // Defines the structure of an LLM tool with Name, Description, and Parameters fields. Used for JSON serialization of tool definitions in MCP protocol responses.
@@ -53,6 +68,10 @@ type ToolCallFunction struct {
 type ChatResponse struct {
 	Content   string
 	Reasoning string
+	// Thinking is the reasoning as the provider structured it, to be carried on the
+	// assistant Message of the next request. Reasoning above is the same text flattened for
+	// display; only this can be sent back.
+	Thinking  []ThinkingBlock
 	ToolCalls []ToolCall
 }
 

@@ -420,9 +420,17 @@ func TestReadFileSkeletonMarksElisionsUnmistakably(t *testing.T) {
 			continue
 		}
 		if strings.Contains(line, "⋯") {
-			// A marker must name the id to read and must not read as code.
-			if !strings.Contains(line, "demo/pkg.") {
-				t.Errorf("elision marker names no id: %q", line)
+			// A marker must say HOW MUCH is missing and WHERE to get it, and must not read
+			// as code. What "where" is spelled as follows the identification mode: a
+			// trailing id segment, or a `path:start-end` span that is directly runnable.
+			// It is the same marker the windowed reader emits, which is the point -- one
+			// vocabulary per project rather than one per renderer.
+			if !strings.Contains(line, "lines") {
+				t.Errorf("elision marker does not say how much is missing: %q", line)
+			}
+			if !strings.Contains(line, "Total") && !strings.Contains(line, "Describe") &&
+				!strings.Contains(line, "pkg/shapes.go:") {
+				t.Errorf("elision marker points nowhere: %q", line)
 			}
 			continue
 		}

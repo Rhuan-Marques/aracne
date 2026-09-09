@@ -57,16 +57,40 @@ func TestValidateChatTools(t *testing.T) {
 }
 
 func TestNativeToolKey(t *testing.T) {
-	cases := map[string]string{"Read": "read", "Grep": "grep", "Edit": "edit", "Write": "write", "Bash": "bash"}
+	// MultiEdit and NotebookEdit are edits. Leaving them out was a blocked_tools bypass:
+	// `blocked_tools: ["edit"]` refused Edit and Write and waved MultiEdit straight through.
+	cases := map[string]string{
+		"Read": "read", "Grep": "grep", "Edit": "edit", "Write": "write", "Bash": "bash",
+		"MultiEdit": "edit", "NotebookEdit": "edit",
+	}
 	for tool, want := range cases {
 		got, ok := NativeToolKey(tool)
 		if !ok || got != want {
 			t.Fatalf("NativeToolKey(%q) = (%q, %v), want (%q, true)", tool, got, ok, want)
 		}
 	}
-	for _, tool := range []string{"MultiEdit", "Glob", "read", "nope"} {
+	for _, tool := range []string{"Glob", "read", "nope"} {
 		if _, ok := NativeToolKey(tool); ok {
 			t.Fatalf("NativeToolKey(%q) should report false", tool)
+		}
+	}
+}
+
+// TestNativeToolNamesCoversTheMap pins the derivation the guard's hook matcher relies on: a
+// name in the map must appear in the matcher, or the guard is never invoked for it.
+func TestNativeToolNamesCoversTheMap(t *testing.T) {
+	names := NativeToolNames()
+	if len(names) != len(nativeToolToKey) {
+		t.Fatalf("NativeToolNames() = %v, want one entry per nativeToolToKey (%d)", names, len(nativeToolToKey))
+	}
+	for _, n := range names {
+		if _, ok := nativeToolToKey[n]; !ok {
+			t.Fatalf("NativeToolNames() returned %q, which is not in nativeToolToKey", n)
+		}
+	}
+	for i := 1; i < len(names); i++ {
+		if names[i-1] >= names[i] {
+			t.Fatalf("NativeToolNames() must be sorted so the generated matcher is stable: %v", names)
 		}
 	}
 }

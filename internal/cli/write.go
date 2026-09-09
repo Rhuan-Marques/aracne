@@ -20,7 +20,7 @@ func RunWrite() {
 		os.Exit(1)
 	}
 
-	manager, reg := InitRegistry(".aracne/topology.db")
+	manager, reg := InitRegistry(ProjectDBPath(DefaultDBRelative))
 	result, err := tools.NewWrite(manager, reg).Run(data)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

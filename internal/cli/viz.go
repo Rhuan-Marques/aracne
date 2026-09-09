@@ -29,11 +29,15 @@ func RunViz(args []string) {
 	}
 
 	fs := flag.NewFlagSet("viz serve", flag.ExitOnError)
-	dbPath := fs.String("db", ".aracne/topology.db", "Topology database path")
+	dbPath := fs.String("db", DefaultDBRelative, "Topology database path")
 	addr := fs.String("addr", "127.0.0.1:7331", "HTTP listen address")
 	fs.Parse(args[1:])
 
-	if err := viz.Listen(*addr, *dbPath); err != nil {
+	// Resolved, not taken literally -- the same walk every other verb does. Started from a
+	// subdirectory this served the SPA happily and answered every API call with
+	// "unable to open database file (14)", with nothing in the log to say why. ProjectDBPath
+	// leaves an explicitly-passed --db alone, so only the default walks up.
+	if err := viz.Listen(*addr, ProjectDBPath(*dbPath)); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}

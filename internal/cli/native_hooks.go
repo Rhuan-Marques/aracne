@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,9 +22,9 @@ type claudeNativeEditHook struct {
 }
 
 // Installs a native edit hook script and registers it in Claude's settings configuration.
-func writeClaudeNativeEditHook(settingsPath, hooksDir string, autoYes bool) {
+func writeClaudeNativeEditHook(settingsPath, hooksDir string, global, autoYes bool) {
 	os.MkdirAll(hooksDir, 0755)
-	hook := claudeNativeEditHookForOS(runtime.GOOS)
+	hook := claudeNativeEditHookForOS(runtime.GOOS, hooksDir, global)
 	scriptPath := filepath.Join(hooksDir, hook.scriptName)
 	writeMarkdownFile(scriptPath, "Claude native edit hook script", hook.content, autoYes)
 	if runtime.GOOS != "windows" {
@@ -37,35 +38,43 @@ func writeClaudeNativeEditHook(settingsPath, hooksDir string, autoYes bool) {
 	if hooks == nil {
 		hooks = make(map[string]interface{})
 	}
-	hooks["PostToolUse"] = []interface{}{
-		map[string]interface{}{
-			"matcher": "Edit|Write|MultiEdit",
-			"hooks": []interface{}{
-				map[string]interface{}{
-					"type":    "command",
-					"command": hook.command,
-					"shell":   hook.shell,
-					"timeout": 60,
-				},
+	entry := map[string]interface{}{
+		"matcher": "Edit|Write|MultiEdit",
+		"hooks": []interface{}{
+			map[string]interface{}{
+				"type":    "command",
+				"command": hook.command,
+				"shell":   hook.shell,
+				"timeout": 60,
 			},
 		},
 	}
+	// UPSERTED, not assigned. A plain assignment replaced the whole list, which deleted the
+	// user's own PostToolUse hooks -- a formatter, a linter, a notifier -- and only spared the
+	// guard's entry because the guard happens to be written afterwards and re-adds its own.
+	// The guard has always upserted; this is the same filter-then-append.
+	hooks["PostToolUse"] = upsertHookEntry(hooks["PostToolUse"], entry, isEditSyncHookEntry)
 	settings["hooks"] = hooks
 	writeJSONConfig(settingsPath, settings)
 	fmt.Printf("[Claude Code] Native edit hook configured in %s\n", settingsPath)
 }
 
-// guardHookMatcher is the tool matcher for the guard hook. It matches only the
-// PascalCase native tools (the lowercase mcp__aracne__* tools never match).
-const guardHookMatcher = "Read|Grep|Edit|Write|Bash"
+// guardHookMatcher is the tool matcher for the guard hook. It matches only the PascalCase
+// native tools (the lowercase mcp__aracne__* tools never match).
+//
+// DERIVED from toolspec.NativeToolNames rather than typed out, because the two must agree: a
+// name the matcher omits is a call the guard never sees, and a name the map omits is a call
+// the guard sees and cannot classify. Typed separately, the matcher fell behind the map and
+// MultiEdit went unguarded -- see toolspec.nativeToolToKey.
+var guardHookMatcher = strings.Join(toolspec.NativeToolNames(), "|")
 
 // writeClaudeGuardHook installs the `arac guard` PreToolUse + PostToolUse hooks
 // that warn on (and, per blocked_tools, block) native/shell tool usage. It
 // merges into settings.json, preserving the edit-sync PostToolUse hook and any
 // user hooks, and is idempotent (its own prior entries are replaced).
-func writeClaudeGuardHook(settingsPath, hooksDir string, autoYes bool) {
+func writeClaudeGuardHook(settingsPath, hooksDir string, global, autoYes bool) {
 	os.MkdirAll(hooksDir, 0755)
-	hook := claudeGuardHookForOS(runtime.GOOS)
+	hook := claudeGuardHookForOS(runtime.GOOS, hooksDir, global)
 	scriptPath := filepath.Join(hooksDir, hook.scriptName)
 	writeMarkdownFile(scriptPath, "Claude guard hook script", hook.content, autoYes)
 	if runtime.GOOS != "windows" {
@@ -97,36 +106,115 @@ func writeClaudeGuardHook(settingsPath, hooksDir string, autoYes bool) {
 	fmt.Printf("[Claude Code] Guard hook configured in %s\n", settingsPath)
 }
 
-// upsertGuardHookEntry drops any existing guard entry from a hook-event list
-// (so re-init does not duplicate it) and appends the fresh one, leaving every
-// other entry — the edit-sync hook, user hooks — untouched.
-func upsertGuardHookEntry(existing interface{}, entry map[string]interface{}) []interface{} {
+// upsertHookEntry drops the entries `mine` recognizes as aracne's own from a hook-event list
+// (so re-running setup does not duplicate them) and appends the fresh one, leaving every other
+// entry — the sibling aracne hook, and every hook the user wrote — untouched.
+//
+// Every writer of a hook-event list goes through it. The one that did not simply assigned over
+// the list and took the user's hooks with it.
+func upsertHookEntry(existing interface{}, entry map[string]interface{},
+	mine func(interface{}) bool) []interface{} {
+
 	list, _ := existing.([]interface{})
 	filtered := make([]interface{}, 0, len(list)+1)
 	for _, e := range list {
-		if !isGuardHookEntry(e) {
+		if !mine(e) {
 			filtered = append(filtered, e)
 		}
 	}
 	return append(filtered, entry)
 }
 
+// upsertGuardHookEntry is upsertHookEntry for the guard's own entry.
+func upsertGuardHookEntry(existing interface{}, entry map[string]interface{}) []interface{} {
+	return upsertHookEntry(existing, entry, isGuardHookEntry)
+}
+
+// isEditSyncHookEntry reports whether a settings.json hook entry is the edit-sync hook,
+// identified by its script command (`arac-update-file`).
+func isEditSyncHookEntry(entry interface{}) bool {
+	return hookEntryRunsScript(entry, "arac-update-file")
+}
+
 // isGuardHookEntry reports whether a settings.json hook entry is the guard
 // hook, identified by its script command (`arac-guard`).
 func isGuardHookEntry(entry interface{}) bool {
+	return hookEntryRunsScript(entry, "arac-guard")
+}
+
+// hookEntryRunsScript reports whether any of a hook entry's commands RUNS the named aracne
+// script, `.sh` or `.ps1`.
+//
+// It tests the command WORD, base-named and stripped of its extension -- not a substring of the
+// whole command. A substring is what `arac disable` used to delete a settings entry by, and it
+// matched things that merely mentioned the name: a user hook that echoes `not-arac-guard.sh`,
+// or anything under a directory called `arac-guard`. Since setup writes the script path AS the
+// command (the shell is a sibling field, not a prefix), the command word is exactly the right
+// thing to look at.
+func hookEntryRunsScript(entry interface{}, script string) bool {
 	entryMap, ok := entry.(map[string]interface{})
 	if !ok {
 		return false
 	}
 	hooksList, _ := entryMap["hooks"].([]interface{})
 	for _, h := range hooksList {
-		if hMap, ok := h.(map[string]interface{}); ok {
-			if cmd, _ := hMap["command"].(string); strings.Contains(cmd, "arac-guard") {
-				return true
-			}
+		hMap, ok := h.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		cmd, _ := hMap["command"].(string)
+		word := strings.ToLower(baseName(hookCommandWord(cmd)))
+		if word == script || word == script+".sh" || word == script+".ps1" {
+			return true
 		}
 	}
 	return false
+}
+
+// hookCommandWord returns the program a settings.json hook command invokes: its first token,
+// with quoting honoured and PowerShell's call operator skipped.
+//
+// strings.Fields is not enough any more, and that is not a detail. The generated command now
+// QUOTES its script path (see bashHookCommand -- an unquoted path under "My Projects" broke
+// every hook), so the first field of `& 'C:/My Projects/x/.claude/hooks/arac-guard.ps1'` is
+// `&` and the second is `'C:/My`. Neither names the script, and an entry aracne cannot
+// recognize is one `arac setup` stacks a duplicate beside and `arac disable` leaves behind.
+//
+// Still the command WORD and not a substring: that is what keeps a user hook echoing
+// "not-arac-guard.sh", or anything under a directory called arac-guard, out of it.
+func hookCommandWord(cmd string) string {
+	var tokens []string
+	var cur strings.Builder
+	var quote rune
+	flush := func() {
+		if cur.Len() > 0 {
+			tokens = append(tokens, cur.String())
+			cur.Reset()
+		}
+	}
+	for _, r := range cmd {
+		switch {
+		case quote != 0 && r == quote:
+			quote = 0
+		case quote != 0:
+			cur.WriteRune(r)
+		case r == '\'' || r == '"':
+			quote = r
+		case r == ' ' || r == '\t':
+			flush()
+		default:
+			cur.WriteRune(r)
+		}
+	}
+	flush()
+	for _, tok := range tokens {
+		// PowerShell's call operator is punctuation, not a program.
+		if tok == "&" {
+			continue
+		}
+		return tok
+	}
+	return ""
 }
 
 // writeClaudePermissions merges an allow-list for the aracne MCP tools into
@@ -159,10 +247,12 @@ func writeClaudePermissions(settingsPath string, cfg *helper.Config) {
 // upsertAracneAllowRules strips every mcp__aracne__* rule before re-adding, so flipping the
 // flag in either direction self-heals an existing settings.json on the next init.
 func claudeMCPPermissionRules(cfg *helper.Config) []string {
-	// The mode filter runs here as everywhere else: a rule pre-approving a tool the server
-	// never registers is inert, but it is also the exact shape of the drift this file's
-	// generator/server test hunts, and a reader cannot tell the inert one from a real bug.
-	names := cfg.ServableMCPTools(allMCPToolNames())
+	// The SUB-AGENT filter, not the main-agent one. Sub-agents declare their own scoped
+	// server inline and have it in every mode, so their tools need pre-approving in every
+	// mode; narrowing by the main agent's surface left an intercepting project prompting on
+	// every `update_description` its descriptions executor made. The shell-served tools are
+	// still dropped, so no rule here names something no server registers.
+	names := cfg.SubAgentMCPTools(allMCPToolNames())
 	rules := make([]string, 0, len(names)+1)
 	for _, name := range names {
 		if toolspec.IsBugTool(name) && !cfg.BugManagementEnabled() {
@@ -193,28 +283,86 @@ func upsertAracneAllowRules(existing []interface{}, rules []string) []interface{
 }
 
 // Returns the appropriate native hook script and configuration for the given OS.
-func claudeGuardHookForOS(goos string) claudeNativeEditHook {
+func claudeGuardHookForOS(goos, hooksDir string, global bool) claudeNativeEditHook {
 	if goos == "windows" {
 		return claudeNativeEditHook{
 			scriptName: "arac-guard.ps1",
 			content:    claudeGuardHookPowerShellScript(),
-			command:    "${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-guard.ps1",
+			command:    powershellHookCommand(hookScriptRef(hooksDir, "arac-guard.ps1", global)),
 			shell:      "powershell",
 		}
 	}
 	return claudeNativeEditHook{
 		scriptName: "arac-guard.sh",
 		content:    claudeGuardHookShellScript(),
-		command:    "${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-guard.sh",
+		command:    bashHookCommand(hookScriptRef(hooksDir, "arac-guard.sh", global)),
 		shell:      "bash",
 	}
+}
+
+// hookScriptRef is how a settings.json entry names one of the scripts setup just wrote.
+//
+// A LOCAL install uses ${CLAUDE_PROJECT_DIR}, which Claude Code expands to the project root
+// the session started in. That keeps the entry portable: it means the same thing in a
+// teammate's checkout, which matters because settings.json is usually committed.
+//
+// A GLOBAL install must not use it. `arac setup --global` writes the scripts under the user's
+// HOME (~/.claude/hooks) while ${CLAUDE_PROJECT_DIR} still expands to the PROJECT root -- so
+// the entry named a file setup had never created, and in every project without a local copy
+// the guard was simply dead: no interception, no pre-tool scan, no blocked_tools, no nudge.
+// A global install names the absolute path it actually wrote to.
+func hookScriptRef(hooksDir, name string, global bool) string {
+	if !global {
+		return "${CLAUDE_PROJECT_DIR}/.claude/hooks/" + name
+	}
+	path := filepath.Join(hooksDir, name)
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	return filepath.ToSlash(path)
+}
+
+// bashHookCommand and powershellHookCommand wrap a script path for a SHELL-FORM hook.
+//
+// THE QUOTES ARE THE WHOLE POINT. Claude Code substitutes the path into the command string
+// and hands the result to a shell, so an unquoted path word-splits on the first space. A
+// project under "~/My Projects" therefore failed EVERY tool call with
+// `bash: line 1: /Users/x/My: No such file or directory` and exit 127 -- the guard dead,
+// loudly, on every turn, with nothing in aracne able to notice. The hooks reference says it
+// outright: "In shell form, wrap each placeholder in double quotes."
+//
+// Double quotes rather than single, so the placeholder still expands if the harness ever
+// leaves that to the shell rather than substituting it first.
+func bashHookCommand(path string) string { return `"` + path + `"` }
+
+// powershellHookCommand needs the call operator as well as the quotes: a quoted string on its
+// own is an expression that evaluates to the path, not a command that runs it.
+func powershellHookCommand(path string) string { return "& " + quoteForPowerShell(path) }
+
+// aracBinary is the command a generated hook or plugin should run.
+//
+// The ABSOLUTE path of the binary writing the integration, when it can be resolved, and the
+// bare name otherwise. `arac setup` is the one moment where the answer is known for certain,
+// and the scripts used to hard-code `arac` and hope: a build kept at ./bin/arac, a Homebrew
+// install whose shell a GUI-launched editor does not inherit, a login PATH the harness does
+// not share -- each turned every tool call into a failing hook, not a quiet degradation.
+// interceptCommand already resolves os.Executable() for exactly this reason.
+func aracBinary() string {
+	exe, err := os.Executable()
+	if err != nil || strings.TrimSpace(exe) == "" {
+		return "arac"
+	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil && resolved != "" {
+		exe = resolved
+	}
+	return exe
 }
 
 // Returns a shell script that invokes the arac guard tool as a Claude hook
 func claudeGuardHookShellScript() string {
 	return strings.Join([]string{
 		"#!/bin/sh",
-		"exec arac guard --claude-hook",
+		"exec " + quoteForShell(aracBinary()) + " guard --claude-hook",
 		"",
 	}, "\n")
 }
@@ -224,25 +372,32 @@ func claudeGuardHookPowerShellScript() string {
 	return strings.Join([]string{
 		"$inputJson = [Console]::In.ReadToEnd()",
 		"if ([string]::IsNullOrWhiteSpace($inputJson)) { exit 0 }",
-		"$inputJson | & arac guard --claude-hook",
+		"$inputJson | & " + quoteForPowerShell(aracBinary()) + " guard --claude-hook",
 		"",
 	}, "\n")
 }
 
+// quoteForPowerShell wraps a path in single quotes for a PowerShell call operator, which
+// needs them whenever the path contains a space -- a Windows install under "Program Files"
+// being the ordinary case.
+func quoteForPowerShell(p string) string {
+	return "'" + strings.ReplaceAll(p, "'", "''") + "'"
+}
+
 // Returns OS-specific native edit hook configuration (PowerShell for Windows, shell script for others)
-func claudeNativeEditHookForOS(goos string) claudeNativeEditHook {
+func claudeNativeEditHookForOS(goos, hooksDir string, global bool) claudeNativeEditHook {
 	if goos == "windows" {
 		return claudeNativeEditHook{
 			scriptName: "arac-update-file.ps1",
 			content:    claudeUpdateFileHookPowerShellScript(),
-			command:    "${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-update-file.ps1",
+			command:    powershellHookCommand(hookScriptRef(hooksDir, "arac-update-file.ps1", global)),
 			shell:      "powershell",
 		}
 	}
 	return claudeNativeEditHook{
 		scriptName: "arac-update-file.sh",
 		content:    claudeUpdateFileHookShellScript(),
-		command:    "${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-update-file.sh",
+		command:    bashHookCommand(hookScriptRef(hooksDir, "arac-update-file.sh", global)),
 		shell:      "bash",
 	}
 }
@@ -252,7 +407,7 @@ func claudeUpdateFileHookPowerShellScript() string {
 	return strings.Join([]string{
 		"$inputJson = [Console]::In.ReadToEnd()",
 		"if ([string]::IsNullOrWhiteSpace($inputJson)) { exit 0 }",
-		"$inputJson | & arac update-file --claude-hook",
+		"$inputJson | & " + quoteForPowerShell(aracBinary()) + " update-file --claude-hook",
 		"",
 	}, "\n")
 }
@@ -261,9 +416,19 @@ func claudeUpdateFileHookPowerShellScript() string {
 func claudeUpdateFileHookShellScript() string {
 	return strings.Join([]string{
 		"#!/bin/sh",
-		"exec arac update-file --claude-hook",
+		"exec " + quoteForShell(aracBinary()) + " update-file --claude-hook",
 		"",
 	}, "\n")
+}
+
+// aracJSLiteral is aracBinary() as a JSON string literal, safe to paste into a generated
+// JavaScript plugin (a Windows path is full of backslashes).
+func aracJSLiteral() string {
+	b, err := json.Marshal(aracBinary())
+	if err != nil {
+		return `"arac"`
+	}
+	return string(b)
 }
 
 // writeOpenCodePreToolScanPlugin installs the OpenCode counterpart of the Claude Code
@@ -289,6 +454,10 @@ import { promisify } from "node:util"
 
 const run = promisify(execFile)
 
+// The absolute path of the aracne binary that generated this plugin, so a harness whose
+// PATH differs from the shell that ran "arac setup" still finds it.
+const ARAC = `+aracJSLiteral()+`
+
 // The tools whose answer depends on the topology being current, matching the Claude Code
 // guard hook's matcher plus OpenCode's own spellings of a native edit.
 const SCANNED_TOOLS = new Set([
@@ -313,7 +482,7 @@ export const AracPreToolScan = async ({ directory, worktree }) => {
         // Awaited on purpose: the scan is only worth running if it lands BEFORE the tool
         // reads the graph. Bounded and swallowed, like the Claude hook -- a scan that failed
         // must never turn into a tool call that failed.
-        await run("arac", ["guard", "--pre-scan"], { cwd: root, timeout: 30000 })
+        await run(ARAC, ["guard", "--pre-scan"], { cwd: root, timeout: 30000 })
       } catch {}
     },
   }
@@ -332,6 +501,9 @@ func openCodeNativeEditPlugin() string {
 	return strings.TrimPrefix(`
 import { execFileSync } from "node:child_process"
 import path from "node:path"
+
+// The absolute path of the aracne binary that generated this plugin; see arac-pre-tool-scan.
+const ARAC = `+aracJSLiteral()+`
 
 export const AracNativeEditSync = async ({ directory, worktree }) => {
   const root = worktree ?? directory ?? process.cwd()
@@ -352,7 +524,7 @@ export const AracNativeEditSync = async ({ directory, worktree }) => {
     file = normalizeFile(file)
     if (!file || shouldSkip(file)) return ""
     try {
-      const text = execFileSync("arac", ["update-file", file], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })
+      const text = execFileSync(ARAC, ["update-file", file], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })
       if (/Warning number\s+0/.test(text)) return ""
       return `+"`"+`Aracne warnings for ${file}:\n${text}`+"`"+`
     } catch (error) {

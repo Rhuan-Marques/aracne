@@ -85,3 +85,58 @@ func TestStoreSaveLoadAll(t *testing.T) {
 		t.Fatalf("unexpected sessions: %+v", all)
 	}
 }
+
+// Plan Mode is a hard refusal and the workspace scope is a prompt, so the refusal has to be
+// decided first. The order used to be the other way round, which made `rm -rf /etc/nginx` in
+// Plan Mode return `ask` while `rm -rf build` returned `deny` -- the safety gradient inverted,
+// in the one mode a user selects to be certain nothing runs.
+func TestPlanModeDeniesEvenOutsideTheWorkspace(t *testing.T) {
+	policy := NewPermissionPolicy("/tmp/ws")
+	for _, tc := range []struct {
+		name string
+		tool string
+		args string
+	}{
+		{"bash inside", "bash", `{"command":"rm -rf build"}`},
+		{"bash outside", "bash", `{"command":"rm -rf /etc/nginx"}`},
+		{"write outside", "write", `{"file_path":"/etc/hosts","content":"x"}`},
+		{"edit outside", "edit", `{"file_path":"/etc/hosts","old_string":"a","new_string":"b"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := policy.Decide(tc.tool, tc.args, ModePlan, ApprovalAlways)
+			if d.Action != permissionDeny {
+				t.Fatalf("Decide(%s) = %s (%s), want deny", tc.tool, d.Action, d.Reason)
+			}
+		})
+	}
+}
+
+// The read tool's parameter is `ids`, and nothing used to look at it: isReadOnlyTool then
+// returned allow with the reason "read-only in workspace", a claim nothing had checked. An
+// absolute path among the ids falls through to rawFileUnit, which reads it off disk.
+func TestReadIDsOutsideWorkspaceAreNotAutoAllowed(t *testing.T) {
+	policy := NewPermissionPolicy("/tmp/ws")
+	for _, tool := range []string{"read", "read_resource"} {
+		d := policy.Decide(tool, `{"ids":["/etc/passwd"]}`, ModeBuild, ApprovalManual)
+		if d.Action == permissionAllow {
+			t.Fatalf("Decide(%s, ids=/etc/passwd) = allow (%s), want ask", tool, d.Reason)
+		}
+	}
+}
+
+// The same check must not turn resource ids into scope questions: an id is not a path, and a
+// relative path resolves inside the workspace by construction. Reads of both stay allowed.
+func TestReadIDsInsideWorkspaceStayAllowed(t *testing.T) {
+	policy := NewPermissionPolicy("/tmp/ws")
+	for _, args := range []string{
+		`{"ids":["internal/cli.RunGuard"]}`,
+		`{"ids":["github.com/x/y/internal/helper.LoadConfig","pkg.Thing"]}`,
+		`{"ids":["internal/cli/guard.go"]}`,
+		`{"ids":["/tmp/ws/internal/cli/guard.go"]}`,
+	} {
+		d := policy.Decide("read_resource", args, ModeBuild, ApprovalManual)
+		if d.Action != permissionAllow {
+			t.Fatalf("Decide(read_resource, %s) = %s (%s), want allow", args, d.Action, d.Reason)
+		}
+	}
+}

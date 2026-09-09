@@ -60,4 +60,18 @@ type Resource struct {
 	Location    Location
 	Properties  map[string]any
 	Connections map[string][]string
+	// ExactHash and NormHash fingerprint this resource's own source span, so that code which
+	// MOVED can be recognised as the same code after its id changes -- which it does in every
+	// language whose module path is minted from the filename (Python, JavaScript, TypeScript,
+	// Rust). See helper.BodyHashes for what each one covers and why there are two.
+	//
+	// Stamped on the scan path while the file is still on disk, and persisted, because the
+	// point is to answer a question asked AFTER the old file is gone. Empty for a resource
+	// whose body is too small to fingerprint safely, and for one read out of a database
+	// written before these columns existed.
+	ExactHash string
+	NormHash  string
+	// NormLines is how many lines the body came to once comments and blanks were removed. It
+	// is what the weaker match tiers check before trusting a hash; see helper.WeakTierMinLines.
+	NormLines int
 }

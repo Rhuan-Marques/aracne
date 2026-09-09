@@ -98,6 +98,16 @@ func interceptableSegment(segments []commandSegment, i int, original, dbPath str
 	if seg.pipedInto || seg.redirectsOut {
 		return 0, false
 	}
+	// A segment INSIDE a substitution, a subshell or a group is not a command whose stdout
+	// the model reads: it is a value the enclosing command consumes. `X=$(cat f)`,
+	// `grep foo $(cat list)` and ``echo `cat f` `` all put aracne's rendering -- fences,
+	// `⋯ +N lines ⋯` markers, a `# CONTEXT:` block -- where the file's own bytes were
+	// expected, and the enclosing command then runs normally on different text with nothing
+	// to mark the substitution. It is the same trade the pipe rule below refuses, on a path
+	// that had no rule at all.
+	if seg.depth > 0 {
+		return 0, false
+	}
 	argv := segmentArgv(seg)
 	if len(argv) == 0 {
 		return 0, false
@@ -164,6 +174,13 @@ func interceptableSegment(segments []commandSegment, i int, original, dbPath str
 // FEWER matches than the real command -- a wrong answer with nothing to mark it as one. That
 // is the opposite trade from the grep case: there, aracne's answer is the same KIND of thing
 // the consumer expected; here it is not.
+//
+// THE WALK IS ADJACENCY, AND THAT IS ONLY SAFE BECAUSE THE SCANNER KEEPS A PIPELINE WHOLE.
+// Anything that splits a stage in two puts a non-piped fragment between a producer and its
+// consumer, and the loop below stops at it and reports "feeds no pipe". That was live for
+// every `2>&1` -- `grep … | grep -v x 2>&1 | wc -l` reached `wc` only once the `&` stopped
+// ending a command (splitCommandSegments.isRedirectAmpersand), and a group or a subshell
+// around the producer is refused a step earlier, by its depth.
 func pipesIntoLinePreservingConsumers(segments []commandSegment, i int, kind shellcmd.Kind) bool {
 	if i+1 >= len(segments) || !segments[i+1].pipedInto {
 		return true // feeds no pipe

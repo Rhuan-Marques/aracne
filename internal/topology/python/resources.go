@@ -60,10 +60,6 @@ type PythonFunction struct {
 	Connections map[ConnectionKind][]string
 	MethodFrom  *ClassID
 	IsAsync     bool
-	// Python docstring positions (1-based; 0 = absent) used by descriptions apply.
-	BodyLine int
-	DocStart int
-	DocEnd   int
 }
 
 // Describes a Python class with its name, base classes, parameters, methods, and connections.
@@ -79,10 +75,6 @@ type PythonClass struct {
 	IsABC              bool
 	IsProtocol         bool
 	HasAbstractMethods bool
-	// Python docstring positions (1-based; 0 = absent) used by descriptions apply.
-	BodyLine int
-	DocStart int
-	DocEnd   int
 }
 
 // Represents a Python module with its ID, name, description, parent package, and connection metadata.

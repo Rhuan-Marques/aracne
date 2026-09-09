@@ -3,14 +3,12 @@ package cli
 import (
 	"os"
 	"path/filepath"
-	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Rhuan-Marques/aracne/internal/helper"
 	"github.com/Rhuan-Marques/aracne/internal/llm/languages/universaltools"
-	"github.com/Rhuan-Marques/aracne/internal/toolspec"
+	"github.com/Rhuan-Marques/aracne/internal/shellcmd"
 	"github.com/Rhuan-Marques/aracne/internal/topology"
 )
 
@@ -18,19 +16,6 @@ const (
 	// proxyReadTimeout bounds the work a denial is allowed to do. A denial that hangs is far
 	// worse than a terse one: the agent is stalled behind the hook with nothing to show for it.
 	proxyReadTimeout = 5 * time.Second
-	// proxyMaxBytes is the absolute ceiling on what a denial reason may carry. It was 100KB,
-	// which in practice caught nothing: the worst over-serve measured in
-	// compact-blocked-after-bs-20260830c was 59,177 bytes and sailed under it.
-	proxyMaxBytes = 32 * 1024
-	// proxyMinBudget is what the answer is always allowed, however small the request. A
-	// twenty-line `sed` window legitimately expands to the whole function around it plus a
-	// context block, and refusing that would put us back to the bare pointer for the very
-	// case the proxy exists to serve.
-	proxyMinBudget = 12 * 1024
-	// proxyOverServeFactor bounds the answer against what was actually asked for. Past this
-	// the proxy is no longer a cheaper read -- it is a way to spend the context window on one
-	// refused `cat` -- so it hands back "" and the model gets the ordinary one-line denial.
-	proxyOverServeFactor = 4
 )
 
 // proxyRead answers a denied file read with the content it asked for, instead of a pointer to
@@ -66,8 +51,6 @@ func proxyRead(command, dbPath string) string {
 	if err != nil || info.IsDir() {
 		return ""
 	}
-	budget := proxyBudget(target, info.Size())
-
 	done := make(chan string, 1)
 	go func() {
 		defer func() {
@@ -85,7 +68,15 @@ func proxyRead(command, dbPath string) string {
 			return
 		}
 		cfg := helper.LoadConfig(helper.ConfigPath(dbPath))
-		rd := universaltools.NewRead(mgr, cfg, false, nil)
+		budget := proxyBudget(cfg, target, info.Size())
+		// NO LAZY FILL ON THIS PATH. NewRead attaches a descriptions filler, which is awaited
+		// inline for up to descriptions.lazy.timeout_seconds (8s by default) -- longer than
+		// proxyReadTimeout, so on a repository whose descriptions are not yet written (a fresh
+		// install, exactly when the filler is doing the most work) the proxy reliably gave up
+		// and the model got a bare pointer instead of the file: the two-turns-for-one-question
+		// failure this function exists to end, arriving intermittently. A denial is not the
+		// place to pay for description generation; the next ordinary read still fills them.
+		rd := universaltools.NewRead(mgr, cfg, false, nil).WithFiller(nil)
 		// read.kinds gates this surface like every other. The proxy is an ADDITION to a
 		// denial message, so a kind the project does not allow simply yields no proxy answer
 		// -- the denial still goes out, just without an aracne read attached to it.
@@ -108,7 +99,7 @@ func proxyRead(command, dbPath string) string {
 				return
 			}
 		}
-		if strings.TrimSpace(out) == "" || len(out) > budget {
+		if strings.TrimSpace(out) == "" || (budget >= 0 && len(out) > budget) {
 			done <- ""
 			return
 		}
@@ -123,13 +114,13 @@ func proxyRead(command, dbPath string) string {
 	}
 }
 
-// proxyBudget is the largest answer worth sending for this request.
+// proxyBudget is the largest answer worth sending for this request. A negative return means
+// the project has switched the ceiling off.
 //
 // Without it the proxy answers every question with the same thing -- the whole file -- and a
-// 22-line `awk` window came back at 20,763 bytes. The budget is proportional so a big honest
-// read still goes through, floored so a small window still gets its enclosing function plus
-// context, and capped absolutely so nothing gets to blow the context window.
-func proxyBudget(t readTarget, fileSize int64) int {
+// 22-line `awk` window came back at 20,763 bytes. terminal.max_overserve keeps it proportional
+// so a big honest read still goes through; helper.OverserveBudget floors and caps it.
+func proxyBudget(cfg *helper.Config, t readTarget, fileSize int64) int {
 	want := int(fileSize)
 	if t.hasWindow && t.totalLines > 0 {
 		lines := t.to - t.from + 1
@@ -141,14 +132,7 @@ func proxyBudget(t readTarget, fileSize int64) int {
 		}
 		want = int(fileSize) * lines / t.totalLines
 	}
-	budget := want * proxyOverServeFactor
-	if budget < proxyMinBudget {
-		budget = proxyMinBudget
-	}
-	if budget > proxyMaxBytes {
-		budget = proxyMaxBytes
-	}
-	return budget
+	return cfg.OverserveBudget(want, helper.OverserveReadFree)
 }
 
 // readTarget is the single file a denied command reads, plus the line window it asked for.
@@ -159,121 +143,54 @@ type readTarget struct {
 	totalLines int // of the file on disk; 0 when it could not be counted
 }
 
-var (
-	// `sed -n 120,160p` and `sed -n '120,160p'` (quotes are already stripped by the splitter).
-	reSedRange = regexp.MustCompile(`(?:^|[\s;])(\d+)\s*,\s*(\d+)\s*p`)
-	// `sed -n 120p`.
-	reSedSingle = regexp.MustCompile(`(?:^|[\s;])(\d+)\s*p(?:[\s;]|$)`)
-	// `awk 'NR>=120 && NR<=160'` in its common spellings.
-	reAwkRange = regexp.MustCompile(`NR\s*>=?\s*(\d+).*?NR\s*<=?\s*(\d+)`)
-	// `head -40`, `head -n 40`.
-	reHead = regexp.MustCompile(`^-n?(\d+)$`)
-)
-
 // soleReadTarget returns the single file a shell command reads and the window it wants, or a
 // zero value when the command is anything more complicated than that.
 //
 // Deliberately strict. A pipeline, a glob, two operands or an unrecognized reader all return
 // nothing and cost the model the ordinary one-line denial it would have had anyway. The only
 // case worth answering is the one with an unambiguous answer.
+//
+// The window comes from shellcmd -- the same parser `arac cmd` and the interception hook use.
+// It used to come from a second, thinner set of regexes kept here, and that copy knew `sed`,
+// `awk` and `head` but not `tail`: a denied `tail -n 20 f` therefore reported no window at
+// all, proxyBudget measured against the whole file, and the proxy answered a twenty-line
+// request with the file. That is the 5.8x over-serve proxyBudget exists to prevent, still
+// live for one reader in four. One parser cannot have three of the four cases right.
 func soleReadTarget(command string) readTarget {
 	segments := splitCommandSegments(command)
 	if len(segments) != 1 {
 		return readTarget{}
 	}
-	fields := commandFields(segments[0].text)
-	if len(fields) < 2 {
+	argv := segmentArgv(segments[0])
+	if len(argv) == 0 {
 		return readTarget{}
 	}
-	if key, ok := toolspec.ShellCommandKeyForArgs(fields[0], fields[1:], segments[0].redirectsOut); !ok || key != "read" {
+	req := shellcmd.Parse(argv)
+	if req.Kind != shellcmd.KindRead || len(req.Operands) != 1 {
 		return readTarget{}
 	}
-	var operands []string
-	for _, a := range fields[1:] {
-		if strings.HasPrefix(a, "-") || strings.ContainsAny(a, "*?[]") {
-			continue
-		}
-		// sed/awk take a script operand before the filename; only a path can be the target.
-		if !strings.ContainsAny(a, "/\\") && !strings.Contains(a, ".") {
-			continue
-		}
-		operands = append(operands, a)
-	}
-	if len(operands) != 1 {
+	operand := strings.Trim(req.Operands[0], `'"`)
+	// The guard sees the command BEFORE the shell expands it, which shellcmd's callers on
+	// the other side of the hook do not: `arac cmd` is handed argv a real shell already
+	// split and globbed. So an unexpanded glob or a variable reaches here as one operand
+	// standing for an unknown number of files, and there is no single answer to proxy.
+	if strings.ContainsAny(operand, "*?[]$`~") {
 		return readTarget{}
 	}
-	t := readTarget{path: filepath.Clean(strings.Trim(operands[0], `'"`))}
-	t.from, t.to, t.hasWindow = readWindow(commandBase(fields[0]), fields[1:], t.path)
-	if t.hasWindow {
-		t.totalLines = countFileLines(t.path)
-		if t.totalLines == 0 {
-			t.hasWindow = false
-		}
+	t := readTarget{path: filepath.Clean(operand)}
+	if req.Window.Mode == shellcmd.WholeFile {
+		return t
 	}
+	total := countFileLines(t.path)
+	if total == 0 {
+		return t
+	}
+	from, to, ok := resolveWindow(req.Window, 1, total)
+	if !ok {
+		return t
+	}
+	t.from, t.to, t.hasWindow, t.totalLines = from, to, true, total
 	return t
-}
-
-// readWindow extracts the line range a read command asked for. The target path is excluded
-// from the scanned text so a filename containing digits cannot be mistaken for a range.
-func readWindow(name string, args []string, path string) (from, to int, ok bool) {
-	var parts []string
-	for _, a := range args {
-		if strings.Trim(a, `'"`) == path {
-			continue
-		}
-		parts = append(parts, a)
-	}
-	joined := strings.Join(parts, " ")
-	// The splitter substitutes a control character for spaces inside quoted runs; put them
-	// back so `'NR>=955 && NR<=995'` matches as one expression.
-	joined = strings.ReplaceAll(joined, string(quotedSpace), " ")
-
-	switch name {
-	case "sed":
-		if m := reSedRange.FindStringSubmatch(joined); m != nil {
-			return atoi(m[1]), atoi(m[2]), true
-		}
-		if m := reSedSingle.FindStringSubmatch(joined); m != nil {
-			n := atoi(m[1])
-			return n, n, true
-		}
-	case "awk", "gawk", "mawk":
-		if m := reAwkRange.FindStringSubmatch(joined); m != nil {
-			return atoi(m[1]), atoi(m[2]), true
-		}
-	case "head":
-		for i, a := range parts {
-			// `head -40` and `head -n40` carry the count in the flag itself.
-			if m := reHead.FindStringSubmatch(a); m != nil {
-				return 1, atoi(m[1]), true
-			}
-			// `head -n 40` puts it in the next token.
-			if (a == "-n" || a == "--lines") && i+1 < len(parts) {
-				if n := atoi(parts[i+1]); n > 0 {
-					return 1, n, true
-				}
-			}
-		}
-		// A bare `head file` is the default 10 lines.
-		return 1, 10, true
-	}
-	return 0, 0, false
-}
-
-// commandBase strips a path and any extension off a command word, so `/usr/bin/sed` and
-// `sed.exe` both classify as `sed`. toolspec has the same helper unexported; duplicating four
-// lines is cheaper than widening that package's surface for one caller.
-func commandBase(tok string) string {
-	tok = strings.ToLower(tok)
-	if i := strings.LastIndexAny(tok, `/\`); i >= 0 {
-		tok = tok[i+1:]
-	}
-	return strings.TrimSuffix(tok, ".exe")
-}
-
-func atoi(s string) int {
-	n, _ := strconv.Atoi(s)
-	return n
 }
 
 // proxyLineCountLimit bounds the file countFileLines is willing to read. This runs on the

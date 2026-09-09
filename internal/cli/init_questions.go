@@ -114,9 +114,16 @@ func setDescriptionsExecutorModel(cfg *helper.Config, model string) {
 // The CLI answer is deliberately a different STRING for the same model. An API branch writes
 // this value into the `model` field of a request to the vendor's endpoint, which wants the full
 // published id; the CLI branch writes it into `--model` on a command line, where the Claude CLI
-// resolves its own short aliases and `claude-haiku-5` is the spelling that is not guaranteed to
-// mean anything. Passing an alias to an HTTP API is a 404 at the first batch, which is a slow
-// way to find out -- so the two are separate cases rather than one value doing both jobs.
+// resolves its own short aliases and a full id is not guaranteed to mean anything. Passing an
+// alias to an HTTP API is a 404 at the first batch, which is a slow way to find out -- so the
+// two are separate cases rather than one value doing both jobs.
+//
+// AND THE API SPELLING HAS TO BE A REAL ID. This returned "claude-haiku-5", which is not a
+// model -- while the paragraph above argued that the API branch needs "the full published id".
+// It was the DEFAULT answer to question four on the Anthropic branch, so the happy path of the
+// wizard ended in a sweep that 404'd on its first batch, after the wizard had already reported
+// success. Kept in step with lazydesc.modelAliases, which is where the same names resolve for
+// the read path.
 func defaultModelFor(provider string) string {
 	switch provider {
 	case helper.ProviderNameOpenAI:
@@ -126,7 +133,7 @@ func defaultModelFor(provider string) string {
 	case helper.ProviderNameCLI:
 		return "haiku"
 	default:
-		return "claude-haiku-5"
+		return "claude-haiku-4-5"
 	}
 }
 

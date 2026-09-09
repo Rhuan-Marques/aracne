@@ -44,15 +44,15 @@ func main() {
 	case "disable":
 		cli.RunDisable(os.Args[2:])
 	case "descriptions":
+		// A missing or unknown sub-verb is a typo, not a request for the banner. Same rule as
+		// the default arm below: it goes to stderr and exits non-zero.
 		if len(os.Args) < 3 {
-			cli.PrintUsage()
-			return
+			fmt.Fprintln(os.Stderr, "Usage: arac descriptions <generate|clear|export|import> [flags]")
+			os.Exit(1)
 		}
 		switch os.Args[2] {
 		case "generate":
 			cli.RunGenerateDescriptions(os.Args[3:])
-		case "apply":
-			cli.RunDescriptionApply(os.Args[3:])
 		case "clear":
 			cli.RunClearDescriptions(os.Args[3:])
 		case "export":
@@ -60,7 +60,9 @@ func main() {
 		case "import":
 			cli.RunDescriptionsImport(os.Args[3:])
 		default:
-			cli.PrintUsage()
+			fmt.Fprintf(os.Stderr, "arac descriptions: unknown subcommand %q\n", os.Args[2])
+			fmt.Fprintln(os.Stderr, "Usage: arac descriptions <generate|clear|export|import> [flags]")
+			os.Exit(1)
 		}
 	case "update-file":
 		cli.RunUpdateFile(os.Args[2:])
@@ -85,18 +87,22 @@ func main() {
 		}
 		cli.RunResourceList(os.Args[3:])
 	case "node":
+		// One subcommand, so one check. The inner switch this replaces re-tested a value the
+		// guard above had already required, with one reachable arm and no default.
 		if len(os.Args) < 3 || os.Args[2] != "count" {
 			fmt.Fprintln(os.Stderr, "Usage: arac node count [--no-description]")
 			os.Exit(1)
 		}
-		noDesc := len(os.Args) > 3 && os.Args[3] == "--no-description"
-		switch os.Args[2] {
-		case "count":
-			if noDesc {
-				cli.RunNodeCountNoDescription()
-			} else {
-				cli.RunNodeCount()
+		noDesc := false
+		for _, arg := range os.Args[3:] {
+			if arg == "--no-description" {
+				noDesc = true
 			}
+		}
+		if noDesc {
+			cli.RunNodeCountNoDescription()
+		} else {
+			cli.RunNodeCount()
 		}
 	case "warnings":
 		if len(os.Args) < 3 || os.Args[2] != "list" {
@@ -111,6 +117,11 @@ func main() {
 	case "check-updates":
 		cli.RunCheckUpdates(os.Args[2:])
 	default:
-		cli.PrintUsage()
+		// A TYPO IS A FAILURE. Printing the banner and exiting 0 meant no script, Makefile or
+		// agent could tell `arac scna` from a command that ran -- and the banner on stdout
+		// looked like output. A bare `arac` (above) is the deliberate ask and still exits 0.
+		fmt.Fprintf(os.Stderr, "arac: unknown command %q\n\n", os.Args[1])
+		cli.PrintUsageTo(os.Stderr)
+		os.Exit(1)
 	}
 }

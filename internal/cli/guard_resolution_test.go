@@ -1,10 +1,13 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Rhuan-Marques/aracne/internal/helper"
 )
 
 // The guard used to open the RELATIVE path ".aracne/topology.db", which the hook resolves
@@ -92,35 +95,48 @@ func TestGuardDBPathAlwaysReturnsSomething(t *testing.T) {
 // window away. Measured over one benchmark run that served 281,925 bytes for ~48,800 asked
 // for, worst case a 40-line `awk` window returning an entire 59KB test file.
 func TestProxyExtractsTheLineWindow(t *testing.T) {
+	// A real file, because the window is now resolved against its length -- which is what
+	// lets `tail` be expressed at all, and what clamps a request past the end.
+	dir := t.TempDir()
+	name := filepath.Join(dir, "args.rs")
+	lines := make([]string, 1000)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("line %d", i+1)
+	}
+	if err := os.WriteFile(name, []byte(strings.Join(lines, "\n")+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
 	cases := []struct {
 		name           string
 		cmd            string
 		wantFrom, want int
 		wantOK         bool
 	}{
-		{"sed range", `sed -n 660,760p crates/core/args.rs`, 660, 760, true},
-		{"sed quoted range", `sed -n '110,300p' src/util.py`, 110, 300, true},
-		{"sed single line", `sed -n 42p src/main.go`, 42, 42, true},
-		{"awk range", `awk 'NR>=955 && NR<=995' tests/test_requests.py`, 955, 995, true},
-		{"awk tight range", `awk 'NR>=282&&NR<=304' src/engine_state.rs`, 282, 304, true},
-		{"head -n", `head -n 40 src/app.rs`, 1, 40, true},
-		{"head -N", `head -20 src/app.rs`, 1, 20, true},
-		{"cat has no window", `cat src/main.go`, 0, 0, false},
+		{"sed range", `sed -n 660,760p ` + name, 660, 760, true},
+		{"sed quoted range", `sed -n '110,300p' ` + name, 110, 300, true},
+		{"sed single line", `sed -n 42p ` + name, 42, 42, true},
+		{"awk range", `awk 'NR>=955 && NR<=995' ` + name, 955, 995, true},
+		{"awk tight range", `awk 'NR>=282&&NR<=304' ` + name, 282, 304, true},
+		{"head -n", `head -n 40 ` + name, 1, 40, true},
+		{"head -N", `head -20 ` + name, 1, 20, true},
+		// tail was missing from the proxy's own parser, so a denied `tail -n 20 f`
+		// reported no window and the proxy answered it with the whole file.
+		{"tail -n", `tail -n 20 ` + name, 981, 1000, true},
+		{"tail -N", `tail -5 ` + name, 996, 1000, true},
+		{"tail from line", `tail -n +990 ` + name, 990, 1000, true},
+		{"cat has no window", `cat ` + name, 0, 0, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			fields := commandFields(splitCommandSegments(tc.cmd)[0].text)
-			var path string
-			for _, a := range fields[1:] {
-				if !strings.HasPrefix(a, "-") && strings.Contains(a, ".") {
-					path = a
-					break
-				}
+			got := soleReadTarget(tc.cmd)
+			if got.hasWindow != tc.wantOK ||
+				(got.hasWindow && (got.from != tc.wantFrom || got.to != tc.want)) {
+				t.Errorf("soleReadTarget(%q) = %d-%d hasWindow=%v, want %d-%d hasWindow=%v",
+					tc.cmd, got.from, got.to, got.hasWindow, tc.wantFrom, tc.want, tc.wantOK)
 			}
-			from, to, ok := readWindow(commandBase(fields[0]), fields[1:], path)
-			if ok != tc.wantOK || (ok && (from != tc.wantFrom || to != tc.want)) {
-				t.Errorf("readWindow(%q) = %d-%d ok=%v, want %d-%d ok=%v",
-					tc.cmd, from, to, ok, tc.wantFrom, tc.want, tc.wantOK)
+			if got.path != name {
+				t.Errorf("soleReadTarget(%q) path = %q, want %q", tc.cmd, got.path, name)
 			}
 		})
 	}
@@ -130,20 +146,29 @@ func TestProxyExtractsTheLineWindow(t *testing.T) {
 // proportional so an honest whole-file read still passes, floored so a small window still gets
 // its enclosing function plus context, and capped absolutely.
 func TestProxyBudgetIsProportionalFlooredAndCapped(t *testing.T) {
+	cfg := helper.DefaultConfig()
+
 	// A 20-line window of a 1000-line, 40KB file asks for ~800 bytes; the floor governs.
 	small := readTarget{hasWindow: true, from: 100, to: 119, totalLines: 1000}
-	if got := proxyBudget(small, 40000); got != proxyMinBudget {
-		t.Errorf("small window budget = %d, want the floor %d", got, proxyMinBudget)
+	if got := proxyBudget(cfg, small, 40000); got != helper.OverserveReadFree {
+		t.Errorf("small window budget = %d, want the floor %d", got, helper.OverserveReadFree)
 	}
 	// Half of a 60KB file asks for ~30KB; 4x that is over the absolute cap.
 	half := readTarget{hasWindow: true, from: 1, to: 500, totalLines: 1000}
-	if got := proxyBudget(half, 60000); got != proxyMaxBytes {
-		t.Errorf("half-file budget = %d, want the cap %d", got, proxyMaxBytes)
+	if got := proxyBudget(cfg, half, 60000); got != helper.OverserveMaxBytes {
+		t.Errorf("half-file budget = %d, want the cap %d", got, helper.OverserveMaxBytes)
 	}
 	// The 59KB whole-test-file answer that motivated all of this must not fit the budget its
 	// own 40-line request earned.
 	worst := readTarget{hasWindow: true, from: 955, to: 995, totalLines: 1500}
-	if b := proxyBudget(worst, 59033); b >= 59033 {
+	if b := proxyBudget(cfg, worst, 59033); b >= 59033 {
 		t.Errorf("a 40-line window still budgets %d bytes, enough for the whole 59KB file", b)
+	}
+	// terminal.max_overserve is the project's dial, and the proxy turns on it like every
+	// other surface: zero is no ceiling at all.
+	off := helper.DefaultConfig()
+	off.Terminal.MaxOverserve = new(int)
+	if b := proxyBudget(off, worst, 59033); b >= 0 {
+		t.Errorf("max_overserve 0 still budgeted %d bytes", b)
 	}
 }

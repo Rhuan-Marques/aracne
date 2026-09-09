@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"sync"
 	"time"
 
 	"github.com/Rhuan-Marques/aracne/internal/helper"
@@ -31,7 +30,7 @@ func RunScanner(args []string) {
 
 // Watches source files for changes and runs incremental scans to update the topology database.
 func RunScannerRun(args []string) {
-	dbPath := ".aracne/topology.db"
+	dbPath := ProjectDBPath(DefaultDBRelative)
 	for i := 0; i < len(args); i++ {
 		if args[i] == "--db" && i+1 < len(args) {
 			dbPath = args[i+1]
@@ -83,8 +82,6 @@ func RunScannerRun(args []string) {
 
 	fmt.Fprintf(os.Stderr, "Scanner running on %s (checking every %dms)...\n", dbPath, frequency)
 
-	var scanMu sync.Mutex
-
 	sleep := func() {
 		time.Sleep(time.Duration(frequency) * time.Millisecond)
 	}
@@ -102,15 +99,14 @@ func RunScannerRun(args []string) {
 		return added, modified, deleted, nil
 	}
 
+	// ONE GOROUTINE, SO NO LOCK. This loop used to take a sync.Mutex with TryLock and
+	// unlock it on every branch, but nothing else ever held it -- the watch loop is the only
+	// writer -- so the TryLock always succeeded and the contention branch was unreachable.
+	// Concurrent access from a SEPARATE PROCESS is real and is handled where it has to be, by
+	// the per-database locking and busy_timeout in internal/helper/sqlite.go.
 	for {
-		if !scanMu.TryLock() {
-			sleep()
-			continue
-		}
-
 		added, modified, deleted, diffErr := diffChanged()
 		if diffErr != nil {
-			scanMu.Unlock()
 			fmt.Fprintf(os.Stderr, "[%s] Scan error: %v\n", time.Now().Format("15:04:05"), diffErr)
 			sleep()
 			continue
@@ -118,14 +114,11 @@ func RunScannerRun(args []string) {
 		changed := len(added) + len(modified) + len(deleted)
 
 		if changed == 0 {
-			scanMu.Unlock()
 			sleep()
 			continue
 		}
 
 		_, scanErr := manager.IncrementalScan(root, reg)
-		scanMu.Unlock()
-
 		if scanErr != nil {
 			fmt.Fprintf(os.Stderr, "[%s] Scan error: %v\n", time.Now().Format("15:04:05"), scanErr)
 
@@ -137,7 +130,7 @@ func RunScannerRun(args []string) {
 					}
 					helper.CleanupOrphanedWarnings(topo)
 					if writeErr := helper.WriteDb(topo, dbPath); writeErr == nil {
-						helper.SyncManifest(topo, dbPath)
+						helper.SyncManifest(topo, dbPath, nil)
 					}
 				}
 			}

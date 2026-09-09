@@ -17,9 +17,16 @@ import (
 const (
 	// DefaultLazyMaxNodes caps how many nodes one lazy fill may describe.
 	DefaultLazyMaxNodes = 40
-	// DefaultLazyTimeoutSeconds bounds the whole fill, not one batch. A read that has
-	// already waited two minutes has stopped being a read.
-	DefaultLazyTimeoutSeconds = 120
+	// DefaultLazyTimeoutSeconds bounds the whole fill, not one batch.
+	//
+	// SINGLE DIGITS, because this deadline sits on the READ path and nowhere else: the
+	// filler is awaited inline by `read`, `grep` and every intercepted shell command, so it
+	// is the ceiling on how long a `cat` can hang. It was 120 -- two minutes for a command
+	// the model expected to be instant, and the fill is a side effect of the answer rather
+	// than the answer itself. What does not land in time is simply not described, and the
+	// next read that names the same node picks it up. The whole-repo sweep is a different
+	// job with its own patience; it does not come through here.
+	DefaultLazyTimeoutSeconds = 8
 	// DefaultLazyBatchSize is how many resources one completion describes.
 	DefaultLazyBatchSize = DefaultDescriptionBatchSize
 	// DefaultLazyParallel is how many batches run at once.

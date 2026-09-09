@@ -1,0 +1,1224 @@
+<!-- Aracne harness audit — generated 2026-09-07 -->
+<title>Aracne Harness Audit</title>
+<style>
+  :root{
+    --bg:#faf9f7; --panel:#ffffff; --ink:#17181c; --muted:#5c6169; --line:#e2e0dc;
+    --code-bg:#f4f2ef; --code-ink:#2a2c33;
+    --hi:#8a2f2f; --hi-bg:#fbeeee; --med:#8a5a10; --med-bg:#fdf3e3; --low:#3a5f7d; --low-bg:#eef4f9;
+    --note:#4a6b4a; --note-bg:#eef5ee;
+    --accent:#7a3e2f;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#15161a; --panel:#1c1e23; --ink:#e6e5e2; --muted:#9aa0a8; --line:#2c2f36;
+      --code-bg:#111318; --code-ink:#d3d2cf;
+      --hi:#f08a8a; --hi-bg:#2a1a1a; --med:#e8bb6a; --med-bg:#2a2317; --low:#8fc0e0; --low-bg:#16232c;
+      --note:#9dc79d; --note-bg:#18241a;
+      --accent:#e0a08c;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#15161a; --panel:#1c1e23; --ink:#e6e5e2; --muted:#9aa0a8; --line:#2c2f36;
+    --code-bg:#111318; --code-ink:#d3d2cf;
+    --hi:#f08a8a; --hi-bg:#2a1a1a; --med:#e8bb6a; --med-bg:#2a2317; --low:#8fc0e0; --low-bg:#16232c;
+    --note:#9dc79d; --note-bg:#18241a;
+    --accent:#e0a08c;
+  }
+
+  body{
+    background:var(--bg); color:var(--ink);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+    margin:0; padding:0 20px 120px;
+  }
+  .wrap{max-width:940px; margin:0 auto}
+  header{padding:56px 0 28px; border-bottom:1px solid var(--line)}
+  h1{font-size:31px; line-height:1.2; margin:0 0 10px; letter-spacing:-.02em}
+  .sub{color:var(--muted); font-size:14.5px; max-width:70ch; margin:0 0 6px}
+  .meta{color:var(--muted); font-size:13px; margin-top:18px}
+  .meta code{font-size:12.5px}
+
+  h2{font-size:21px; margin:52px 0 6px; letter-spacing:-.01em; scroll-margin-top:20px}
+  h2 .rule{display:block; height:1px; background:var(--line); margin-top:14px}
+  h3{font-size:16.5px; margin:34px 0 2px; letter-spacing:-.005em; scroll-margin-top:20px}
+  p{margin:10px 0}
+
+  code,pre{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace}
+  code{background:var(--code-bg); color:var(--code-ink); padding:1.5px 5px; border-radius:4px; font-size:.875em}
+  pre{background:var(--code-bg); color:var(--code-ink); padding:13px 15px; border-radius:7px;
+      overflow-x:auto; font-size:12.7px; line-height:1.55; border:1px solid var(--line); margin:12px 0}
+  pre code{background:none; padding:0; font-size:inherit}
+
+  .badge{display:inline-block; font-size:11px; font-weight:650; letter-spacing:.06em;
+         text-transform:uppercase; padding:2.5px 8px; border-radius:20px; vertical-align:3px; margin-right:9px}
+  .b-high{background:var(--hi-bg); color:var(--hi)}
+  .b-med{background:var(--med-bg); color:var(--med)}
+  .b-low{background:var(--low-bg); color:var(--low)}
+  .b-note{background:var(--note-bg); color:var(--note)}
+  .b-fixed{background:var(--note-bg); color:var(--note)}
+  .fixed-note{background:var(--note-bg); border:1px solid var(--line); border-left:3px solid var(--note);
+              border-radius:7px; padding:11px 15px; margin:14px 0 4px; font-size:13.6px}
+  .fixed-note strong{color:var(--note)}
+  .card.done{border-color:var(--note)}
+
+  .card{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:4px 20px 18px; margin:16px 0 28px}
+  .card h3{margin-top:18px}
+  .where{color:var(--muted); font-size:12.8px; margin:6px 0 4px}
+  .where code{background:none; padding:0; color:var(--accent)}
+
+  dl{margin:14px 0 0}
+  dt{font-size:11.5px; font-weight:700; letter-spacing:.07em; text-transform:uppercase;
+     color:var(--muted); margin-top:15px}
+  dd{margin:4px 0 0}
+  dd ul{margin:6px 0 0; padding-left:20px}
+  dd li{margin:3px 0}
+
+  .repro{border-left:3px solid var(--accent); padding-left:14px; margin:14px 0}
+  .repro > .lbl{font-size:11.5px; font-weight:700; letter-spacing:.07em; text-transform:uppercase; color:var(--muted)}
+
+  table{border-collapse:collapse; width:100%; font-size:13.6px; margin:14px 0}
+  th,td{text-align:left; padding:8px 11px; border-bottom:1px solid var(--line); vertical-align:top}
+  th{font-size:11.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); font-weight:650}
+  td code{font-size:12.4px}
+  .scroll{overflow-x:auto}
+
+  .toc{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px 22px; margin:26px 0 0}
+  .toc ol{margin:6px 0; padding-left:22px}
+  .toc li{margin:4px 0}
+  .toc a{color:inherit; text-decoration:none; border-bottom:1px solid transparent}
+  .toc a:hover{border-bottom-color:var(--muted)}
+  .toc .tag{color:var(--muted); font-size:12.4px}
+
+  .callout{background:var(--note-bg); border:1px solid var(--line); border-left:3px solid var(--note);
+           border-radius:7px; padding:12px 16px; margin:18px 0; font-size:14px}
+  .lede{font-size:16px; color:var(--muted); max-width:72ch}
+  hr{border:0; border-top:1px solid var(--line); margin:44px 0}
+  footer{color:var(--muted); font-size:13px; margin-top:60px; padding-top:20px; border-top:1px solid var(--line)}
+</style>
+
+<div class="wrap">
+
+<header>
+  <h1>Aracne harness audit</h1>
+  <p class="sub">A defect report for the Claude&nbsp;Code and OpenCode integration surface: the guard hook,
+  the shell interception path, <code>arac cmd</code>, the MCP server, and everything
+  <code>arac init</code>&nbsp;/&nbsp;<code>arac setup</code>&nbsp;/&nbsp;<code>arac disable</code> writes into a repository.</p>
+  <p class="meta">
+    Branch <code>chore/debloat</code> at <code>07aee2b</code> &middot; Go 1.25 &middot;
+    <code>go build ./...</code> clean, <code>go vet ./...</code> clean, <code>go test ./...</code> all&nbsp;green.<br>
+    Every finding below survives a green test suite. Reproductions were run against a purpose-built
+    Go fixture project and against this repository, with a binary built from the working tree.<br>
+    Chat and internal-agent code (<code>internal/chat</code>, <code>arac agent</code>) excluded by request.
+  </p>
+</header>
+
+<div class="callout">
+<strong>Status: 23 of 24 findings are fixed.</strong> All four severe, all eight significant,
+and eleven of the twelve minor. Each fixed card carries the change and how it was verified.
+Still open: <a href="#l1">L1</a> (timeout budget), and the two entries under
+<a href="#deviations">&sect;5</a> that need a product decision rather than a patch. Full suite
+green throughout &mdash; <code>gofmt</code>, <code>go vet</code>, <code>go test ./...</code> and
+the <code>-tags minimal</code> build &mdash; with ten new regression tests, and every test that
+pinned a defect rewritten to pin the fix instead.
+</div>
+
+<div class="callout">
+<strong>How to read this.</strong> Findings are ranked by what they cost a real session, not by how
+hard they were to find. Each one states the <em>conditions</em> that trigger it, the <em>effect</em>,
+and a concrete <em>fix</em>. Where I could reproduce it, the transcript is included verbatim.
+Section&nbsp;5 lists deliberate deviations that are <em>not</em> bugs but are worth a decision before
+release, and Section&nbsp;6 lists comment/documentation claims that no longer match the code.
+</div>
+
+<div class="toc">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#high">Severe — breaks the integration outright</a> <span class="tag">4 findings</span></li>
+    <li><a href="#med">Significant — wrong answers, lost signal, silent no-ops</a> <span class="tag">8 findings</span></li>
+    <li><a href="#low">Minor — rough edges and papercuts</a> <span class="tag">12 findings</span></li>
+    <li><a href="#matrix">Verified-correct matrix</a> <span class="tag">what I checked and found sound</span></li>
+    <li><a href="#deviations">Deliberate deviations worth a decision</a></li>
+    <li><a href="#docs">Comments and docs that no longer match the code</a></li>
+    <li><a href="#method">Method &amp; fixture</a></li>
+  </ol>
+</div>
+
+<!-- ==================================================================== -->
+<h2 id="high">1 &nbsp;Severe <span class="badge b-fixed" style="vertical-align:6px">all fixed</span><span class="rule"></span></h2>
+<p class="lede">Four defects that stop the integration from working at all, or that make it
+manufacture an answer it cannot stand behind.</p>
+
+<!-- H1 -->
+<div class="card done">
+<h3 id="h1"><span class="badge b-high">H1</span>A project path containing a space kills every hook</h3>
+<p class="where"><code>internal/cli/native_hooks.go:249,256,312,319</code> &middot; <code>writeClaudeGuardHook</code></p>
+<div class="fixed-note"><strong>FIXED &mdash; quoted, and verified from a path with a space</strong><br><code>bashHookCommand</code> / <code>powershellHookCommand</code> now wrap the script path (<code>"…"</code> for bash, <code>&amp; '…'</code> for PowerShell, which needs the call operator alongside the quotes). <code>hookCommandWord</code> was added so a quoted command is still recognized as aracne's own &mdash; otherwise <code>arac setup</code> would stack a duplicate beside it and <code>arac disable</code> would leave it behind. Verified end to end: the guard now runs and rewrites from <code>/…/my proj</code>, where it previously exited 127. Pinned by <code>TestHookCommandSurvivesAPathWithSpaces</code> and <code>TestHookCommandWord</code>.</div>
+
+<dl>
+<dt>What happens</dt>
+<dd><code>arac setup</code> writes the hook into <code>settings.json</code> in <em>shell form</em> with an
+unquoted placeholder:
+<pre><code>"command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-guard.sh",
+"shell":   "bash"</code></pre>
+Claude&nbsp;Code expands <code>${CLAUDE_PROJECT_DIR}</code> to the project root and hands the string to
+<code>bash&nbsp;-c</code>. A root containing a space word-splits, so the hook never runs. The Claude&nbsp;Code
+hooks reference is explicit about this: <em>&ldquo;Prefer exec form for any hook that references a path
+placeholder. In shell form, wrap each placeholder in double quotes.&rdquo;</em></dd>
+
+<dt>Requirements</dt>
+<dd>Any project whose absolute path contains a space or any other word-splitting character —
+<code>~/My Projects/…</code>, <code>~/Library/Mobile Documents/…</code>, a Windows
+<code>C:\Users\First Last\…</code> under Git&nbsp;Bash. Extremely common on macOS and Windows.</dd>
+
+<dt>Effect</dt>
+<dd>The guard is <strong>completely dead</strong> and fails loudly on every single tool call: no
+interception, no <code>scan.pre_tool</code> freshness scan, no <code>blocked_tools</code> enforcement,
+no PostToolUse nudge, no drift check. The user sees a hook error on every turn. Nothing in aracne
+detects or reports this.</dd>
+
+<dt>Reproduction</dt>
+<dd>
+<div class="repro"><div class="lbl">verbatim</div>
+<pre><code>$ mkdir -p "/tmp/scratch/my proj" &amp;&amp; cd "/tmp/scratch/my proj"
+$ arac scan &amp;&amp; arac setup --claude -y
+$ export CLAUDE_PROJECT_DIR="/tmp/scratch/my proj"
+$ bash -c "${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-guard.sh" &lt;/dev/null
+bash: line 1: /tmp/scratch/my: No such file or directory
+exit=127
+
+$ bash -c "\"${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-guard.sh\"" &lt;/dev/null
+exit=0</code></pre></div>
+</dd>
+
+<dt>Fix</dt>
+<dd>Switch to <strong>exec form</strong>, which removes the shell (and the <code>shell</code> field)
+entirely and is what the docs recommend for placeholder paths:
+<pre><code>entry := map[string]any{
+    "matcher": guardHookMatcher,
+    "hooks": []any{map[string]any{
+        "type":    "command",
+        "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-guard.sh",
+        "args":    []string{},          // &lt;- exec form: no shell, no word splitting
+        "timeout": 30,
+    }},
+}</code></pre>
+Or, minimally, quote it: <code>"\"${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-guard.sh\""</code>.
+Apply the same change to the <code>arac-update-file</code> hook. A regression test
+asserting the command string is either exec form or fully quoted belongs beside
+<code>TestClaudeGuardHookForOS</code>.</dd>
+</dl>
+</div>
+
+<!-- H2 -->
+<div class="card done">
+<h3 id="h2"><span class="badge b-high">H2</span><code>arac setup --global</code> installs a hook that can never resolve</h3>
+<p class="where"><code>internal/cli/native_hooks.go:244-259</code> + <code>internal/cli/setup.go:364-374</code> (<code>claudePaths</code>)</p>
+<div class="fixed-note"><strong>FIXED &mdash; the global install names the script it actually wrote</strong><br><code>hookScriptRef(hooksDir, name, global)</code> returns the portable <code>${CLAUDE_PROJECT_DIR}</code> form for a project install and the absolute path for <code>--global</code>. <code>global</code> is threaded through <code>writeClaudeGuardHook</code>, <code>writeClaudeNativeEditHook</code> and <code>writeClaudePlugins</code>. Verified: <code>arac setup --claude --global</code> against a temp HOME now writes a command whose target exists on disk. Pinned by <code>TestGlobalHookNamesTheScriptItActuallyWrote</code>, which also asserts a local install keeps the placeholder.</div>
+
+<dl>
+<dt>What happens</dt>
+<dd>With <code>--global</code>, <code>claudePaths(true)</code> returns
+<code>~/.claude/commands</code>, so <code>claudeBaseDir</code> is <code>~/.claude</code>. The script is
+written to <code>~/.claude/hooks/arac-guard.sh</code> and the entry to
+<code>~/.claude/settings.json</code>. But <code>claudeGuardHookForOS</code> hard-codes the command as
+<code>${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-guard.sh</code> — and
+<code>${CLAUDE_PROJECT_DIR}</code> is documented as <em>&ldquo;the project root where the session
+started&rdquo;</em>, not the home directory. The command points at a file that was never written.</dd>
+
+<dt>Requirements</dt>
+<dd><code>arac setup --global</code> (or <code>arac init --global</code>) in any project that does not
+also have a local <code>.claude/hooks/arac-guard.sh</code>. That is the entire point of a global
+install, so it is the normal case.</dd>
+
+<dt>Effect</dt>
+<dd>Same as H1 — the guard never runs — but silently for a user who deliberately chose the
+&ldquo;install once, works everywhere&rdquo; path. The same bug applies to the
+<code>arac-update-file</code> hook (<code>native_hooks.go:312,319</code>).</dd>
+
+<dt>Fix</dt>
+<dd>Thread the <code>global</code> flag into <code>claudeGuardHookForOS</code> /
+<code>claudeNativeEditHookForOS</code> and use the real script path when it is set. Since
+<code>aracBinary()</code> already resolves an absolute binary path at setup time, the simplest correct
+form is to drop the wrapper script for the global case and point the hook straight at the binary in
+exec form:
+<pre><code>"command": aracBinary(),
+"args":    []string{"guard", "--claude-hook"},</code></pre>
+which is correct for both scopes and also fixes H1.</dd>
+</dl>
+</div>
+
+<!-- H3 -->
+<div class="card done">
+<h3 id="h3"><span class="badge b-high">H3</span>A native edit produces no topology warning — and the warning that eventually arrives blames the wrong command</h3>
+<p class="where"><code>internal/cli/guard.go:158</code> &middot; <code>internal/cli/guard_drift.go:150</code> &middot;
+<code>internal/cli/plugins.go</code> &middot; <code>helper.DefaultConfig</code></p>
+<div class="fixed-note"><strong>FIXED &mdash; warnings arrive on the edit that caused them, and the header no longer lies</strong><br>Three changes. (1) <code>driftCheckApplies</code> replaces the Bash-only condition and now covers native <code>Edit</code>/<code>Write</code>/<code>MultiEdit</code>/<code>NotebookEdit</code>, asking <code>toolspec.NativeToolKey</code> rather than listing names. (2) The drift header is now <code>"Topology re-synced."</code> &mdash; the reporter reports what is new in the table however it got there, so it is in no position to blame a shell command. (3) <code>runClaudeUpdateFileHook</code> now reports through the same <code>unreportedWarnings</code> ledger and resolves its database with <code>guardDBPath(event.cwd)</code>, so enabling the edit-sync plugin cannot double-report and the hook can no longer create a stray <code>.aracne/</code> outside the project (that last part also closes M5). Verified: the signature break is now reported on the native Edit's own PostToolUse, once, and a later <code>ls</code> adds nothing. Pinned by <code>TestDriftCheckCoversNativeEdits</code>, <code>TestDriftWarningsDoNotBlameAShellCommand</code> and <code>TestUpdateFileHookNeverBuildsATopology</code>.</div>
+
+<dl>
+<dt>What happens</dt>
+<dd>Two things compound:
+<ul>
+<li>The <code>arac-update-file</code> PostToolUse hook — the only thing that reports warnings after a
+native <code>Edit</code>/<code>Write</code>/<code>MultiEdit</code> — is installed <em>only</em> when the
+main agent lists the <code>edit-update-db-plugin</code> plugin. <strong>Nothing ever sets it.</strong>
+<code>DefaultConfig()</code> leaves <code>plugins</code> empty, <code>arac init</code> never asks about
+it, and this repository's own <code>.claude/settings.json</code> has no such hook.</li>
+<li>The guard's own drift check is gated on <code>event.ToolName == "Bash"</code>
+(<code>guard.go:158</code>), so it never fires for a native edit either.</li>
+</ul>
+The warning is still <em>created</em> — by the next tool call's <code>scan.pre_tool</code> scan — and
+then delivered by the next Bash command that happens to be unclassified, under the header
+<code>"Topology re-synced after a shell command wrote to the project."</code></dd>
+
+<dt>Requirements</dt>
+<dd>Any default install (<code>arac init</code> or <code>arac setup</code> with a stock config) where the
+model uses the native <code>Edit</code>/<code>Write</code> tool. That is the default editing path in
+Claude&nbsp;Code, and <code>blocked_tools</code> ships empty.</dd>
+
+<dt>Effect</dt>
+<dd>The generated contract, in every mode, tells the model:
+<em>&ldquo;Your edits keep the graph current automatically; act on any topology warning that comes
+back.&rdquo;</em> For a native edit no warning ever comes back at the time of the edit. When one does
+surface, it is attached to an unrelated command and asserts a falsehood — that a shell command wrote
+to the project. A model that trusts the attribution will look for a shell write that never happened.
+Worse, if the next Bash call is <em>classified</em> (a <code>cat</code>, a <code>grep</code>), the
+drift check is skipped and the warning may not surface for many turns, or at all.</dd>
+
+<dt>Reproduction</dt>
+<dd>Fixture: <code>pkg/util.go</code> declares <code>Helper</code>; <code>main.go</code> calls it.
+Mode <code>intercept_line_ranges</code>, stock config.
+<div class="repro"><div class="lbl">verbatim</div>
+<pre><code># 1. PreToolUse for the native Edit (seeds warn-state, runs the pre-scan)
+$ echo '{"hook_event_name":"PreToolUse","tool_name":"Edit",
+         "tool_input":{"file_path":".../pkg/util.go"},"cwd":".../proj"}' | arac guard --claude-hook
+(no output)
+
+# 2. the edit lands: func Helper(x int) -&gt; func Helper(x, y int)
+
+# 3. PostToolUse for the native Edit
+$ echo '{"hook_event_name":"PostToolUse","tool_name":"Edit", ...}' | arac guard --claude-hook
+{"hookSpecificOutput":{"additionalContext":
+  "aracne: `echo '{\"edits\":[…]}' | arac edit` applies several replacements in ONE call...",
+  "hookEventName":"PostToolUse"}}
+$ arac warnings list
+No warnings found.                      &lt;-- nothing found, nothing reported
+
+# 4. an entirely unrelated later call: `ls`
+$ echo '{"hook_event_name":"PreToolUse","tool_name":"Bash",
+         "tool_input":{"command":"ls"}, ...}' | arac guard --claude-hook
+$ arac warnings list
+  [signature_changed] function Helper changed input/output format,
+                      verify caller example.com/proj.main
+
+$ echo '{"hook_event_name":"PostToolUse","tool_name":"Bash",
+         "tool_input":{"command":"ls"}, ...}' | arac guard --claude-hook
+{"hookSpecificOutput":{"additionalContext":
+  "Topology re-synced after a shell command wrote to the project.\n
+   Topology warnings (functions that may need manual review):\n
+     - [signature_changed] function Helper changed input/output format, ...",
+  "hookEventName":"PostToolUse"}}</code></pre>
+<p style="margin-top:10px"><code>ls</code> wrote nothing. The message says it did.</p></div>
+</dd>
+
+<dt>Fix</dt>
+<dd>Three independent changes, each worth making:
+<ol>
+<li><strong>Run the drift check for native edits.</strong> In <code>guard.go</code>'s PostToolUse
+branch, extend the condition past Bash:
+<pre><code>if (event.ToolName == "Bash" &amp;&amp; mayHaveWrittenSource(keys) &amp;&amp; !isAracCommand(event.ToolInput)) ||
+   toolWritesSource(event.ToolName) {   // Edit | Write | MultiEdit | NotebookEdit
+    if msg := driftCheck(dbPath); msg != "" { parts = append(parts, msg) }
+}</code></pre>
+<code>toolspec.nativeToolToKey</code> already knows which native tools mean <code>edit</code>.</li>
+<li><strong>Make the header honest.</strong> <code>formatDriftWarnings</code> should not assert a
+cause. &ldquo;Topology re-synced. Topology warnings (functions that may need manual
+review):&rdquo; says the true thing in the same bytes.</li>
+<li><strong>Decide the plugin default.</strong> Either add <code>edit-update-db-plugin</code> to
+<code>DefaultConfig()</code>'s main agent (so the promise in the contract is kept out of the box) or
+stop making the promise. Today the config and the contract disagree.</li>
+</ol></dd>
+</dl>
+</div>
+
+<!-- H4 -->
+<div class="card done">
+<h3 id="h4"><span class="badge b-high">H4</span><code>arac cmd</code> answers for binaries that are not installed</h3>
+<p class="where"><code>internal/cli/cmd.go:75</code> (<code>serveCommand</code>) — no <code>exec.LookPath</code> gate</p>
+<div class="fixed-note"><strong>FIXED &mdash; a command the shell could not have run is passed through</strong><br><code>serveCommand</code> gates on <code>commandIsAvailable(argv[0])</code> before it opens the topology, with one exemption: <code>Get-Content</code> is a PowerShell cmdlet and is never on PATH. Verified on this host (no ripgrep, bat or ack): <code>arac cmd -- rg Add</code> now returns <code>arac cmd: rg: command not found</code> and exit 127, byte-identical to the real failure, while <code>grep</code> and <code>cat</code> are still served. Pinned by <code>TestCmdRefusesACommandTheShellCouldNotRun</code> and <code>TestCommandAvailabilityExemptsShellResolvedCommands</code>.</div>
+
+<dl>
+<dt>What happens</dt>
+<dd><code>serveCommand</code> classifies argv with <code>shellcmd.Parse</code> and, if it recognises the
+shape, answers it from the topology. It never checks that <code>argv[0]</code> is a command the shell
+could actually have run. So on a machine without ripgrep, <code>rg &lt;pattern&gt;</code> returns a full
+annotated search and exits&nbsp;0. The guard rewrites the model's <code>rg</code> into
+<code>arac cmd -- rg</code>, so the model never sees the truth.</dd>
+
+<dt>Requirements</dt>
+<dd>Any machine where <code>rg</code>, <code>ack</code>, <code>ag</code>, <code>ug</code>,
+<code>bat</code>, <code>egrep</code>/<code>fgrep</code> or <code>get-content</code> is absent —
+i.e. most container images and most stock Linux boxes for <code>rg</code>/<code>bat</code>/<code>ack</code>.
+Applies in every mode for the search commands, and in the two intercepting modes for the readers.</dd>
+
+<dt>Effect</dt>
+<dd>aracne manufactures a capability that does not exist and then withdraws it without warning. The
+model concludes ripgrep is available; the first <code>rg</code> carrying a flag
+<code>shellcmd</code> does not model (<code>-o</code>, <code>--files</code>, <code>--hidden</code>,
+<code>--json</code>, <code>-U</code>, …) falls through to <code>passthrough()</code> and returns
+<code>command not found</code>, exit&nbsp;127. This is precisely the failure the
+<code>shellcmd</code> package doc exists to prevent — &ldquo;a wrong answer wearing a helpful
+face&rdquo; — arriving from the other direction.</dd>
+
+<dt>Reproduction</dt>
+<dd>
+<div class="repro"><div class="lbl">verbatim (ripgrep, bat and ack are all absent on this host)</div>
+<pre><code>$ which rg bat ack
+(nothing)
+
+$ arac cmd -- rg Add
+# pkg/util.go:4-6 — Adder adds numbers.
+pkg/util.go:4:type Adder struct {
+# pkg/util.go:9-12 — Add adds n to the total.
+pkg/util.go:9:func (a *Adder) Add(n int) int {
+exit=0
+
+$ arac cmd -- bat main.go
+```main.go
+package main
+...
+exit=0
+
+$ arac cmd -- rg -o Add
+arac cmd: rg: command not found
+exit=127</code></pre></div>
+</dd>
+
+<dt>Fix</dt>
+<dd>One gate at the top of <code>serveCommand</code>, after the passthrough classification:
+<pre><code>req := shellcmd.Parse(argv)
+if req.Kind == shellcmd.KindPassthrough {
+    return "", 0, nil, false
+}
+// aracne answers a command IN PLACE OF the real one. A command that would not have
+// run is not a question aracne was asked -- passthrough reproduces its exact error.
+if _, err := exec.LookPath(argv[0]); err != nil {
+    return "", 0, nil, false
+}</code></pre>
+<code>passthrough()</code> already produces the byte-identical
+<code>arac cmd: rg: command not found</code> / exit&nbsp;127 that the shell would have. Optionally add
+the same check to <code>interceptableSegment</code> so the rewrite is skipped too — it is not
+required for correctness, but it saves a subprocess.</dd>
+</dl>
+</div>
+
+<!-- ==================================================================== -->
+<h2 id="med">2 &nbsp;Significant <span class="badge b-fixed" style="vertical-align:6px">all fixed</span><span class="rule"></span></h2>
+<p class="lede">Wrong output, lost signal, dead checks, and generated artifacts that name things
+that do not exist.</p>
+
+<!-- M1 -->
+<div class="card done">
+<h3 id="m1"><span class="badge b-med">M1</span><code>grep -H</code> / <code>--with-filename</code> is silently ignored</h3>
+<p class="where"><code>internal/shellcmd/shellcmd.go:675</code> (accepted and discarded) &middot;
+<code>internal/topogrep/grep.go:597-608</code> (<code>bare := opt.Terse &amp;&amp; res.RootIsFile</code>)</p>
+<div class="fixed-note"><strong>FIXED &mdash; -H and --with-filename are honoured</strong><br><code>shellcmd.GrepRequest</code> and <code>topogrep.Options</code> carry <code>WithFilename</code>; the renderer's <code>bare</code> test now reads <code>Terse &amp;&amp; RootIsFile &amp;&amp; !WithFilename</code>. Verified against GNU grep 3.11: <code>grep -H -n Total pkg/util.go</code> now prints <code>pkg/util.go:5:</code> as the real command does. <code>topogrep.RawBytes</code> was taught the same two shape questions, so the over-serve
+denominator still describes a row the caller actually sees. Pinned by
+<code>TestFilenameAndLineNumberFlagsAreCarried</code> (shellcmd) and
+<code>TestGrepHonoursExplicitFilenameAndLineNumberFlags</code> (five flag combinations against
+the real grep).</div>
+
+<dl>
+<dt>What happens</dt>
+<dd><code>parseGrep</code> lists <code>-H</code>/<code>--with-filename</code> among the flags that are
+&ldquo;accepted and ignored&rdquo;, on the stated grounds that <em>&ldquo;aracne always reports
+path:line&rdquo;</em>. That is not true on the shell surface: <code>FormatResult</code> sets
+<code>bare = Terse &amp;&amp; RootIsFile</code> and then omits the path for a single-file operand.
+<code>topogrep.Options</code> carries no field for &ldquo;the caller asked for the filename&rdquo;, so the
+information is destroyed at parse time and cannot be recovered.</dd>
+
+<dt>Requirements</dt>
+<dd><code>grep -H …</code> (or <code>--with-filename</code>) with exactly one file operand, on any
+surface that sets <code>Terse</code> — i.e. every intercepted shell search, in every mode.</dd>
+
+<dt>Effect</dt>
+<dd>Output shape changes under the caller. <code>grep -H -n pat f | cut -d: -f1</code> is a list of
+paths to the real grep and a list of line numbers to aracne. Interception explicitly permits piping a
+search into line filters (<code>ConsumerLineFilter</code>), so this is reachable in a pipeline aracne
+volunteered to answer.</dd>
+
+<dt>Reproduction</dt>
+<dd>
+<div class="repro"><div class="lbl">GNU grep 3.11</div>
+<pre><code>$ /usr/bin/grep -H -n Total pkg/util.go
+pkg/util.go:5:  Total int
+pkg/util.go:10: a.Total += n
+pkg/util.go:11: return a.Total
+
+$ arac cmd -- /usr/bin/grep -H -n Total pkg/util.go
+# pkg/util.go:4-6 — Adder adds numbers.
+5:      Total int
+# pkg/util.go:9-12 — Add adds n to the total.
+10:     a.Total += n
+11:     return a.Total</code></pre>
+<p style="margin-top:10px">Same for <code>--with-filename</code>. (Note: plain <code>-r</code> with a
+single file operand <em>does</em> match GNU grep — GNU only implies <code>-H</code> when more than one
+file is searched. Only the explicit flag is lost.)</p></div>
+</dd>
+
+<dt>Fix</dt>
+<dd>Add <code>WithFilename bool</code> to <code>shellcmd.GrepRequest</code> and
+<code>topogrep.Options</code>, set it on <code>-H</code>/<code>--with-filename</code>, and make the
+renderer <code>bare := opt.Terse &amp;&amp; res.RootIsFile &amp;&amp; !opt.WithFilename</code>.
+Then remove <code>-H</code> from the &ldquo;accepted and ignored&rdquo; branch's comment, since it is
+no longer ignored. Note that <code>tests/grep_parity_test.go</code> cannot catch this today: it
+forced <code>-H</code> onto the reference grep and re-attached the implied path to aracne's bare
+rows, normalising the difference away &mdash; that harness now passes the same flags to both sides.</dd>
+</dl>
+</div>
+
+<!-- M2 -->
+<div class="card done">
+<h3 id="m2"><span class="badge b-med">M2</span>Line numbers are emitted whether or not <code>-n</code> was asked for</h3>
+<p class="where"><code>internal/topogrep/grep.go:596-608</code> — the emit closure always writes <code>%s:%d:%s</code></p>
+<div class="fixed-note"><strong>FIXED &mdash; line numbers only when -n asked for them</strong><br>Same mechanism: <code>LineNumbers</code> is carried from the parsed flag on the shell surface and defaults to true for the MCP/CLI surfaces, which have no <code>-n</code> to honour. Verified: <code>grep -r Add pkg</code> now prints <code>pkg/util.go:// Adder…</code>, matching GNU grep, instead of injecting a line-number column the caller did not ask for.</div>
+
+<dl>
+<dt>What happens</dt>
+<dd>There is no code path that renders a match without its line number. <code>shellcmd</code> accepts
+<code>-n</code> and throws it away because the renderer &ldquo;always&rdquo; prints it — which means a
+<code>grep</code> that did <em>not</em> ask for line numbers gets an extra colon-delimited field.</dd>
+
+<dt>Requirements</dt>
+<dd>Any intercepted search without <code>-n</code>/<code>--line-number</code>. Agents type this
+routinely: <code>grep -rl</code>, <code>grep -r pat dir</code>, <code>grep -c</code> are the common
+shapes, and only the first two reach the content renderer.</dd>
+
+<dt>Effect</dt>
+<dd>A field the caller did not ask for is injected in the middle of every row, shifting every later
+field. <code>grep -r pat dir | cut -d: -f2-</code> returns the match text to the real grep and
+<code>line:text</code> to aracne. Same class as M1, and it is the more common shape.</dd>
+
+<dt>Reproduction</dt>
+<dd>
+<div class="repro"><div class="lbl">GNU grep 3.11</div>
+<pre><code>$ /usr/bin/grep -r Add pkg
+pkg/util.go:// Adder adds numbers.
+pkg/util.go:type Adder struct {
+pkg/util.go:// Add adds n to the total.
+pkg/util.go:func (a *Adder) Add(n int) int {
+
+$ arac cmd -- /usr/bin/grep -r Add pkg
+# pkg/util.go:4-6 — Adder adds numbers.
+pkg/util.go:4:type Adder struct {
+# pkg/util.go:9-12 — Add adds n to the total.
+pkg/util.go:9:func (a *Adder) Add(n int) int {</code></pre></div>
+</dd>
+
+<dt>Fix</dt>
+<dd>Carry <code>LineNumbers bool</code> the same way as M1's <code>WithFilename</code>, defaulting to
+<code>true</code> for the MCP/CLI surfaces (which have no <code>-n</code> to honour) and to the parsed
+flag for the shell surface. The <code>emit</code> closure grows one more branch; the resource header
+lines keep their spans either way, which is where the line information actually earns its place.
+<br><br>If that is judged too invasive, the honest alternative is the one the package's own doc
+prescribes: make a search without <code>-n</code> a <code>KindPassthrough</code>. Silently changing
+the column layout is the one option the package rules out.</dd>
+</dl>
+</div>
+
+<!-- M3 -->
+<div class="card done">
+<h3 id="m3"><span class="badge b-med">M3</span>The PostToolUse nudge fires for files the topology does not model — and the guard already has the check it needs</h3>
+<p class="where"><code>internal/cli/guard_intercept.go:226-248</code> (<code>namesAnIndexedFile</code>, never called) &middot; <code>internal/cli/guard.go:131-136</code></p>
+<div class="fixed-note"><strong>FIXED &mdash; the guard now calls the check it already had</strong><br><code>worthNudging</code> gates the native read/search pointer on <code>namesAnIndexedFile</code> &mdash; which existed, documented the exact regression it prevents, and had no callers. A mutation is still nudged unconditionally: its guidance is about the topology sync, and an edit that creates a file's first declaration would fail an index test. Verified: a native <code>Read</code> of <code>CHANGELOG.md</code> (zero nodes) is now silent; one of <code>main.go</code> still gets the pointer. Pinned by <code>TestNudgeRequiresSomethingToOffer</code>.</div>
+
+<dl>
+<dt>What happens</dt>
+<dd><code>namesAnIndexedFile</code> exists, carries a 20-line doc comment describing the exact
+regression it was written to prevent, cites a real smoke-cell failure — and <strong>has no
+callers</strong>. Confirmed with a repo-wide search: the only other occurrences of the name are inside
+its own comment. The PostToolUse branch calls <code>warningMessage(keys, …)</code> unconditionally.</dd>
+
+<dt>Requirements</dt>
+<dd>A native <code>Read</code>/<code>Grep</code>/<code>Edit</code>/<code>Write</code> on any file with
+no topology nodes: <code>CHANGELOG.md</code>, <code>README.md</code>, a lockfile, a template, a
+YAML config, anything in an unsupported language. Every mode.</dd>
+
+<dt>Effect</dt>
+<dd>The model is told, on every such call, that
+<em>&ldquo;<code>cat</code>, <code>head -N</code>, <code>tail -N</code> and <code>sed -n 'A,Bp'</code>
+on an indexed file are answered from the topology&rdquo;</em> — for a file that is not indexed and
+where aracne has nothing to add. The nudge text is injected into the transcript on every matching
+call; <code>toolspec</code>'s own comment budgets it at &ldquo;~16&nbsp;KB across eighty native
+calls&rdquo;. Spending that on files aracne cannot serve is the exact cost the check was written to
+avoid, and it teaches the model a rule that fails the next time it tries it.</dd>
+
+<dt>Reproduction</dt>
+<dd>
+<div class="repro"><div class="lbl">verbatim — <code>CHANGELOG.md</code> has zero topology nodes</div>
+<pre><code>$ echo '{"hook_event_name":"PostToolUse","tool_name":"Read",
+         "tool_input":{"file_path":".../proj/CHANGELOG.md"},"cwd":".../proj"}' \
+  | arac guard --claude-hook
+{"hookSpecificOutput":{"additionalContext":
+  "aracne: `cat`, `head -N`, `tail -N` and `sed -n 'A,Bp'` on an indexed file are
+   answered from the topology -- the lines you asked for, framed by their declaration,
+   with the exact range of everything they touch.","hookEventName":"PostToolUse"}}
+
+# byte-identical output for an indexed file — the check never runs</code></pre></div>
+</dd>
+
+<dt>Fix</dt>
+<dd>Call it. In the <code>event.ToolName != "Bash"</code> branch, gate the read/grep guidance on
+evidence:
+<pre><code>case event.ToolName != "Bash":
+    // A read of a file with no nodes has nothing to trade for the advice.
+    if isReadLike(keys) &amp;&amp; !namesAnIndexedFile(nativeToolPaths(event.ToolInput), dbPath) {
+        break
+    }
+    if msg := warningMessage(keys, !blocked[toolspec.ReadToolName], cfg.Surface()); msg != "" {
+        parts = append(parts, msg)
+    }</code></pre>
+<code>claudeHookPaths</code> in <code>update_file.go</code> already extracts the path set from a
+native tool input and can be reused verbatim. Keep the nudge unconditional for
+<code>edit</code>/<code>write</code>, where the advice is about the sync, not about the file.</dd>
+</dl>
+</div>
+
+<!-- M4 -->
+<div class="card done">
+<h3 id="m4"><span class="badge b-med">M4</span><code>arac disable</code> silently leaves the contract behind when its closing line was edited</h3>
+<p class="where"><code>internal/cli/disable.go:426</code> (<code>stripAracneIntegrationSegment</code>) vs
+<code>internal/cli/setup.go:765</code> (<code>updateMarkdownIntegrationSegment</code>)</p>
+<div class="fixed-note"><strong>FIXED &mdash; one bounds helper for the writer and the remover</strong><br><code>aracIntegrationBounds</code> is now the single answer to "where is the block", including the fallback to the next top-level heading when the closing line was edited away. <code>updateMarkdownIntegrationSegment</code> and <code>stripAracneIntegrationSegment</code> both call it, so they cannot disagree again. Verified: <code>arac disable</code> now removes an edited block and leaves the reader's own content. Pinned by <code>TestDisableRemovesABlockMissingItsClosingLine</code>.</div>
+
+<dl>
+<dt>What happens</dt>
+<dd>The generated block has no delimiter — it is found by its opening heading and by whichever real
+closing sentence the contract ends on. <code>arac setup</code> handles the case where a reader has
+edited that last sentence away: it falls back to <code>nextTopLevelHeading</code> and replaces up to
+there, with an explicit comment about why. <code>arac disable</code> has no such fallback. When
+<code>findAracIntegrationEnd</code> returns <code>-1</code> it returns the content unchanged, and the
+caller prints <strong>&ldquo;CLAUDE.md already clean&rdquo;</strong>.</dd>
+
+<dt>Requirements</dt>
+<dd>Anyone who edits or deletes the contract's last line — which reads as ordinary prose in a file
+they are told is theirs — and then runs <code>arac disable</code>. Also reachable after a partial
+upgrade, since the closing line differs per mode.</dd>
+
+<dt>Effect</dt>
+<dd>An uninstall that reports success and removes nothing, leaving the whole contract in
+<code>CLAUDE.md</code> / <code>AGENTS.md</code> — still re-sent on every request, now describing an
+integration that no longer exists (the MCP entry, hooks and agents <em>were</em> removed). The
+&ldquo;already clean&rdquo; message actively misleads.</dd>
+
+<dt>Reproduction</dt>
+<dd>
+<div class="repro"><div class="lbl">verbatim</div>
+<pre><code>$ arac setup --claude -y
+$ # user deletes the last line ("Parallelise multiple reads and edits ...")
+$ arac disable --claude -y
+Claude Code CLAUDE.md already clean at CLAUDE.md
+
+$ cat CLAUDE.md
+# My own section
+
+# Aracne
+
+This repository supports Aracne: every function, type, interface and variable is indexed...
+...
+(the whole block still there)</code></pre></div>
+</dd>
+
+<dt>Fix</dt>
+<dd>Give the remover the writer's fallback:
+<pre><code>end, endMarker := findAracIntegrationEnd(content, start)
+if end &lt; 0 {
+    // Same rule as updateMarkdownIntegrationSegment: a block whose closing line the
+    // reader removed runs to the next top-level heading, or to end of file.
+    return strings.TrimRight(content[:start], " \t\r\n") +
+           tail(content, nextTopLevelHeading(content, start), lineEnding)
+}</code></pre>
+Both functions should share one <code>aracIntegrationBounds(content) (start, end int, ok bool)</code>
+helper so the writer and the remover cannot disagree about where the block is again.</dd>
+</dl>
+</div>
+
+<!-- M5 -->
+<div class="card done">
+<h3 id="m5"><span class="badge b-med">M5</span>The <code>update-file</code> hook ignores the event <code>cwd</code>, and creates a stray <code>.aracne/</code> outside the project</h3>
+<p class="where"><code>internal/cli/update_file.go:42-60</code> &middot; <code>internal/cli/helpers.go:87</code> (<code>InitRegistry</code>)</p>
+<div class="fixed-note"><strong>FIXED &mdash; fixed alongside H3</strong><br><code>runClaudeUpdateFileHook</code> resolves its database with <code>guardDBPath(event.cwd)</code> &mdash; the guard's own three-tier ladder &mdash; and returns when there is no topology instead of letting <code>InitRegistry</code> build one. Verified: run from outside the tree it now creates no <code>.aracne/</code> and says nothing. Pinned by <code>TestUpdateFileHookNeverBuildsATopology</code>.</div>
+
+<dl>
+<dt>What happens</dt>
+<dd><code>guardDBPath</code> exists precisely because a hook's working directory is not dependable;
+its doc comment describes a benchmark run lost to exactly this. It resolves in three tiers:
+the hook event's <code>cwd</code>, then <code>$CLAUDE_PROJECT_DIR</code>, then an upward walk.
+<code>runClaudeUpdateFileHook</code> — the sibling hook, on the same surface, receiving an event JSON
+that carries the same <code>cwd</code> field — parses only <code>tool_input</code> and resolves with
+<code>ProjectDBPath(DefaultDBRelative)</code>, which is the upward walk alone. When that finds
+nothing, <code>InitRegistry</code> does <em>not</em> bail: it <code>MkdirAll</code>s a
+<code>.aracne/</code>, prints &ldquo;No topology found. Scanning project...&rdquo;, and
+<code>os.Exit(1)</code>s.</dd>
+
+<dt>Requirements</dt>
+<dd>The hook process running anywhere that is not inside the project — a session whose Bash cwd moved
+outside the tree, a worktree/temp directory that vanished (Claude&nbsp;Code then falls back to the
+session dir, the project root, <em>$HOME</em>, or the system temp dir), or a monorepo edited from
+outside its indexed subtree.</dd>
+
+<dt>Effect</dt>
+<dd>The real topology is never re-synced for that edit; a junk <code>.aracne/</code> directory is left
+in an unrelated location; the hook exits non-zero. And if that directory ever <em>does</em> acquire a
+database, later <code>arac cmd</code> calls run there will answer from the wrong topology.</dd>
+
+<dt>Reproduction</dt>
+<dd>
+<div class="repro"><div class="lbl">verbatim</div>
+<pre><code>$ mkdir /tmp/outside &amp;&amp; cd /tmp/outside
+$ echo '{"tool_name":"Edit","tool_input":{"file_path":"/tmp/proj/pkg/util.go"}}' \
+  | arac update-file --claude-hook
+No topology found. Scanning project...
+Error scanning project: no language scanner detected for /tmp/outside
+$ ls -a /tmp/outside
+.  ..  .aracne         &lt;-- created, empty, never asked for</code></pre></div>
+</dd>
+
+<dt>Fix</dt>
+<dd>Decode <code>cwd</code> from the event and use the guard's own resolver:
+<pre><code>var event struct {
+    ToolInput map[string]interface{} `json:"tool_input"`
+    Cwd       string                 `json:"cwd"`
+}
+...
+dbPath := guardDBPath(event.Cwd)
+if _, err := os.Stat(dbPath); err != nil {
+    return  // no topology here: a hook has nothing to do, and must not build one
+}
+manager := topology.New()
+if err := manager.Load(dbPath); err != nil { return }</code></pre>
+Separately, <code>InitRegistry</code>'s unconditional <code>os.MkdirAll(filepath.Dir(dbPath))</code>
+is worth revisiting on its own account: every CLI verb creates <code>.aracne/</code> wherever it is
+run, before it knows whether there is anything to put in it.</dd>
+</dl>
+</div>
+
+<!-- M6 -->
+<div class="card done">
+<h3 id="m6"><span class="badge b-med">M6</span>The contract block is spliced between the host document's title and its body</h3>
+<p class="where"><code>internal/cli/setup.go:853</code> (<code>markdownIntegrationInsertionIndex</code>)</p>
+<div class="fixed-note"><strong>FIXED &mdash; the contract is appended, not spliced</strong><br><code>updateMarkdownIntegrationSegment</code> now appends a first-time block at the end of the document. The block is found again by its heading, so its position was always free, and the end of the file is the only place that cannot orphan someone else's content. An existing block is still replaced <em>where it is</em>, so a configured project does not have its document re-ordered. Four now-orphaned markdown helpers were removed with it. Verified on a hand-written CLAUDE.md: title, prose and <code>## Conventions</code> stay together.</div>
+
+<dl>
+<dt>What happens</dt>
+<dd>The insertion point is &ldquo;after any leading headings&rdquo;. For the overwhelmingly common
+shape — an <code>H1</code> title followed by prose — that puts a second <code>H1</code>
+(<code>#&nbsp;Aracne</code>) immediately after the title and before the body it introduces.</dd>
+
+<dt>Requirements</dt>
+<dd>Any existing <code>CLAUDE.md</code>/<code>AGENTS.md</code> that opens with a title and then has
+content. Reproduced on a hand-written file; visible in this repository's own <code>CLAUDE.md</code>,
+where everything the maintainer wrote under <code>#&nbsp;Working on Aracne</code> now sits under
+<code>#&nbsp;Aracne</code>.</dd>
+
+<dt>Effect</dt>
+<dd>The user's document is structurally broken: their prose reads as the body of aracne's block, and
+their <code>##</code> sections become subsections of it. Any tool that navigates by heading — a
+docs site, an outline view, a model reading the file as a tree — attributes the wrong content to the
+wrong section.</dd>
+
+<dt>Reproduction</dt>
+<dd>
+<div class="repro"><div class="lbl">before / after</div>
+<pre><code># before                          # after `arac setup -y`
+# My Project                      # My Project
+
+Some user prose.                  # Aracne
+                                  &lt;the whole contract&gt;
+## Conventions
+                                  Some user prose.
+Use tabs.
+                                  ## Conventions
+
+                                  Use tabs.</code></pre></div>
+</dd>
+
+<dt>Fix</dt>
+<dd>Append rather than splice. The block is found again by its heading, so its position is free, and
+the end of the file is the only place that cannot orphan someone else's content. If a position near
+the top is wanted for prompt-ordering reasons, demote the generated heading to <code>##</code> when
+the host document already opens with an <code>H1</code> — but then the block markers
+(<code>AracIntegrationStart</code>, <code>findAracIntegrationStart</code>) must match both levels, and
+<code>nextTopLevelHeading</code>'s fallback has to follow.</dd>
+</dl>
+</div>
+
+<!-- M7 -->
+<div class="card done">
+<h3 id="m7"><span class="badge b-med">M7</span>Two hard-coded model IDs do not exist, one of them the wizard's default answer</h3>
+<p class="where"><code>internal/cli/init_questions.go:129</code> &middot; <code>internal/lazydesc/generator.go:137</code></p>
+<div class="fixed-note"><strong>FIXED &mdash; the ids exist, and are current</strong><br><code>defaultModelFor(anthropic)</code> &rarr; <code>claude-haiku-4-5</code>; <code>modelAliases</code> &rarr; <code>claude-fable-5-1</code>, <code>claude-sonnet-5</code>, <code>claude-opus-5</code>. The comment now records that this table is a snapshot of someone else's release schedule that no test can date, and to re-check it when a generation ships.</div>
+
+<dl>
+<dt>What happens</dt>
+<dd>
+<div class="scroll"><table>
+<tr><th>Where</th><th>Value</th><th>Status</th></tr>
+<tr><td><code>defaultModelFor(anthropic)</code> — the offered default for the API branch of question&nbsp;4</td><td><code>claude-haiku-5</code></td><td><strong>not a model.</strong> Current Haiku is <code>claude-haiku-4-5</code>.</td></tr>
+<tr><td><code>lazydesc.modelAliases["fable"]</code></td><td><code>fable-5</code></td><td><strong>not a model.</strong> The IDs are <code>claude-fable-5</code> / <code>claude-fable-5-1</code>.</td></tr>
+<tr><td><code>modelAliases["sonnet"]</code></td><td><code>claude-sonnet-4-6</code></td><td>valid, but previous generation (<code>claude-sonnet-5</code>).</td></tr>
+<tr><td><code>modelAliases["opus"]</code></td><td><code>claude-opus-4-8</code></td><td>valid, but previous generation (<code>claude-opus-5</code>).</td></tr>
+<tr><td><code>modelAliases["haiku"]</code>, <code>providerFallbackModel</code></td><td><code>claude-haiku-4-5</code></td><td>correct.</td></tr>
+</table></div>
+The irony is sharp: the comment three lines above the bad default
+(<code>init_questions.go:117</code>) argues that the API branch <em>&ldquo;wants the full published
+id&rdquo;</em> and names <code>claude-haiku-5</code> as the spelling that is
+<em>&ldquo;not guaranteed to mean anything&rdquo;</em> — then returns it.</dd>
+
+<dt>Requirements</dt>
+<dd>Any user who runs <code>arac init</code>, answers &ldquo;An API key&rdquo; &rarr;
+&ldquo;anthropic&rdquo;, and takes the highlighted default for the model question. That is the happy
+path of the wizard.</dd>
+
+<dt>Effect</dt>
+<dd>The description sweep fails on its first batch with a 404 from the provider, after the wizard
+has already reported success and written the config. Because <code>descriptions.model</code> is a
+single-tier setting with no fallback, every later
+<code>arac descriptions generate</code> and every lazy fill on the read path fails the same way,
+silently (<code>generator()</code> drops the error by design). The user sees descriptions simply
+never appearing.</dd>
+
+<dt>Fix</dt>
+<dd><code>defaultModelFor(ProviderNameAnthropic)</code> &rarr; <code>"claude-haiku-4-5"</code>;
+<code>modelAliases["fable"]</code> &rarr; <code>{providerAnthropic, "claude-fable-5-1"}</code>; refresh
+<code>sonnet</code>/<code>opus</code> to <code>claude-sonnet-5</code>/<code>claude-opus-5</code>.
+More durably: this table is a hard-coded snapshot of someone else's release schedule with no test that
+can fail when it goes stale. Either validate the id once at wizard time with a cheap
+<code>GET /v1/models/{id}</code> and re-ask on a miss, or drop the alias table and pass the model
+string through untouched, letting the provider produce the error at the point the user can act on it.</dd>
+</dl>
+</div>
+
+<!-- M8 -->
+<div class="card done">
+<h3 id="m8"><span class="badge b-med">M8</span>MCP entries invoke a bare <code>arac</code> while hooks use the resolved absolute path</h3>
+<p class="where"><code>internal/cli/setup.go:196</code>, <code>:115</code>, <code>:505</code> vs <code>internal/cli/native_hooks.go:269</code> (<code>aracBinary</code>)</p>
+<div class="fixed-note"><strong>FIXED &mdash; MCP entries run the resolved binary</strong><br>All three sites &mdash; <code>.mcp.json</code>, <code>.opencode/opencode.json</code> and the sub-agent <code>mcpServers:</code> frontmatter &mdash; now use <code>aracBinary()</code>, as the hooks already did. Verified in a fresh project: every generated entry names the absolute path. Pinned by <code>TestGeneratedMCPEntriesRunTheResolvedBinary</code>.</div>
+
+<dl>
+<dt>What happens</dt>
+<dd><code>aracBinary()</code> resolves <code>os.Executable()</code> (through symlinks) so generated
+scripts run the binary that wrote them. Its doc comment states the reason plainly: <em>&ldquo;a build
+kept at ./bin/arac, a Homebrew install whose shell a GUI-launched editor does not inherit, a login
+PATH the harness does not share — each turned every tool call into a failing hook.&rdquo;</em>
+The three MCP configuration sites did not get the fix:
+<pre><code>.mcp.json                        "command": "arac"
+.opencode/opencode.json          "command": ["arac", "serve", ...]
+.claude/agents/*.md frontmatter  command: arac</code></pre></dd>
+
+<dt>Requirements</dt>
+<dd>Any host whose PATH at harness-launch differs from the shell that ran <code>arac setup</code> —
+the GUI-launched-editor case the comment already names, a Homebrew or <code>~/go/bin</code> install
+outside a non-login PATH, a container whose entrypoint differs from the build shell.</dd>
+
+<dt>Effect</dt>
+<dd>The server fails to start. In <code>mcp</code> mode the main agent loses its only aracne tool; in
+<em>every</em> mode the generated sub-agents lose theirs, so <code>descriptions generate</code> and the
+bug pipeline have nothing to call. MCP start-up failures are quiet in both harnesses — the tool list
+is simply short.</dd>
+
+<dt>Fix</dt>
+<dd>Use <code>aracBinary()</code> at all three sites, exactly as the hook writers do. The one
+consideration is portability of the generated file: an absolute path in a committed
+<code>.mcp.json</code> does not travel between machines. If that matters, write
+<code>aracBinary()</code> and fall back to <code>"arac"</code> only when the resolved path lies inside
+a directory already on the default PATH — or make it a config key
+(<code>paths.arac_binary</code>) with the resolved path as its default.</dd>
+</dl>
+</div>
+
+<!-- ==================================================================== -->
+<h2 id="low">3 &nbsp;Minor <span class="badge b-fixed" style="vertical-align:6px">11 of 12 fixed</span><span class="rule"></span></h2>
+<p class="lede">Real but low-cost: papercuts, dead code, timing margins, and one or two things that
+will bite eventually.</p>
+
+<div class="card">
+<h3 id="l1"><span class="badge b-low">L1</span>The guard's internal timeout budget can exceed the hook timeout it writes</h3>
+<p class="where"><code>guard_drift.go:17</code> (20s) &middot; <code>guard_untracked.go:15</code> (3s, twice) &middot; <code>guard_proxy.go:18</code> (5s) &middot; <code>native_hooks.go:98</code> (<code>"timeout": 30</code>)</p>
+<dl>
+<dt>Requirements</dt><dd>A slow <code>scan.pre_tool</code> on a large repo, followed by a denial that reaches the untracked check and the read proxy. Only in <code>mcp</code>/<code>cli</code> mode with a non-empty <code>blocked_tools</code>.</dd>
+<dt>Effect</dt><dd>Worst case on the PreToolUse path is 20&nbsp;+&nbsp;3&nbsp;+&nbsp;3&nbsp;+&nbsp;5&nbsp;=&nbsp;31&nbsp;s against a 30&nbsp;s hook timeout: the hook is killed and its decision — including a rewrite that was about to answer the call — is lost. Every sub-budget is individually defended in a comment; nothing checks the sum.</dd>
+<dt>Fix</dt><dd>Derive the sub-budgets from one constant, and give the whole PreToolUse handler a single deadline (<code>context.WithTimeout</code>) below the hook's, rather than four independent ones. Raise the written <code>timeout</code> to match if 20&nbsp;s of scan is genuinely wanted.</dd>
+</dl>
+</div>
+
+<div class="card done">
+<h3 id="l2"><span class="badge b-low">L2</span>The read proxy times out before the lazy fill it can trigger</h3>
+<p class="where"><code>guard_proxy.go:18</code> (<code>proxyReadTimeout = 5s</code>) vs <code>helper.DefaultLazyTimeoutSeconds = 8</code></p>
+<div class="fixed-note"><strong>FIXED &mdash; the proxy no longer waits on descriptions</strong><br><code>proxyRead</code> builds its reader with <code>.WithFiller(nil)</code>. A denial is not the place to pay for description generation, and the fill it used to await could outlast the 5s budget. Pinned by <code>TestProxyReadDoesNotWaitOnDescriptions</code>, which skips itself if the two timeouts are ever reordered.</div>
+<dl>
+<dt>Requirements</dt><dd><code>blocked_tools: ["read"]</code> in <code>mcp</code>/<code>cli</code> mode, on a repository whose descriptions are not yet written (i.e. a fresh install, which is when <code>descriptions.lazy</code> is doing the most work).</dd>
+<dt>Effect</dt><dd><code>proxyRead</code> builds a <code>universaltools.Read</code>, which constructs a lazy filler; the fill is awaited inline for up to 8&nbsp;s, the proxy gives up at 5&nbsp;s and returns <code>""</code>, and the model gets a bare pointer instead of the file — the two-turns-for-one-question failure the proxy exists to end. The descriptions still get written, so the <em>next</em> call succeeds, which makes this look intermittent.</dd>
+<dt>Fix</dt><dd>Either raise <code>proxyReadTimeout</code> above the lazy deadline, or (better) construct the proxy's <code>Read</code> with <code>.WithFiller(nil)</code> — a denial is not the place to pay for description generation.</dd>
+</dl>
+</div>
+
+<div class="card done">
+<h3 id="l3"><span class="badge b-low">L3</span>The usage banner tells users to run a command that does not exist</h3>
+<p class="where"><code>internal/cli/usage.go:104-135</code></p>
+<div class="fixed-note"><strong>FIXED &mdash; the banner names the real binary</strong><br>Twenty-two <code>Aracne &lt;cmd&gt;</code> invocations became <code>arac</code>, the Usage block realigned, and the three now-redundant legacy prefix checks in the feature gates collapsed to one each.</div>
+<dl>
+<dt>Effect</dt><dd>Fifteen lines say <code>Aracne scan</code>, <code>Aracne serve</code>, <code>Aracne init</code>, <code>Aracne viz serve</code>, … while the binary is <code>arac</code> and the rest of the same banner says <code>arac read</code>, <code>arac grep</code>. The examples block is the worst of it: <code>Aracne scan -root ./myproject</code> is copy-pasteable and wrong.</dd>
+<dt>Fix</dt><dd>Rename to <code>arac</code> throughout. Note that <code>gateAgentUsage</code> and <code>gateBugUsage</code> match on both spellings (<code>"Aracne bug "</code> / <code>"arac bug "</code>), so the gating survives the rename; keep both prefixes in the matchers or update them together.</dd>
+</dl>
+</div>
+
+<div class="card done">
+<h3 id="l4"><span class="badge b-low">L4</span>An unknown subcommand exits 0</h3>
+<p class="where"><code>cmd/arac/main.go:115</code> &middot; <code>:21</code></p>
+<div class="fixed-note"><strong>FIXED &mdash; a typo is a failure</strong><br>An unknown subcommand prints to stderr and exits 1; so does an unknown or missing <code>descriptions</code> sub-verb. A bare <code>arac</code> still exits 0 &mdash; that one is a deliberate ask. <code>PrintUsageTo(w)</code> was added so a diagnostic goes to stderr, where it cannot be mistaken for output.</div>
+<dl>
+<dt>Effect</dt><dd><code>arac frobnicate</code> prints the usage banner and exits&nbsp;0; so does a bare <code>arac</code>. A script or a Makefile cannot detect a typo'd subcommand, and neither can an agent branching on the status.</dd>
+<dt>Fix</dt><dd><code>default:</code> &rarr; print usage to stderr and <code>os.Exit(1)</code>. Keep exit&nbsp;0 for the deliberate no-argument invocation if that is wanted, but not for an unrecognised verb.</dd>
+</dl>
+</div>
+
+<div class="card done">
+<h3 id="l5"><span class="badge b-low">L5</span><code>arac init</code> is the one verb that does not resolve the project database</h3>
+<p class="where"><code>internal/cli/init.go:56</code>, <code>:316-321</code></p>
+<div class="fixed-note"><strong>FIXED &mdash; init refuses to nest a project inside one</strong><br><code>RunInit</code> checks <code>ProjectDBPath</code> before asking anything and exits with a pointer naming the outer project's root, the two commands that do what the caller probably meant, and how to make the subdirectory its own project on purpose. Silently creating a nested topology was the one outcome nobody would notice.</div>
+<dl>
+<dt>Requirements</dt><dd>Running <code>arac init</code> from a subdirectory of an already-configured project.</dd>
+<dt>Effect</dt><dd><code>ProjectDBPath</code> exists because a verb run from a subdirectory used to build a second topology there — its doc comment says so at length. <code>RunInit</code> uses the literal <code>".aracne/topology.db"</code> for both the config it loads and the config it saves, and <code>initScan</code> scans <code>"."</code>. The result is a nested project: a second <code>.aracne/</code> under the subdirectory, indexing only that subtree, whose config the outer project's tooling will never read.</dd>
+<dt>Fix</dt><dd>Either resolve upward like every other verb, or refuse with a pointer (&ldquo;this directory is inside a project already configured at &lt;root&gt;; run <code>arac init</code> there, or <code>arac setup</code> to re-render&rdquo;). Silently creating a nested project is the one option that is hard to notice.</dd>
+</dl>
+</div>
+
+<div class="card done">
+<h3 id="l6"><span class="badge b-low">L6</span>The descriptions executor is told to call a tool it does not have</h3>
+<p class="where"><code>internal/prompts/describe_agent.go:44</code></p>
+<div class="fixed-note"><strong>FIXED &mdash; the executor is pointed at the tool it has</strong><br>The prompt now says "read it with your aracne lookup tool (named in the Tools list above)" &mdash; the phrasing <code>bug_judge.go</code> already used &mdash; instead of naming <code>read</code>, which in Claude Code resolves to the native file reader.</div>
+<dl>
+<dt>Effect</dt><dd>The prompt says <em>&ldquo;call <strong>read</strong> with its <code>resource_id</code>&rdquo;</em>. In Claude&nbsp;Code the agent's aracne tool registers as <code>read_resource</code> (its <code>tools:</code> frontmatter and its own generated <code>## Tools</code> listing both say so), while <code>read</code> resolves to the harness's native file reader, which has no <code>resource_id</code> parameter. <code>toolspec</code>'s own comment on <code>ResolveToolNames</code> names this exact mismatch as costing a wasted turn. <code>prompts/bug_judge.go</code> already solves it correctly — <em>&ldquo;use your aracne lookup tool (named in the Tools list above)&rdquo;</em>.</dd>
+<dt>Fix</dt><dd>Use the bug-judge phrasing, or thread <code>nativeReadAvailable</code> into <code>DescriptionsGenerationExecutorPrompt()</code> and render the resolved name.</dd>
+</dl>
+</div>
+
+<div class="card done">
+<h3 id="l7"><span class="badge b-low">L7</span>The descriptions executor ships with <code>Edit</code>, <code>Write</code> and <code>Bash</code></h3>
+<p class="where"><code>helper.DefaultConfig</code> &middot; <code>internal/cli/setup.go:542</code> (<code>claudeToolsForAgent</code>)</p>
+<div class="fixed-note"><strong>FIXED &mdash; read-only agents are read-only</strong><br><code>DefaultConfig</code>'s <code>subAgent</code> now blocks <code>edit</code>/<code>write</code> for every generated sub-agent except <code>bug-solver</code>, which is the only one whose job is to change code. Verified: the executor's <code>tools:</code> frontmatter is now <code>… Read, Grep, Bash</code>.</div>
+<dl>
+<dt>Effect</dt><dd>Generated frontmatter:
+<pre><code>tools: mcp__aracne__read_resource, mcp__aracne__update_description, Read, Grep, Edit, Write, Bash</code></pre>
+Its prompt says <em>&ldquo;Touch only assigned resources. Never write scripts to bulk-generate.&rdquo;</em>
+<code>DefaultConfig</code> already makes this call for <code>bug-hunter</code> and <code>bug-judge</code> (<code>BlockedTools: []string{"edit","write"}</code>, with a comment explaining why two read-only agents should not be able to rewrite the codebase); the descriptions executor was left out.</dd>
+<dt>Fix</dt><dd>Add the same <code>BlockedTools: []string{"edit","write"}</code> to the <code>descriptions-generation-executor</code> branch of <code>subAgent()</code>.</dd>
+</dl>
+</div>
+
+<div class="card done">
+<h3 id="l8"><span class="badge b-low">L8</span><code>arac disable</code> leaves behind files it created</h3>
+<p class="where"><code>internal/cli/disable.go:75-112</code>, <code>:287-315</code></p>
+<div class="fixed-note"><strong>FIXED &mdash; an uninstall takes its own files with it</strong><br><code>removeIfOnlyAracneWrote</code> deletes a harness config that aracne created and that now holds nothing but the keys aracne put there &mdash; a <code>settings.json</code> of <code>{}</code>, an <code>opencode.json</code> of three permission keys. One unrecognized key or one different value and the file is left exactly where it is. Verified over a full setup&rarr;disable round trip.</div>
+<dl>
+<dt>Effect</dt><dd>After setup-then-disable in a project that had neither file:
+<code>.claude/settings.json</code> is left as <code>{}</code>, and <code>.opencode/opencode.json</code>
+is left holding <code>{"permission":{"bash":"allow","edit":"allow","read":"allow"}}</code> — three keys
+aracne invented. The &ldquo;only un-gate, never destroy&rdquo; rule is right for a file that existed
+before; it does not apply to one aracne created.</dd>
+<dt>Fix</dt><dd>Record in <code>.aracne/</code> which harness files setup created from nothing, and remove those on disable. Failing that, delete a settings file that ends up empty (<code>{}</code>) and a permission block that ends up holding only the three keys aracne writes.</dd>
+</dl>
+</div>
+
+<div class="card done">
+<h3 id="l9"><span class="badge b-low">L9</span>Dead code that documents behaviour the product does not have</h3>
+<dl>
+<dt>Instances</dt>
+<dd><ul>
+<li><code>internal/cli/guard_intercept.go:241</code> — <code>namesAnIndexedFile</code>, never called (see&nbsp;<a href="#m3">M3</a>; this is the same defect seen as dead code).</li>
+<li><code>internal/cli/guard.go:559</code> — <code>commandWord</code>, referenced only from a comment in <code>guard_intercept.go</code> that contrasts itself against it.</li>
+<li><code>internal/toolspec/toolspec.go:178</code> — <code>nativeWarnings</code> is an empty map; <code>WarningFor</code>'s middle branch can never fire.</li>
+<li><code>internal/cli/scanner.go:86,106</code> — <code>scanMu</code> is only ever locked by the single watch goroutine, so <code>TryLock</code> always succeeds. The retry-on-contention path is unreachable.</li>
+</ul></dd>
+<dt>Fix</dt><dd>Delete or wire up. A dead function carrying a detailed rationale is worse than no function: it reads as evidence that the behaviour exists.</dd>
+</dl>
+</div>
+
+<div class="card done">
+<h3 id="l10"><span class="badge b-low">L10</span><code>arac warnings list --kind</code> accepts anything</h3>
+<p class="where"><code>internal/cli/warnings.go:34-38</code></p>
+<div class="fixed-note"><strong>FIXED &mdash; --kind is validated</strong><br><code>parseWarningKind</code> rejects an unknown kind and names the four valid spellings; the summary loop now reads the same list. <code>--kind signature-changed</code> exits 1 with the alternatives instead of printing "No warnings found." and exiting 0.</div>
+<div class="fixed-note"><strong>FIXED &mdash; dead code removed</strong><br><code>commandWord</code>, the empty <code>nativeWarnings</code> map and the branch over it, the four markdown helpers orphaned by M6, and <code>scanner.go</code>'s single-goroutine <code>scanMu</code> (whose <code>TryLock</code> could never fail, making the contention branch unreachable). <code>namesAnIndexedFile</code> is no longer dead &mdash; see M3.</div>
+<dl>
+<dt>Effect</dt><dd><code>--kind signature-changed</code> (hyphen) or any other typo yields <code>No warnings found.</code> and exit&nbsp;0 — indistinguishable from a clean topology. The usage banner lists the four valid values, so the shape of the mistake is easy to make.</dd>
+<dt>Fix</dt><dd>Validate against the four <code>domain.Warn*</code> constants and exit&nbsp;1 with the list on a miss, the way <code>--kind</code> is validated in <code>parseReadArgs</code>.</dd>
+</dl>
+</div>
+
+<div class="card done">
+<h3 id="l11"><span class="badge b-low">L11</span>Every unclassified Bash command triggers two full incremental scans</h3>
+<p class="where"><code>guard.go:82</code> (<code>preToolScan</code>) + <code>guard.go:158</code> (<code>driftCheck</code>)</p>
+<div class="fixed-note"><strong>FIXED &mdash; the second scan runs only when something moved</strong><br><code>driftCheck</code> asks <code>indexHasDrifted</code> (the <code>IndexHealth</code> primitive <code>arac check-updates</code> uses) before re-scanning, and fails toward scanning on any error. The report still reads the warnings TABLE, not this scan, which is what makes skipping it safe. Verified: <code>ls</code> on an unchanged tree returns in ~0.00s, while a real edit is still scanned and reported.</div>
+<dl>
+<dt>Requirements</dt><dd><code>mayHaveWrittenSource</code> returns <code>true</code> whenever the classifier recognised nothing — deliberately, as the backstop for unenumerated write paths. But that covers <code>ls</code>, <code>go build</code>, <code>npm test</code>, <code>git status</code>, <code>make</code>, <code>docker …</code> — the majority of what an agent types.</dd>
+<dt>Effect</dt><dd>Those calls pay a <code>RunPreToolScan</code> on the way in and an <code>IncrementalScan</code> on the way out. Both walk the tree and diff the manifest. On a large repo this is the dominant per-call cost of the integration, and half of it is redundant: the PreToolUse scan of the <em>next</em> call would find the same drift.</dd>
+<dt>Fix</dt><dd>Have <code>driftCheck</code> skip the scan when the pre-tool scan already ran for this call and the manifest has not changed since — <code>IndexHealth</code> is the cheap primitive for that and is already used by <code>check-updates</code>. Reporting still comes from <code>unreportedWarnings</code>, which is what actually delivers the signal.</dd>
+</dl>
+</div>
+
+<div class="card done">
+<h3 id="l12"><span class="badge b-low">L12</span><code>scan.pre_tool: "hard"</code> destroys every description before each tool call</h3>
+<p class="where"><code>internal/topology/manager.go:55-77</code> (<code>RunPreToolScan</code>)</p>
+<div class="fixed-note"><strong>FIXED &mdash; pre_tool: hard is refused</strong><br><code>Validate</code> rejects it by name, explaining that it would clear every description and bug before every tool call and pointing at <code>arac scan --hard</code> for a one-off. <code>EffectivePreToolScan</code> is the belt: a config that reached the guard unvalidated gets the incremental scan. Verified: <code>arac setup</code> exits 1 with the message, and the guard leaves descriptions intact.</div>
+<dl>
+<dt>Effect</dt><dd><code>PreToolScanHard</code> runs <code>FullScan</code> (a from-scratch rebuild, which drops descriptions) followed by <code>DeleteAllBugs()</code> — on <em>every tool call the guard sees</em>. The mode list documents what &ldquo;hard&rdquo; means, but nothing warns that it is a per-call setting, and the loss is unrecoverable without a <code>descriptions export</code> sidecar.</dd>
+<dt>Fix</dt><dd>Reject <code>hard</code> in <code>Validate()</code> for the <code>scan.pre_tool</code> key (it is available on <code>arac scan --hard</code>, where it is a deliberate one-off), or at minimum print a loud warning from <code>announceMode</code> when a config sets it.</dd>
+</dl>
+</div>
+
+<!-- ==================================================================== -->
+<h2 id="matrix">4 &nbsp;Verified-correct matrix<span class="rule"></span></h2>
+<p class="lede">What I probed and found sound, so a reader knows the shape of the coverage and does
+not re-test it.</p>
+
+<div class="scroll">
+<table>
+<tr><th>Area</th><th>Probed</th><th>Result</th></tr>
+<tr>
+  <td>Interception guard rails</td>
+  <td><code>cat f &gt; /tmp/x</code>, <code>cat f | wc -l</code>, <code>grep … &gt; out</code>,
+      <code>sudo cat f</code>, <code>time cat f</code>, <code>LC_ALL=C grep …</code>,
+      <code>grep … | sort</code>, <code>cat -n f</code>, <code>tail -f f</code>,
+      <code>head -c 40 f</code>, <code>sed -n 1,5p a b</code>,
+      <code>for f in a b; do cat f; done</code>, heredocs, backticks, <code>$( )</code></td>
+  <td>All correctly left alone. Redirect, pipe-into-opaque-consumer, wrapper, env-prefix, unmodelled-flag
+      and multi-operand-<code>sed</code> rules all hold.</td>
+</tr>
+<tr>
+  <td>Segment-wise rewriting</td>
+  <td><code>cd pkg &amp;&amp; cat util.go</code>, <code>cat a; cat b</code>,
+      <code>grep … &amp;&amp; echo done</code>, <code>grep … | grep -v x | head -5</code>,
+      <code>cd /tmp &amp;&amp; cat main.go</code></td>
+  <td>Correct in all cases, including offset arithmetic (spliced back-to-front) and the
+      <code>cd</code>-elsewhere case, which degrades to a byte-identical real failure.</td>
+</tr>
+<tr>
+  <td>Passthrough fidelity</td>
+  <td>exit codes and stderr for <code>cat nosuchfile</code> (1), <code>head -3 nosuchfile</code> (1),
+      <code>grep -rn x nodir</code> (2), <code>grep -c x f</code> with no match (1),
+      <code>grep -l</code> with no match (1)</td>
+  <td>Byte-identical messages and statuses, including <code>argv[0]</code> rewriting so diagnostics
+      name the command the caller typed.</td>
+</tr>
+<tr>
+  <td>grep semantics</td>
+  <td><code>-i</code>, <code>-w</code>, <code>-x</code>, <code>-F</code>, <code>-c</code>,
+      <code>-l</code>, <code>-A/-B/-C</code>, <code>--include</code>, BRE alternation,
+      <code>-r</code> with one file, <code>-rc</code>, <code>-rl</code></td>
+  <td>All match GNU grep 3.11 apart from <a href="#m1">M1</a> and <a href="#m2">M2</a>.
+      Context windows, <code>--</code> separators and per-file counts are correct.</td>
+</tr>
+<tr>
+  <td>Read windowing</td>
+  <td><code>cat</code>, <code>head -N</code>, <code>sed -n 'A,Bp'</code> by path and by resource ID;
+      skeleton elision markers; <code>read.kinds</code> refusal for a <code>package</code> ID</td>
+  <td>Correct. Elision spans verified against the file (<code>+32 lines … at pkg/big.go:4-36</code>
+      for a 33-line declaration). Kind refusals reach stderr with exit&nbsp;1 rather than falling
+      through to the shell.</td>
+</tr>
+<tr>
+  <td><code>blocked_tools</code> in <code>mcp</code> mode</td>
+  <td>native <code>Read</code> denial, Bash <code>cat</code> denial with proxied content,
+      blocked <code>grep</code></td>
+  <td>Correct, including interception taking precedence over denial for <code>grep</code>.</td>
+</tr>
+<tr>
+  <td>setup / disable round trip</td>
+  <td><code>setup -y</code> twice (idempotency), then <code>disable -y</code>, on a project with a
+      pre-existing hand-written <code>CLAUDE.md</code></td>
+  <td>Byte-stable on re-run; user prose and structure fully restored on disable. Hook entries are
+      upserted, not assigned, so sibling user hooks survive.</td>
+</tr>
+<tr>
+  <td><code>arac edit</code> batch form</td>
+  <td>the exact command string the guard's nudge advertises, plus the single-edit form and a
+      relative path from a subdirectory</td>
+  <td>All work; topology re-synced inline.</td>
+</tr>
+<tr>
+  <td>Sub-agent <code>mcpServers:</code> frontmatter</td>
+  <td>generated shape vs the Claude&nbsp;Code sub-agent frontmatter reference</td>
+  <td>Valid — <code>mcpServers</code> is a documented field and the inline-definition shape matches
+      the documented example exactly.</td>
+</tr>
+<tr>
+  <td>MCP protocol</td>
+  <td><code>initialize</code>, <code>tools/list</code>, <code>tools/call</code> with absent
+      <code>arguments</code>, <code>ping</code>, notifications (no <code>id</code>), raw-JSON
+      request ids</td>
+  <td>Sound. The string-id and missing-<code>arguments</code> cases are both handled with comments
+      explaining the host that would have hit them.</td>
+</tr>
+<tr>
+  <td>SQLite concurrency</td>
+  <td>per-path locks, per-process migration <code>Once</code>, <code>busy_timeout</code> set both in
+      the DSN and by <code>PRAGMA</code>, WAL, atomic writes for config/manifest/warn-state</td>
+  <td>Careful and correct; each of the interesting cases carries a comment naming the failure it
+      came from.</td>
+</tr>
+</table>
+</div>
+
+<!-- ==================================================================== -->
+<h2 id="deviations">5 &nbsp;Deliberate deviations worth a decision<span class="rule"></span></h2>
+<p class="lede">Not bugs — each is documented in a code comment as intended. Listed because each one
+changes what a command means, and a release is the moment to confirm the trade.</p>
+
+<div class="card">
+<dl>
+<dt><code>-m N</code> is a cap on line matches only</dt>
+<dd><code>searchFile</code> deliberately keeps collecting node rows past the cap. Measured:
+<code>grep -m 1 -n Add pkg/util.go</code> returns 1 row from GNU grep and 3 from aracne (two node rows
+plus the line hit). Node rows are budgeted (<code>NodeHitBudget</code>, 25% of the head limit) so it
+cannot run away, but <code>grep -rm 1 foo .</code> — the &ldquo;one hit per file, an index of the
+tree&rdquo; idiom <code>shellcmd</code> explicitly protects — no longer returns one row per file.</dd>
+
+<dt>Matches are re-ordered by tier</dt>
+<dd>Title hits, then description hits, then line hits — not file order. Interception permits piping a
+search into <code>head</code>, so <code>grep … | head -20</code> returns a <em>different</em> twenty
+lines than the real command would. The annotation lines are counted in that twenty too.</dd>
+
+<dt>The <code>./</code> prefix is dropped for a <code>.</code> root</dt>
+<dd>GNU grep prints <code>./pkg/util.go:3:…</code>; aracne prints <code>pkg/util.go:4:…</code>.
+<code>tests/grep_parity_test.go</code> normalises this away explicitly. Same pipeline-fidelity class
+as M1/M2, but a smaller blast radius.</dd>
+
+<dt>Searches prune directories grep would walk</dt>
+<dd><code>prunedDirs</code> skips <code>.git</code>, <code>.aracne</code>, <code>node_modules</code>,
+<code>vendor</code>, <code>.venv</code>, <code>.next</code>, … A <code>grep -rn X .</code> that the
+real command answers with a vendored hit comes back empty, with nothing in the output to say a
+directory was skipped.</dd>
+
+<dt>OpenCode gets the MCP server enabled in every mode, with the main agent denied every tool</dt>
+<dd><code>initOpenCode</code> writes <code>mcp.aracne.enabled: true</code> unconditionally (the
+sub-agents need it) and then <code>"aracne_*": "deny"</code> for the main agent, with no
+<code>allow</code> entries outside <code>mcp</code> mode. If OpenCode lists a denied tool's schema to
+the model — I could not verify either way — the terminal-surface modes pay a schema block per request
+for eight tools the main agent may never call, which is the cost those modes exist to avoid. Worth
+confirming against a real OpenCode session before release.</dd>
+
+<dt>A whole-file <code>cat</code> of a small file costs more than <code>cat</code></dt>
+<dd>The over-serve floor is 12&nbsp;KB, so short files always come back with the fence and the group
+header on top. Intended (the floor exists so a narrow window can expand to its declaration), but it
+means the very cheapest read is slightly more expensive than the command it replaced.</dd>
+</dl>
+</div>
+
+<!-- ==================================================================== -->
+<h2 id="docs">6 &nbsp;Comments and docs that no longer match the code<span class="rule"></span></h2>
+<p class="lede">This codebase leans hard on its comments — they are the design record. Each of these
+now asserts something untrue, which is a maintenance hazard in its own right.</p>
+
+<div class="card">
+<div class="scroll">
+<table>
+<tr><th>Where</th><th>Claim</th><th>Reality</th></tr>
+<tr>
+  <td><code>guard_intercept.go:212</code> (in <code>namesOnlyUnindexedFiles</code>)</td>
+  <td>&ldquo;the same resolver the denial path uses, and it tries each token against the project root
+      <em>as well as the process cwd</em>&rdquo;</td>
+  <td><code>existingReadFiles</code> tries the token as written only when it is already absolute, plus
+      the root-joined form. A relative token is never resolved against the process cwd.</td>
+</tr>
+<tr>
+  <td><code>prompts/contract.go:212</code> (<code>contractGuardNote</code>)</td>
+  <td>&ldquo;appears only where a guard can actually deny something, which since the mode rework is
+      ModeMCP and nowhere else&rdquo;</td>
+  <td>The gate is <code>GuardBlocksNativeReads()</code>, true for <code>mcp</code> <em>and</em>
+      <code>cli</code>. The note is rendered in both — which is correct; the comment is not.</td>
+</tr>
+<tr>
+  <td><code>docs/architecture.md</code> §9</td>
+  <td>the rewrite happens &ldquo;never across a pipe, a redirect, a heredoc, <strong>an
+      <code>&amp;&amp;</code></strong>, an env prefix or a wrapper&rdquo;</td>
+  <td><code>interceptCommand</code> rewrites segment by segment and deliberately does cross
+      <code>&amp;&amp;</code> and <code>;</code> — its own comment cites the measurement that
+      motivated it (<code>cd d &amp;&amp; cat f</code> was 256 of 462 refusals). The architecture doc
+      describes the version before that change.</td>
+</tr>
+<tr>
+  <td><code>guard_proxy.go:41</code></td>
+  <td>&ldquo;the file must exist <em>and be tracked</em>, so this never invents an answer&rdquo;</td>
+  <td><code>proxyRead</code> only <code>os.Stat</code>s. The tracked check lives in the caller
+      (<code>decideGuard</code> &rarr; <code>readsOnlyUntrackedFiles</code>), so the invariant holds —
+      but not for the reason the comment gives, and not for a future second caller.</td>
+</tr>
+<tr>
+  <td><code>shellcmd.go:671-675</code></td>
+  <td>&ldquo;Accepted and ignored: aracne always reports path:line&rdquo;</td>
+  <td>False in the <code>Terse</code>+single-file case, which is every intercepted shell search of one
+      file. This is the comment that licenses <a href="#m1">M1</a>.</td>
+</tr>
+<tr>
+  <td><code>guard.go:120-129</code></td>
+  <td>—</td>
+  <td>The same two-sentence paragraph appears twice, verbatim, inside one comment block.</td>
+</tr>
+<tr>
+  <td><code>docs/architecture.md</code> §9</td>
+  <td>&ldquo;A <strong>shell</strong> read earns no nudge in any mode&rdquo;</td>
+  <td>The very next sentence describes the <code>ModeMCP</code> fallback that does nudge a shell read,
+      and the code implements it. The first sentence is left standing as an absolute.</td>
+</tr>
+<tr>
+  <td><code>docs/architecture.md</code> §9</td>
+  <td>the update-file hook is &ldquo;Installed only when the main agent lists the
+      <code>edit-update-db-plugin</code> plugin&rdquo;</td>
+  <td>Accurate — but nothing in the product ever lists it, which is <a href="#h3">H3</a>. The doc
+      describes a configuration no shipped path produces.</td>
+</tr>
+</table>
+</div>
+</div>
+
+<!-- ==================================================================== -->
+<h2 id="method">7 &nbsp;Method &amp; fixture<span class="rule"></span></h2>
+
+<p>Everything was checked against a binary built from the working tree
+(<code>go build ./cmd/arac</code>), never against an installed <code>arac</code>.</p>
+
+<p><strong>Fixture.</strong> A three-file Go module (<code>main.go</code>, <code>pkg/util.go</code>,
+<code>CHANGELOG.md</code>) with a cross-file caller relationship, scanned with <code>arac scan</code>,
+driven through each of the four modes by editing <code>.aracne/config.json</code>. Hook behaviour was
+exercised by feeding <code>arac guard --claude-hook</code> hand-built PreToolUse/PostToolUse event JSON
+matching the documented schema, including the <code>cwd</code> field.</p>
+
+<p><strong>One thing that nearly produced a false report.</strong> In this session's shell,
+<code>grep</code> is a Claude&nbsp;Code function wrapping <code>ugrep&nbsp;7.8.4</code>, not GNU grep.
+An early pass produced three grep-fidelity &ldquo;findings&rdquo; that were really ugrep/GNU
+differences. Every grep comparison in this report was re-run against
+<code>/usr/bin/grep</code>&nbsp;(GNU&nbsp;3.11) explicitly, and two of those three findings were
+withdrawn: plain <code>-r</code> with a single file operand and <code>-rc</code> both match GNU grep.
+<code>cat</code>, <code>head</code>, <code>tail</code>, <code>sed</code> and <code>awk</code> were
+confirmed unshadowed.</p>
+
+<p><strong>External facts checked rather than recalled.</strong> The Claude&nbsp;Code hooks and
+sub-agents references were fetched to confirm that <code>hookSpecificOutput.updatedInput</code> and
+<code>additionalContext</code> are supported (they are), that <code>shell</code> and
+<code>timeout</code> are valid handler fields (they are), that <code>${CLAUDE_PROJECT_DIR}</code>
+expands to the session's project root, that shell form requires quoting placeholders, and that
+sub-agent <code>mcpServers:</code> frontmatter is real. Anthropic model IDs were checked against the
+current model table rather than from memory.</p>
+
+<p><strong>What I did not cover.</strong> <code>internal/chat</code> and <code>arac agent</code>
+(excluded by request); the language scanners and the graph builders beyond what the read/search paths
+exercise; the viz SPA; the <code>bench/</code> harness. No code was modified — this report and the
+throwaway fixtures under the session scratchpad are the only artifacts.</p>
+
+<footer>
+  Aracne harness audit &middot; branch <code>chore/debloat</code> @ <code>07aee2b</code> &middot;
+  generated 2026-09-07, updated after the severe-fix pass.
+  24 findings, <strong>23 fixed</strong>: 4&nbsp;severe, 8&nbsp;significant and 11&nbsp;of
+  12&nbsp;minor. Plus 6&nbsp;deliberate deviations and 8&nbsp;stale comments.
+</footer>
+
+</div>

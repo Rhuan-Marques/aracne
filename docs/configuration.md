@@ -48,7 +48,7 @@ languages.)
 | `scan.ignore` | `[]` | `.gitignore`-style globs skipped on every walk — discovery, manifest, parsing, and language detection. No `!` negation; use `paths` to re-include a subtree. |
 | `scan.workers` | `0` (NumCPU) | Max files parsed concurrently during a full scan. Lower it to cap peak RAM. |
 | `scan.progress` | `auto` | `auto` (on a terminal, above 15 files), `always`, `never`. |
-| `scan.pre_tool` | `default` | The scan the guard runs *before* every tool call it sees, on both harnesses. `default` is incremental, so the usual case — nothing changed since the last call — is a no-op. `none` switches the freshness guarantee off for projects keeping the topology current another way (e.g. `arac scanner run`). `full` and `hard` exist for completeness. An unrecognized value resolves to `default`. |
+| `scan.pre_tool` | `default` | The scan the guard runs *before* every tool call it sees, on both harnesses. `default` is incremental, so the usual case — nothing changed since the last call — is a no-op. `none` switches the freshness guarantee off for projects keeping the topology current another way (e.g. `arac scanner run`). `full` re-scans every file, preserving descriptions. `hard` is **rejected**: it rebuilds from scratch, which would clear every description and bug *before every tool call* — use `arac scan --hard` for a one-off rebuild. An unrecognized value resolves to `default`. |
 | `scanner.update_frequency` | `200` (ms) | How often `arac scanner run` polls for changes. |
 
 `ignore`, `workers` and `progress` are each also a flag on `arac scan`, which wins for that
@@ -94,11 +94,15 @@ matching entirely.
 
 | key | default | meaning |
 |---|---|---|
-| `max_overserve` | `4` | The answer must stay within this multiple of the bytes the real command would have printed, or `arac cmd` passes through instead. `0` or negative disables the check. |
+| `max_overserve` | `4` | An answer must stay within this multiple of the bytes the plain answer it replaces would have cost. `0` or negative disables the check. |
 
-A window is a narrow question, and an answer disproportionate to it is not a cheaper read — it
-is a way to spend the context window on one `head -1`. `guard_proxy.go` makes the same trade
-for a denied native read.
+A narrow question answered disproportionately is not a cheaper read — it is a way to spend the
+context window on one `head -1`. Every surface that answers in something else's place measures
+itself here: intercepted commands, the guard's proxied read, and the read and search tools.
+Over the ceiling a shell command runs for real, and a tool serves the plain answer instead —
+source without its context block, matches without their node rows. Small answers always pass
+(12KB for a read, 2KB for a search) and nothing exceeds 32KB; a search that matched only names
+and descriptions is exempt, having no plain answer to be measured against.
 
 ### `descriptions`
 
@@ -140,7 +144,7 @@ and a map of named `agents`.
 | `model` | string | Model for this agent. `"<inherits>"` copies the main agent's. |
 | `mcp_tools` | string[] | Which MCP tools this agent gets. Validated against the catalog, then filtered through `Config.ServableMCPTools`, which drops the shell-served ones and returns nothing outside `mcp` mode. |
 | `blocked_tools` | string[] | Native tools to deny: `read`, `grep`, `edit`, `write`, `bash`. Empty by default. Only bites in `mcp` and `cli`; `grep` is additionally dropped outside `mcp`. |
-| `plugins` | string[] | Currently one: `edit-update-db-plugin`, which installs the native-edit topology-sync hook. |
+| `plugins` | string[] | Currently one: `edit-update-db-plugin`, which installs the native-edit topology-sync hook. An optimization, not the warning channel: it syncs inline with the edit, where the guard otherwise syncs on the PostToolUse that follows it. Warnings reach the model either way, once. |
 | `params` | map[string]int | Integer knobs — `max-batch-size` for the description executor, `thinking` for chat sub-agents. Non-positive falls back to the default. |
 
 Resolution: the per-harness block beats `<any>`; an absent field or the sentinel

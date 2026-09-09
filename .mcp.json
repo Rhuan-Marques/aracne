@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "aracne": {
+      "args": [
+        "serve",
+        "--tool-profile",
+        "main",
+        "--harness",
+        "claude_code"
+      ],
+      "command": "arac"
+    }
+  }
+}

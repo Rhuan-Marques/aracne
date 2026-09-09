@@ -200,6 +200,15 @@ func interceptLineRanges() string {
 		"says. Widening a range by trial and error is the one habit this replaces.\n\n"
 }
 
+// toolNameSet turns a blocked_tools list into the set BlockableInMode takes.
+func toolNameSet(names []string) map[string]bool {
+	set := make(map[string]bool, len(names))
+	for _, n := range names {
+		set[n] = true
+	}
+	return set
+}
+
 // contractGuardNote appears only where a guard can actually deny something, which since the
 // mode rework is ModeMCP and nowhere else.
 //
@@ -210,10 +219,15 @@ func contractGuardNote(cfg *helper.Config) string {
 	if !cfg.GuardBlocksNativeReads() {
 		return ""
 	}
-	blocked := cfg.EffectiveAgent("claude_code", "main").BlockedTools
+	// Filtered through BlockableInMode, which is what the guard actually enforces: it drops
+	// `grep` outside ModeMCP, because search is intercepted in every mode and refusing it
+	// would deny a call aracne is one step from answering. Reading the raw list here wrote
+	// "denies shell and native read and grep calls" into a cli-mode CLAUDE.md and taught the
+	// model, on every request, a restriction that does not exist.
+	blocked := cfg.BlockableInMode(toolNameSet(cfg.EffectiveAgent("claude_code", "main").BlockedTools))
 	var gated []string
-	for _, key := range blocked {
-		if key == "read" || key == "grep" {
+	for _, key := range []string{"read", "grep"} {
+		if blocked[key] {
 			gated = append(gated, key)
 		}
 	}

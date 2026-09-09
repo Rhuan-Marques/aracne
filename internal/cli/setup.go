@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/Rhuan-Marques/aracne/internal/helper"
@@ -67,7 +68,8 @@ func RunSetup(args []string) {
 // runSetup is the command without its flags, so `arac init` can finish its wizard by calling
 // it directly rather than by assembling an argv and parsing it again.
 func runSetup(claude, opencode, global, autoYes bool) {
-	configPath := helper.ConfigPath(".aracne/topology.db")
+	dbPath := ProjectDBPath(DefaultDBRelative)
+	configPath := helper.ConfigPath(dbPath)
 	cfg := helper.EnsureConfig(configPath)
 	if err := cfg.Validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "Invalid .aracne/config.json: %v\n", err)
@@ -79,7 +81,7 @@ func runSetup(claude, opencode, global, autoYes bool) {
 	// fresh checkout. An empty result is the honest answer there, and the contract renders its
 	// language-free form -- the next `arac setup` after a scan fills it in. (`arac init` scans
 	// before it gets here, so the wizard's first contract already names the languages.)
-	languages := TopologyLanguages(".aracne/topology.db")
+	languages := TopologyLanguages(dbPath)
 
 	if opencode {
 		initOpenCode(global, cfg, autoYes, languages)
@@ -96,26 +98,25 @@ func initOpenCode(global bool, cfg *helper.Config, autoYes bool, languages []str
 	mainEff := cfg.EffectiveAgent("opencode", "main")
 
 	config := readJSONConfig(configPath)
-	if cfg.MCPEnabled() {
-		if shouldWriteConfig(config, "mcp", configPath, "OpenCode", autoYes) {
-			mcpMap, _ := config["mcp"].(map[string]interface{})
-			if mcpMap == nil {
-				mcpMap = make(map[string]interface{})
-			}
-			mcpMap["aracne"] = map[string]interface{}{
-				"type":    "local",
-				"command": []string{"arac", "serve", "--tool-profile", "all", "--harness", "opencode"},
-				"enabled": true,
-			}
-			config["mcp"] = mcpMap
+	// The shared server is written in EVERY mode.
+	//
+	// OpenCode runs one server for every agent (--tool-profile all), and the generated
+	// sub-agents need it: the descriptions executor exists to call update_description, which
+	// has no shell equivalent, so gating the server on the MAIN agent's surface left that
+	// agent with nothing to call in three of the four modes. What the mode still decides is
+	// the permission block below -- outside ModeMCP the main agent is allowed none of these
+	// tools, and only the sub-agents' own blocks open them.
+	if shouldWriteConfig(config, "mcp", configPath, "OpenCode", autoYes) {
+		mcpMap, _ := config["mcp"].(map[string]interface{})
+		if mcpMap == nil {
+			mcpMap = make(map[string]interface{})
 		}
-	} else if mcpMap, ok := config["mcp"].(map[string]interface{}); ok {
-		delete(mcpMap, "aracne")
-		if len(mcpMap) == 0 {
-			delete(config, "mcp")
-		} else {
-			config["mcp"] = mcpMap
+		mcpMap["aracne"] = map[string]interface{}{
+			"type":    "local",
+			"command": []string{aracBinary(), "serve", "--tool-profile", "all", "--harness", "opencode"},
+			"enabled": true,
 		}
+		config["mcp"] = mcpMap
 	}
 
 	permissionMap, _ := config["permission"].(map[string]interface{})
@@ -151,7 +152,6 @@ func initOpenCode(global bool, cfg *helper.Config, autoYes bool, languages []str
 
 	batchSize := cfg.AgentParam("opencode", "descriptions-generation-executor", "max-batch-size", helper.DefaultDescriptionBatchSize)
 	writeOpenCodePrimaryCommand(commandsDir, "descriptions-generate", "Generate descriptions for undocumented resources in the topology", "build", prompts.DescriptionsGenerateCommand("descriptions-generation-executor", batchSize), autoYes)
-	writeOpenCodeCommand(commandsDir, "descriptions-apply", "Write topology descriptions back into source files as doc comments", "build", prompts.DescriptionsApplyCommand(), autoYes)
 	writeOpenCodeCommand(commandsDir, "descriptions_clear", "Clear stored topology descriptions", "build", prompts.DescriptionsClearCommand(), autoYes)
 	writeAgent(agentsDir, "descriptions-generation-executor", openCodeAgentContent("Generates descriptions for one assigned batch of undocumented topology resources", cfg.EffectiveAgent("opencode", "descriptions-generation-executor"), prompts.DescriptionsGenerationExecutorPrompt()), autoYes)
 
@@ -194,7 +194,7 @@ func initClaudeCode(global bool, cfg *helper.Config, autoYes bool, languages []s
 				mcpServers = make(map[string]interface{})
 			}
 			mcpServers["aracne"] = map[string]interface{}{
-				"command": "arac",
+				"command": aracBinary(),
 				"args":    []string{"serve", "--tool-profile", "main", "--harness", "claude_code"},
 			}
 			claudeConfig["mcpServers"] = mcpServers
@@ -215,7 +215,6 @@ func initClaudeCode(global bool, cfg *helper.Config, autoYes bool, languages []s
 
 	batchSize := cfg.AgentParam("claude_code", "descriptions-generation-executor", "max-batch-size", helper.DefaultDescriptionBatchSize)
 	writeCommand(commandsDir, "descriptions-generate", "Generate descriptions for undocumented resources in the topology", prompts.DescriptionsGenerateCommand("descriptions-generation-executor", batchSize), autoYes)
-	writeCommand(commandsDir, "descriptions-apply", "Write topology descriptions back into source files as doc comments", prompts.DescriptionsApplyCommand(), autoYes)
 	writeCommand(commandsDir, "descriptions_clear", "Clear stored topology descriptions", prompts.DescriptionsClearCommand(), autoYes)
 	writeAgent(agentsDir, "descriptions-generation-executor", claudeAgentContent("descriptions-generation-executor", "Generates descriptions for one assigned batch of undocumented topology resources", cfg.EffectiveAgent("claude_code", "descriptions-generation-executor"), prompts.DescriptionsGenerationExecutorPrompt()), autoYes)
 
@@ -231,16 +230,21 @@ func initClaudeCode(global bool, cfg *helper.Config, autoYes bool, languages []s
 		pruneBugArtifacts(commandsDir, agentsDir, "Claude Code")
 	}
 
-	writeClaudePlugins(mainEff.Plugins, claudeBaseDir, autoYes)
+	writeClaudePlugins(mainEff.Plugins, claudeBaseDir, global, autoYes)
 	// The guard hook is installed unconditionally (independent of plugins): it
 	// must always warn on native/shell tool usage and block per blocked_tools.
-	writeClaudeGuardHook(filepath.Join(claudeBaseDir, "settings.json"), filepath.Join(claudeBaseDir, "hooks"), autoYes)
-	// Pre-approve the aracne MCP tools so Claude Code does not prompt on every
-	// lookup/edit call in modes that would otherwise ask. Nothing to pre-approve on the
-	// terminal surface: the calls the agent makes there are ordinary Bash.
-	if cfg.MCPEnabled() {
-		writeClaudePermissions(filepath.Join(claudeBaseDir, "settings.json"), cfg)
-	}
+	//
+	// `global` is threaded in because it decides how the settings entry NAMES the script it
+	// just wrote: ${CLAUDE_PROJECT_DIR} for a project install, the absolute path for a
+	// user-level one. See hookScriptRef.
+	writeClaudeGuardHook(filepath.Join(claudeBaseDir, "settings.json"), filepath.Join(claudeBaseDir, "hooks"), global, autoYes)
+	// Pre-approve the aracne MCP tools so Claude Code does not prompt on every call.
+	//
+	// In EVERY mode, not only ModeMCP. The main agent has no MCP tools on the terminal
+	// surface, but the generated sub-agents each declare their own scoped server inline and
+	// do -- so skipping this left an intercepting project prompting on every
+	// `update_description` its descriptions executor made.
+	writeClaudePermissions(filepath.Join(claudeBaseDir, "settings.json"), cfg)
 	writeMarkdownIntegrationFile(claudeMdPath, "Claude Code CLAUDE.md", prompts.ClaudeMdForConfig(cfg, languages))
 	fmt.Println("[Claude Code] Restart Claude Code to activate the topology workflow.")
 }
@@ -412,7 +416,12 @@ func writeJSONConfig(path string, config map[string]interface{}) {
 		os.Exit(1)
 	}
 	out = append(out, '\n')
-	if err := os.WriteFile(path, out, 0644); err != nil {
+	// ATOMIC. This writes .claude/settings.json and .opencode/opencode.json, files aracne
+	// does not own -- and readJSONConfig calls os.Exit(1) on a parse error, so a write torn
+	// between truncate and fill makes every later `arac setup` and `arac disable` fail hard,
+	// with a hand-edit as the only way out. AtomicWriteFile also preserves the destination's
+	// existing mode, which os.WriteFile does not.
+	if err := helper.AtomicWriteFile(path, out, 0644); err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing %s: %v\n", path, err)
 		os.Exit(1)
 	}
@@ -496,9 +505,15 @@ func agentModelFrontmatter(model string) string {
 	return fmt.Sprintf("model: %s\n", model)
 }
 
-// Generates MCP server frontmatter YAML configuration for the arac serve tool with tool-profile and harness settings
+// Generates MCP server frontmatter YAML configuration for the arac serve tool with tool-profile and harness settings.
+//
+// The command is the RESOLVED binary (aracBinary), quoted, for the same reason the hooks use
+// it: a bare `arac` is a bet on the harness inheriting the PATH that ran `arac setup`, and an
+// MCP server that fails to start is quiet in both harnesses -- the tool list is simply short.
+// See aracBinary.
 func claudeMCPServersFrontmatter(agentName string) string {
-	return fmt.Sprintf("mcpServers:\n  - aracne:\n      type: stdio\n      command: arac\n      args: [\"serve\", \"--tool-profile\", \"%s\", \"--harness\", \"claude_code\"]\n", agentName)
+	return fmt.Sprintf("mcpServers:\n  - aracne:\n      type: stdio\n      command: %s\n      args: [\"serve\", \"--tool-profile\", \"%s\", \"--harness\", \"claude_code\"]\n",
+		strconv.Quote(aracBinary()), agentName)
 }
 
 // serverToolProfile returns the --tool-profile value the generated harness config actually
@@ -674,7 +689,7 @@ func writeMarkdownFile(path, label, content string, autoYes bool) {
 		fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", filepath.Dir(path), err)
 		os.Exit(1)
 	}
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	if err := helper.AtomicWriteFile(path, []byte(content), 0644); err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing %s: %v\n", path, err)
 		os.Exit(1)
 	}
@@ -728,6 +743,35 @@ func findAracIntegrationStart(content string) int {
 	return findMarkdownLine(content, AracIntegrationLegacyStart, 0)
 }
 
+// aracIntegrationBounds locates the generated block: the byte offsets of its opening heading
+// and of the first byte after it, plus whether there is a block at all.
+//
+// ONE FUNCTION, BECAUSE THE WRITER AND THE REMOVER MUST NOT DISAGREE. `arac setup` had a
+// fallback for a block whose closing line the reader had edited away -- it reads as ordinary
+// prose in a file they are told is theirs -- and ran to the next top-level heading instead.
+// `arac disable` did not: findAracIntegrationEnd returned -1, stripAracneIntegrationSegment
+// returned the content unchanged, and the command printed "already clean" while leaving the
+// whole contract in place. An uninstall that reports success and removes nothing is worse than
+// one that fails, because nothing tells you to look. Both callers now ask the same question.
+func aracIntegrationBounds(content string) (start, end int, ok bool) {
+	start = findAracIntegrationStart(content)
+	if start < 0 {
+		return 0, 0, false
+	}
+	if at, marker := findAracIntegrationEnd(content, start); at >= 0 {
+		end = at + len(marker)
+		if strings.HasPrefix(content[end:], "\r\n") {
+			end += 2
+		} else if strings.HasPrefix(content[end:], "\n") {
+			end++
+		}
+		return start, end, true
+	}
+	// The block opens and its closing line is gone. It runs to the next top-level heading, or
+	// to the end of the file when there is none.
+	return start, nextTopLevelHeading(content, start), true
+}
+
 // Updates or creates a markdown file by merging a new segment into an existing integration section.
 func writeMarkdownIntegrationFile(path, label, segment string) {
 	data, err := os.ReadFile(path)
@@ -750,7 +794,7 @@ func writeMarkdownIntegrationFile(path, label, segment string) {
 		fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", filepath.Dir(path), err)
 		os.Exit(1)
 	}
-	if err := os.WriteFile(path, []byte(updated), 0644); err != nil {
+	if err := helper.AtomicWriteFile(path, []byte(updated), 0644); err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing %s: %v\n", path, err)
 		os.Exit(1)
 	}
@@ -765,35 +809,53 @@ func updateMarkdownIntegrationSegment(existing, segment string) string {
 		return segment
 	}
 
-	start := findAracIntegrationStart(existing)
-	if start >= 0 {
-		end, marker := findAracIntegrationEnd(existing, start)
-		if end >= 0 {
-			end += len(marker)
-			if strings.HasPrefix(existing[end:], "\r\n") {
-				end += 2
-			} else if strings.HasPrefix(existing[end:], "\n") {
-				end++
-			}
-			return existing[:start] + segment + existing[end:]
-		}
+	// A block already present is REPLACED, wherever it sits and whether or not its closing
+	// line survived -- see aracIntegrationBounds. Falling through to the insertion path
+	// prepended a SECOND contract above the orphaned one, and every later run added another.
+	if start, end, ok := aracIntegrationBounds(existing); ok {
+		return existing[:start] + segment + existing[end:]
 	}
 
-	insertAt := markdownIntegrationInsertionIndex(existing)
-	prefix := existing[:insertAt]
-	suffix := existing[insertAt:]
-	if prefix != "" {
-		if !strings.HasSuffix(prefix, "\n") {
-			prefix += lineEnding
-		}
-		if !hasTrailingBlankLine(prefix) {
-			prefix += lineEnding
-		}
+	// A FIRST-TIME insertion goes at the END of the document.
+	//
+	// It used to go after the leading headings, which for the overwhelmingly common shape --
+	// an H1 title followed by prose -- dropped a second H1 (`# Aracne`) between the title and
+	// the body it introduces. The author's own paragraphs then read as the body of aracne's
+	// block and their `##` sections became subsections of it, in a file aracne is a guest in.
+	// Anything that navigates by heading -- a docs site, an outline, a model reading the file
+	// as a tree -- attributed the wrong content to the wrong section, and aracne's own
+	// CLAUDE.md was living proof.
+	//
+	// Appending costs nothing: the block is found again by its heading
+	// (aracIntegrationBounds), so its position is free, and the end of the file is the only
+	// place that cannot orphan someone else's content.
+	prefix := existing
+	if !strings.HasSuffix(prefix, "\n") {
+		prefix += lineEnding
 	}
-	if suffix != "" && !strings.HasPrefix(suffix, "\n") && !strings.HasPrefix(suffix, "\r\n") {
-		segment += lineEnding
+	if !hasTrailingBlankLine(prefix) {
+		prefix += lineEnding
 	}
-	return prefix + segment + suffix
+	return prefix + segment
+}
+
+// nextTopLevelHeading returns the offset of the first "# " heading strictly after `from`, or
+// len(content) when there is none. It bounds a generated block whose closing line the reader
+// removed, so re-rendering replaces it instead of stacking a second copy above it.
+func nextTopLevelHeading(content string, from int) int {
+	pos := from
+	if _, next := nextMarkdownLine(content, pos); next > pos {
+		pos = next // skip the opening heading itself
+	}
+	for pos < len(content) {
+		line, next := nextMarkdownLine(content, pos)
+		trimmed := strings.TrimLeft(line, " \t")
+		if strings.HasPrefix(trimmed, "# ") || strings.TrimRight(trimmed, "\r\n") == "#" {
+			return pos
+		}
+		pos = next
+	}
+	return len(content)
 }
 
 // Normalizes markdown text by trimming whitespace and standardizing line endings to a specified format.
@@ -820,63 +882,6 @@ func hasTrailingBlankLine(content string) bool {
 	return strings.HasSuffix(content, "\n\n") || strings.HasSuffix(content, "\r\n\r\n")
 }
 
-// Returns the index where markdown integration content should be inserted, after BOM, frontmatter, and leading headings.
-func markdownIntegrationInsertionIndex(content string) int {
-	pos := 0
-	if strings.HasPrefix(content, "\ufeff") {
-		pos = len("\ufeff")
-	}
-	pos = skipMarkdownFrontmatter(content, pos)
-	afterBlanks := skipBlankMarkdownLines(content, pos)
-	if !markdownLineIsHeading(lineAt(content, afterBlanks)) {
-		return pos
-	}
-
-	pos = afterBlanks
-	for pos < len(content) {
-		line, next := nextMarkdownLine(content, pos)
-		if !markdownLineIsHeading(line) {
-			break
-		}
-		pos = skipBlankMarkdownLines(content, next)
-	}
-	return pos
-}
-
-// Skips YAML frontmatter (--- delimited block) from markdown content and returns position after it.
-func skipMarkdownFrontmatter(content string, pos int) int {
-	line, next := nextMarkdownLine(content, pos)
-	if strings.TrimSpace(line) != "---" {
-		return pos
-	}
-	for next < len(content) {
-		line, after := nextMarkdownLine(content, next)
-		if strings.TrimSpace(line) == "---" {
-			return after
-		}
-		next = after
-	}
-	return pos
-}
-
-// Advances a position cursor past consecutive blank markdown lines, returning the offset of the next non-blank line.
-func skipBlankMarkdownLines(content string, pos int) int {
-	for pos < len(content) {
-		line, next := nextMarkdownLine(content, pos)
-		if strings.TrimSpace(line) != "" {
-			break
-		}
-		pos = next
-	}
-	return pos
-}
-
-// Returns the markdown line containing the given position in the content.
-func lineAt(content string, pos int) string {
-	line, _ := nextMarkdownLine(content, pos)
-	return line
-}
-
 // Extracts the next line from markdown content starting at a given position, returning the line and next position.
 func nextMarkdownLine(content string, pos int) (string, int) {
 	if pos >= len(content) {
@@ -888,11 +893,6 @@ func nextMarkdownLine(content string, pos int) (string, int) {
 	}
 	next := pos + newline + 1
 	return content[pos:next], next
-}
-
-// Checks whether a markdown line is a heading by detecting leading hash symbols.
-func markdownLineIsHeading(line string) bool {
-	return strings.HasPrefix(strings.TrimLeft(line, " \t"), "#")
 }
 
 // Searches for a markdown line matching a marker starting from a given position.

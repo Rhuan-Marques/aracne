@@ -12,9 +12,11 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Rhuan-Marques/aracne/internal/llm/tools"
 	"github.com/Rhuan-Marques/aracne/internal/topology"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 	"github.com/Rhuan-Marques/aracne/internal/topology/scanner"
 )
 
@@ -191,31 +193,14 @@ func (a *AskUserQuestionTool) Run(args json.RawMessage) (string, error) {
 	return "", fmt.Errorf("ask_user_question is handled by the chat session")
 }
 
-// Converts a glob pattern (with *, **, ?) to a compiled regexp for matching file paths.
+// globRegexp compiles a glob for matching file paths.
+//
+// It delegates to domain.GlobToRegexp rather than keeping its own copy. The copy it replaces
+// was byte-identical and carried the same bug: it compiled "**/" to ".*/", so `**/*.go` --
+// the pattern this tool's own description advertises -- never matched a file at the search
+// root, and the agent concluded the file was not there.
 func globRegexp(pattern string) (*regexp.Regexp, error) {
-	var b strings.Builder
-	b.WriteString("^")
-	for i := 0; i < len(pattern); i++ {
-		ch := pattern[i]
-		switch ch {
-		case '*':
-			if i+1 < len(pattern) && pattern[i+1] == '*' {
-				b.WriteString(".*")
-				i++
-			} else {
-				b.WriteString("[^/]*")
-			}
-		case '?':
-			b.WriteString("[^/]")
-		case '.', '+', '(', ')', '|', '[', ']', '{', '}', '^', '$', '\\':
-			b.WriteByte('\\')
-			b.WriteByte(ch)
-		default:
-			b.WriteByte(ch)
-		}
-	}
-	b.WriteString("$")
-	return regexp.Compile(b.String())
+	return domain.GlobToRegexp(pattern)
 }
 
 // Truncates tool output to 64KB with an ellipsis suffix indicating total bytes if exceeded.
@@ -224,5 +209,15 @@ func trimToolOutput(text string) string {
 	if len(text) <= limit {
 		return strings.TrimRight(text, "\r\n")
 	}
-	return strings.TrimRight(text[:limit], "\r\n") + fmt.Sprintf("\n... output truncated (%d bytes total)", len(text))
+	// Cut on a RUNE boundary. A byte offset can land mid-rune in any non-ASCII output, and
+	// the invalid UTF-8 that produces then has to survive JSON encoding into a provider
+	// request -- where Go substitutes U+FFFD and a stricter encoder would not.
+	cut := text[:limit]
+	for len(cut) > 0 {
+		if r, size := utf8.DecodeLastRuneInString(cut); r != utf8.RuneError || size > 1 {
+			break
+		}
+		cut = cut[:len(cut)-1]
+	}
+	return strings.TrimRight(cut, "\r\n") + fmt.Sprintf("\n... output truncated (%d bytes total)", len(text))
 }

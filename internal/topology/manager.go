@@ -3,7 +3,6 @@ package topology
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -104,10 +103,12 @@ func (m *TopologyManager) FullScan(root string, reg *scanner.Registry) error {
 	// edit, so a cold scan has to find it too -- otherwise `arac scan --all` would be the
 	// one way to make these warnings disappear.
 	syncInterfaceConflicts(topo, nil)
+	// nil: everything was just parsed, so everything needs a fingerprint.
+	helper.StampBodyHashes(topo, nil)
 	if err := helper.WriteDb(topo, m.dbPath); err != nil {
 		return err
 	}
-	helper.SyncManifest(topo, m.dbPath)
+	helper.SyncManifest(topo, m.dbPath, attemptedSourceFiles(root, reg))
 	return nil
 }
 
@@ -136,13 +137,29 @@ func (m *TopologyManager) IncrementalScan(root string, reg *scanner.Registry) ([
 
 	langScanners := reg.DetectAll(root)
 	var added, modified, deleted []string
+	// A LANGUAGE WHOSE DIFF FAILS IS SKIPPED, NOT FATAL TO THE WHOLE SCAN.
+	//
+	// This loop used to `return nil, diffErr` on the first failure, which handed one language
+	// a veto over every other. The reachable case is DiffScanFiles' mass-deletion guard: remove
+	// the last .py file from a mixed repo and every incremental scan from then on -- `arac
+	// scan`, the guard's pre-tool scan, the drift check -- aborted before it reached Go,
+	// TypeScript or Rust. Nothing removed the manifest entry that caused it, so the graph
+	// silently stopped tracking the whole project until someone ran `arac scan --all`, which
+	// nothing told them to do.
+	//
+	// Recorded rather than swallowed: the errors go into topo.Errors below, which is what
+	// `info` surfaces and what a reader of the graph can act on.
+	diffErrs := map[string]string{}
 	for _, ls := range langScanners {
-		a, m, d, diffErr := helper.DiffScanFiles(root, ls.Name(), manifestPath)
+		// Not `m`: that is this method's receiver, and shadowing it here is correct only
+		// for as long as nothing in the loop needs m.dbPath.
+		a, mod, d, diffErr := helper.DiffScanFiles(root, ls.Name(), manifestPath)
 		if diffErr != nil {
-			return nil, diffErr
+			diffErrs["diff:"+ls.Name()] = diffErr.Error()
+			continue
 		}
 		added = append(added, a...)
-		modified = append(modified, m...)
+		modified = append(modified, mod...)
 		deleted = append(deleted, d...)
 	}
 
@@ -150,6 +167,11 @@ func (m *TopologyManager) IncrementalScan(root string, reg *scanner.Registry) ([
 	// reason to deserialize the topology graph (the only remaining work,
 	// SyncManifest, is a no-op when the diff is empty).
 	if len(added) == 0 && len(modified) == 0 && len(deleted) == 0 {
+		// Unless the reason nothing changed is that every diff failed. Reporting success
+		// there would make a broken scan indistinguishable from a quiet one.
+		if len(diffErrs) > 0 {
+			return nil, fmt.Errorf("%s", firstValue(diffErrs))
+		}
 		return nil, nil
 	}
 
@@ -159,14 +181,31 @@ func (m *TopologyManager) IncrementalScan(root string, reg *scanner.Registry) ([
 	// file's delta directly from the DB, never reading or rewriting the full
 	// graph. Correctness over coverage: anything unsafe falls through to the
 	// existing full path below, unchanged.
-	if handled, warnings, err := m.tryPartialIncremental(root, reg, added, modified, deleted); handled {
-		return warnings, err
+	//
+	// A failed language diff also disqualifies it: the fast path never loads the graph, so it
+	// has nowhere to record the error, and taking it would lose the one report of a language
+	// that is no longer being scanned.
+	if len(diffErrs) == 0 {
+		if handled, warnings, err := m.tryPartialIncremental(root, reg, added, modified, deleted); handled {
+			return warnings, err
+		}
 	}
 
 	// A change exists; only now is it worth loading the full graph.
 	topo, err := helper.ReadDb(m.dbPath)
 	if err != nil {
 		return m.FullReScan(root, reg)
+	}
+	// The diff errors describe THIS scan, so the previous scan's are cleared first. ReadDb
+	// loads the stored `error:` rows back into topo.Errors and writeScanErrors rewrites the
+	// map wholesale, so without this a `diff:` error would outlive the problem that caused it.
+	for key := range topo.Errors {
+		if strings.HasPrefix(key, "diff:") {
+			delete(topo.Errors, key)
+		}
+	}
+	for key, msg := range diffErrs {
+		topo.Errors[key] = msg
 	}
 	// Fingerprint the pre-update graph so we can persist only what actually
 	// changed (scoped write) instead of rewriting every row.
@@ -182,7 +221,11 @@ func (m *TopologyManager) IncrementalScan(root string, reg *scanner.Registry) ([
 	beforeResources := make(map[string]domain.Resource, len(topo.Resources))
 	beforeSigKeys := make(map[string]string, len(topo.Resources))
 	for id, res := range topo.Resources {
-		beforeResources[id] = res
+		// DEEP copy. A struct copy shares Properties and Connections with the live graph,
+		// and removeLanguageResources filters connection slices in place (`kept :=
+		// targets[:0]`) during the update -- so the "pre-update snapshot" was being
+		// truncated by the update it exists to be compared against.
+		beforeResources[id] = cloneResource(res)
 		beforeSigKeys[id] = resourceSignatureKey(res)
 	}
 	// Needed to keep a re-raised signature_changed warning pointing at the
@@ -277,6 +320,13 @@ func (m *TopologyManager) IncrementalScan(root string, reg *scanner.Registry) ([
 		allWarnings = append(allWarnings, warnings...)
 	}
 
+	// Re-fingerprint what was re-parsed, before anything tries to match on it. Scoped to the
+	// re-resolved set: a file nobody touched keeps the hash ReadDb loaded for it.
+	helper.StampBodyHashes(topo, resolveSet)
+
+	// A description belongs to an ID, not to the file that happened to hold it last.
+	restoreDescriptions(topo, beforeResources)
+
 	// Files that were re-parsed are authoritative about what they reference.
 	for path := range resolveSet {
 		helper.ClearReferrerWarningsForFile(topo, path)
@@ -314,9 +364,73 @@ func (m *TopologyManager) IncrementalScan(root string, reg *scanner.Registry) ([
 	}
 
 	helper.CleanupOrphanedBugs(m.dbPath, topo)
-	helper.SyncManifest(topo, m.dbPath)
+	// changedFiles, not just the ones that produced nodes: a file this scan tried and failed
+	// to parse still has to be stamped, or it comes back as `added` on every later scan. See
+	// helper.SyncManifest.
+	helper.SyncManifest(topo, m.dbPath, changedFiles)
 
 	return allWarnings, nil
+}
+
+// restoreDescriptions carries a description across a re-parse BY ID, from the pre-update
+// snapshot the caller already holds.
+//
+// WHY THE SCANNERS CANNOT DO THIS THEMSELVES. Every scanner preserves descriptions, and every
+// one of them keys the carry-over on the FILE: goscanner builds its `oldFunctions` map from
+// `oldFile.Functions()` and fills a blank description out of that, and jsscanner, pyscanner,
+// rustscanner and javascanner all have the same shape. That is exactly right for an edit and
+// blind to a rename -- the file being registered is BRAND NEW, so the map is empty, and the
+// descriptions sitting on the identical ids under the old path are never consulted. Renaming
+// `pkg/a.go` to `pkg/b.go` therefore returned every symbol in it with an empty description,
+// even once F-01's ownership guard kept the symbols themselves alive.
+//
+// The loss is not symmetric across a codebase, and it falls on the expensive half. A Go
+// function with a doc comment is re-described from source on every parse, so it never notices.
+// A function with no doc comment is precisely the one an `arac descriptions generate` sweep
+// paid a model to describe, and it came back blank -- silently, with no way to tell that
+// anything had been dropped.
+//
+// So the rule is applied once, here, where ids rather than files are the unit of identity.
+// It is the same rule FullReScan already applies to a cold rescan and the same rule each
+// scanner applies within a file; this is only the third place it has to hold.
+//
+// WHAT IT DELIBERATELY DOES NOT DO. It never overwrites: a freshly harvested doc comment
+// arrives non-empty and wins, which is what keeps a renamed comment from being shadowed by the
+// old one. It cannot resurrect a cleared description either -- `descriptions clear` writes the
+// database directly, so the next scan's snapshot is already empty. And it can only help where
+// the ID SURVIVES: Go ids are `module/package.Symbol` and Java's are an FQN plus a signature,
+// so a rename inside a package keeps them, while Python, JavaScript, TypeScript and Rust are
+// modules-first and mint a new id from the new filename. Those need the identity remap
+// (helper.MatchDescriptions), which today only FullReScan reaches.
+func restoreDescriptions(topo *domain.Topology, before map[string]domain.Resource) {
+	if topo == nil || len(before) == 0 {
+		return
+	}
+	for id, res := range topo.Resources {
+		if strings.TrimSpace(res.Description) != "" {
+			continue
+		}
+		old, ok := before[id]
+		if !ok || strings.TrimSpace(old.Description) == "" {
+			continue
+		}
+		res.Description = old.Description
+		topo.Resources[id] = res
+	}
+}
+
+// firstValue returns one value from a map, chosen by sorted key so the message a caller sees
+// does not change between runs over the same failures.
+func firstValue(m map[string]string) string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	if len(keys) == 0 {
+		return ""
+	}
+	return m[keys[0]]
 }
 
 // partialUpdaterFor returns the scanner for path if and only if it implements
@@ -414,6 +528,15 @@ func (m *TopologyManager) tryPartialIncremental(root string, reg *scanner.Regist
 		if m.partialNeedsCrossFileResolve(absPath, upserts, deletes) {
 			return false, nil, nil
 		}
+		// These came straight out of a re-parse and carry no fingerprints, and the hashes are
+		// columns on the row -- so writing them unstamped would overwrite a correctly stamped
+		// row with an empty one and silently lose the ability to track this code through a
+		// later move.
+		helper.StampBodyHashesSlice(upserts)
+		// And repair the rows this path's own diff is blind to -- a body edited in place,
+		// leaving the span and the signature untouched, is invisible to it. See
+		// helper.RestampUnchangedRows.
+		upserts = helper.RestampUnchangedRows(m.dbPath, absPath, upserts)
 		// WriteScopedResources rewrites the whole warnings table from this map, so
 		// a warning this very delta orphaned would be re-inserted and outlive the
 		// code it points at. The whole-graph CleanupOrphanedWarnings cannot run on
@@ -454,18 +577,27 @@ func (m *TopologyManager) tryPartialIncremental(root string, reg *scanner.Regist
 
 // Rescans codebase and preserves existing resource descriptions when re-indexing.
 //
-// Descriptions are matched by resource ID first. When the stored database was built under
-// an OLDER id-scheme, that alone would discard every description — the IDs on both sides
-// describe the same code but no longer spell the same string. So a scheme change also runs
-// the identity-based remap (same tiers as the descriptions sidecar: path+kind+name+parent,
-// then source hash), carries bugs across, and records old -> new in `resource_alias` so
-// IDs an agent already knows keep resolving.
+// Descriptions are matched by resource ID first, then BY IDENTITY -- always, not only when
+// something detected a change. IDs drift for several reasons (a renamed file, a workspace
+// member resolving differently, a change to how a scanner builds them), and ID-only matching
+// silently discards a description every time: both sides describe the same code and no longer
+// spell the same string. So this also runs the identity remap (same tiers as the descriptions
+// sidecar: path+kind+name+parent, then source hash), carries bugs across, and records
+// old -> new in `resource_alias` so IDs an agent already knows keep resolving.
+//
+// This is the ONLY path that remaps. An incremental scan re-parses just the changed files, so
+// on a database whose IDs were minted under an older grammar it re-mints those files and
+// leaves the rest -- see the note above WriteResourceAliases in helper/db.go.
 func (m *TopologyManager) FullReScan(root string, reg *scanner.Registry) ([]domain.TopologyWarning, error) {
 	m.applyPathVisibility(root)
 	newTopo, err := scanAllLanguages(root, reg)
 	if err != nil {
 		return nil, err
 	}
+	// Before the remap, which matches moved code by these hashes. The OLD side's hashes come
+	// out of the database, where the previous scan stored them while the old files still
+	// existed -- which is the whole reason they are persisted rather than recomputed here.
+	helper.StampBodyHashes(newTopo, nil)
 
 	oldTopo, readErr := helper.ReadDb(m.dbPath)
 	var aliases map[string]string
@@ -513,7 +645,7 @@ func (m *TopologyManager) FullReScan(root string, reg *scanner.Registry) ([]doma
 	}
 
 	helper.CleanupOrphanedBugs(m.dbPath, newTopo)
-	helper.SyncManifest(newTopo, m.dbPath)
+	helper.SyncManifest(newTopo, m.dbPath, attemptedSourceFiles(root, reg))
 	return nil, nil
 }
 
@@ -561,25 +693,6 @@ func (m *TopologyManager) Load(path string) error {
 	return nil
 }
 
-// Exports the topology database to a file.
-func (m *TopologyManager) Write(path string) error {
-	if m.dbPath == "" {
-		return nil
-	}
-	src, err := os.Open(m.dbPath)
-	if err != nil {
-		return err
-	}
-	defer src.Close()
-	dst, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer dst.Close()
-	_, err = io.Copy(dst, src)
-	return err
-}
-
 // Loads and returns the complete topology graph from the database.
 func (m *TopologyManager) ReadAll() (*domain.Topology, error) {
 	return helper.ReadDb(m.dbPath)
@@ -596,6 +709,13 @@ func (m *TopologyManager) Cut(loc domain.Location) (*domain.CodeEntry, error) {
 		lines = lines[:len(lines)-1]
 	}
 	if loc.StartsAt == 0 && loc.EndsAt == 0 {
+		// An empty file has no lines, and asking for the whole of it is a legitimate
+		// question with an empty answer -- a placeholder __init__.py, a stubbed module.
+		// Falling through would report "EndsAt 0 < StartsAt 1", which reads as a corrupt
+		// record rather than as an empty file.
+		if len(lines) == 0 {
+			return &domain.CodeEntry{Location: domain.Location{Path: loc.Path}, Cut: ""}, nil
+		}
 		loc.StartsAt = 1
 		loc.EndsAt = len(lines)
 	}
@@ -656,7 +776,9 @@ func (m *TopologyManager) UpdateFile(path string, reg *scanner.Registry) ([]doma
 	beforeSigs := helper.ResourceSignatures(topo.Resources)
 	beforeResources := make(map[string]domain.Resource, len(topo.Resources))
 	for id, res := range topo.Resources {
-		beforeResources[id] = res
+		// Deep, for the same reason as in IncrementalScan: the update mutates connection
+		// slices in place, and a shallow snapshot shares them.
+		beforeResources[id] = cloneResource(res)
 	}
 	beforeWarnings := cloneWarnings(topo.Warnings)
 	absPath, err := filepath.Abs(path)
@@ -665,6 +787,15 @@ func (m *TopologyManager) UpdateFile(path string, reg *scanner.Registry) ([]doma
 	}
 
 	finish := func(warnings []domain.TopologyWarning) ([]domain.TopologyWarning, error) {
+		// Same placement argument as restoreDescriptions below: in finish, so that every exit
+		// path -- including the four that only REMOVE a file's resources -- agrees about what
+		// is fingerprinted.
+		helper.StampBodyHashes(topo, map[string]bool{absPath: true})
+		// In finish rather than beside the re-parse, so every exit path gets it. A rename
+		// reaches this verb as two calls -- one registering the new path, one removing the old
+		// -- which is how OpenCode's edit-sync plugin and the `arac update-file` hook see one,
+		// so the id-keyed carry-over has to hold here exactly as it does in IncrementalScan.
+		restoreDescriptions(topo, beforeResources)
 		for _, w := range warnings {
 			topo.Warnings[w.ID] = w
 		}
@@ -831,6 +962,34 @@ func scanAllLanguages(root string, reg *scanner.Registry) (*domain.Topology, err
 	}
 	normalizeTopologyLanguages(merged)
 	return merged, nil
+}
+
+// attemptedSourceFiles is every file a cold scan of root would hand to a scanner: one walk
+// per detected language, filtered exactly as DiffScanFiles filters the manifest, so the two
+// agree about what counts as a source file.
+//
+// It exists so SyncManifest can stamp a file the scan tried and failed to parse. Without it
+// such a file produces no node, is never stamped, and is reported `added` by every scan from
+// then on -- see helper.SyncManifest.
+func attemptedSourceFiles(root string, reg *scanner.Registry) []string {
+	if reg == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, ls := range reg.DetectAll(root) {
+		files, err := helper.CollectSourceFiles(root, ls.Name())
+		if err != nil {
+			continue
+		}
+		for _, f := range files {
+			if !seen[f] {
+				seen[f] = true
+				out = append(out, f)
+			}
+		}
+	}
+	return out
 }
 
 // countFileResources returns how many file nodes a topology holds.
@@ -1183,11 +1342,29 @@ func mergeTopology(dst, src *domain.Topology) {
 		dst.Errors = make(map[string]string)
 	}
 	for id, res := range src.Resources {
-		if existing, exists := dst.Resources[id]; exists && resourceLanguage(existing, dst.Language) != resourceLanguage(res, src.Language) {
-			dst.Errors["resource-collision:"+id] = fmt.Sprintf("resource id %s exists in both %s and %s", id, resourceLanguage(existing, dst.Language), resourceLanguage(res, src.Language))
+		existing, exists := dst.Resources[id]
+		if !exists || resourceLanguage(existing, dst.Language) == resourceLanguage(res, src.Language) {
+			dst.Resources[id] = cloneResource(res)
 			continue
 		}
-		dst.Resources[id] = cloneResource(res)
+		// TWO LANGUAGES NAMING THE SAME DEPENDENCY IS THE SHARED-NODE CASE, NOT AN ERROR.
+		//
+		// A dependency node is a bare external package name with no location and no body, and
+		// removeLanguageResources already treats one as language-neutral for exactly this
+		// reason: "the SAME external package can be imported from files of other languages".
+		// mergeTopology disagreed -- it recorded an error and dropped the second side -- so a
+		// repository holding both Go's `path` and Node's `path`, or JS's and TS's `react`,
+		// wrote one `resource-collision:` row per pair into `info` on every scan and kept
+		// whichever language merged first. Merging their edges decides the question the way
+		// the rest of the code already had.
+		if existing.Kind == domain.ResourceDependency && res.Kind == domain.ResourceDependency {
+			dst.Resources[id] = mergeDependencyNode(existing, res)
+			continue
+		}
+		// A genuine kind conflict is still worth reporting: two languages minting the same id
+		// for different things is a modelling problem someone has to look at.
+		dst.Errors["resource-collision:"+id] = fmt.Sprintf("resource id %s exists as a %s in %s and a %s in %s",
+			id, existing.Kind, resourceLanguage(existing, dst.Language), res.Kind, resourceLanguage(res, src.Language))
 	}
 	for id, warning := range src.Warnings {
 		dst.Warnings[id] = warning
@@ -1195,6 +1372,47 @@ func mergeTopology(dst, src *domain.Topology) {
 	for path, msg := range src.Errors {
 		dst.Errors[path] = msg
 	}
+}
+
+// mergeDependencyNode unions two languages' view of one external package.
+//
+// The node itself carries nothing that can conflict -- an id, a name, and whatever
+// description a language happened to harvest -- so the merge keeps the first non-empty of
+// each and unions the connection sets. Language is deliberately left on whichever side
+// already had it: the tag says which scanner registered the package first, and nothing reads
+// it as a claim of ownership.
+func mergeDependencyNode(existing, incoming domain.Resource) domain.Resource {
+	out := cloneResource(existing)
+	if out.Name == "" {
+		out.Name = incoming.Name
+	}
+	if out.Description == "" {
+		out.Description = incoming.Description
+	}
+	if out.Language == "" {
+		out.Language = incoming.Language
+	}
+	if out.Connections == nil {
+		out.Connections = map[string][]string{}
+	}
+	for kind, targets := range incoming.Connections {
+		seen := make(map[string]bool, len(out.Connections[kind]))
+		for _, t := range out.Connections[kind] {
+			seen[t] = true
+		}
+		for _, t := range targets {
+			if !seen[t] {
+				seen[t] = true
+				out.Connections[kind] = append(out.Connections[kind], t)
+			}
+		}
+	}
+	for key, value := range incoming.Properties {
+		if _, ok := out.Properties[key]; !ok {
+			out.Properties[key] = value
+		}
+	}
+	return out
 }
 
 // Removes resources and errors for a specific language while preserving language-neutral dependency nodes and their incoming edges.

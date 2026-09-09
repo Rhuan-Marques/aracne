@@ -30,7 +30,7 @@ func RunRead() {
 		os.Exit(1)
 	}
 
-	manager, reg := InitRegistry(".aracne/topology.db")
+	manager, reg := InitRegistry(ProjectDBPath(DefaultDBRelative))
 
 	cfg := helper.EnsureConfig(helper.ConfigPath(manager.DbPath()))
 	// read.kinds gates this surface too. It used to pass AllReadKinds, on the reasoning that

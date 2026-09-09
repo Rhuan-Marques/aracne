@@ -5,17 +5,18 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
-// The id-scheme stamp and the alias table are what let a resource-ID format change happen
-// without breaking every database and every ID an agent already knows. These tests pin the
-// two guarantees that matter: an OLD database is recognised as old (not silently treated as
-// current), and an old ID keeps resolving after a remap.
+// The alias table is what lets a resource-ID format change happen without breaking every ID
+// an agent already knows: FullReScan's identity remap matches the old resource to the new one
+// and records old -> new here, so a saved note or a stale transcript keeps resolving.
+//
+// There is deliberately no id-scheme STAMP any more -- see the note above WriteResourceAliases
+// in db.go for what it was, why nothing read it, and what a future grammar change has to do
+// instead.
 
-// seedSchemeDB creates a database the way a pre-v2 aracne would have: real resources, no
-// id_scheme stamp, user_version reset so the migration has not run.
+// seedSchemeDB creates a database the way a pre-v2 aracne would have: real resources, and
+// user_version reset so the migration has not run.
 func seedSchemeDB(t *testing.T, path string, withResources bool) {
 	t.Helper()
 	db, err := openSQLite(path, true)
@@ -36,9 +37,6 @@ func seedSchemeDB(t *testing.T, path string, withResources bool) {
 			t.Fatalf("seed insert: %v", err)
 		}
 	}
-	if _, err := db.Exec(`DELETE FROM info WHERE key = 'id_scheme'`); err != nil {
-		t.Fatalf("clear stamp: %v", err)
-	}
 	if _, err := db.Exec(`PRAGMA user_version = 0`); err != nil {
 		t.Fatalf("reset user_version: %v", err)
 	}
@@ -58,48 +56,6 @@ func userVersion(t *testing.T, path string) int {
 	return v
 }
 
-func TestMigrationV2StampsExistingDatabaseAsLegacyScheme(t *testing.T) {
-	// An existing database predates the stamp, so it MUST be reported as scheme 1. Getting
-	// this wrong is the dangerous case: a legacy database read as "current" would skip the
-	// remap and leave every ID in the old format with no aliases.
-	path := filepath.Join(t.TempDir(), "topology.db")
-	seedSchemeDB(t, path, true)
-
-	if _, _, err := ReadIDScheme(path); err != nil { // triggers ensureSQLiteMigrated
-		t.Fatalf("ReadIDScheme: %v", err)
-	}
-	// Every migration runs, not just v2, so this tracks the constant rather than
-	// pinning the number v2 happened to leave behind.
-	if got := userVersion(t, path); got != latestSchemaVersion {
-		t.Fatalf("want user_version %d after migration, got %d", latestSchemaVersion, got)
-	}
-	scheme, stamped, err := ReadIDScheme(path)
-	if err != nil {
-		t.Fatalf("ReadIDScheme: %v", err)
-	}
-	if scheme != 1 || !stamped {
-		t.Fatalf("want scheme 1 stamped, got scheme=%d stamped=%v", scheme, stamped)
-	}
-}
-
-func TestMigrationV2LeavesEmptyDatabaseUnstamped(t *testing.T) {
-	// A fresh, empty database has no IDs to be stale, so stamping it "1" would force a
-	// pointless remap on the very first scan.
-	path := filepath.Join(t.TempDir(), "topology.db")
-	seedSchemeDB(t, path, false)
-
-	scheme, stamped, err := ReadIDScheme(path)
-	if err != nil {
-		t.Fatalf("ReadIDScheme: %v", err)
-	}
-	if stamped {
-		t.Fatal("empty database should not be stamped as legacy")
-	}
-	if scheme != IDSchemeVersion {
-		t.Fatalf("want current scheme %d for an empty db, got %d", IDSchemeVersion, scheme)
-	}
-}
-
 func TestMigrationV2DoesNotRewriteIDs(t *testing.T) {
 	// Recomputing IDs needs the scanners and the source tree; the schema step must only
 	// record which scheme is present.
@@ -116,28 +72,6 @@ func TestMigrationV2DoesNotRewriteIDs(t *testing.T) {
 			ids = append(ids, id)
 		}
 		t.Fatalf("migration altered a resource ID; got %v", ids)
-	}
-}
-
-func TestWriteAndReadIDScheme(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "topology.db")
-	seedSchemeDB(t, path, true)
-	if err := WriteIDScheme(path, 7); err != nil {
-		t.Fatalf("WriteIDScheme: %v", err)
-	}
-	scheme, stamped, err := ReadIDScheme(path)
-	if err != nil {
-		t.Fatalf("ReadIDScheme: %v", err)
-	}
-	if scheme != 7 || !stamped {
-		t.Fatalf("want scheme 7 stamped, got %d / %v", scheme, stamped)
-	}
-	// Overwriting must replace, not duplicate or append.
-	if err := WriteIDScheme(path, 8); err != nil {
-		t.Fatalf("WriteIDScheme(8): %v", err)
-	}
-	if scheme, _, _ := ReadIDScheme(path); scheme != 8 {
-		t.Fatalf("want scheme 8 after rewrite, got %d", scheme)
 	}
 }
 
@@ -238,28 +172,6 @@ func TestRemapBugNodesFollowsAnIDSchemeChange(t *testing.T) {
 	}
 	if node != "src/a.Foo" {
 		t.Fatalf("bug node = %q, want src/a.Foo", node)
-	}
-}
-
-func TestFullWriteStampsTheCurrentIDScheme(t *testing.T) {
-	// WriteDb clears `info`, so without an explicit re-stamp a freshly rescanned database
-	// would read as legacy and be remapped again on every scan.
-	path := filepath.Join(t.TempDir(), "topology.db")
-	topo := &domain.Topology{
-		Root: "/x", Language: "python", Languages: []string{"python"},
-		Resources: map[string]domain.Resource{
-			"a.Foo": {ID: "a.Foo", Kind: domain.ResourceStruct, Name: "Foo"},
-		},
-	}
-	if err := WriteDb(topo, path); err != nil {
-		t.Fatalf("WriteDb: %v", err)
-	}
-	scheme, stamped, err := ReadIDScheme(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !stamped || scheme != IDSchemeVersion {
-		t.Fatalf("want stamped scheme %d, got %d (stamped=%v)", IDSchemeVersion, scheme, stamped)
 	}
 }
 

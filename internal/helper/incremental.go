@@ -2,7 +2,6 @@ package helper
 
 import (
 	"database/sql"
-	"encoding/json"
 	"sort"
 	"strconv"
 	"strings"
@@ -31,7 +30,15 @@ func resourceSignature(res domain.Resource) string {
 	b.WriteByte('\x1f')
 	b.WriteString(res.Language)
 	b.WriteByte('\x1f')
-	b.WriteString(res.Description)
+	// THE STORED FORM, NOT THE PARSED ONE. WriteDb / WriteIncremental / WriteScopedResources
+	// all persist domain.DescriptionForStorage(kind, desc), which collapses whitespace and
+	// drops anything over its kind's budget. Hashing the raw text meant the signature of a
+	// freshly-parsed resource could never equal the signature of what had been stored for
+	// it: a two-line doc comment round-tripped as one line, an over-budget one as the empty
+	// string. DiffResources then reported every doc-commented resource as changed on every
+	// scan, and WriteIncremental re-upserted its row and rewrote all of its connection rows
+	// -- write amplification that scaled with the repository instead of with the change.
+	b.WriteString(domain.DescriptionForStorage(res.Kind, res.Description))
 	b.WriteByte('\x1f')
 	b.WriteString(strconv.Itoa(startsAt))
 	b.WriteByte('\x1f')
@@ -40,6 +47,17 @@ func resourceSignature(res domain.Resource) string {
 	b.WriteString(locPath)
 	b.WriteByte('\x1f')
 	b.WriteString(toJSON(res.Properties))
+	b.WriteByte('\x1f')
+	// The body hashes are part of the row, so they belong in the fingerprint that decides
+	// whether the row needs rewriting. Leaving them out let an edit that changed only the
+	// BODY -- one line replaced in place, same span, same signature -- keep the stale hash
+	// that was stored for the previous body, which is the one thing a move matcher must never
+	// read.
+	b.WriteString(res.ExactHash)
+	b.WriteByte('\x1f')
+	b.WriteString(res.NormHash)
+	b.WriteByte('\x1f')
+	b.WriteString(strconv.Itoa(res.NormLines))
 	b.WriteByte('\x1f')
 
 	connTypes := make([]string, 0, len(res.Connections))
@@ -146,7 +164,7 @@ func WriteScopedResources(dbPath string, upserts []domain.Resource, deletes []st
 		}
 
 		if len(upserts) > 0 {
-			resStmt, err := tx.Prepare("INSERT OR REPLACE INTO resources (id, kind, name, language, description, properties_json, starts_at, ends_at, loc_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+			resStmt, err := tx.Prepare("INSERT OR REPLACE INTO resources (id, kind, name, language, description, properties_json, starts_at, ends_at, loc_path, exact_hash, norm_hash, norm_lines) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
 			if err != nil {
 				return err
 			}
@@ -166,7 +184,8 @@ func WriteScopedResources(dbPath string, upserts []domain.Resource, deletes []st
 					locPath = res.Location.Path
 				}
 				if _, err := resStmt.Exec(res.ID, string(res.Kind), res.Name, res.Language,
-					domain.DescriptionForStorage(res.Kind, res.Description), toJSON(res.Properties), startsAt, endsAt, locPath); err != nil {
+					domain.DescriptionForStorage(res.Kind, res.Description), toJSON(res.Properties), startsAt, endsAt, locPath,
+					res.ExactHash, res.NormHash, res.NormLines); err != nil {
 					return err
 				}
 				if _, err := tx.Exec("DELETE FROM connections WHERE source_id = ?", res.ID); err != nil {
@@ -189,8 +208,8 @@ func WriteScopedResources(dbPath string, upserts []domain.Resource, deletes []st
 // WriteIncremental persists a scoped topology update in one transaction. The
 // large resources/connections tables are written with row-level scope (upsert
 // the changed resources, delete the removed ones — like WriteDelta), while the
-// small info and warnings tables are rewritten wholesale (cheap, and they change
-// globally on an incremental update). This replaces a full WriteDb on the
+// small warnings table is rewritten wholesale (cheap, and warnings shift globally on an
+// incremental update) while `info` is upserted key by key. This replaces a full WriteDb on the
 // incremental path: cost scales with the change, not the repo. bugs are left to
 // CleanupOrphanedBugs, exactly as with WriteDb.
 func WriteIncremental(dbPath string, topo *domain.Topology, upserts []domain.Resource, deletes []string) error {
@@ -204,27 +223,16 @@ func WriteIncremental(dbPath string, topo *domain.Topology, upserts []domain.Res
 		}
 		defer tx.Rollback()
 
-		// info: full rewrite (tiny table).
-		if _, err := tx.Exec("DELETE FROM info"); err != nil {
+		// info: the three graph-wide rows are UPSERTED and the error log is rewritten under
+		// its own cap. Deliberately not `DELETE FROM info` -- that took out every key this
+		// function does not itself re-insert, and re-added the error rows with no ceiling, so
+		// an incremental scan re-grew exactly the bloat maxStoredErrors exists to stop. See
+		// writeTopologyInfo / writeScanErrors.
+		if err := writeTopologyInfo(tx, topo); err != nil {
 			return err
 		}
-		if _, err := tx.Exec("INSERT INTO info VALUES ('root', ?)", topo.Root); err != nil {
+		if err := writeScanErrors(tx, topo.Errors); err != nil {
 			return err
-		}
-		if _, err := tx.Exec("INSERT INTO info VALUES ('language', ?)", topo.Language); err != nil {
-			return err
-		}
-		languagesJSON, err := json.Marshal(topo.Languages)
-		if err != nil {
-			return err
-		}
-		if _, err := tx.Exec("INSERT INTO info VALUES ('languages', ?)", string(languagesJSON)); err != nil {
-			return err
-		}
-		for pat, msg := range topo.Errors {
-			if _, err := tx.Exec("INSERT INTO info VALUES (?, ?)", "error:"+pat, msg); err != nil {
-				return err
-			}
 		}
 
 		// warnings: full rewrite (small table; warnings shift globally per update).
@@ -258,7 +266,7 @@ func WriteIncremental(dbPath string, topo *domain.Topology, upserts []domain.Res
 		}
 
 		if len(upserts) > 0 {
-			resStmt, err := tx.Prepare("INSERT OR REPLACE INTO resources (id, kind, name, language, description, properties_json, starts_at, ends_at, loc_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+			resStmt, err := tx.Prepare("INSERT OR REPLACE INTO resources (id, kind, name, language, description, properties_json, starts_at, ends_at, loc_path, exact_hash, norm_hash, norm_lines) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
 			if err != nil {
 				return err
 			}
@@ -278,7 +286,8 @@ func WriteIncremental(dbPath string, topo *domain.Topology, upserts []domain.Res
 					locPath = res.Location.Path
 				}
 				if _, err := resStmt.Exec(res.ID, string(res.Kind), res.Name, res.Language,
-					domain.DescriptionForStorage(res.Kind, res.Description), toJSON(res.Properties), startsAt, endsAt, locPath); err != nil {
+					domain.DescriptionForStorage(res.Kind, res.Description), toJSON(res.Properties), startsAt, endsAt, locPath,
+					res.ExactHash, res.NormHash, res.NormLines); err != nil {
 					return err
 				}
 				if _, err := tx.Exec("DELETE FROM connections WHERE source_id = ?", res.ID); err != nil {

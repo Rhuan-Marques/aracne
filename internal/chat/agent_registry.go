@@ -71,7 +71,7 @@ func ensureDefaultAgentFiles(cfg *helper.Config, dir string) error {
 			return err
 		}
 		content := chatAgentMarkdown(def.name, def.description, chatAgentTools(cfg, def.name), def.prompt)
-		if err := os.WriteFile(path, []byte(strings.TrimSpace(content)+"\n"), 0o644); err != nil {
+		if err := helper.AtomicWriteFile(path, []byte(strings.TrimSpace(content)+"\n"), 0o644); err != nil {
 			return err
 		}
 	}

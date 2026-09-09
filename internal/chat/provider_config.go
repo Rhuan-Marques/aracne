@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	_ "embed"
+
+	"github.com/Rhuan-Marques/aracne/internal/helper"
 )
 
 //go:embed provider_models.json
@@ -114,7 +116,7 @@ func saveProviderConfig(path string, cfg ProviderConfig) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o600)
+	return helper.AtomicWriteFile(path, data, 0o600)
 }
 
 // Normalizes provider config and returns public defaults, providers, and supported models.

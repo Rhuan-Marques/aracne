@@ -1,0 +1,687 @@
+<title>Aracne Fault Ledger</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Serif:ital,wght@0,400;0,500;1,400&display=swap">
+<style>
+:root{
+  --paper:#F1F3F0;
+  --surface:#FAFBF9;
+  --surface-sunk:#E7EAE6;
+  --ink:#171C1A;
+  --ink-soft:#3D4744;
+  --ink-mute:#6C7A75;
+  --rule:#D2D8D3;
+  --rule-hard:#B6BFB9;
+  --accent:#256B5D;
+  --accent-soft:#DCEAE5;
+  --sev-high:#9E3324;
+  --sev-high-bg:#F6E2DE;
+  --sev-med:#9C6414;
+  --sev-med-bg:#F6EBD8;
+  --sev-low:#5F6E69;
+  --sev-low-bg:#E4E8E5;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#101413;
+    --surface:#171C1B;
+    --surface-sunk:#0B0F0E;
+    --ink:#E6ECE9;
+    --ink-soft:#B5C0BB;
+    --ink-mute:#7E8C87;
+    --rule:#2A3230;
+    --rule-hard:#3B4441;
+    --accent:#5CB6A2;
+    --accent-soft:#17322C;
+    --sev-high:#E8836F;
+    --sev-high-bg:#331B16;
+    --sev-med:#DCA24E;
+    --sev-med-bg:#2F2413;
+    --sev-low:#93A29C;
+    --sev-low-bg:#1D2422;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#101413;
+  --surface:#171C1B;
+  --surface-sunk:#0B0F0E;
+  --ink:#E6ECE9;
+  --ink-soft:#B5C0BB;
+  --ink-mute:#7E8C87;
+  --rule:#2A3230;
+  --rule-hard:#3B4441;
+  --accent:#5CB6A2;
+  --accent-soft:#17322C;
+  --sev-high:#E8836F;
+  --sev-high-bg:#331B16;
+  --sev-med:#DCA24E;
+  --sev-med-bg:#2F2413;
+  --sev-low:#93A29C;
+  --sev-low-bg:#1D2422;
+}
+
+*{box-sizing:border-box}
+body{
+  background:var(--paper);color:var(--ink);
+  font-family:"IBM Plex Serif","Iowan Old Style",Georgia,serif;
+  font-size:16px;line-height:1.6;-webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1120px;margin:0 auto;padding:0 28px 96px}
+
+.masthead{border-bottom:2px solid var(--ink);padding:44px 0 18px}
+.eyebrow{
+  font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:11px;
+  letter-spacing:.16em;text-transform:uppercase;color:var(--ink-mute);margin:0 0 14px;
+}
+h1{
+  font-family:"IBM Plex Sans Condensed","Helvetica Neue",sans-serif;font-weight:700;
+  font-size:clamp(38px,6.5vw,64px);line-height:1.02;letter-spacing:-.015em;
+  margin:0 0 14px;text-wrap:balance;
+}
+.standfirst{font-size:19px;line-height:1.55;color:var(--ink-soft);max-width:64ch;margin:0 0 24px}
+.standfirst em{font-style:italic;color:var(--ink)}
+.runline{
+  font-family:"IBM Plex Mono",monospace;font-size:13px;
+  background:var(--surface-sunk);border-left:2px solid var(--accent);
+  padding:10px 14px;margin:0 0 24px;overflow-x:auto;white-space:nowrap;
+}
+.facts{
+  display:grid;gap:2px 26px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+  font-family:"IBM Plex Mono",monospace;font-size:12.5px;
+  padding:16px 0 6px;border-top:1px solid var(--rule);
+}
+.facts div{display:flex;flex-direction:column;gap:1px;padding:6px 0}
+.facts dt{color:var(--ink-mute);font-size:10.5px;letter-spacing:.13em;text-transform:uppercase}
+.facts dd{margin:0;color:var(--ink);font-variant-numeric:tabular-nums}
+
+section{padding-top:52px}
+h2{
+  font-family:"IBM Plex Sans Condensed",sans-serif;font-weight:600;font-size:13px;
+  letter-spacing:.19em;text-transform:uppercase;color:var(--accent);margin:0 0 4px;
+}
+h2 + .sectionlede{margin:0 0 24px;color:var(--ink-soft);max-width:66ch;font-size:16px}
+h3{
+  font-family:"IBM Plex Sans Condensed",sans-serif;font-weight:600;font-size:20px;
+  letter-spacing:-.005em;margin:32px 0 10px;
+}
+
+.meter{display:flex;height:12px;border-radius:2px;overflow:hidden;background:var(--surface-sunk);margin:0 0 12px}
+.meter span{display:block;height:100%}
+.meter-key{
+  display:flex;flex-wrap:wrap;gap:6px 22px;font-family:"IBM Plex Mono",monospace;
+  font-size:12px;color:var(--ink-soft);padding-bottom:8px;
+}
+.meter-key b{font-weight:600;color:var(--ink);font-variant-numeric:tabular-nums}
+.swatch{display:inline-block;width:9px;height:9px;border-radius:1px;margin-right:7px}
+
+.tablewrap{overflow-x:auto;border-top:1px solid var(--rule-hard);margin-top:22px}
+table{border-collapse:collapse;width:100%;font-family:"IBM Plex Mono",monospace;font-size:12.5px}
+th,td{text-align:left;padding:9px 16px 9px 0;border-bottom:1px solid var(--rule);white-space:nowrap}
+th{
+  font-family:"IBM Plex Sans Condensed",sans-serif;font-weight:600;font-size:10.5px;
+  letter-spacing:.13em;text-transform:uppercase;color:var(--ink-mute);
+}
+td.n{text-align:right;padding-right:22px;font-variant-numeric:tabular-nums}
+td.pkg{color:var(--ink);width:60%;white-space:normal}
+
+.controls{
+  position:sticky;top:0;z-index:20;background:var(--paper);
+  border-bottom:1px solid var(--rule-hard);padding:14px 0 12px;margin-top:52px;
+  display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;
+}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+button.chip{
+  font-family:"IBM Plex Mono",monospace;font-size:11.5px;letter-spacing:.06em;
+  text-transform:uppercase;padding:5px 11px;border:1px solid var(--rule-hard);
+  background:transparent;color:var(--ink-soft);border-radius:2px;cursor:pointer;
+  transition:background .12s ease,color .12s ease,border-color .12s ease;
+}
+button.chip:hover{border-color:var(--ink-mute);color:var(--ink)}
+button.chip[aria-pressed="true"]{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+button.chip[aria-pressed="true"][data-sev="high"]{background:var(--sev-high);border-color:var(--sev-high);color:#fff}
+button.chip[aria-pressed="true"][data-sev="medium"]{background:var(--sev-med);border-color:var(--sev-med);color:#fff}
+button.chip[aria-pressed="true"][data-sev="low"]{background:var(--sev-low);border-color:var(--sev-low);color:#fff}
+input[type="search"]{
+  font-family:"IBM Plex Mono",monospace;font-size:13px;padding:6px 10px;
+  border:1px solid var(--rule-hard);border-radius:2px;background:var(--surface);
+  color:var(--ink);min-width:220px;flex:1 1 220px;
+}
+input[type="search"]::placeholder{color:var(--ink-mute)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.tally{
+  font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--ink-mute);
+  margin-left:auto;font-variant-numeric:tabular-nums;white-space:nowrap;
+}
+
+.ledger{margin-top:6px}
+article.finding{
+  display:grid;grid-template-columns:64px 1fr;gap:0 20px;
+  padding:26px 0 24px 14px;border-bottom:1px solid var(--rule);
+  border-left:3px solid var(--rule-hard);scroll-margin-top:90px;
+}
+article.finding[data-sev="high"]{border-left-color:var(--sev-high)}
+article.finding[data-sev="medium"]{border-left-color:var(--sev-med)}
+article.finding[data-sev="low"]{border-left-color:var(--sev-low)}
+.idx{
+  font-family:"IBM Plex Mono",monospace;font-size:13px;font-weight:500;
+  color:var(--ink-mute);padding-top:3px;font-variant-numeric:tabular-nums;
+}
+.head{display:flex;flex-wrap:wrap;gap:8px 10px;align-items:baseline;margin-bottom:8px}
+.title{
+  font-family:"IBM Plex Sans Condensed",sans-serif;font-weight:600;font-size:21px;
+  line-height:1.22;margin:0;flex:1 1 320px;text-wrap:balance;
+}
+.tag{
+  font-family:"IBM Plex Mono",monospace;font-size:10.5px;letter-spacing:.1em;
+  text-transform:uppercase;padding:2px 7px;border-radius:2px;white-space:nowrap;
+}
+.tag.sev[data-sev="high"]{background:var(--sev-high-bg);color:var(--sev-high)}
+.tag.sev[data-sev="medium"]{background:var(--sev-med-bg);color:var(--sev-med)}
+.tag.sev[data-sev="low"]{background:var(--sev-low-bg);color:var(--sev-low)}
+.tag.reach{border:1px solid var(--rule-hard);color:var(--ink-mute)}
+.tag.reach[data-reach="live"]{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+
+.sites{
+  font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--ink-soft);
+  margin:0 0 12px;display:flex;flex-wrap:wrap;gap:4px 8px;
+}
+.sites code{background:var(--surface-sunk);padding:1px 6px;border-radius:2px;white-space:nowrap}
+.summary{margin:0 0 14px;max-width:76ch;color:var(--ink-soft)}
+.summary strong{color:var(--ink);font-weight:500}
+
+.grid3{display:grid;gap:14px 26px;grid-template-columns:repeat(auto-fit,minmax(215px,1fr))}
+.block{display:flex;flex-direction:column;gap:4px}
+.block > h4{
+  font-family:"IBM Plex Sans Condensed",sans-serif;font-weight:600;font-size:10.5px;
+  letter-spacing:.15em;text-transform:uppercase;color:var(--ink-mute);margin:0;
+}
+.block > p{margin:0;font-size:14.5px;line-height:1.5;color:var(--ink-soft)}
+.block.fix > h4{color:var(--accent)}
+code{font-family:"IBM Plex Mono",monospace;font-size:.88em}
+.summary code,.block code,.notes code,li code{background:var(--surface-sunk);padding:0 4px;border-radius:2px}
+
+.proof{margin-top:16px}
+.proof > h4{
+  font-family:"IBM Plex Sans Condensed",sans-serif;font-weight:600;font-size:10.5px;
+  letter-spacing:.15em;text-transform:uppercase;color:var(--sev-high);margin:0 0 6px;
+}
+pre{
+  font-family:"IBM Plex Mono",monospace;font-size:12.5px;line-height:1.55;
+  background:var(--surface-sunk);border-left:2px solid var(--sev-high);
+  padding:12px 14px;overflow-x:auto;margin:0;color:var(--ink-soft);white-space:pre;
+}
+pre.plain{border-left-color:var(--rule-hard)}
+pre b{color:var(--ink);font-weight:600}
+
+.empty{font-family:"IBM Plex Mono",monospace;font-size:13px;color:var(--ink-mute);padding:40px 0}
+.notes{max-width:74ch}
+.notes p{color:var(--ink-soft)}
+.notes ul{padding-left:20px;color:var(--ink-soft)}
+.notes li{margin-bottom:9px}
+.notes li b{color:var(--ink);font-weight:500}
+footer{
+  margin-top:64px;padding-top:20px;border-top:2px solid var(--ink);
+  font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--ink-mute);
+}
+@media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
+@media (max-width:620px){
+  article.finding{grid-template-columns:1fr;gap:0}
+  .idx{padding-top:0;margin-bottom:4px}
+  .wrap{padding:0 18px 72px}
+}
+</style>
+
+<div class="wrap">
+
+<header class="masthead">
+  <p class="eyebrow">Reproduced faults only · 14 findings · 15 failing tests</p>
+  <h1>Aracne Fault Ledger</h1>
+  <p class="standfirst">
+    Every entry below is backed by a test that <em>fails against this commit</em>. Anything I could
+    not reproduce, and anything a code comment defends as a deliberate trade, has been withdrawn —
+    the withdrawal list is at the end. The reproducers are build-tagged, so
+    <code>go test ./...</code> and <code>make test</code> stay green.
+  </p>
+  <p class="runline">$ go test -tags audit ./... -run TestAudit</p>
+  <dl class="facts">
+    <div><dt>Repository</dt><dd>Rhuan-Marques/aracne</dd></div>
+    <div><dt>Branch</dt><dd>chore/debloat</dd></div>
+    <div><dt>Commit</dt><dd>07aee2b</dd></div>
+    <div><dt>Findings</dt><dd>14</dd></div>
+    <div><dt>Reproducers</dt><dd>15 tests · 9 packages</dd></div>
+    <div><dt>Withdrawn</dt><dd>43</dd></div>
+  </dl>
+</header>
+
+<section id="summary">
+  <h2>What this is</h2>
+  <p class="sectionlede">
+    <code>go vet ./...</code> is clean and the existing suites are thorough, so none of these are
+    crashes or type errors. Each is a place where the code does something its own doc comment says
+    it does not — a parser documented as pure that mutates its input, a validator documented as
+    loud that cannot fire, a manifest that records a state it never observed.
+  </p>
+  <div class="meter" id="meter" aria-hidden="true"></div>
+  <div class="meter-key" id="meterKey"></div>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Package</th><th style="text-align:right">High</th><th style="text-align:right">Med</th><th style="text-align:right">Low</th><th style="text-align:right">Tests</th></tr></thead>
+      <tbody id="areaRows"></tbody>
+    </table>
+  </div>
+  <p class="sectionlede" style="margin-top:22px">
+    <b style="font-weight:500;color:var(--ink)">Live</b> means the condition is reachable through
+    an ordinary use of the tool today. <b style="font-weight:500;color:var(--ink)">Latent</b> means
+    the defect is real and demonstrable but currently masked by something incidental — the reproducer
+    says exactly what.
+  </p>
+</section>
+
+<div class="controls" role="search">
+  <div class="chips" id="sevChips"></div>
+  <input type="search" id="q" placeholder="filter by file, symbol, or phrase" aria-label="Filter findings">
+  <button class="chip" id="reset" type="button" aria-pressed="false">reset</button>
+  <span class="tally" id="tally"></span>
+</div>
+
+<main class="ledger" id="ledger"></main>
+
+<section id="withdrawn">
+  <h2>Withdrawn</h2>
+  <p class="sectionlede">
+    A first pass produced 57 candidates. 43 are gone. Recording why matters as much as the list that
+    survived: most were not defects, they were decisions I had not yet found the reasoning for.
+  </p>
+  <div class="notes">
+    <h3>Withdrawn because a comment in the code defends the behaviour</h3>
+    <ul>
+      <li><b>grep over a directory without <code>-r</code>.</b> Modelled as recursive where GNU grep
+      says "Is a directory". <code>parseGrep</code> states it: "Accepted and ignored: aracne always
+      reports path:line, and always recurses into a directory operand." A deliberate divergence,
+      not an oversight.</li>
+      <li><b><code>shellcmd.Base</code> lowercasing the command word.</b> Documented: "so
+      <code>/usr/bin/sed</code>, <code>\sed</code> and <code>SED.EXE</code> all resolve to
+      <code>sed</code>." The PowerShell surface needs it.</li>
+      <li><b><code>wrappedCommandIndex</code> promoting an argument into the command slot.</b> The
+      function exists to do that (<code>rtk proxy sed …</code>), and its comment accepts the false
+      positives the bound still allows.</li>
+      <li><b><code>splitCommandSegments</code> not handling backslash escapes.</b> Declared "a
+      pragmatic tokenizer, not a real shell parser", with residual false positives accepted.</li>
+      <li><b>idresolve preferring the shortest matching ID.</b> Argued for explicitly: "a caller who
+      wrote <code>a.b.Foo</code> almost always meant the former."</li>
+      <li><b><code>head</code>/<code>tail</code> group headers replacing <code>==&gt; f &lt;==</code>.</b>
+      Stated in <code>serveRead</code>: "the group header above each block carries the filename that
+      head's own banner would have."</li>
+      <li><b>lazydesc discarding results that arrive after the deadline.</b> Both halves are
+      documented intent — the timeout ("so the read returns on time") and the permanent claim ("whether
+      or not the attempt succeeds").</li>
+      <li><b><code>proxyRead</code> resolving its target against the hook's cwd.</b> The function
+      states that returning <code>""</code> whenever it cannot be certain is the designed outcome.</li>
+      <li><b>Dangling incoming edges after a scoped delete.</b> <code>WriteDelta</code> says they are
+      kept on purpose: "they drive missing-node warnings."</li>
+    </ul>
+
+    <h3>Withdrawn because the reproducer did not reproduce</h3>
+    <ul>
+      <li><b>Scanner errors persisted as warnings with an empty <code>Kind</code>.</b> I wrote the
+      probe: an unparseable Go file put through <code>IncrementalScan</code> produced
+      <code>err=nil</code>, zero returned warnings and zero stored warnings. The
+      <code>"error:"+path</code> branch in <code>manager.go</code> is not reached by a syntax error,
+      so the claim was wrong.</li>
+    </ul>
+
+    <h3>Withdrawn as not confirmed</h3>
+    <ul>
+      <li><b>Guard timeout budget.</b> 20s + 5s + 3s under a 30s hook timeout is tight, but I could
+      not show the stages actually serialising in one call, so the arithmetic is not evidence.</li>
+      <li><b><code>update-file --claude-hook</code> writing bare text to stdout.</b> Whether that
+      reaches the model depends on the host's hook contract, which I did not verify.</li>
+      <li><b>OpenCode setup deleting the <code>write</code> permission key.</b> Plausibly deliberate
+      normalisation — aracne folds writes into <code>edit</code> — rather than destruction.</li>
+      <li><b>The partial fast path not clearing <code>use_missing_node</code> warnings.</b> I could
+      not build a reproducer I trusted to be exercising the fast path rather than something else.</li>
+      <li><b>viz: <code>optimization_rules</code> as a write target, a GET with a side effect, an
+      absent <code>Origin</code> treated as trusted, no <code>Sec-WebSocket-Version</code> check.</b>
+      Each is a defensible posture for a loopback developer tool; none is provably wrong.</li>
+    </ul>
+
+    <h3>Withdrawn as true but not bugs</h3>
+    <ul>
+      <li><b>Style and hygiene:</b> <code>regexpQuote</code> duplicating <code>regexp.QuoteMeta</code>;
+      an unused <code>root</code> parameter on <code>normalizeManifestPath</code>; a
+      <code>cfg != nil</code> check on a value that is never nil; <code>RunRead</code> reading
+      <code>os.Args</code> instead of its argument; five duplicated comment lines in
+      <code>viz/server.go</code>.</li>
+      <li><b>Performance:</b> <code>DetectAll</code> walking the tree twice per incremental scan;
+      <code>idresolve</code> tokenising the whole graph per lookup; <code>countFileLines</code>
+      converting a file to a string twice.</li>
+      <li><b>Documentation drift</b> (worth fixing, but not faults):
+      <code>docs/architecture.md</code> §9 still describes the pre-segment-splicing interception
+      rule, so two of its six named guard rails no longer hold; and <code>EffectiveMode</code>'s
+      comment promises a legacy <code>integration.mode</code> fallback tier that does not exist in
+      the code.</li>
+      <li><b>Design properties:</b> absolute paths in the database and manifest making the store
+      non-relocatable; <code>SaveConfig</code> not using <code>AtomicWriteFile</code>; timeouts that
+      stop the wait without stopping the work. Real, but each is a trade rather than a mistake, and
+      none is demonstrable as a failure.</li>
+    </ul>
+
+    <h3>Excluded by request</h3>
+    <ul>
+      <li>Everything in <code>internal/chat</code> and its permission policy.</li>
+    </ul>
+
+    <h3>Checked and found sound</h3>
+    <p>
+      Worth recording so a later pass does not re-tread it: the all-or-nothing batching and CRLF
+      matching in <code>llm/tools/edit.go</code>; <code>helper.AtomicWriteFile</code> as a correct
+      atomic replace; <code>topogrep</code>'s context map, binary-file handling and per-file
+      <code>-m</code> cap; <code>domain.GlobToRegexp</code>'s zero-directory <code>**/</code> case;
+      the raw-JSON <code>id</code> handling and notification/<code>ping</code> dispatch in
+      <code>internal/mcp</code>; and the loopback-host check that does defeat DNS rebinding on the
+      <code>viz</code> API's mutating routes.
+    </p>
+  </div>
+</section>
+
+<section id="running">
+  <h2>Running the reproducers</h2>
+  <div class="notes">
+    <p>
+      Nine files were added, one per package, each guarded by <code>//go:build audit</code>. Nothing
+      else in the tree was touched.
+    </p>
+    <pre class="plain">cmd/arac/audit_test.go
+internal/cli/audit_test.go
+internal/helper/audit_test.go
+internal/llm/languages/universaltools/audit_test.go
+internal/mcp/audit_test.go
+internal/shellcmd/audit_test.go
+internal/toolspec/audit_test.go
+internal/topogrep/audit_test.go
+internal/topology/scanner/pyscanner/audit_test.go</pre>
+    <p style="margin-top:16px">
+      The tag keeps them out of the default build, so <code>go build ./...</code>,
+      <code>go test ./...</code> and <code>make test</code> are unaffected — verified. They assert the
+      behaviour the code's own comments promise, so each one turns green when its finding is fixed
+      and stays as a regression test afterwards.
+    </p>
+  </div>
+</section>
+
+<footer>
+  Aracne Fault Ledger &middot; 07aee2b &middot; 14 findings, 15 failing reproducers, 43 candidates withdrawn.
+</footer>
+</div>
+
+<script>
+const F = [
+{
+ id:"A-01", sev:"medium", reach:"latent", area:"internal/shellcmd",
+ title:"Parse rewrites the caller's argv in place",
+ test:"TestAudit_ParseDoesNotMutateCallerArgv",
+ sites:["internal/shellcmd/shellcmd.go:638","internal/cli/cmd.go:104","internal/cli/cmd.go:562"],
+ summary:"The package doc promises Parse is <strong>a pure function of argv</strong>, and both callers depend on it. The short-flag cluster expansion in <code>parseGrep</code> does <code>args = append(args[:i], append(expanded, args[i+1:]...)...)</code>, which writes through the slice header into the caller's backing array.",
+ req:"Any caller passing a slice with spare capacity — one built with <code>append</code>, or a sub-slice of a larger buffer — and a grep carrying a clustered short flag (<code>-rn</code>, <code>-rm1</code>).",
+ eff:"An operand is lost, silently. <code>RunCmd</code> calls <code>serveCommand(argv)</code> and then <code>passthrough(argv)</code> on the fallback branch, so the shell would run a <em>different command than the model typed</em> — the exact class of failure this package exists to prevent. It does not fire today only because <code>os.Args[2:]</code> happens to have zero spare capacity; nothing in the code enforces or documents that.",
+ fix:"Copy before mutating: <code>args = append(append(append([]string{}, args[:i]...), expanded...), args[i+1:]...)</code>. The reproducer stays as the regression test.",
+ repro:"before [grep -rn foo .]\nafter  [grep -r -n foo]"
+},
+{
+ id:"A-02", sev:"medium", reach:"live", area:"internal/shellcmd",
+ title:"An interior caret in a BRE pattern becomes a second anchor",
+ test:"TestAudit_BREInteriorCaretIsLiteral",
+ sites:["internal/shellcmd/shellcmd.go:1026"],
+ summary:"<code>breToRE2</code>'s own comment states the rule: a caret is \"an anchor only where it leads, ordinary anywhere else\". The <code>'^'</code> case deliberately leaves <code>leading</code> set so a following <code>*</code> stays literal — and as a side effect every later caret is emitted as an anchor too.",
+ req:"Plain <code>grep</code>, whose default dialect is BRE, with a caret anywhere after the first character. Searching for a comment marker, a diff line or an anchored alternation all reach it.",
+ eff:"POSIX BRE reads <code>^^foo</code> as \"a line beginning with the literal <code>^foo</code>\". The translation yields <code>^^foo</code>, which RE2 reads as two start anchors, so it matches plain <code>foo</code> at line start. Wrong matches rather than none — nothing in the output marks the answer as suspect.",
+ fix:"Track \"first position in the pattern\" separately from \"a <code>*</code> here would have nothing to repeat\". Only the leading caret, and one directly after <code>\\(</code> or <code>\\|</code>, is an anchor; every other is <code>\\^</code>.",
+ repro:"breToRE2(\"^^foo\") = \"^^foo\", want \"^\\^foo\""
+},
+{
+ id:"A-03", sev:"high", reach:"live", area:"internal/helper",
+ title:"The config typo checks in Validate can never fire",
+ test:"TestAudit_ValidateRejectsAModeTypoAfterLoad",
+ sites:["internal/helper/config.go:1409","internal/helper/config.go:740","internal/cli/serve.go:22","internal/cli/setup.go:73"],
+ summary:"<code>normalizeConfig</code> stamps the coerced values onto the struct — <code>c.Mode = c.EffectiveMode()</code> and the same for <code>ContractVerbosity</code> and <code>Read.ContextFilter</code>. <code>LoadConfigStrict</code> runs it on the way out, and every <code>Validate()</code> call site loads through <code>EnsureConfig</code> → <code>LoadConfigStrict</code>.",
+ req:"A hand-edited <code>.aracne/config.json</code> with a typo in <code>mode</code>, <code>contract_verbosity</code> or <code>read.context_filter</code> — the keys the documentation invites operators to set by hand.",
+ eff:"<code>\"mode\": \"intercept_lineranges\"</code> resolves silently to <code>cli</code>. The project loses interception, the generated contract changes, the guard stops rewriting reads, and nothing anywhere says so. Both <code>EffectiveMode</code> and <code>EffectiveContractVerbosity</code> promise in their comments that \"Validate() is where a typo is reported, loudly and once\" — an assurance the code cannot keep.",
+ fix:"Validate the raw decoded values before normalising: run <code>Validate()</code> inside <code>LoadConfigStrict</code> ahead of <code>normalizeConfig</code>, or keep the raw strings alongside the coerced ones and check those.",
+ repro:"Validate() accepted a config with three unknown values;\n  mode                \"intercept_lineranges\" -> \"cli\"\n  contract_verbosity  \"hgih\"                 -> \"low\"\n  read.context_filter \"ful\"                  -> \"normal\""
+},
+{
+ id:"A-04", sev:"medium", reach:"live", area:"internal/helper",
+ title:"Both SQLite DSN parameters are ignored by the driver",
+ test:"TestAudit_DSNBusyTimeoutReachesTheDriver",
+ sites:["internal/helper/sqlite.go:93"],
+ summary:"<code>openSQLite</code> opens with <code>path?cache=shared&amp;_busy_timeout=10000</code>. Those are the <code>mattn/go-sqlite3</code> spellings. <code>modernc.org/sqlite</code>'s <code>applyQueryParams</code> understands only <code>_pragma</code>, <code>_time_format</code>, <code>_txlock</code>, <code>_timezone</code> and <code>vfs</code>, and ignores every other key without an error.",
+ req:"Always. The reproducer reads <code>PRAGMA busy_timeout</code> back through both spellings against the pinned <code>modernc.org/sqlite@v1.50.1</code>.",
+ eff:"Shared cache is off and the DSN busy timeout is dead. The <code>PRAGMA busy_timeout</code> issued afterwards through <code>db.Exec</code> covers the connection it happens to run on — but a pragma applied that way does not follow the pool, so any connection <code>database/sql</code> opens later runs with no busy timeout and fails immediately under contention instead of waiting. That is the failure the surrounding retry loop exists to avoid.",
+ fix:"Use the driver's own spelling, which is applied to every connection the pool opens: <code>path?_pragma=busy_timeout(10000)</code>. Drop <code>cache=shared</code>, for which the driver has no equivalent.",
+ repro:"aracne's DSN      -> busy_timeout = 0\n_pragma spelling  -> busy_timeout = 10000"
+},
+{
+ id:"A-05", sev:"high", reach:"live", area:"internal/helper",
+ title:"A write that lands during a scan is invisible to every later scan",
+ test:"TestAudit_ManifestDoesNotSwallowAWriteDuringTheScan",
+ sites:["internal/helper/manifest.go:85","internal/helper/manifest.go:380"],
+ summary:"<code>SyncManifest</code> stamps each file with the mtime it has <em>when the scan finishes</em>, not the mtime the parser saw. <code>DiffScanFiles</code> then asks only <code>fi.ModTime().After(manifestTime)</code>.",
+ req:"A file modified after the scanner read it and before the manifest is stamped: an editor save, a formatter, a code generator, or a second agent, during a scan that takes more than an instant.",
+ eff:"The manifest records the <em>new</em> mtime while the database holds the <em>old</em> parse. Every later incremental scan sees the file as current, so the drift is permanent until someone runs a hard rescan. Reads are then answered from spans that no longer match the file — the condition <code>healStale</code> exists to paper over one file at a time.",
+ fix:"Capture each file's mtime at the moment it is read and stamp that value, so a write during the scan leaves the manifest behind the file and the next diff catches it. A content hash beside the mtime would also close the preserved-mtime restore case (<code>rsync -t</code>, <code>tar -x</code>, <code>cp -p</code>).",
+ repro:"parse at T0 -> write at T1 -> SyncManifest at T2 stamps T1\nDiffScanFiles: modified = []   (the write is gone)"
+},
+{
+ id:"A-06", sev:"medium", reach:"live", area:"internal/helper",
+ title:"descriptions apply rewrites line endings it was not asked to touch",
+ test:"TestAudit_ApplyDescriptionsPreservesLineEndings",
+ sites:["internal/helper/apply.go:79","internal/helper/apply.go:100"],
+ summary:"<code>applyFile</code> splits on <code>\\n</code>, rejoins with <code>\\n</code> and force-appends a trailing newline; the doc lines it inserts are built with bare <code>\\n</code>. <code>llm/tools/edit.go</code> carries a long comment on why an edit must leave a file's line endings alone outside its own hunk.",
+ req:"<code>arac descriptions apply</code> over a repository containing a CRLF file, or any file without a final newline.",
+ eff:"Two whole-file changes nobody asked for: a CRLF file comes back with LF-only comment lines mixed into it, and a file with no trailing newline gains one. On a repo with <code>* text=auto</code> that is a diff on lines the sweep never meant to touch, across every described file.",
+ fix:"Detect the file's dominant terminator once, emit the rendered comment lines with it, and preserve the presence or absence of a final newline rather than normalising it.",
+ repro:"in : \"package p\\r\\n\\r\\nfunc Alpha() {}\"\nout: \"package p\\r\\n\\r\\n// Does alpha things.\\nfunc Alpha() {}\\n\"\n                              ^^ bare LF        trailing \\n added"
+},
+{
+ id:"A-07", sev:"high", reach:"live", area:"internal/cli",
+ title:"The guard blames the model for changes made outside the session",
+ test:"TestAudit_GuardDoesNotBlameTheModelForExternalDrift",
+ sites:["internal/cli/guard_drift.go:85","internal/cli/guard_warnstate.go:118"],
+ summary:"<code>preToolScan</code> calls <code>seedReportedWarnings</code> <em>first</em> and only then runs the scan, so warnings the scan itself discovers are absent from the seed. <code>seedReportedWarnings</code>' own comment says it exists \"so the post-tool comparison is against the state this call found\".",
+ req:"<code>scan.pre_tool</code> at its default, source changed outside the session (a <code>git checkout</code>, a rebase, a teammate's edit, an editor save), then any Bash command the drift backstop treats as a possible write — which includes every command the classifier does not recognise.",
+ eff:"The next drift check reports those warnings under the banner \"Topology re-synced after a shell command wrote to the project\". In the reproducer a plain <code>go build ./...</code>, which wrote nothing, is credited with three <code>node_removed</code> warnings caused by an edit it had nothing to do with. The model then goes looking for a change it did not make.",
+ fix:"Move <code>seedReportedWarnings</code> to after the pre-tool scan, so the seed is the state the tool call actually found. Externally-caused warnings then surface through <code>warnings_list</code>, which is where §9 of the architecture doc already says they belong.",
+ repro:"tool: Bash `go build ./...`  (wrote nothing)\n→ \"Topology re-synced after a shell command wrote to the project.\"\n  - [node_removed] example.com/proj.Serve was removed from …\n  - [node_removed] example.com/proj.main  was removed from …"
+},
+{
+ id:"A-08", sev:"high", reach:"live", area:"internal/cli",
+ title:"An over-budget read of a resource ID falls through to the real command",
+ test:"TestAudit_OverBudgetResourceIDIsRefusedNotPassedThrough",
+ sites:["internal/cli/cmd.go:160","internal/helper/overserve.go:24","internal/cli/cmd.go:538"],
+ summary:"<code>serveRead</code> returns <code>ok=false</code> when the rendered answer exceeds the over-serve budget, and <code>RunCmd</code> answers <code>ok=false</code> by running the command the caller typed. For a resource-ID operand there is no such command.",
+ req:"An intercepting mode, an operand that is a resource ID rather than a path, and an answer over <code>OverserveMaxBytes</code> — a flat 32&nbsp;KB ceiling applied whatever the ratio says. The reproducer uses one 120-line function, comfortably under the 160-line symbol abridgement threshold.",
+ eff:"The shell runs <code>cat example.com/proj.Wide</code> and the model is told <code>No such file or directory</code> about an ID that resolves perfectly well. The comment above <code>rawWindowBytes</code> names this exact outcome as the bug it was written to fix; correcting the byte <em>estimate</em> left the failure path itself in place.",
+ fix:"Track whether every operand resolved to a path on disk. Where one did not, a budget failure has to become a refusal — the third return of <code>serveRead</code> already exists for this — rather than a passthrough.",
+ repro:"serveCommand([\"cat\", \"example.com/proj.Wide\"])\n→ ok = false, refusal = nil   → RunCmd runs the real `cat`"
+},
+{
+ id:"A-09", sev:"low", reach:"live", area:"three renderers",
+ title:"A directory named \"..data\" is treated as outside the topology root",
+ test:"TestAudit_DisplayRootHandlesADotDotPrefixedDirectory · TestAudit_DisplayPathHandlesADotDotPrefixedDirectory (×2)",
+ sites:["internal/cli/cmd.go:449","internal/topogrep/grep.go:1297","internal/llm/languages/universaltools/read.go:886"],
+ summary:"All three helpers decide a path escapes the root with <code>strings.HasPrefix(rel, \"..\")</code>. <code>guard_scope.isUnder</code> gets the same test right by comparing against <code>\"..\"</code> and <code>\"..\" + separator</code> separately.",
+ req:"A repository containing a directory whose name begins with two dots. <code>..data</code> and <code>..2026_09_06</code> are what Kubernetes ConfigMap and Secret volume mounts are actually named, and several build tools use the convention.",
+ eff:"Files under it are judged to be outside the root, so the read tool's group header and every grep row print the full absolute path instead of the relative one. Pure width, repeated per match — which is exactly the cost <code>displayPath</code>'s own comment says the relative form exists to avoid.",
+ fix:"Replace all three with the check <code>guard_scope.isUnder</code> already implements. Better: export that helper so the four call sites share one definition.",
+ repro:"displayRoot(\"<root>/..data/app.go\") = \"<root>/..data/app.go\"\nwant                                  = \"..data/app.go\""
+},
+{
+ id:"A-10", sev:"medium", reach:"live", area:"internal/cli",
+ title:"A resource-scoped search still renders context from outside the resource",
+ test:"TestAudit_RangeRestrictionAlsoDropsOutOfRangeContext",
+ sites:["internal/cli/cmd.go:463","internal/topogrep/grep.go:590"],
+ summary:"<code>restrictResultToRange</code> filters <code>Matches</code> and recomputes <code>Files</code>, <code>Counts</code>, <code>Total</code> and <code>DistinctResources</code> — but leaves <code>Result.Context</code> untouched. <code>FormatResult</code> reads context by absolute line number.",
+ req:"An intercepted <code>grep</code> with <code>-A</code>, <code>-B</code> or <code>-C</code> whose single operand is a resource ID, and a match near the declaration's boundary.",
+ eff:"The window prints lines from above or below the declaration the caller scoped the search to. The counts and the trailer are honest; the rendered output is not — it shows source the caller explicitly narrowed away from.",
+ fix:"Drop context entries outside <code>[from, to]</code> in the same pass that filters the matches, and clear <code>BinaryFiles</code> when a range restriction is applied.",
+ repro:"restrictResultToRange(res, 10, 20) then FormatResult(Before: 2):\n  app.go-8-line 8 - above the resource\n  app.go-9-line 9 - above the resource\n  app.go:10:match inside the resource"
+},
+{
+ id:"A-11", sev:"medium", reach:"live", area:"internal/toolspec",
+ title:"A git global option hides the subcommand from the classifier",
+ test:"TestAudit_GitGlobalOptionsDoNotHideTheSubcommand",
+ sites:["internal/toolspec/toolspec.go:407"],
+ summary:"<code>gitSubcommandKey</code> takes the first argument not starting with <code>-</code> as the subcommand. For <code>git -C /repo apply p.patch</code> that argument is <code>/repo</code>, so none of the classifier's git rules apply.",
+ req:"Any git invocation using a global option that takes a separate value: <code>-C</code>, <code>-c</code>, <code>--git-dir</code>, <code>--work-tree</code>.",
+ eff:"<code>git -C x apply</code>, <code>git -C x restore</code> and <code>git -C x show HEAD:f.go</code> are classified as nothing at all, so none of the guard's git rules reach them. The drift backstop still keeps the topology correct — an unclassified command counts as \"might have written source\" — but the classifier's own guarantee does not hold, and any future rule keyed on the <code>edit</code> or <code>read</code> key silently skips these.",
+ fix:"Skip the value of the known value-taking global options before picking the subcommand, the way <code>commandFields</code> already skips environment assignments.",
+ repro:"ShellCommandKeyForArgs(git, [-C /repo apply p.patch])  = (\"\", false), want (\"edit\", true)\nShellCommandKeyForArgs(git, [-C /repo restore src/a.go]) = (\"\", false), want (\"edit\", true)\nShellCommandKeyForArgs(git, [-C /repo show HEAD:a.go])   = (\"\", false), want (\"read\", true)"
+},
+{
+ id:"A-12", sev:"low", reach:"live", area:"internal/mcp",
+ title:"tools/call with no arguments hands every tool a nil payload",
+ test:"TestAudit_ToolsCallWithoutArgumentsStillRuns",
+ sites:["internal/mcp/server.go:132","internal/mcp/protocol.go:94"],
+ summary:"<code>CallToolParams.Arguments</code> is <code>omitempty</code> raw JSON. MCP permits a client to omit <code>arguments</code> for a tool that takes none; the server passes the nil slice straight to <code>Run</code>, and <code>json.Unmarshal(nil, …)</code> fails with \"unexpected end of JSON input\".",
+ req:"A host that omits <code>arguments</code> rather than sending <code>{}</code>. Claude Code sends <code>{}</code>; the specification allows either.",
+ eff:"A no-parameter tool such as <code>node_list_no_description</code> returns a parse error instead of running. Host-specific and invisible until a second host connects — which is precisely the reasoning <code>protocol.go</code> gives for having made the request <code>id</code> raw JSON.",
+ fix:"Default <code>call.Arguments</code> to <code>json.RawMessage(\"{}\")</code> when it is empty, before dispatch.",
+ repro:"tools/call {\"name\":\"no_args\"}   (no \"arguments\" member)\n→ Run receives nil"
+},
+{
+ id:"A-13", sev:"high", reach:"live", area:"cmd/arac",
+ title:"An unknown subcommand exits 0",
+ test:"TestAudit_UnknownSubcommandExitsNonZero",
+ sites:["cmd/arac/main.go:22","cmd/arac/main.go:62","cmd/arac/main.go:117"],
+ summary:"The <code>default</code> arm, the no-argument arm and <code>descriptions</code> with no subcommand all print usage and fall out of <code>main</code> with status 0.",
+ req:"Any typo, or a verb whose subcommand was forgotten.",
+ eff:"Every wrapper that branches on the exit status — CI, a shell <code>&amp;&amp;</code> chain, the generated slash commands, the benchmark harness — reads a typo as success. A misspelled step silently does nothing and the pipeline reports green. The rest of this CLI is deliberate about exit vocabulary: <code>arac grep</code> and <code>arac read</code> both exit non-zero when they find nothing, and <code>arac warnings</code> already exits 1, which is what makes the dispatcher's default the outlier.",
+ fix:"Print usage to stderr and <code>os.Exit(1)</code> for an unknown or missing subcommand. Keep status 0 for an explicit <code>--help</code>/<code>-h</code>, which is currently not handled at all.",
+ repro:"$ arac scna         ; echo $?   ->  0\n$ arac descriptions ; echo $?   ->  0\n$ arac warnings     ; echo $?   ->  1   (correct)"
+},
+{
+ id:"A-14", sev:"medium", reach:"live", area:"pyscanner",
+ title:"A Python syntax error is reported as a missing interpreter",
+ test:"TestAudit_PythonSyntaxErrorSurvivesTheInterpreterFallback",
+ sites:["internal/topology/scanner/pyscanner/parser.go:143"],
+ summary:"<code>parsePythonFile</code> tries <code>python3</code> then <code>python</code>, overwriting <code>cmdErr</code> each time, and treats a non-zero exit as \"try the next interpreter\". A <code>SyntaxError</code> in the file being parsed is a non-zero exit.",
+ req:"A Python file the interpreter cannot parse. The diagnostic is lost whenever the second attempt also fails, which on a modern host means whenever <code>python</code> is not installed.",
+ eff:"python3's real diagnostic — file, line, and the syntax error itself — is discarded and replaced by <code>exec: \"python\": executable file not found in $PATH</code>. The operator is told the wrong thing about the wrong cause, and the actual error is unrecoverable from the message.",
+ fix:"Fall through to the next interpreter only when the failure is \"interpreter not found\" (an <code>exec.Error</code>); a non-zero exit from a working interpreter is the answer. Join the attempts into one error rather than keeping the last.",
+ repro:"broken.py contains `def f(:`\n→ python parse failed: : exec: \"python\": executable file not found in $PATH\nwant: python3's SyntaxError, naming the file and line"
+}
+];
+
+const SEV = ["high","medium","low"];
+const SEV_LABEL = {high:"High", medium:"Medium", low:"Low"};
+const SEV_VAR = {high:"--sev-high", medium:"--sev-med", low:"--sev-low"};
+const TESTS = 15;
+
+const counts = {};
+SEV.forEach(s => counts[s] = F.filter(f => f.sev === s).length);
+const present = SEV.filter(s => counts[s] > 0);
+
+const meter = document.getElementById("meter");
+const key = document.getElementById("meterKey");
+present.forEach(s => {
+  const span = document.createElement("span");
+  span.style.flex = counts[s];
+  span.style.background = `var(${SEV_VAR[s]})`;
+  meter.appendChild(span);
+  const li = document.createElement("span");
+  li.innerHTML = `<i class="swatch" style="background:var(${SEV_VAR[s]})"></i>${SEV_LABEL[s]} <b>${counts[s]}</b>`;
+  key.appendChild(li);
+});
+const live = F.filter(f => f.reach === "live").length;
+const extra = document.createElement("span");
+extra.innerHTML = `Live <b>${live}</b> &nbsp; Latent <b>${F.length - live}</b> &nbsp; Reproducers <b>${TESTS}</b>`;
+key.appendChild(extra);
+
+const pkgs = {};
+F.forEach(f => {
+  pkgs[f.area] = pkgs[f.area] || {high:0, medium:0, low:0, total:0, tests:0};
+  pkgs[f.area][f.sev]++; pkgs[f.area].total++;
+  pkgs[f.area].tests += f.test.split("·").length;
+});
+document.getElementById("areaRows").innerHTML =
+  Object.entries(pkgs)
+    .sort((a,b) => b[1].high - a[1].high || b[1].total - a[1].total || a[0].localeCompare(b[0]))
+    .map(([name,a]) => `
+      <tr>
+        <td class="pkg">${name}</td>
+        <td class="n">${a.high || "&middot;"}</td>
+        <td class="n">${a.medium || "&middot;"}</td>
+        <td class="n">${a.low || "&middot;"}</td>
+        <td class="n"><b>${a.tests}</b></td>
+      </tr>`).join("");
+
+const active = new Set(present);
+const chipBar = document.getElementById("sevChips");
+present.forEach(s => {
+  const b = document.createElement("button");
+  b.className = "chip"; b.type = "button"; b.dataset.sev = s;
+  b.setAttribute("aria-pressed", "true");
+  b.textContent = `${SEV_LABEL[s]} ${counts[s]}`;
+  b.addEventListener("click", () => {
+    if (active.has(s)) { active.delete(s); b.setAttribute("aria-pressed","false"); }
+    else { active.add(s); b.setAttribute("aria-pressed","true"); }
+    render();
+  });
+  chipBar.appendChild(b);
+});
+
+const qEl = document.getElementById("q");
+const ledger = document.getElementById("ledger");
+const tally = document.getElementById("tally");
+
+const esc = s => s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+
+function card(f){
+  return `<article class="finding" data-sev="${f.sev}" id="${f.id}">
+    <div class="idx">${f.id}</div>
+    <div>
+      <div class="head">
+        <h3 class="title">${f.title}</h3>
+        <span class="tag sev" data-sev="${f.sev}">${SEV_LABEL[f.sev]}</span>
+        <span class="tag reach" data-reach="${f.reach}">${f.reach}</span>
+      </div>
+      <p class="sites">${f.sites.map(s => `<code>${s}</code>`).join("")}</p>
+      <p class="summary">${f.summary}</p>
+      <div class="grid3">
+        <div class="block"><h4>Trigger</h4><p>${f.req}</p></div>
+        <div class="block"><h4>Effect</h4><p>${f.eff}</p></div>
+        <div class="block fix"><h4>Fix</h4><p>${f.fix}</p></div>
+      </div>
+      <div class="proof">
+        <h4>Fails now &mdash; ${esc(f.test)}</h4>
+        <pre>${esc(f.repro)}</pre>
+      </div>
+    </div>
+  </article>`;
+}
+
+function render(){
+  const q = qEl.value.trim().toLowerCase();
+  const shown = F.filter(f => {
+    if (!active.has(f.sev)) return false;
+    if (!q) return true;
+    return (f.id+" "+f.title+" "+f.area+" "+f.test+" "+f.sites.join(" ")+" "+
+            f.summary+" "+f.req+" "+f.eff+" "+f.fix+" "+f.repro).toLowerCase().includes(q);
+  });
+  ledger.innerHTML = shown.length
+    ? shown.map(card).join("")
+    : `<p class="empty">No finding matches that filter.</p>`;
+  tally.textContent = `${shown.length} of ${F.length} shown`;
+}
+
+qEl.addEventListener("input", render);
+document.getElementById("reset").addEventListener("click", () => {
+  qEl.value = "";
+  present.forEach(s => active.add(s));
+  chipBar.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed","true"));
+  render();
+});
+
+render();
+</script>

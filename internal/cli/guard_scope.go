@@ -58,89 +58,13 @@ func isUnder(path, root string) bool {
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-// commandPaths pulls the file-shaped operands out of a shell command: anything carrying a
-// directory separator or a file extension, minus flags and the pieces of shell syntax that
-// merely look like paths.
+// commandPaths is toolspec.CommandPaths under the name the guard has always used for it.
 //
-// It reads the whole command string rather than the segment structure, because the point here
-// is "does this command touch the project AT ALL" -- one operand inside the root is enough to
-// keep the guard engaged, so over-collecting is the safe error.
-func commandPaths(command string) []string {
-	// A heredoc BODY is usually data, not operands: `cat > /tmp/x.mjs <<'EOF' … "/repo/a.js"`
-	// writes to /tmp and merely MENTIONS the repo. Judging it by that mention would keep the
-	// very case this function exists to release.
-	//
-	// Unless an interpreter is running it. `python3 - <<'EOF' … open('/repo/x.py')` performs
-	// its file operations inside the body, which is exactly why the classifier reads the whole
-	// command line for interpreters (toolspec.InterpreterProgramKey). Dropping the body here
-	// while the classifier keeps it would free a genuine repo read -- caught by replaying the
-	// run's real denials, where one `python3` heredoc reading a worktree file slipped through.
-	//
-	// When the body is dropped, only the body is: a redirect may follow the heredoc marker on
-	// the same line (`python3 - <<'EOF' > /tmp/out.txt`), and cutting at the marker loses the
-	// one operand saying where the command was actually writing.
-	if strings.Contains(command, "<<") && !runsAnInterpreter(command) {
-		if nl := strings.IndexByte(command, '\n'); nl >= 0 {
-			command = command[:nl]
-		}
-	}
-	var out []string
-	for _, tok := range strings.FieldsFunc(command, func(r rune) bool {
-		return r == ' ' || r == '\t' || r == '\n' || r == '|' || r == ';' || r == '&' ||
-			r == '(' || r == ')' || r == '\'' || r == '"' || r == '<'
-	}) {
-		tok = strings.TrimLeft(tok, ">")
-		tok = strings.Trim(tok, "'\"`")
-		if tok == "" || strings.HasPrefix(tok, "-") {
-			continue
-		}
-		// A `rev:path` operand (git) names a path but not one on disk to compare; the git
-		// classifier decides those, so they are not this function's business.
-		if strings.Contains(tok, ":") && !filepath.IsAbs(tok) {
-			continue
-		}
-		if strings.ContainsRune(tok, filepath.Separator) || hasFileExtension(tok) {
-			out = append(out, tok)
-		}
-	}
-	return out
-}
-
-// runsAnInterpreter reports whether any command word before the heredoc body runs an inline
-// program, in which case the body is that program and its paths are real operands.
-func runsAnInterpreter(command string) bool {
-	head := command
-	if nl := strings.IndexByte(head, '\n'); nl >= 0 {
-		head = head[:nl]
-	}
-	for _, tok := range strings.Fields(head) {
-		if toolspec.IsInterpreter(strings.Trim(tok, "'\"`")) {
-			return true
-		}
-	}
-	return false
-}
-
-// hasFileExtension is a cheap "looks like a filename" test: a dot with something after it and
-// no path separator needed. `NR>=1` and `2.13` are excluded by requiring a letter to lead the
-// extension.
-func hasFileExtension(tok string) bool {
-	dot := strings.LastIndex(tok, ".")
-	if dot <= 0 || dot == len(tok)-1 {
-		return false
-	}
-	ext := tok[dot+1:]
-	if len(ext) > 8 {
-		return false
-	}
-	for i := 0; i < len(ext); i++ {
-		c := ext[i]
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9') {
-			return false
-		}
-	}
-	return ext[0] >= 'a' && ext[0] <= 'z' || ext[0] >= 'A' && ext[0] <= 'Z'
-}
+// The extractor moved to toolspec because a second caller needs it: the chat permission
+// policy never inspected a bash `command`, so its workspace scope was one `bash` call away
+// from bypassed, and "does this command touch the project" must have ONE definition rather
+// than two that drift.
+func commandPaths(command string) []string { return toolspec.CommandPaths(command) }
 
 // projectRoot turns the resolved database path back into the directory the topology indexes.
 // `<root>/.aracne/topology.db` -> `<root>`.

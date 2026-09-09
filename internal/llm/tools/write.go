@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Rhuan-Marques/aracne/internal/helper"
 	"github.com/Rhuan-Marques/aracne/internal/topology"
 	"github.com/Rhuan-Marques/aracne/internal/topology/scanner"
 )
@@ -71,7 +72,9 @@ func (w *Write) apply(filePath, contentStr string) (string, error) {
 		return "", fmt.Errorf("create directories: %w", err)
 	}
 
-	if err := os.WriteFile(filePath, []byte(contentStr), 0644); err != nil {
+	// Atomic: a truncate-then-write that is interrupted leaves the file empty, and this
+	// tool's whole job is to leave a file whose contents the caller stated.
+	if err := helper.AtomicWriteFile(filePath, []byte(contentStr), 0644); err != nil {
 		return "", fmt.Errorf("write file: %w", err)
 	}
 

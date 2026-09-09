@@ -66,18 +66,40 @@ type GrepRequest struct {
 	Pattern    string
 	IgnoreCase bool
 	// WholeWord is `-w`: the caller expects word boundaries, which topogrep has no flag for,
-	// so the pattern is wrapped instead.
+	// so the pattern is wrapped instead. Only ever set for a pattern made entirely of word
+	// characters -- see wordSafe.
 	WholeWord bool
+	// WholeLine is `-x`: the match must be the entire line, which is an anchoring of the
+	// pattern rather than a knob.
+	WholeLine bool
 	// Fixed is `-F`: the pattern is literal text, which the caller expects NOT to be read as
 	// a regex.
 	Fixed bool
+	// WithFilename is `-H`: print the path on every row, even for a single file operand.
+	// LineNumbers is `-n`: print the line number.
+	//
+	// BOTH ARE CARRIED RATHER THAN ASSUMED, and they used to be neither. They sat in the
+	// "accepted and ignored" branch below on the grounds that "aracne always reports
+	// path:line" -- which is not true of the shell surface, where a single named file prints
+	// bare `line:text` and there is no way to ask for the path back. So `-H` was silently
+	// dropped, and `-n` was silently ADDED to every row that did not ask for it. Either one
+	// moves the field a caller reads: `grep -H -n pat f | cut -d: -f1` is a list of paths to
+	// the real grep and a list of line numbers to aracne.
+	WithFilename bool
+	LineNumbers  bool
 	// Mode is topogrep's OutputMode spelling: "content", "files_with_matches" or "count".
-	Mode      string
-	Before    int
-	After     int
-	HeadLimit int
-	Glob      string
-	Type      string
+	Mode   string
+	Before int
+	After  int
+	// MaxCount is `-m`: at most this many matches FROM EACH FILE. It is deliberately not
+	// called HeadLimit. topogrep's head limit caps the whole result, and `grep -rm 1 foo .`
+	// -- the idiom for "one hit per file", an index of the tree -- means something entirely
+	// different from "one hit".
+	MaxCount     int
+	Globs        []string
+	ExcludeGlobs []string
+	ExcludeDirs  []string
+	Type         string
 }
 
 // Request is one parsed command.
@@ -124,8 +146,6 @@ func Parse(argv []string) Request {
 		return parseSed(name, args)
 	case "awk", "gawk", "mawk":
 		return parseAwk(name, args)
-	case "git":
-		return parseGit(name, args)
 	case "get-content":
 		return parseGetContent(name, args)
 	case "grep", "egrep", "fgrep", "rg", "ack", "ag", "ug":
@@ -234,10 +254,22 @@ func parseHead(name string, args []string) Request {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
+		// A zero count is not a small window, it is no window: `head -0` prints nothing.
+		// Answering it with head's ten-line default is the opposite of what was asked, and
+		// classifying it as a read at all makes the guard rewrite a command `arac cmd`
+		// then hands straight back.
 		case bareCount.MatchString(a):
-			n = atoi(bareCount.FindStringSubmatch(a)[1])
+			v := atoi(bareCount.FindStringSubmatch(a)[1])
+			if v < 1 {
+				return pass(name, "unmodelled count "+a)
+			}
+			n = v
 		case attachedCount.MatchString(a):
-			n = atoi(attachedCount.FindStringSubmatch(a)[1])
+			v := atoi(attachedCount.FindStringSubmatch(a)[1])
+			if v < 1 {
+				return pass(name, "unmodelled count "+a)
+			}
+			n = v
 		case a == "-n" || a == "--lines":
 			if i+1 >= len(args) {
 				return pass(name, "-n without a count")
@@ -274,10 +306,19 @@ func parseTail(name string, args []string) Request {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
+		// As in parseHead: `tail -0` prints nothing, so it is not a window aracne models.
 		case bareCount.MatchString(a):
-			w = Window{Mode: Tail, N: atoi(bareCount.FindStringSubmatch(a)[1])}
+			v := atoi(bareCount.FindStringSubmatch(a)[1])
+			if v < 1 {
+				return pass(name, "unmodelled count "+a)
+			}
+			w = Window{Mode: Tail, N: v}
 		case attachedCount.MatchString(a):
-			w = Window{Mode: Tail, N: atoi(attachedCount.FindStringSubmatch(a)[1])}
+			v := atoi(attachedCount.FindStringSubmatch(a)[1])
+			if v < 1 {
+				return pass(name, "unmodelled count "+a)
+			}
+			w = Window{Mode: Tail, N: v}
 		case a == "-n" || a == "--lines":
 			if i+1 >= len(args) {
 				return pass(name, "-n without a count")
@@ -330,6 +371,13 @@ var (
 // parseSed models `sed -n` used purely to print a line range, which is the one sed form that
 // is a read. Everything else -- a substitution, `-i`, more than one script -- is either a
 // mutation or a transformation, and both must run for real.
+//
+// MORE THAN ONE FILE IS A PASSTHROUGH, and this is the difference between sed and head. sed
+// concatenates its operands into ONE stream and does not reset its line numbers per file, so
+// `sed -n '1,5p' a.go b.go` prints lines 1-5 of the concatenation -- usually nothing from
+// b.go at all. Answering it per file returns lines the command never printed, which is a
+// confident wrong answer of exactly the kind this package exists to refuse. awk's NR is
+// cumulative for the same reason; head, tail and cat genuinely are per file and stay served.
 func parseSed(name string, args []string) Request {
 	var script string
 	var ops []string
@@ -364,6 +412,9 @@ func parseSed(name string, args []string) Request {
 	}
 	if len(ops) == 0 {
 		return pass(name, "reads stdin")
+	}
+	if len(ops) > 1 {
+		return pass(name, "sed numbers lines across all its files as one stream")
 	}
 	w, ok := sedWindow(strings.Trim(script, `'"`))
 	if !ok {
@@ -427,6 +478,9 @@ func parseAwk(name string, args []string) Request {
 	if program == "" || len(ops) == 0 {
 		return pass(name, "reads stdin")
 	}
+	if len(ops) > 1 {
+		return pass(name, "NR runs across all of awk's files as one stream")
+	}
 	w, ok := awkWindow(program)
 	if !ok {
 		return pass(name, "unmodelled awk program")
@@ -466,35 +520,19 @@ func awkWindow(program string) (Window, bool) {
 	return Window{}, false
 }
 
-// parseGit models the two subcommands that print a worktree file's contents. The rev must be
-// HEAD: any other revision names bytes that are not on disk, and the topology only indexes
-// what is.
-func parseGit(name string, args []string) Request {
-	if len(args) == 0 {
-		return pass(name, "no subcommand")
-	}
-	var spec string
-	switch args[0] {
-	case "show":
-		if len(args) != 2 {
-			return pass(name, "unmodelled git show")
-		}
-		spec = args[1]
-	case "cat-file":
-		// `git cat-file -p HEAD:path` is the only spelling that prints contents plainly.
-		if len(args) != 3 || args[1] != "-p" {
-			return pass(name, "unmodelled git cat-file")
-		}
-		spec = args[2]
-	default:
-		return pass(name, "git "+args[0]+" is not a read")
-	}
-	rev, path, found := strings.Cut(spec, ":")
-	if !found || rev != "HEAD" || path == "" {
-		return pass(name, "not a HEAD: path")
-	}
-	return Request{Kind: KindRead, Name: name, Operands: []string{path}, Window: Window{Mode: WholeFile}}
-}
+// WHY `git show` AND `git cat-file` ARE NOT MODELLED.
+//
+// They were, for the HEAD: spelling, on the reasoning that HEAD names bytes aracne already
+// has. It does not. `git show HEAD:f` prints what is COMMITTED, the topology indexes what is
+// CHECKED OUT, and the two differ exactly when the question is worth asking -- when the file
+// has uncommitted changes and the caller is asking what the last commit held. Answering from
+// the worktree there returns the caller's own edit as though it were the committed version,
+// which is the confident wrong answer this package exists to avoid. It was also served in a
+// directory that is not a git repository at all, where the real command exits 128.
+//
+// Deciding correctly would mean running git to compare the worktree against the blob, and
+// this package does no I/O by design -- both callers depend on Parse being a pure function of
+// argv. So git reaches the real binary, which is the only thing that can answer it.
 
 // parseGetContent models the PowerShell reader. Its count flags are the same three questions
 // head and tail ask.
@@ -553,8 +591,32 @@ const (
 	OutputCount   = "count"
 )
 
-// attachedCtx matches the glued context forms `-A3`, `-B2`, `-C1`.
-var attachedCtx = regexp.MustCompile(`^-([ABC])(\d+)$`)
+// wordChars is the POSIX word-constituent set, which is what `-w` is defined against.
+var wordRun = regexp.MustCompile(`^[0-9A-Za-z_]+$`)
+
+// wordSafe reports whether wrapping a pattern in `\b…\b` means what `-w` means.
+//
+// It usually does not. POSIX `-w` requires the match to be bounded by NON-word characters,
+// which is satisfied between two non-word characters too: `grep -w '=='` finds `if x == ""`.
+// RE2's `\b` is a boundary between a word and a non-word character, so `\b==\b` requires a
+// word character on the far side and matches nothing at all -- a search that answers "no
+// matches" to a pattern the real grep finds.
+//
+// The two agree exactly when the pattern begins and ends with a word character and contains
+// nothing else, so that is the only case aracne claims. Anything else reaches the real grep.
+func wordSafe(pattern string) bool {
+	return wordRun.MatchString(pattern)
+}
+
+// includeFamily and typeFamily say which search tools own which filename filters.
+//
+// A tool must not be credited with a flag it does not have. `grep -t go` is an ERROR in GNU
+// grep -- exit 2 and a usage message -- so answering it with a type-filtered search invents
+// a capability, and the model that learns the spelling here finds it fails everywhere else.
+var (
+	includeFamily = map[string]bool{"grep": true, "egrep": true, "fgrep": true, "ug": true}
+	typeFamily    = map[string]bool{"rg": true, "ag": true, "ack": true, "ug": true}
+)
 
 // parseGrep maps a search command onto the knobs topogrep has. Flags that change what a
 // match IS (`-v` inverts, `-o` prints the match not the line, `-P` is a different regex
@@ -564,68 +626,179 @@ func parseGrep(name string, args []string) Request {
 	g := GrepRequest{Mode: OutputContent}
 	var ops []string
 	patternSet := false
-	args = expandShortFlags(args)
+	sawRecursive := false
+	endOfFlags := false
+	dialect := defaultDialect(name)
+	// Expanded per token INSIDE the loop, not in a pass over the whole argv, so `--` is
+	// honoured first. The pre-pass shredded a post-`--` pattern into flags: `grep -- -rn f`
+	// came back with the pattern `-r` and `-n` as an operand, where the real grep searches
+	// for the literal string "-rn". Nothing downstream could have recovered the pattern.
 	for i := 0; i < len(args); i++ {
 		a := args[i]
+		// `--` ends the options: every token after it is the pattern or an operand, even
+		// one that starts with a dash. Reading `-foo` as a flag after it searches for
+		// something else entirely.
+		if endOfFlags {
+			if !patternSet {
+				g.Pattern, patternSet = a, true
+			} else {
+				ops = append(ops, a)
+			}
+			continue
+		}
+		if expanded, ok := expandCluster(a); ok {
+			// COPIED, not spliced in place. `args` is argv[1:] -- the CALLER's backing
+			// array -- and `append(args[:i], ...)` writes straight into it whenever the
+			// slice has spare capacity. Parse is documented as a pure function of argv and
+			// both callers hand it a slice whose length equals its capacity today, so the
+			// splice happened to reallocate; a caller that built argv with append would
+			// have had its command silently rewritten, and RunCmd passes the same slice on
+			// to passthrough(). Measured on a slice with spare capacity, `grep -rn foo .`
+			// came back as `grep -r -n foo` -- the path operand gone.
+			next := make([]string, 0, len(args)+len(expanded))
+			next = append(next, args[:i]...)
+			next = append(next, expanded...)
+			next = append(next, args[i+1:]...)
+			args = next
+			a = args[i]
+		}
 		switch {
+		case a == "--":
+			endOfFlags = true
 		case a == "-i" || a == "--ignore-case" || a == "-y":
 			g.IgnoreCase = true
 		case a == "-w" || a == "--word-regexp":
 			g.WholeWord = true
+		case a == "-x" || a == "--line-regexp":
+			g.WholeLine = true
+		// The three dialect flags, last one winning, as GNU grep resolves them. Which
+		// dialect is in force decides what the pattern MEANS, so it is tracked rather
+		// than assumed -- see defaultDialect.
 		case a == "-F" || a == "--fixed-strings":
-			g.Fixed = true
-		// Accepted and ignored: aracne always reports path:line, always recurses into a
-		// directory operand, and Go's regexp is already an extended dialect.
-		case a == "-n" || a == "--line-number" || a == "-H" || a == "--with-filename",
-			a == "-r" || a == "-R" || a == "--recursive" || a == "--dereference-recursive",
-			a == "-E" || a == "--extended-regexp",
-			a == "-s" || a == "--no-messages",
+			dialect = dialectFixed
+		case a == "-E" || a == "--extended-regexp":
+			dialect = dialectERE
+		case a == "-G" || a == "--basic-regexp":
+			dialect = dialectBRE
+		// Accepted and ignored: aracne always recurses into a directory operand.
+		case a == "-r" || a == "-R" || a == "--recursive" || a == "--dereference-recursive":
+			sawRecursive = true
+		// CARRIED, NOT IGNORED. These two sat in the branch below on the reasoning that
+		// "aracne always reports path:line" -- which is not true on the shell surface, where
+		// a single named file prints a bare `line:text`. So `-H` was silently dropped and
+		// `-n` was silently ADDED to rows that never asked for it. See GrepRequest.
+		case a == "-n" || a == "--line-number":
+			g.LineNumbers = true
+		case a == "-H" || a == "--with-filename":
+			g.WithFilename = true
+		case a == "-s" || a == "--no-messages",
 			a == "--binary-files=without-match", strings.HasPrefix(a, "--color"):
 		case a == "-l" || a == "--files-with-matches":
 			g.Mode = OutputFiles
 		case a == "-c" || a == "--count":
 			g.Mode = OutputCount
-		case attachedCtx.MatchString(a):
-			m := attachedCtx.FindStringSubmatch(a)
-			setContext(&g, m[1], atoi(m[2]))
 		case a == "-A" || a == "-B" || a == "-C":
 			if i+1 >= len(args) {
 				return pass(name, a+" without a count")
 			}
 			i++
-			setContext(&g, strings.TrimPrefix(a, "-"), atoi(args[i]))
-		case strings.HasPrefix(a, "--after-context="):
-			g.After = atoi(strings.TrimPrefix(a, "--after-context="))
-		case strings.HasPrefix(a, "--before-context="):
-			g.Before = atoi(strings.TrimPrefix(a, "--before-context="))
-		case strings.HasPrefix(a, "--context="):
-			n := atoi(strings.TrimPrefix(a, "--context="))
-			g.Before, g.After = n, n
+			n, ok := positiveCount(args[i])
+			if !ok {
+				return pass(name, "unmodelled "+a+" "+args[i])
+			}
+			setContext(&g, strings.TrimPrefix(a, "-"), n)
+		case strings.HasPrefix(a, "--after-context="),
+			strings.HasPrefix(a, "--before-context="),
+			strings.HasPrefix(a, "--context="):
+			flag, value, _ := strings.Cut(a, "=")
+			n, ok := positiveCount(value)
+			if !ok {
+				return pass(name, "unmodelled "+a)
+			}
+			setContext(&g, map[string]string{
+				"--after-context": "A", "--before-context": "B", "--context": "C",
+			}[flag], n)
+		// -m is a PER-FILE cap. A zero or non-numeric argument is not one: `grep -m 0`
+		// prints nothing at all, and answering it with the default cap is the opposite.
 		case a == "-m" || a == "--max-count":
 			if i+1 >= len(args) {
 				return pass(name, "-m without a count")
 			}
 			i++
-			g.HeadLimit = atoi(args[i])
+			n, ok := positiveCount(args[i])
+			if !ok {
+				return pass(name, "unmodelled -m "+args[i])
+			}
+			g.MaxCount = n
 		case strings.HasPrefix(a, "--max-count="):
-			g.HeadLimit = atoi(strings.TrimPrefix(a, "--max-count="))
+			n, ok := positiveCount(strings.TrimPrefix(a, "--max-count="))
+			if !ok {
+				return pass(name, "unmodelled "+a)
+			}
+			g.MaxCount = n
+		// Filename filters, each repeatable and each OR-ed with the others -- which is
+		// what grep means by them. Keeping only the last silently dropped every match the
+		// earlier one would have found.
 		case strings.HasPrefix(a, "--include="):
-			g.Glob = strings.TrimPrefix(a, "--include=")
-		case strings.HasPrefix(a, "--glob="):
-			g.Glob = strings.TrimPrefix(a, "--glob=")
-		case a == "-g" || a == "--glob" || a == "--include":
-			if i+1 >= len(args) {
-				return pass(name, a+" without a glob")
+			if !includeFamily[name] {
+				return pass(name, name+" has no --include")
+			}
+			g.Globs = append(g.Globs, strings.TrimPrefix(a, "--include="))
+		case a == "--include":
+			if !includeFamily[name] || i+1 >= len(args) {
+				return pass(name, "unmodelled --include")
 			}
 			i++
-			g.Glob = args[i]
+			g.Globs = append(g.Globs, args[i])
+		case strings.HasPrefix(a, "--exclude="):
+			if !includeFamily[name] {
+				return pass(name, name+" has no --exclude")
+			}
+			g.ExcludeGlobs = append(g.ExcludeGlobs, strings.TrimPrefix(a, "--exclude="))
+		case a == "--exclude":
+			if !includeFamily[name] || i+1 >= len(args) {
+				return pass(name, "unmodelled --exclude")
+			}
+			i++
+			g.ExcludeGlobs = append(g.ExcludeGlobs, args[i])
+		case strings.HasPrefix(a, "--exclude-dir="):
+			if !includeFamily[name] {
+				return pass(name, name+" has no --exclude-dir")
+			}
+			g.ExcludeDirs = append(g.ExcludeDirs, strings.TrimPrefix(a, "--exclude-dir="))
+		case a == "--exclude-dir":
+			if !includeFamily[name] || i+1 >= len(args) {
+				return pass(name, "unmodelled --exclude-dir")
+			}
+			i++
+			g.ExcludeDirs = append(g.ExcludeDirs, args[i])
+		case strings.HasPrefix(a, "--glob="):
+			if !typeFamily[name] {
+				return pass(name, name+" has no --glob")
+			}
+			g.Globs = append(g.Globs, strings.TrimPrefix(a, "--glob="))
+		case a == "-g" || a == "--glob":
+			if !typeFamily[name] || i+1 >= len(args) {
+				return pass(name, "unmodelled "+a)
+			}
+			i++
+			// ripgrep's `-g !pat` is a NEGATED glob, and reading it as a positive one
+			// searches exactly the files the caller asked to skip.
+			if strings.HasPrefix(args[i], "!") {
+				g.ExcludeGlobs = append(g.ExcludeGlobs, strings.TrimPrefix(args[i], "!"))
+				continue
+			}
+			g.Globs = append(g.Globs, args[i])
 		case a == "-t" || a == "--type":
-			if i+1 >= len(args) {
-				return pass(name, "-t without a type")
+			if !typeFamily[name] || i+1 >= len(args) {
+				return pass(name, "unmodelled "+a)
 			}
 			i++
 			g.Type = args[i]
 		case strings.HasPrefix(a, "--type="):
+			if !typeFamily[name] {
+				return pass(name, name+" has no --type")
+			}
 			g.Type = strings.TrimPrefix(a, "--type=")
 		case a == "-e" || a == "--regexp":
 			if i+1 >= len(args) || patternSet {
@@ -649,18 +822,44 @@ func parseGrep(name string, args []string) Request {
 	if !patternSet || g.Pattern == "" {
 		return pass(name, "no pattern")
 	}
-	// egrep/fgrep are the flagless spellings of -E and -F.
-	if name == "fgrep" {
-		g.Fixed = true
+	// `-w` is only `\b…\b` for a pattern made of word characters; anything else has to
+	// reach the real grep rather than a wrap that finds fewer matches. See wordSafe.
+	if g.WholeWord && !wordSafe(g.Pattern) {
+		return pass(name, "-w on a pattern \\b cannot express: "+g.Pattern)
+	}
+	// The dialect is settled. `-F` rides into topogrep as a flag; BRE cannot ride at all,
+	// because topogrep compiles with Go's regexp and there is no RE2 switch for it, so the
+	// pattern is rewritten here or the command passes through.
+	g.Fixed = dialect == dialectFixed
+	if dialect == dialectBRE {
+		re2, ok := breToRE2(g.Pattern)
+		if !ok {
+			return pass(name, "BRE pattern with no RE2 equivalent: "+g.Pattern)
+		}
+		g.Pattern = re2
 	}
 	// Where a path-less search looks is NOT the same question across these tools. `grep foo`
 	// reads stdin; `rg foo` walks the working directory. Serving the first from the topology
 	// would answer a search of the whole tree when the caller asked about piped input -- so
 	// only the tools that already mean "the tree" may omit a path.
-	if len(ops) == 0 && !searchesCwdByDefault[name] {
+	//
+	// `grep -r foo` is the exception, and it has been one since GNU grep 2.11: with -r and no
+	// operand it searches the working directory rather than stdin.
+	if len(ops) == 0 && !searchesCwdByDefault[name] && !sawRecursive {
 		return pass(name, name+" without a path reads stdin")
 	}
 	return Request{Kind: KindGrep, Name: name, Operands: ops, Grep: g}
+}
+
+// positiveCount reads a count argument that must be a plain integer of at least 1. It reports
+// false for a zero, a negative and a word, each of which means something the caller asked for
+// that a default would not deliver.
+func positiveCount(s string) (int, bool) {
+	n, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil || n < 1 {
+		return 0, false
+	}
+	return n, true
 }
 
 // searchesCwdByDefault lists the search tools whose no-path form walks the working directory
@@ -668,35 +867,69 @@ func parseGrep(name string, args []string) Request {
 var searchesCwdByDefault = map[string]bool{"rg": true, "ag": true, "ack": true, "ug": true}
 
 // clusterable is a short flag that takes no argument, so it may appear glued to others
-// (`-rn`, `-in`). Flags that consume the next token are deliberately absent: expanding a
-// cluster containing one would silently drop its argument.
+// (`-rn`, `-in`).
 var clusterable = map[byte]bool{
-	'i': true, 'w': true, 'F': true, 'E': true, 'n': true, 'H': true,
+	'i': true, 'w': true, 'x': true, 'F': true, 'E': true, 'G': true, 'n': true, 'H': true,
 	'r': true, 'R': true, 's': true, 'l': true, 'c': true, 'y': true,
 }
 
-// expandShortFlags rewrites `-rn` into `-r -n` so the flag loop sees one flag per token.
-// A cluster holding anything not in `clusterable` is left exactly as it is, which sends it
-// to the loop's default branch and passes the whole command through -- the right answer,
-// since we cannot know whether the unknown letter wanted the next token.
-func expandShortFlags(args []string) []string {
-	out := make([]string, 0, len(args))
-	for _, a := range args {
-		if len(a) < 3 || a[0] != '-' || a[1] == '-' || !allClusterable(a[1:]) {
-			out = append(out, a)
-			continue
-		}
-		for i := 1; i < len(a); i++ {
-			out = append(out, "-"+string(a[i]))
+// valueTaking is a short flag that consumes a value -- either glued to it (`-m1`, `-A3`,
+// `-epattern`) or as the next token (`-m 1`). It may only appear LAST in a cluster, because
+// everything after it in the token is its argument.
+//
+// numericValue is the subset whose glued value must be digits. `-A3` is a count and `-Ax` is
+// nothing at all, so a non-numeric tail there means the token was never the flag it looked
+// like and the whole command passes through.
+var (
+	valueTaking  = map[byte]bool{'m': true, 'A': true, 'B': true, 'C': true, 'e': true}
+	numericValue = map[byte]bool{'m': true, 'A': true, 'B': true, 'C': true}
+)
+
+// expandCluster splits one short-flag run -- `-rn` into `-r -n`, `-rm1` into `-r -m1`, which
+// is how grep itself reads a cluster ending in a flag that takes a value -- reporting false
+// for anything it cannot account for letter by letter.
+//
+// A cluster it cannot account for completely is left EXACTLY as it is, which sends it to the
+// flag loop's default branch and passes the whole command through. That is the right answer:
+// an unknown letter may have wanted the next token, and expanding it would silently drop the
+// argument -- the "ignore the flag" this package forbids.
+func expandCluster(a string) ([]string, bool) {
+	if len(a) < 3 || a[0] != '-' || a[1] == '-' {
+		return nil, false
+	}
+	var out []string
+	for i := 1; i < len(a); i++ {
+		switch c := a[i]; {
+		case clusterable[c]:
+			out = append(out, "-"+string(c))
+		case valueTaking[c]:
+			// Last in the cluster: the rest of the token, if any, is its glued value, and
+			// an empty rest means the value is the next token. Either way nothing after it
+			// is a flag, and splitting it into two tokens is what lets the flag loop read
+			// `-A3`, `-m1` and `-rm 5` with one branch each rather than three.
+			rest := a[i+1:]
+			if numericValue[c] && rest != "" && !allDigits(rest) {
+				return nil, false
+			}
+			out = append(out, "-"+string(c))
+			if rest != "" {
+				out = append(out, rest)
+			}
+			return out, true
+		default:
+			return nil, false
 		}
 	}
-	return out
+	return out, true
 }
 
-// allClusterable reports whether every byte of a short-flag run takes no argument.
-func allClusterable(letters string) bool {
-	for i := 0; i < len(letters); i++ {
-		if !clusterable[letters[i]] {
+// allDigits reports whether s is a non-empty run of decimal digits.
+func allDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
 			return false
 		}
 	}
@@ -738,4 +971,166 @@ func atoi(s string) int {
 		return 0
 	}
 	return n
+}
+
+// --- regex dialects ---------------------------------------------------------
+
+// regexDialect is the syntax a search command's pattern is written in.
+//
+// WHY THIS EXISTS. topogrep compiles with Go's regexp, which is RE2: a superset of POSIX
+// ERE, but NOT of POSIX BRE. Plain `grep` is BRE, and the two dialects disagree in both
+// directions -- `\|` is alternation in BRE and a literal pipe in RE2, while a bare `+` is
+// a literal in BRE and a quantifier in RE2. Reading one as the other does not fail loudly;
+// it returns a confident, well-formed answer to a different question. Treating the absence
+// of `-E` as "near enough to extended" was exactly the "ignore the flag" this package's
+// doc comment forbids, so the dialect is carried instead of assumed.
+type regexDialect int
+
+const (
+	dialectBRE regexDialect = iota
+	dialectERE
+	dialectFixed
+)
+
+// defaultDialect is the syntax a search tool uses when no dialect flag is given. Only
+// POSIX grep defaults to BRE; egrep is the flagless spelling of -E and fgrep of -F, and
+// rg/ack/ag/ug all default to ERE-or-richer dialects RE2 already covers.
+func defaultDialect(name string) regexDialect {
+	switch name {
+	case "grep":
+		return dialectBRE
+	case "fgrep":
+		return dialectFixed
+	default:
+		return dialectERE
+	}
+}
+
+// breToRE2 rewrites a POSIX Basic Regular Expression into the RE2 source that means the
+// same thing: BRE's escaped operators (`\(`, `\|`, `\+`, `\{`) shed their backslash, and
+// the ordinary characters RE2 would read as operators (`(`, `|`, `+`, `{`) gain one.
+//
+// ok is false where BRE expresses something RE2 cannot (a backreference), where the input
+// is malformed, or where the rewrite fails to compile. Every one of those is a
+// passthrough, per the package rule: a pattern this function cannot vouch for must reach
+// the real grep rather than a near-miss of it.
+func breToRE2(pat string) (string, bool) {
+	var b strings.Builder
+	b.Grow(len(pat) + 8)
+	// leading marks the positions where BRE has nothing to repeat, which is where `*` is
+	// an ordinary character and `^` is an anchor: the start of the pattern, and just past
+	// a `\(` or a `\|`.
+	leading := true
+	for i := 0; i < len(pat); i++ {
+		switch c := pat[i]; c {
+		case '\\':
+			if i+1 >= len(pat) {
+				return "", false // a trailing backslash is undefined
+			}
+			i++
+			switch d := pat[i]; {
+			case d >= '1' && d <= '9':
+				return "", false // a backreference; RE2 has no such thing
+			case d == '(' || d == ')' || d == '{' || d == '}' || d == '|' || d == '+' || d == '?':
+				b.WriteByte(d) // BRE's escaped operator is RE2's bare one
+				leading = d == '(' || d == '|'
+			case d == '<' || d == '>':
+				b.WriteString(`\b`) // GNU's word boundaries
+				leading = false
+			default:
+				b.WriteByte('\\')
+				b.WriteByte(d)
+				leading = false
+			}
+		case '(', ')', '{', '}', '|', '+', '?':
+			b.WriteByte('\\') // ordinary in BRE, an operator in RE2
+			b.WriteByte(c)
+			leading = false
+		case '*':
+			if leading {
+				b.WriteString(`\*`) // nothing to repeat, so it repeats nothing
+			} else {
+				b.WriteByte('*')
+			}
+			leading = false
+		case '^':
+			// An anchor only where it leads, ordinary anywhere else. It does not itself
+			// give a following `*` something to repeat, so `leading` survives it.
+			if leading {
+				b.WriteByte('^')
+			} else {
+				b.WriteString(`\^`)
+			}
+		case '$':
+			if breEndAnchor(pat, i) {
+				b.WriteByte('$')
+			} else {
+				b.WriteString(`\$`)
+			}
+			leading = false
+		case '[':
+			end, ok := breBracket(pat, i)
+			if !ok {
+				return "", false
+			}
+			b.WriteString(pat[i : end+1])
+			i = end
+			leading = false
+		default:
+			b.WriteByte(c)
+			leading = false
+		}
+	}
+	out := b.String()
+	if _, err := regexp.Compile(out); err != nil {
+		return "", false
+	}
+	return out, true
+}
+
+// breEndAnchor reports whether the `$` at i anchors rather than matching a literal `$`:
+// BRE anchors only at the very end of the pattern, or of a `\(…\)` branch.
+func breEndAnchor(pat string, i int) bool {
+	if i == len(pat)-1 {
+		return true
+	}
+	return i+2 < len(pat) && pat[i+1] == '\\' && (pat[i+2] == ')' || pat[i+2] == '|')
+}
+
+// breBracket returns the index of the `]` closing the bracket expression opening at i.
+// Bracket expressions are copied through untouched, because POSIX and RE2 read their
+// contents the same way -- with one exception: inside them POSIX treats `\` as an ordinary
+// character where RE2 treats it as an escape, so a bracket holding one is not translatable.
+func breBracket(pat string, i int) (int, bool) {
+	j := i + 1
+	if j < len(pat) && pat[j] == '^' {
+		j++
+	}
+	if j < len(pat) && pat[j] == ']' {
+		j++ // a `]` in the first position is a member, not the terminator
+	}
+	for j < len(pat) {
+		switch {
+		case pat[j] == '\\':
+			return 0, false
+		case pat[j] == '[' && j+1 < len(pat) && (pat[j+1] == '.' || pat[j+1] == '='):
+			// A collating element or equivalence class. RE2 has neither, and it does not
+			// reject them either -- it reads `[[.a.]]` as the class {`[`, `.`, `a`} followed
+			// by a literal `]`, so the compile check in breToRE2 cannot catch this one.
+			return 0, false
+		case pat[j] == '[' && j+1 < len(pat) && pat[j+1] == ':':
+			// A character class, which RE2 does support. Its own `]` does not close the
+			// bracket, so step over the whole `[:…:]`.
+			k := strings.Index(pat[j+2:], ":]")
+			if k < 0 {
+				return 0, false
+			}
+			j += 2 + k + 2
+		case pat[j] == ']':
+			return j, true
+		default:
+			j++
+		}
+	}
+	return 0, false // unterminated
 }

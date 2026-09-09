@@ -3,6 +3,7 @@ package tools
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/Rhuan-Marques/aracne/internal/helper"
 	"github.com/Rhuan-Marques/aracne/internal/lazydesc"
@@ -87,14 +88,15 @@ func (g *Grep) Run(args json.RawMessage) (string, error) {
 	opt := topogrep.Options{
 		Pattern:    params.Pattern,
 		Root:       params.Path,
-		Glob:       params.Glob,
+		Globs:      splitGlobs(params.Glob),
 		Type:       params.Type,
 		IgnoreCase: params.CaseInsensitive,
 		Mode:       topogrep.OutputMode(params.OutputMode),
 		Before:     params.Before,
 		After:      params.After,
 	}
-	opt.Ignore, opt.DescriptionKinds, opt.LineRange = grepConfig(g.mgr, topo)
+	cfg := helper.LoadConfig(helper.ConfigPath(g.mgr.DbPath()))
+	opt.Ignore, opt.DescriptionKinds, opt.LineRange = grepConfig(cfg, topo)
 	if params.HeadLimit != nil {
 		opt.HeadLimit = *params.HeadLimit
 	}
@@ -106,12 +108,32 @@ func (g *Grep) Run(args json.RawMessage) (string, error) {
 	// A node found by its name or by a line in its body gets its description written now, so
 	// the header this result is about to print carries one. See lazydesc.Filler.FillSearch.
 	g.lazy.FillSearch(topo, res)
+	out := topogrep.FormatResult(res, opt)
+	// The over-serve ceiling this tool shares with every other surface that answers in
+	// something else's place. Past it the node rows and headers are no longer what makes a
+	// topology search worth having, so what a plain grep would have printed goes out instead.
+	if topogrep.HasTextualMatch(res) &&
+		!cfg.WithinOverserve(out, topogrep.RawBytes(res, opt), helper.OverserveSearchFree) {
+		out = topogrep.FormatResult(topogrep.WithoutTopology(res), opt)
+	}
 	// Always a message, never "": an empty tool result reads as a broken tool rather than
 	// as an honest "nothing matched".
-	return topogrep.FormatResult(res, opt), nil
+	return out, nil
 }
 
-// grepConfig reads the project settings the search honours, in one config load: the
+// splitGlobs turns the tool's single glob parameter into the list topogrep takes. A caller
+// may still pass several, comma-separated, the way ripgrep's own `-g` is repeatable.
+func splitGlobs(glob string) []string {
+	var out []string
+	for _, g := range strings.Split(glob, ",") {
+		if g = strings.TrimSpace(g); g != "" {
+			out = append(out, g)
+		}
+	}
+	return out
+}
+
+// grepConfig reads the project settings the search honours: the
 // scan.ignore matcher, so a search does not descend into build output the project has
 // explicitly told aracne to skip, and grep.description_kinds, which limits the kinds
 // whose description may match.
@@ -119,8 +141,7 @@ func (g *Grep) Run(args json.RawMessage) (string, error) {
 // A nil kind slice means "not configured" and lets topogrep apply its defaults, so a
 // missing or unreadable config still gets description matching rather than silently
 // losing it.
-func grepConfig(mgr *topology.TopologyManager, topo *domain.Topology) (*domain.IgnoreMatcher, []domain.ResourceKind, bool) {
-	cfg := helper.LoadConfig(helper.ConfigPath(mgr.DbPath()))
+func grepConfig(cfg *helper.Config, topo *domain.Topology) (*domain.IgnoreMatcher, []domain.ResourceKind, bool) {
 	if cfg == nil {
 		return nil, nil, false
 	}

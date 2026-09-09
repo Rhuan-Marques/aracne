@@ -150,7 +150,12 @@ func (f *Filler) fill(topo *domain.Topology, targets []Target) bool {
 	}
 
 	results := f.run(ctx, topo, pending)
-	return f.write(pending, results) > 0
+	written := f.write(pending, results)
+	// Recorded AFTER the run and for the whole pending set: a target that succeeded drops out
+	// of the plan on its own the moment the topology is re-read, and a target that failed is
+	// exactly what the record exists to hold.
+	f.recordAttempts(pending)
+	return written > 0
 }
 
 // claim takes the targets this fill is responsible for, marking them attempted so no other
@@ -159,7 +164,16 @@ func (f *Filler) fill(topo *domain.Topology, targets []Target) bool {
 // The failures are the point of recording them. A resource the model declines to describe
 // would otherwise be re-planned by every subsequent read that names it, buying a provider call
 // per read forever.
+//
+// TWO LEDGERS, and the second is what makes the first mean anything on the terminal surface.
+// The in-process set stops two overlapping fills in ONE process from both claiming a node.
+// The persisted one (helper.ReadDescriptionAttempts) stops the next PROCESS from re-trying
+// what this one already failed at -- and every intercepted `cat` and `grep` is a new process,
+// so without it the guard guarded nothing where it was needed most. A recorded attempt expires
+// when the resource's fingerprint changes, so edited code is always tried again.
 func (f *Filler) claim(targets []Target) []Target {
+	recorded := f.recordedAttempts(targets)
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	pending := make([]Target, 0, len(targets))
@@ -167,10 +181,41 @@ func (f *Filler) claim(targets []Target) []Target {
 		if f.attempted[t.ID] {
 			continue
 		}
+		if fp, seen := recorded[t.ID]; seen && fp == t.Fingerprint && t.Fingerprint != "" {
+			f.attempted[t.ID] = true // do not re-consult the table for this id either
+			continue
+		}
 		f.attempted[t.ID] = true
 		pending = append(pending, t)
 	}
 	return pending
+}
+
+// recordedAttempts reads the persisted ledger, best-effort: an unreadable table means every
+// target is unattempted, which is the behaviour this feature had before the table existed.
+func (f *Filler) recordedAttempts(targets []Target) map[string]string {
+	ids := make([]string, 0, len(targets))
+	for _, t := range targets {
+		ids = append(ids, t.ID)
+	}
+	recorded, err := helper.ReadDescriptionAttempts(f.mgr.DbPath(), ids)
+	if err != nil {
+		return nil
+	}
+	return recorded
+}
+
+// recordAttempts persists what this fill tried, so the next process does not try it again.
+// Best-effort, like everything else here: a read must not fail because a bookkeeping row
+// could not be written.
+func (f *Filler) recordAttempts(targets []Target) {
+	attempts := make(map[string]string, len(targets))
+	for _, t := range targets {
+		if t.ID != "" && t.Fingerprint != "" {
+			attempts[t.ID] = t.Fingerprint
+		}
+	}
+	_ = helper.RecordDescriptionAttempts(f.mgr.DbPath(), attempts)
 }
 
 // generator resolves the generator once per Filler.

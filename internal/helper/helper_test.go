@@ -13,64 +13,6 @@ import (
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
-func TestJSONRoundtrip(t *testing.T) {
-	path := "test_topology.json"
-	defer os.Remove(path)
-
-	topo := &domain.Topology{
-		Root:     "/test",
-		Language: "go",
-		Resources: map[string]domain.Resource{
-			"f1": {
-				ID:       "f1",
-				Kind:     domain.ResourceFunction,
-				Name:     "Foo",
-				Location: domain.Location{StartsAt: 1, EndsAt: 10, Path: "main.go"},
-			},
-		},
-		Warnings: map[string]domain.TopologyWarning{
-			"w1": {
-				ID: "w1", SourceID: "f1",
-				Kind: domain.WarnUseMissingNode, TargetID: "f2",
-				Message: "missing reference",
-			},
-		},
-		Errors: map[string]string{"file.go": "parse error"},
-	}
-
-	if err := WriteJson(topo, path); err != nil {
-		t.Fatalf("WriteJson: %v", err)
-	}
-
-	read, err := ReadJson(path)
-	if err != nil {
-		t.Fatalf("ReadJson: %v", err)
-	}
-
-	if read.Root != "/test" {
-		t.Errorf("expected root /test, got %q", read.Root)
-	}
-	if read.Language != "go" {
-		t.Errorf("expected language go, got %q", read.Language)
-	}
-	if len(read.Resources) != 1 {
-		t.Errorf("expected 1 resource, got %d", len(read.Resources))
-	}
-	if len(read.Warnings) != 1 {
-		t.Errorf("expected 1 warning, got %d", len(read.Warnings))
-	}
-	if len(read.Errors) != 1 {
-		t.Errorf("expected 1 error, got %d", len(read.Errors))
-	}
-}
-
-func TestReadJsonNonexistent(t *testing.T) {
-	_, err := ReadJson("nonexistent.json")
-	if err == nil {
-		t.Error("expected error for nonexistent file")
-	}
-}
-
 // TestRemoveFileResourcesWarningSurvivesCleanup verifies that when a file is
 // removed, the "verify caller" warning is attributed to the surviving
 // referencer (SourceID) rather than the deleted node, so it is not discarded by
@@ -149,22 +91,62 @@ func TestDiffScanFilesErrorsForMissingRoot(t *testing.T) {
 	}
 }
 
-func TestDiffScanFilesRefusesMassDeleteWhenNoCurrentFiles(t *testing.T) {
-	root := t.TempDir()
-	manifestPath := filepath.Join(t.TempDir(), "file_manifest.json")
-	manifest := FileManifest{
-		filepath.Join(root, "main.go"): "2026-01-01T00:00:00Z",
+// The mass-delete guard fires when the walk returns nothing while the files it should have
+// found are STILL ON DISK -- a hidden tree, a new ignore rule, a scan rooted somewhere
+// unexpected. Marking those deleted would take the whole language out of the graph.
+func TestDiffScanFilesRefusesMassDeleteWhenFilesStillExist(t *testing.T) {
+	base := t.TempDir()
+	// The manifest's file is real and reachable; the SCAN is rooted somewhere else, so the
+	// walk returns nothing. This is the shape the guard exists for -- a scan pointed at the
+	// wrong directory must not conclude that the project's source was deleted.
+	sources := filepath.Join(base, "a")
+	scanRoot := filepath.Join(base, "b")
+	for _, dir := range []string{sources, scanRoot} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
 	}
-	if err := WriteManifest(manifest, manifestPath); err != nil {
+	present := filepath.Join(sources, "main.go")
+	if err := os.WriteFile(present, []byte("package main\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	root := scanRoot
+
+	manifestPath := filepath.Join(t.TempDir(), "file_manifest.json")
+	if err := WriteManifest(FileManifest{present: "2026-01-01T00:00:00Z"}, manifestPath); err != nil {
 		t.Fatalf("WriteManifest: %v", err)
 	}
 
 	_, _, deleted, err := DiffScanFiles(root, "go", manifestPath)
 	if err == nil {
-		t.Fatal("expected no source files guard error")
+		t.Fatal("expected the mass-delete guard to refuse: the manifest's file is still on disk")
 	}
 	if len(deleted) != 0 {
 		t.Fatalf("expected no deleted files on guard error, got %v", deleted)
+	}
+}
+
+// The other half of the same rule, and the case the guard used to refuse wrongly: when every
+// manifest file is genuinely GONE from disk, the deletion has to be reported.
+//
+// Refusing it wedged the scan permanently. Remove the last .py file from a mixed repo and
+// DiffScanFiles errored; IncrementalScan treated that as fatal for every language; nothing ever
+// cleared the manifest entry that caused it, so the graph silently stopped tracking the whole
+// project until someone ran `arac scan --all`.
+func TestDiffScanFilesReportsDeletionOfTheLastFileOfALanguage(t *testing.T) {
+	root := t.TempDir()
+	gone := filepath.Join(root, "main.go")
+	manifestPath := filepath.Join(t.TempDir(), "file_manifest.json")
+	if err := WriteManifest(FileManifest{gone: "2026-01-01T00:00:00Z"}, manifestPath); err != nil {
+		t.Fatalf("WriteManifest: %v", err)
+	}
+
+	_, _, deleted, err := DiffScanFiles(root, "go", manifestPath)
+	if err != nil {
+		t.Fatalf("DiffScanFiles: %v", err)
+	}
+	if len(deleted) != 1 || deleted[0] != gone {
+		t.Fatalf("deleted = %v, want [%s]", deleted, gone)
 	}
 }
 
@@ -680,128 +662,6 @@ func TestUpdateBugStateNonexistent(t *testing.T) {
 	}
 }
 
-func TestApplyDescriptions(t *testing.T) {
-	filePath := "test_apply.go"
-	defer os.Remove(filePath)
-
-	original := "package test\n\nfunc Foo() int {\n\treturn 42\n}\n"
-	if err := os.WriteFile(filePath, []byte(original), 0644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	topo := &domain.Topology{
-		Resources: map[string]domain.Resource{
-			"test.Foo": {
-				ID:          "test.Foo",
-				Kind:        domain.ResourceFunction,
-				Name:        "Foo",
-				Description: "Foo returns 42",
-				Location:    domain.Location{StartsAt: 3, EndsAt: 5, Path: filePath},
-			},
-		},
-	}
-
-	if err := ApplyDescriptions(topo); err != nil {
-		t.Fatalf("ApplyDescriptions: %v", err)
-	}
-
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	}
-	content := string(data)
-	if len(content) <= len(original) {
-		t.Error("expected file to grow after applying description")
-	}
-	if !containsStr(content, "Foo returns 42") {
-		t.Errorf("expected description in output, got:\n%s", content)
-	}
-}
-
-func TestApplyDescriptions_NoDescriptionResource(t *testing.T) {
-	filePath := "test_apply_node.go"
-	defer os.Remove(filePath)
-
-	original := "package test\n\nfunc Bar() int {\n\treturn 7\n}\n"
-	if err := os.WriteFile(filePath, []byte(original), 0644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	topo := &domain.Topology{
-		Resources: map[string]domain.Resource{
-			"test.Bar": {
-				ID:          "test.Bar",
-				Kind:        domain.ResourceFunction,
-				Name:        "Bar",
-				Description: "",
-				Location:    domain.Location{StartsAt: 3, EndsAt: 5, Path: filePath},
-			},
-		},
-	}
-
-	if err := ApplyDescriptions(topo); err != nil {
-		t.Fatalf("ApplyDescriptions: %v", err)
-	}
-
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	}
-	if string(data) != original {
-		t.Error("expected no change for empty description")
-	}
-}
-
-func TestApplyDescriptions_NoLocation(t *testing.T) {
-	topo := &domain.Topology{
-		Resources: map[string]domain.Resource{
-			"test.Foo": {
-				ID:          "test.Foo",
-				Kind:        domain.ResourceFunction,
-				Name:        "Foo",
-				Description: "description",
-			},
-		},
-	}
-	if err := ApplyDescriptions(topo); err != nil {
-		t.Fatalf("ApplyDescriptions: %v", err)
-	}
-}
-
-func TestApplyDescriptions_SkippedKinds(t *testing.T) {
-	filePath := "test_apply_skip.go"
-	defer os.Remove(filePath)
-
-	original := "package test\n\nconst X = 1\n"
-	if err := os.WriteFile(filePath, []byte(original), 0644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	topo := &domain.Topology{
-		Resources: map[string]domain.Resource{
-			"test.X": {
-				ID:          "test.X",
-				Kind:        domain.ResourceDependency,
-				Name:        "X",
-				Description: "some dep",
-				Location:    domain.Location{StartsAt: 3, EndsAt: 3, Path: filePath},
-			},
-		},
-	}
-
-	if err := ApplyDescriptions(topo); err != nil {
-		t.Fatalf("ApplyDescriptions: %v", err)
-	}
-
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	}
-	if string(data) != original {
-		t.Error("expected no change for dependency kind")
-	}
-}
-
 func TestDefaultConfigDescriptions(t *testing.T) {
 	cfg := DefaultConfig()
 	want := []domain.ResourceKind{domain.ResourceFunction, domain.ResourceMethod, domain.ResourceStruct, domain.ResourceInterface}
@@ -955,14 +815,25 @@ func TestEffectivePreToolScan(t *testing.T) {
 		"None":      PreToolScanNone,
 		" default ": PreToolScanDefault,
 		"FULL":      PreToolScanFull,
-		"Hard":      PreToolScanHard,
-		"bogus":     PreToolScanDefault,
+		// `hard` rebuilds from scratch, dropping every description and bug -- before EVERY
+		// tool call. Validate rejects it outright; a config that reaches here unvalidated
+		// gets the incremental scan rather than a rebuild.
+		"Hard":  PreToolScanDefault,
+		"bogus": PreToolScanDefault,
 	}
 	for in, want := range cases {
 		c := &Config{Scan: ScanSection{PreTool: PreToolScanMode(in)}}
 		if got := c.EffectivePreToolScan(); got != want {
 			t.Fatalf("EffectivePreToolScan(%q) = %q, want %q", in, got, want)
 		}
+	}
+
+	// And it is refused loudly, so the setting is a typo someone fixes rather than a quiet
+	// downgrade they never notice.
+	hard := DefaultConfig()
+	hard.Scan.PreTool = PreToolScanHard
+	if err := hard.Validate(); err == nil {
+		t.Fatal("scan.pre_tool: hard must be rejected -- it clears descriptions on every tool call")
 	}
 }
 

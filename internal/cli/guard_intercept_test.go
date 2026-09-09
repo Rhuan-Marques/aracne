@@ -80,6 +80,11 @@ func TestCommandsThatMustNotBeRewritten(t *testing.T) {
 		{"FOO=1 head -5 " + app, "an env prefix: the rewrite would front the assignment"},
 		{"sudo head -5 " + app, "a wrapper: the rewrite would front sudo"},
 		{"head -5 " + app + "\nhead -5 " + app, "two lines are two commands"},
+		// A substitution's output is a VALUE the enclosing command consumes, not something
+		// the model reads. Rewriting one put aracne's rendering where the file's bytes were.
+		{"X=$(cat " + app + ")", "a command substitution: the caller captures the bytes"},
+		{"echo `cat " + app + "`", "backticks are a substitution too"},
+		{"for f in x; do cat " + app + "; done", "a loop body is not a top-level command"},
 	} {
 		if got := rewriteOf(t, dbPath, tc.cmd); got != "" {
 			t.Errorf("%q was rewritten to %q -- must be left alone (%s)", tc.cmd, got, tc.why)
@@ -139,6 +144,13 @@ func TestOnlySearchesAreRewrittenUpstreamOfAPipe(t *testing.T) {
 		{"grep -rn Serve " + root + " | wc -l", "aracne's annotated rows would give a different count"},
 		{"grep -rn Serve " + root + " | sort -u", "a transform, not a cap"},
 		{"cat " + app + " | head -30", "a read piped to a pager is a window; leave it to the plain command"},
+		// A stage split in two by a mis-read `&` used to hide the real consumer from the
+		// adjacency walk, so these reached the model as answers to a different question.
+		{"cat " + app + " 2>&1 | grep Serve", "`2>&1` is a redirect, not the end of the command"},
+		{"grep -rn Serve " + root + " 2>&1 | wc -l", "the count is of aracne's annotated rows"},
+		{"grep -rn Serve " + root + " | grep -v _test 2>&1 | wc -l", "the pipeline still ends at wc"},
+		{"{ cat " + app + "; } | grep Serve", "a group around the producer is still the producer"},
+		{"( cat " + app + " ) | grep Serve", "and so is a subshell"},
 	} {
 		if got := rewriteOf(t, dbPath, tc.cmd); got != "" {
 			t.Errorf("%q was rewritten (%s):\n%s", tc.cmd, tc.why, got)
@@ -156,6 +168,89 @@ func TestARewriteIsNeverRewrittenAgain(t *testing.T) {
 	}
 	if second := rewriteOf(t, dbPath, first); second != "" {
 		t.Fatalf("rewrote a rewrite: %q -> %q", first, second)
+	}
+}
+
+// The body of a substitution is a value, and it must survive untouched however the enclosing
+// command is treated.
+//
+// The enclosing command is a different question and is deliberately not asserted here:
+// `grep -rn X $(cat list)` is an ordinary search whose operands happen to be computed, and the
+// shell hands `arac cmd` the expanded argv, which is what settles it. What must never happen is
+// the substitution ITSELF being answered from the topology -- the caller asked for the file's
+// bytes and would silently receive fences, elision markers and a context block instead.
+func TestASubstitutionBodyIsNeverRewritten(t *testing.T) {
+	root, dbPath := scannedProject(t)
+	app := filepath.Join(root, "app.go")
+
+	for _, cmd := range []string{
+		"X=$(cat " + app + "); echo ${#X}",
+		"grep -rn Serve $(cat " + app + ")",
+		"echo `cat " + app + "`",
+		"wc -l $(grep -rl Serve " + root + ")",
+	} {
+		got := rewriteOf(t, dbPath, cmd)
+		if got == "" {
+			continue // left alone entirely, which is also fine
+		}
+		for _, forbidden := range []string{"cmd -- cat ", "cmd -- grep -rl "} {
+			if strings.Contains(got, forbidden) {
+				t.Errorf("%q: the substitution body was rewritten (%q):\n%s", cmd, forbidden, got)
+			}
+		}
+	}
+}
+
+// The scanner is what the two rules above stand on, so it is asserted directly: a redirection
+// `&` must not end a command, and everything inside a substitution, a subshell or a group must
+// carry a depth the interception rules can refuse.
+func TestSegmentsKeepPipelinesWholeAndRecordNesting(t *testing.T) {
+	seg := func(command string) []commandSegment { return splitCommandSegments(command) }
+
+	// `2>&1` stays inside its own command, so the consumer really is the next segment.
+	got := seg("cat f 2>&1 | grep x")
+	if len(got) != 2 {
+		t.Fatalf("`cat f 2>&1 | grep x` split into %d segments, want 2: %#v", len(got), got)
+	}
+	if strings.TrimSpace(got[0].text) != "cat f 2>&1" {
+		t.Errorf("producer text = %q, want the whole command including the redirect", got[0].text)
+	}
+	if !got[1].pipedInto {
+		t.Error("the consumer is no longer recorded as reading the pipe")
+	}
+	// A bare `&` is still a separator, and `&&` still is too.
+	if n := len(seg("cat f & cat g")); n < 2 {
+		t.Errorf("a background `&` stopped separating: %d segment(s)", n)
+	}
+	if n := len(seg("cat f && cat g")); n < 2 {
+		t.Errorf("`&&` stopped separating: %d segment(s)", n)
+	}
+
+	for _, tc := range []struct {
+		command string
+		inner   string
+		want    int
+	}{
+		{"X=$(cat f)", "cat f", 1},
+		{"echo `cat f`", "cat f", 1},
+		{"( cat f )", "cat f", 1},
+		{"{ cat f; }", "cat f", 1},
+		{"cat f", "cat f", 0},
+		{"cd d && cat f", "cat f", 0},
+	} {
+		found := false
+		for _, s := range seg(tc.command) {
+			if strings.TrimSpace(s.text) != tc.inner {
+				continue
+			}
+			found = true
+			if s.depth != tc.want {
+				t.Errorf("%q: %q has depth %d, want %d", tc.command, tc.inner, s.depth, tc.want)
+			}
+		}
+		if !found {
+			t.Errorf("%q: never produced a %q segment", tc.command, tc.inner)
+		}
 	}
 }
 

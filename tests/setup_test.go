@@ -62,7 +62,7 @@ func TestInitDefault_CreatesBothAgents(t *testing.T) {
 	assertExists(t, dir, ".opencode/agents")
 	assertExists(t, dir, "AGENTS.md")
 
-	assertDirCount(t, dir, ".opencode/commands", 3)
+	assertDirCount(t, dir, ".opencode/commands", 2)
 	assertDirCount(t, dir, ".opencode/agents", 1)
 
 	// Claude files. No .mcp.json: the default surface is terminal, where aracne reaches the
@@ -73,7 +73,7 @@ func TestInitDefault_CreatesBothAgents(t *testing.T) {
 	assertExists(t, dir, ".claude/agents")
 	assertExists(t, dir, "CLAUDE.md")
 
-	assertDirCount(t, dir, ".claude/commands", 3)
+	assertDirCount(t, dir, ".claude/commands", 2)
 	assertDirCount(t, dir, ".claude/agents", 1)
 
 	for _, name := range []string{"bug-hunter.md", "bug-judge.md", "bug-solver.md"} {
@@ -89,9 +89,9 @@ func TestInitWithBugManagement_WritesBugAgents(t *testing.T) {
 	enableBugManagement(t, dir)
 	mustRun(t, dir, "setup", "-y")
 
-	assertDirCount(t, dir, ".opencode/commands", 6)
+	assertDirCount(t, dir, ".opencode/commands", 5)
 	assertDirCount(t, dir, ".opencode/agents", 4)
-	assertDirCount(t, dir, ".claude/commands", 6)
+	assertDirCount(t, dir, ".claude/commands", 5)
 	assertDirCount(t, dir, ".claude/agents", 4)
 
 	// bug-judge and bug-solver must be PRIMARY OpenCode commands: they fan out one sub-agent
@@ -192,8 +192,15 @@ func TestSetupOnMCPMode_WiresTheServerAndLeavesTheModeAlone(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &mcpCfg); err != nil {
 		t.Fatalf("parse .mcp.json: %v\n%s", err, raw)
 	}
-	if entry, ok := mcpCfg.MCPServers["aracne"]; !ok || entry["command"] != "arac" {
+	// The command is the RESOLVED binary, not a bare `arac`: a name on PATH is a bet on the
+	// harness inheriting the shell that ran `arac setup`, and an MCP server that fails to
+	// start is quiet in both harnesses. See cli.aracBinary.
+	entry, ok := mcpCfg.MCPServers["aracne"]
+	if !ok {
 		t.Fatalf(".mcp.json missing the aracne server: %s", raw)
+	}
+	if cmd, _ := entry["command"].(string); cmd == "" || cmd == "arac" {
+		t.Fatalf(".mcp.json should invoke the resolved binary, got %q:\n%s", cmd, raw)
 	}
 
 	cfg := helper.LoadConfig(filepath.Join(dir, ".aracne", "config.json"))
@@ -346,9 +353,20 @@ func TestInitOpenCodeConfig_Structure(t *testing.T) {
 		t.Fatalf("parse opencode.json: %v\ncontent: %s", err, raw)
 	}
 
-	// The permission block still belongs here on every surface; the MCP server does not.
-	if _, present := cfg.MCP["aracne"]; present {
-		t.Fatalf("terminal surface wrote an MCP server entry: %+v", cfg.MCP)
+	// The shared MCP server belongs here on EVERY surface, and the permission block is what
+	// the mode decides.
+	//
+	// OpenCode resolves MCP servers from this file alone -- an agent cannot declare its own
+	// the way a Claude Code sub-agent can (see claudeMCPServersFrontmatter), so this single
+	// `--tool-profile all` entry is the only route any agent has to the aracne tools. Gating
+	// it on the MAIN agent's surface therefore left the generated sub-agents with nothing:
+	// the descriptions executor exists to call update_description, which has no shell
+	// equivalent, and on the terminal surface it had no way to call anything at all.
+	//
+	// What the mode still decides is below: outside ModeMCP the main agent is granted no
+	// aracne_* tool, so the server is present and the main agent is allowed none of it.
+	if _, present := cfg.MCP["aracne"]; !present {
+		t.Fatalf("no shared MCP server entry; the generated sub-agents have no server: %+v", cfg.MCP)
 	}
 
 	if cfg.Permission == nil {
@@ -373,8 +391,9 @@ func TestInitOpenCodeConfig_Structure(t *testing.T) {
 	if cfg.Permission["aracne_*"] != "deny" {
 		t.Fatalf("permission.aracne_* = %q, want deny", cfg.Permission["aracne_*"])
 	}
-	// On the terminal surface NO aracne_* tool is granted: none is served, and an allow-list
-	// naming tools that do not exist is the same drift in a different file.
+	// On the terminal surface NO aracne_* tool is granted TO THE MAIN AGENT: the mode says it
+	// has no MCP surface, and the sub-agents open what they need in their own permission
+	// blocks. Granting one here would hand the main agent a tool its contract never mentions.
 	for key, value := range cfg.Permission {
 		if strings.HasPrefix(key, "aracne_") && key != "aracne_*" && value == "allow" {
 			t.Errorf("terminal surface granted %s, but no MCP tool is served", key)
@@ -438,8 +457,9 @@ func TestInitClaudeConfig_Structure(t *testing.T) {
 	if !ok {
 		t.Fatalf(".mcp.json mcpServers missing 'aracne' entry: %+v", cfg.MCPServers)
 	}
-	if aracEntry["command"] != "arac" {
-		t.Fatalf("arac MCP command = %q, want arac", aracEntry["command"])
+	// The resolved binary path, for the same reason the hooks use it.
+	if cmd, _ := aracEntry["command"].(string); cmd == "" || cmd == "arac" {
+		t.Fatalf("arac MCP command = %q, want the resolved binary path", aracEntry["command"])
 	}
 }
 
@@ -451,7 +471,7 @@ func TestInitCommandsAndAgents_Content(t *testing.T) {
 	mustRun(t, dir, "setup", "-y")
 
 	// OpenCode commands should have agent frontmatter
-	for _, name := range []string{"descriptions-generate", "descriptions-apply", "descriptions_clear", "bug-hunter", "bug-judge", "bug-solver"} {
+	for _, name := range []string{"descriptions-generate", "descriptions_clear", "bug-hunter", "bug-judge", "bug-solver"} {
 		content := readFile(t, dir, ".opencode/commands/"+name+".md")
 		if !strings.Contains(content, "agent:") {
 			t.Fatalf("%s command missing 'agent:' frontmatter:\n%s", name, content)
@@ -470,7 +490,7 @@ func TestInitCommandsAndAgents_Content(t *testing.T) {
 	}
 
 	// Claude commands should have description frontmatter
-	for _, name := range []string{"descriptions-generate", "descriptions-apply", "descriptions_clear", "bug-hunter", "bug-judge", "bug-solver"} {
+	for _, name := range []string{"descriptions-generate", "descriptions_clear", "bug-hunter", "bug-judge", "bug-solver"} {
 		content := readFile(t, dir, ".claude/commands/"+name+".md")
 		if !strings.Contains(content, "description:") {
 			t.Fatalf("Claude %s command missing 'description:' frontmatter:\n%s", name, content)

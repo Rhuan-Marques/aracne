@@ -71,7 +71,7 @@ func parseResourceListArgs(args []string) (string, kindFilters, bool) {
 func RunResourceList(args []string) {
 	query, kinds, noDesc := parseResourceListArgs(args)
 
-	manager, _ := InitRegistry(".aracne/topology.db")
+	manager, _ := InitRegistry(ProjectDBPath(DefaultDBRelative))
 	topo, err := manager.ReadAll()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -87,7 +87,7 @@ func RunResourceList(args []string) {
 	var filter domain.ContextFilter
 	var includeNotVisible bool
 	if noDesc {
-		cfg := helper.EnsureConfig(helper.ConfigPath(".aracne/topology.db"))
+		cfg := helper.EnsureConfig(helper.ConfigPath(manager.DbPath()))
 		targetSet = helper.DescribeTargetSet(cfg.Descriptions.Kinds)
 		filter = cfg.EffectiveContextFilter()
 		includeNotVisible = cfg.Descriptions.IncludeNotVisible
@@ -129,7 +129,7 @@ func resourceMatchesQuery(key, id, name, query string) bool {
 
 // Reads the topology database and prints the total count of resources.
 func RunNodeCount() {
-	manager, _ := InitRegistry(".aracne/topology.db")
+	manager, _ := InitRegistry(ProjectDBPath(DefaultDBRelative))
 
 	topo, err := manager.ReadAll()
 	if err != nil {
@@ -142,8 +142,8 @@ func RunNodeCount() {
 
 // Counts resources without descriptions in the topology database matching configured target kinds.
 func RunNodeCountNoDescription() {
-	manager, _ := InitRegistry(".aracne/topology.db")
-	cfg := helper.EnsureConfig(helper.ConfigPath(".aracne/topology.db"))
+	manager, _ := InitRegistry(ProjectDBPath(DefaultDBRelative))
+	cfg := helper.EnsureConfig(helper.ConfigPath(manager.DbPath()))
 	targetSet := helper.DescribeTargetSet(cfg.Descriptions.Kinds)
 	filter := cfg.EffectiveContextFilter()
 	includeNotVisible := cfg.Descriptions.IncludeNotVisible

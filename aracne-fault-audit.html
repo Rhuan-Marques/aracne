@@ -1,0 +1,1115 @@
+<title>Aracne Fault Audit</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<style>
+:root{
+  /* Cool schematic-slate ground. Neutrals biased toward the indigo accent. */
+  --paper:#E9ECF1;
+  --surface:#F7F8FA;
+  --sunk:#DDE1E9;
+  --ink:#12161F;
+  --ink-soft:#3A4351;
+  --ink-mute:#6B7686;
+  --rule:#C9D0DA;
+  --rule-soft:#DCE1E9;
+  --accent:#2F4394;
+  --accent-soft:#DDE2F5;
+  --link:#2F4394;
+
+  --sev-crit:#96271F;      --sev-crit-bg:#F4DFDC;  --sev-crit-line:#B8443A;
+  --sev-high:#8A5410;      --sev-high-bg:#F5E7D2;  --sev-high-line:#B87C2A;
+  --sev-med:#2F4394;       --sev-med-bg:#DFE4F6;   --sev-med-line:#5C6FBE;
+  --sev-low:#4E5A6B;       --sev-low-bg:#E1E5EC;   --sev-low-line:#8C97A6;
+
+  --ok:#1F6A4E;            --ok-bg:#DCEBE3;
+
+  --shadow:0 1px 2px rgba(18,22,31,.06), 0 8px 24px -18px rgba(18,22,31,.35);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#0D1016;
+    --surface:#151A23;
+    --sunk:#0A0D12;
+    --ink:#DFE5EE;
+    --ink-soft:#AAB4C2;
+    --ink-mute:#76818F;
+    --rule:#252D3A;
+    --rule-soft:#1D242F;
+    --accent:#8EA0EA;
+    --accent-soft:#1B2340;
+    --link:#8EA0EA;
+
+    --sev-crit:#EE9184;      --sev-crit-bg:#321916;  --sev-crit-line:#A8483C;
+    --sev-high:#DFA85C;      --sev-high-bg:#2E2314;  --sev-high-line:#9C7530;
+    --sev-med:#8EA0EA;       --sev-med-bg:#1B2340;   --sev-med-line:#4E5EA8;
+    --sev-low:#93A0B1;       --sev-low-bg:#1A202A;   --sev-low-line:#4A5464;
+
+    --ok:#6FC49C;            --ok-bg:#122A21;
+
+    --shadow:0 1px 2px rgba(0,0,0,.5), 0 10px 28px -20px rgba(0,0,0,.9);
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#0D1016;
+  --surface:#151A23;
+  --sunk:#0A0D12;
+  --ink:#DFE5EE;
+  --ink-soft:#AAB4C2;
+  --ink-mute:#76818F;
+  --rule:#252D3A;
+  --rule-soft:#1D242F;
+  --accent:#8EA0EA;
+  --accent-soft:#1B2340;
+  --link:#8EA0EA;
+
+  --sev-crit:#EE9184;      --sev-crit-bg:#321916;  --sev-crit-line:#A8483C;
+  --sev-high:#DFA85C;      --sev-high-bg:#2E2314;  --sev-high-line:#9C7530;
+  --sev-med:#8EA0EA;       --sev-med-bg:#1B2340;   --sev-med-line:#4E5EA8;
+  --sev-low:#93A0B1;       --sev-low-bg:#1A202A;   --sev-low-line:#4A5464;
+
+  --ok:#6FC49C;            --ok-bg:#122A21;
+
+  --shadow:0 1px 2px rgba(0,0,0,.5), 0 10px 28px -20px rgba(0,0,0,.9);
+}
+
+*{box-sizing:border-box}
+body{
+  background:var(--paper);
+  color:var(--ink);
+  font-family:"Source Serif 4","Iowan Old Style",Georgia,serif;
+  font-size:17px;
+  line-height:1.62;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1120px;margin:0 auto;padding:0 28px 96px}
+
+/* ---------- masthead ---------- */
+.masthead{
+  padding:56px 0 28px;
+  border-bottom:2px solid var(--ink);
+  display:flex;flex-wrap:wrap;align-items:flex-end;gap:28px;justify-content:space-between;
+}
+.mast-id{
+  font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-mute);
+  margin:0 0 14px;
+}
+h1{
+  font-family:Archivo,"Helvetica Neue",Arial,sans-serif;
+  font-weight:700;font-size:clamp(38px,6.2vw,62px);line-height:.98;
+  letter-spacing:-.026em;margin:0;text-wrap:balance;
+}
+h1 .thin{font-weight:500;color:var(--ink-soft)}
+.mast-sub{
+  margin:16px 0 0;max-width:60ch;color:var(--ink-soft);font-size:17.5px;
+}
+.mast-meta{
+  font-family:"JetBrains Mono",ui-monospace,monospace;
+  font-size:12px;line-height:1.9;color:var(--ink-mute);
+  border-left:2px solid var(--rule);padding-left:16px;min-width:230px;
+}
+.mast-meta b{color:var(--ink-soft);font-weight:500}
+
+/* ---------- tallies ---------- */
+.tally{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));
+  gap:1px;background:var(--rule);border:1px solid var(--rule);
+  margin:36px 0 0;
+}
+.tally div{background:var(--surface);padding:16px 18px}
+.tally .n{
+  font-family:Archivo,sans-serif;font-weight:700;font-size:34px;line-height:1;
+  font-variant-numeric:tabular-nums;display:block;
+}
+.tally .k{
+  font-family:"JetBrains Mono",monospace;font-size:10.5px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--ink-mute);margin-top:8px;display:block;
+}
+.tally .crit .n{color:var(--sev-crit)}
+.tally .high .n{color:var(--sev-high)}
+.tally .med .n{color:var(--sev-med)}
+.tally .low .n{color:var(--sev-low)}
+.tally .rep .n{color:var(--ok)}
+
+/* ---------- prose sections ---------- */
+h2{
+  font-family:Archivo,sans-serif;font-weight:600;font-size:13px;letter-spacing:.15em;
+  text-transform:uppercase;color:var(--ink-mute);
+  margin:56px 0 18px;padding-bottom:8px;border-bottom:1px solid var(--rule);
+}
+.lede{max-width:68ch;color:var(--ink-soft)}
+.lede p{margin:0 0 14px}
+.lede strong{color:var(--ink);font-weight:600}
+
+/* ---------- controls ---------- */
+.controls{
+  display:flex;flex-wrap:wrap;gap:8px;align-items:center;
+  margin:0 0 20px;
+}
+.controls .lab{
+  font-family:"JetBrains Mono",monospace;font-size:10.5px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--ink-mute);margin-right:4px;
+}
+button.f{
+  font-family:"JetBrains Mono",monospace;font-size:11.5px;letter-spacing:.05em;
+  padding:6px 12px;border:1px solid var(--rule);background:var(--surface);
+  color:var(--ink-soft);cursor:pointer;border-radius:2px;
+}
+button.f:hover{border-color:var(--ink-mute);color:var(--ink)}
+button.f[aria-pressed="true"]{
+  background:var(--ink);color:var(--paper);border-color:var(--ink);
+}
+button.f:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* ---------- index table ---------- */
+.idxwrap{overflow-x:auto;border:1px solid var(--rule);background:var(--surface)}
+table.idx{border-collapse:collapse;width:100%;min-width:720px}
+table.idx th{
+  font-family:"JetBrains Mono",monospace;font-size:10px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--ink-mute);text-align:left;font-weight:500;
+  padding:11px 14px;border-bottom:1px solid var(--rule);white-space:nowrap;
+  background:var(--sunk);
+}
+table.idx td{
+  padding:10px 14px;border-bottom:1px solid var(--rule-soft);
+  font-size:15px;vertical-align:top;
+}
+table.idx tr:last-child td{border-bottom:0}
+table.idx td.c-id a{
+  font-family:"JetBrains Mono",monospace;font-size:12px;font-weight:700;
+  color:var(--link);text-decoration:none;
+}
+table.idx td.c-id a:hover{text-decoration:underline}
+table.idx td.c-area{
+  font-family:"JetBrains Mono",monospace;font-size:11.5px;color:var(--ink-mute);
+  white-space:nowrap;
+}
+table.idx tr:hover td{background:var(--sunk)}
+
+/* ---------- severity chips ---------- */
+.chip{
+  display:inline-block;font-family:"JetBrains Mono",monospace;font-size:10px;
+  letter-spacing:.1em;text-transform:uppercase;font-weight:700;
+  padding:3px 7px;border-radius:2px;white-space:nowrap;
+}
+.chip.crit{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.chip.high{color:var(--sev-high);background:var(--sev-high-bg)}
+.chip.med{color:var(--sev-med);background:var(--sev-med-bg)}
+.chip.low{color:var(--sev-low);background:var(--sev-low-bg)}
+.chip.rep{color:var(--ok);background:var(--ok-bg)}
+.chip.fix{color:var(--paper);background:var(--ok);border:1px solid var(--ok)}
+.chip.read{color:var(--ink-mute);background:var(--sunk)}
+
+/* ---------- findings ---------- */
+.finding{
+  border-top:1px solid var(--rule);
+  padding:30px 0 34px 22px;
+  position:relative;
+  scroll-margin-top:18px;
+}
+.finding::before{
+  content:"";position:absolute;left:0;top:30px;bottom:34px;width:3px;background:var(--sev-low-line);
+}
+.finding[data-sev="crit"]::before{background:var(--sev-crit-line)}
+.finding[data-sev="high"]::before{background:var(--sev-high-line)}
+.finding[data-sev="med"]::before{background:var(--sev-med-line)}
+.finding[data-sev="low"]::before{background:var(--sev-low-line)}
+
+.f-head{display:flex;flex-wrap:wrap;gap:10px;align-items:baseline;margin-bottom:6px}
+.f-id{
+  font-family:"JetBrains Mono",monospace;font-size:12px;font-weight:700;
+  color:var(--ink-mute);letter-spacing:.06em;
+}
+.finding h3{
+  font-family:Archivo,sans-serif;font-weight:600;font-size:24px;line-height:1.22;
+  letter-spacing:-.014em;margin:2px 0 12px;max-width:34ch;text-wrap:balance;
+}
+.f-loc{
+  font-family:"JetBrains Mono",monospace;font-size:12px;color:var(--ink-mute);
+  margin:0 0 18px;line-height:1.8;word-break:break-word;
+}
+.f-loc span{color:var(--ink-soft)}
+
+.f-body{display:grid;grid-template-columns:104px minmax(0,1fr);gap:6px 20px;align-items:start}
+.f-body dt{
+  font-family:"JetBrains Mono",monospace;font-size:10px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--ink-mute);padding-top:6px;
+}
+.f-body dd{margin:0 0 12px;max-width:74ch;color:var(--ink-soft)}
+.f-body dd:last-of-type{margin-bottom:0}
+.f-body dd strong{color:var(--ink);font-weight:600}
+.f-body dd p{margin:0 0 10px}
+.f-body dd p:last-child{margin-bottom:0}
+
+code,kbd{
+  font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:.855em;background:var(--sunk);padding:1px 5px;border-radius:2px;
+  color:var(--ink);word-break:break-word;
+}
+pre{
+  font-family:"JetBrains Mono",monospace;font-size:12.5px;line-height:1.62;
+  background:var(--sunk);border:1px solid var(--rule-soft);border-left:3px solid var(--rule);
+  padding:12px 14px;margin:10px 0 0;overflow-x:auto;color:var(--ink-soft);
+}
+pre b{color:var(--ink);font-weight:700}
+pre .em{color:var(--sev-crit);font-weight:700}
+pre code{background:none;padding:0;font-size:inherit}
+
+dd.landed{
+  border-left:3px solid var(--ok);background:var(--ok-bg);
+  padding:2px 14px;margin-top:4px;
+}
+dd.landed p{margin:10px 0}
+.finding[data-fixed="yes"]::before{
+  background:linear-gradient(var(--ok),var(--ok));
+}
+tr[data-fixed="yes"] td.c-defect{color:var(--ink-mute)}
+.evidence{
+  border-left:3px solid var(--ok);background:var(--ok-bg);
+  padding:2px 14px;margin:10px 0 0;
+}
+.evidence p{margin:10px 0;font-size:15px;color:var(--ink-soft)}
+.evidence pre{background:transparent;border:0;border-left:0;padding:0;margin:8px 0}
+
+a{color:var(--link)}
+.foot{
+  margin-top:64px;padding-top:22px;border-top:2px solid var(--ink);
+  font-size:15px;color:var(--ink-mute);max-width:70ch;
+}
+.foot code{font-size:12px}
+
+.empty{
+  display:none;padding:30px 0;color:var(--ink-mute);font-style:italic;
+  border-top:1px solid var(--rule);
+}
+@media (max-width:720px){
+  .f-body{grid-template-columns:1fr;gap:0}
+  .f-body dt{padding-top:12px}
+  .wrap{padding:0 18px 72px}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<div class="wrap">
+
+<header class="masthead">
+  <div>
+    <p class="mast-id">Aracne · static review · branch chore/debloat @ 07aee2b</p>
+    <h1>Fault Audit<br><span class="thin">of the arac engine</span></h1>
+    <p class="mast-sub">Thirty defects and suspected defects found by reading every subsystem of
+    <code>internal/</code> and <code>cmd/</code>, ranked by what each one costs when it fires.
+    Fourteen are backed by a reproducer that was run against this working tree. <strong>All eleven
+    critical and high findings have since been fixed</strong>, each with a regression test that
+    fails on the code as it was; every entry below carries what landed.</p>
+  </div>
+  <div class="mast-meta">
+    <b>Scope</b> &nbsp;internal/, cmd/arac<br>
+    <b>Read</b> &nbsp;&nbsp;~66k LOC, non-test<br>
+    <b>Suite</b> &nbsp;<code>go test ./...</code> — passes<br>
+    <b>Method</b> &nbsp;source review + probes<br>
+    <b>Fixed</b> &nbsp;11 of 30 (all crit+high)<br>
+    <b>Suite</b> &nbsp;passes after the fixes
+  </div>
+</header>
+
+<div class="tally">
+  <div class="crit"><span class="n">4</span><span class="k">Critical · all fixed</span></div>
+  <div class="high"><span class="n">7</span><span class="k">High · all fixed</span></div>
+  <div class="med"><span class="n">10</span><span class="k">Medium · open</span></div>
+  <div class="low"><span class="n">9</span><span class="k">Low · open</span></div>
+  <div class="rep"><span class="n">11</span><span class="k">Fixed</span></div>
+  <div class="rep"><span class="n">14</span><span class="k">Reproduced</span></div>
+</div>
+
+<h2>How to read this</h2>
+<div class="lede">
+<p>Every entry names its <strong>requirements</strong> — the conditions that have to hold for the
+defect to fire, because most of these are corner cases rather than everyday paths — then its
+<strong>effect</strong> and a <strong>fix</strong>.</p>
+<p>Two labels carry real information and are not decoration. <span class="chip rep">reproduced</span>
+means a reproducer was written, run against this checkout, and its output is quoted verbatim in the
+entry. <span class="chip read">read</span> means the defect was established by reading the code and
+its call sites, with no runtime proof. Nothing was changed: the reproducers were temporary test files,
+run and deleted, and <code>git status</code> is as it was.</p>
+<p>The whole test suite passes. Every finding below is therefore a gap in coverage as much as a gap in
+the code, and several sit in subsystems whose own doc comments describe the correct behaviour the code
+does not implement — those are called out where they occur, since the intent is already written down
+and only the implementation is missing.</p>
+</div>
+
+<h2>Index</h2>
+
+<div class="controls">
+  <span class="lab">Filter</span>
+  <button class="f" data-filter="all" aria-pressed="true">All 30</button>
+  <button class="f" data-filter="crit" aria-pressed="false">Critical</button>
+  <button class="f" data-filter="high" aria-pressed="false">High</button>
+  <button class="f" data-filter="med" aria-pressed="false">Medium</button>
+  <button class="f" data-filter="low" aria-pressed="false">Low</button>
+  <button class="f" data-filter="reproduced" aria-pressed="false">Reproduced only</button>
+  <button class="f" data-filter="fixed" aria-pressed="false">Fixed</button>
+  <button class="f" data-filter="open" aria-pressed="false">Still open</button>
+</div>
+
+<div class="idxwrap">
+<table class="idx">
+<thead><tr><th>ID</th><th>Sev</th><th>Status</th><th>Area</th><th>Defect</th></tr></thead>
+<tbody id="index-body">
+<tr data-fixed="yes" data-sev="crit" data-status="reproduced"><td class="c-id"><a href="#A01">A-01</a></td><td><span class="chip crit">crit</span></td><td><span class="chip rep">repro</span> <span class="chip fix">fixed</span></td><td class="c-area">helper/db.go</td><td>Three bug/caller queries bypass the SQLite lock and retry wrappers</td></tr>
+<tr data-fixed="yes" data-sev="crit" data-status="reproduced"><td class="c-id"><a href="#A02">A-02</a></td><td><span class="chip crit">crit</span></td><td><span class="chip rep">repro</span> <span class="chip fix">fixed</span></td><td class="c-area">helper/sqlite.go</td><td>Both DSN parameters are silently ignored by the driver</td></tr>
+<tr data-fixed="yes" data-sev="crit" data-status="reproduced"><td class="c-id"><a href="#A03">A-03</a></td><td><span class="chip crit">crit</span></td><td><span class="chip rep">repro</span> <span class="chip fix">fixed</span></td><td class="c-area">chat/permissions.go</td><td>Plan Mode is bypassed by naming a path outside the workspace</td></tr>
+<tr data-fixed="yes" data-sev="crit" data-status="read"><td class="c-id"><a href="#A04">A-04</a></td><td><span class="chip crit">crit</span></td><td><span class="chip read">read</span> <span class="chip fix">fixed</span></td><td class="c-area">cli/disable.go</td><td><code>arac disable</code> deletes any hook whose command contains "arac"</td></tr>
+
+<tr data-fixed="yes" data-sev="high" data-status="reproduced"><td class="c-id"><a href="#B01">B-01</a></td><td><span class="chip high">high</span></td><td><span class="chip rep">repro</span> <span class="chip fix">fixed</span></td><td class="c-area">mcp/server.go</td><td>A legal <code>tools/call</code> with no <code>arguments</code> fails every tool</td></tr>
+<tr data-fixed="yes" data-sev="high" data-status="reproduced"><td class="c-id"><a href="#B02">B-02</a></td><td><span class="chip high">high</span></td><td><span class="chip rep">repro</span> <span class="chip fix">fixed</span></td><td class="c-area">chat/permissions.go</td><td>The workspace scope never inspects <code>ids</code>, so any absolute path reads</td></tr>
+<tr data-fixed="yes" data-sev="high" data-status="reproduced"><td class="c-id"><a href="#B03">B-03</a></td><td><span class="chip high">high</span></td><td><span class="chip rep">repro</span> <span class="chip fix">fixed</span></td><td class="c-area">helper/apply.go</td><td><code>descriptions apply</code> writes LF comments into CRLF files</td></tr>
+<tr data-fixed="yes" data-sev="high" data-status="reproduced"><td class="c-id"><a href="#B04">B-04</a></td><td><span class="chip high">high</span></td><td><span class="chip rep">repro</span> <span class="chip fix">fixed</span></td><td class="c-area">helper/apply.go</td><td><code>descriptions apply</code> appends a trailing newline the file never had</td></tr>
+<tr data-fixed="yes" data-sev="high" data-status="reproduced"><td class="c-id"><a href="#B05">B-05</a></td><td><span class="chip high">high</span></td><td><span class="chip rep">repro</span> <span class="chip fix">fixed</span></td><td class="c-area">helper/manifest.go</td><td>Deleting a language's last file aborts the whole incremental scan</td></tr>
+<tr data-fixed="yes" data-sev="high" data-status="read"><td class="c-id"><a href="#B06">B-06</a></td><td><span class="chip high">high</span></td><td><span class="chip read">read</span> <span class="chip fix">fixed</span></td><td class="c-area">helper/config.go</td><td>The config is written non-atomically and replaced with defaults if corrupt</td></tr>
+<tr data-fixed="yes" data-sev="high" data-status="read"><td class="c-id"><a href="#B07">B-07</a></td><td><span class="chip high">high</span></td><td><span class="chip read">read</span> <span class="chip fix">fixed</span></td><td class="c-area">cli/guard_drift.go</td><td>The post-write drift scan uses <code>"."</code>, not the topology root</td></tr>
+
+<tr data-sev="med" data-status="reproduced"><td class="c-id"><a href="#C01">C-01</a></td><td><span class="chip med">med</span></td><td><span class="chip rep">repro</span></td><td class="c-area">shellcmd</td><td><code>rg -r</code>, <code>ag -G</code> and <code>rg -y</code> are read with GNU grep's meanings</td></tr>
+<tr data-sev="med" data-status="reproduced"><td class="c-id"><a href="#C02">C-02</a></td><td><span class="chip med">med</span></td><td><span class="chip rep">repro</span></td><td class="c-area">shellcmd</td><td>A second leading <code>^</code> stays an anchor in the BRE→RE2 rewrite</td></tr>
+<tr data-sev="med" data-status="reproduced"><td class="c-id"><a href="#C03">C-03</a></td><td><span class="chip med">med</span></td><td><span class="chip rep">repro</span></td><td class="c-area">shellcmd</td><td><code>Parse</code> rewrites the caller's argv in place</td></tr>
+<tr data-sev="med" data-status="reproduced"><td class="c-id"><a href="#C04">C-04</a></td><td><span class="chip med">med</span></td><td><span class="chip rep">repro</span></td><td class="c-area">helper/config.go</td><td>Three typo checks in <code>Validate()</code> can never fire</td></tr>
+<tr data-sev="med" data-status="reproduced"><td class="c-id"><a href="#C05">C-05</a></td><td><span class="chip med">med</span></td><td><span class="chip rep">repro</span></td><td class="c-area">helper/incremental.go</td><td>Every doc-commented resource is re-written on every incremental scan</td></tr>
+<tr data-sev="med" data-status="read"><td class="c-id"><a href="#C06">C-06</a></td><td><span class="chip med">med</span></td><td><span class="chip read">read</span></td><td class="c-area">cli/setup.go</td><td>CLAUDE.md and AGENTS.md are rewritten non-atomically</td></tr>
+<tr data-sev="med" data-status="read"><td class="c-id"><a href="#C07">C-07</a></td><td><span class="chip med">med</span></td><td><span class="chip read">read</span></td><td class="c-area">cli/cmd.go</td><td>An over-budget read of a resource ID falls through to the real command</td></tr>
+<tr data-sev="med" data-status="read"><td class="c-id"><a href="#C08">C-08</a></td><td><span class="chip med">med</span></td><td><span class="chip read">read</span></td><td class="c-area">cli/guard_drift.go</td><td>A full incremental scan runs after almost every Bash call</td></tr>
+<tr data-sev="med" data-status="read"><td class="c-id"><a href="#C09">C-09</a></td><td><span class="chip med">med</span></td><td><span class="chip read">read</span></td><td class="c-area">cli/guard_warnstate.go</td><td>The warning-state file is raced and written non-atomically</td></tr>
+<tr data-sev="med" data-status="read"><td class="c-id"><a href="#C10">C-10</a></td><td><span class="chip med">med</span></td><td><span class="chip read">read</span></td><td class="c-area">toolspec, chat</td><td><code>~</code> and <code>$HOME</code> paths read as inside the workspace</td></tr>
+
+<tr data-sev="low" data-status="reproduced"><td class="c-id"><a href="#D01">D-01</a></td><td><span class="chip low">low</span></td><td><span class="chip rep">repro</span></td><td class="c-area">cmd/arac/main.go</td><td>An unknown subcommand exits 0</td></tr>
+<tr data-sev="low" data-status="read"><td class="c-id"><a href="#D02">D-02</a></td><td><span class="chip low">low</span></td><td><span class="chip read">read</span></td><td class="c-area">helper/db.go</td><td>Orphan-bug cleanup prints to stdout, inside a hook whose stdout is JSON</td></tr>
+<tr data-sev="low" data-status="read"><td class="c-id"><a href="#D03">D-03</a></td><td><span class="chip low">low</span></td><td><span class="chip read">read</span></td><td class="c-area">viz</td><td><code>--addr</code> accepts a bind the API then refuses on every request</td></tr>
+<tr data-sev="low" data-status="read"><td class="c-id"><a href="#D04">D-04</a></td><td><span class="chip low">low</span></td><td><span class="chip read">read</span></td><td class="c-area">pyscanner</td><td>A Python syntax error is reported as a missing interpreter</td></tr>
+<tr data-sev="low" data-status="read"><td class="c-id"><a href="#D05">D-05</a></td><td><span class="chip low">low</span></td><td><span class="chip read">read</span></td><td class="c-area">helper/atomicwrite.go</td><td>The atomic writer replaces symlinks and breaks hard links</td></tr>
+<tr data-sev="low" data-status="read"><td class="c-id"><a href="#D06">D-06</a></td><td><span class="chip low">low</span></td><td><span class="chip read">read</span></td><td class="c-area">helper/db.go</td><td><code>ClearOversizedDescriptions</code> writes outside a transaction</td></tr>
+<tr data-sev="low" data-status="read"><td class="c-id"><a href="#D07">D-07</a></td><td><span class="chip low">low</span></td><td><span class="chip read">read</span></td><td class="c-area">helper/apply.go</td><td>Two resources on one line insert two doc blocks, in random order</td></tr>
+<tr data-sev="low" data-status="read"><td class="c-id"><a href="#D08">D-08</a></td><td><span class="chip low">low</span></td><td><span class="chip read">read</span></td><td class="c-area">topogrep</td><td>Annotation is dropped by the byte budget with nothing said</td></tr>
+<tr data-sev="low" data-status="read"><td class="c-id"><a href="#D09">D-09</a></td><td><span class="chip low">low</span></td><td><span class="chip read">read</span></td><td class="c-area">helper/manifest.go</td><td>A write landing during a scan is invisible to every later scan</td></tr>
+</tbody>
+</table>
+</div>
+<p class="empty" id="empty-note">No findings match that filter.</p>
+
+<!-- ==================== CRITICAL ==================== -->
+<h2>Critical</h2>
+
+<article class="finding" data-sev="crit" data-status="reproduced" id="A01" data-fixed="yes">
+<div class="f-head"><span class="f-id">A-01</span><span class="chip crit">critical</span><span class="chip rep">reproduced</span><span class="chip fix">fixed</span></div>
+<h3>Three bug and caller queries bypass the SQLite lock and retry wrappers</h3>
+<p class="f-loc"><span>internal/helper/db.go:850</span> <code>GetCallers</code> · <span>:888</span> <code>ReadBugs</code> · <span>:927</span> <code>UpdateBugState</code></p>
+<dl class="f-body">
+<dt>Requirements</dt><dd>Any concurrent access to <code>topology.db</code> while one of these three runs. The bug pipeline is the designed way to produce that: <code>bug-judge</code> and <code>bug-solver</code> fan out as parallel sub-agents, each calling <code>bug acknowledge</code> / <code>bug dismiss</code> (<code>UpdateBugState</code>) and <code>bug list</code> (<code>ReadBugs</code>), while the guard's pre-tool scan writes the graph in front of every one of their tool calls.</dd>
+<dt>Effect</dt><dd><p>Every other database entrance goes through <code>withSQLiteRead</code> / <code>withSQLiteWrite</code>, which take a per-database <code>RWMutex</code>, run <code>ensureSQLiteMigrated</code>, set <code>PRAGMA busy_timeout = 10000</code>, and retry eight times with backoff on <code>SQLITE_BUSY</code>. These three call <code>sql.Open</code> directly and get none of it — no mutex, no retry, no migration, and (per <a href="#A02">A-02</a>) no busy timeout either, so they fail on the first collision instead of waiting.</p>
+<p><code>UpdateBugState</code> is the serious one because it is a <em>write</em>: a lost acknowledgement in a fan-out is a bug the pipeline believes it triaged. <code>ReadBugs</code> additionally skips the migration, so it is the one reader that can hit <code>no such table</code> on a database every other path would have migrated first. Both also drop per-row <code>Scan</code> errors with <code>continue</code> and never check <code>rows.Err()</code>, so a truncated read returns a short list as a successful one.</p></dd>
+<dt>Evidence</dt><dd>
+<div class="evidence">
+<p>A locked writer holds a transaction for 700&nbsp;ms; <code>UpdateBugState</code> runs against it. A call on the locked path would have waited and retried:</p>
+<pre><code>UpdateBugState during a concurrent write transaction:
+  err=<b>database is locked (5) (SQLITE_BUSY)</b></code></pre>
+<p>And on a database with no schema, proving the migration bypass:</p>
+<pre><code>ReadBugs on a schema-less database:
+  <b>SQL logic error: no such table: bugs (1)</b></code></pre>
+</div>
+</dd>
+<dt>Fix</dt><dd>Move all three into the wrappers, which is a mechanical change — <code>DeleteBug</code> and <code>DeleteAllBugs</code> next to them are already the model:
+<pre><code>func UpdateBugState(dbPath, bugID string, state domain.BugState) error {
+    return <b>withSQLiteWrite</b>(dbPath, func(db *sql.DB) error { … })
+}
+func ReadBugs(…) ([]domain.KnownBug, error) {
+    err := <b>withSQLiteRead</b>(dbPath, func(db *sql.DB) error { … })
+}</code></pre>
+While there, replace <code>continue</code> on a scan error with a returned error and add <code>rows.Err()</code>. A lint or a small test asserting that no <code>sql.Open</code> appears outside <code>sqlite.go</code> would keep the next one from being added.</dd>
+
+<dt>Landed</dt><dd class="landed"><p><strong>Fixed in <code>helper/db.go</code>, <code>helper/sqlite.go</code>.</strong> <code>GetCallers</code>, <code>ReadBugs</code> and <code>UpdateBugState</code> now run inside <code>withSQLiteRead</code>/<code>withSQLiteWrite</code>, so they take the per-database mutex, run the migration and retry on <code>SQLITE_BUSY</code> like every other entrance. Each also returns scan errors instead of skipping the row with <code>continue</code>, checks <code>rows.Err()</code>, and resets its accumulator per attempt so a retried callback cannot concatenate a partial read onto a complete one. Regression: <code>TestBugStateWritesWaitForAConcurrentWriter</code> holds a write transaction open and asserts the bug write queues behind it — it fails on the old code with <code>SQLITE_BUSY</code>.</p></dd>
+</dl>
+</article>
+
+<article class="finding" data-sev="crit" data-status="reproduced" id="A02" data-fixed="yes">
+<div class="f-head"><span class="f-id">A-02</span><span class="chip crit">critical</span><span class="chip rep">reproduced</span><span class="chip fix">fixed</span></div>
+<h3>Both SQLite DSN parameters are silently ignored by the driver</h3>
+<p class="f-loc"><span>internal/helper/sqlite.go:92</span> <code>openSQLite</code> · same DSN repeated at <span>db.go:850, :888, :927</span></p>
+<dl class="f-body">
+<dt>Requirements</dt><dd>None — it is true on every open. <code>openSQLite</code> builds <code>"%s?cache=shared&amp;_busy_timeout=%d"</code>, and the three functions in <a href="#A01">A-01</a> add <code>?cache=shared&amp;_journal_mode=WAL</code>.</dd>
+<dt>Effect</dt><dd><p>Those are <code>mattn/go-sqlite3</code> parameter names. This project uses <code>modernc.org/sqlite</code>, whose <code>applyQueryParams</code> reads only <code>_pragma</code>, <code>_time_format</code>, <code>_time_integer_format</code>, <code>_timezone</code>, <code>_txlock</code> and <code>vfs</code>. Everything else is discarded without an error, so the parameters look like configuration and are dead text.</p>
+<p><code>openSQLite</code> survives this because it issues <code>PRAGMA busy_timeout</code> and <code>PRAGMA journal_mode = WAL</code> explicitly afterwards. The three raw openers do not, which is exactly why A-01 fails immediately rather than blocking: they are running with <code>busy_timeout = 0</code>. Shared cache is not in force anywhere.</p></dd>
+<dt>Evidence</dt><dd>
+<div class="evidence">
+<pre><code>sql.Open("sqlite", db+"?cache=shared&amp;_busy_timeout=10000")
+PRAGMA busy_timeout  ->  <b>0</b></code></pre>
+</div>
+</dd>
+<dt>Fix</dt><dd>Spell them the way the driver reads them, or drop them. The <code>_pragma</code> form is the one this driver honours and it applies <code>busy_timeout</code> first by design:
+<pre><code>dsn := fmt.Sprintf("%s?<b>_pragma=busy_timeout(%d)</b>", dbPath, sqliteBusyTimeoutMillis)</code></pre>
+Then A-01's fix inherits the timeout automatically rather than depending on the follow-up <code>Exec</code>. Decide separately whether shared cache is actually wanted — with <code>SetMaxOpenConns(1)</code> it buys nothing, and deleting it is honest.</dd>
+
+<dt>Landed</dt><dd class="landed"><p><strong>Fixed in <code>helper/sqlite.go</code>.</strong> The DSN is now <code>_pragma=busy_timeout(N)</code>, the spelling modernc.org/sqlite actually reads, so every connection the pool opens carries the timeout — including one opened later to replace a dropped one. <code>cache=shared</code> is deleted rather than re-spelled: with <code>SetMaxOpenConns(1)</code> there is no second connection for a cache to be shared with. The explicit <code>PRAGMA busy_timeout</code> stays as the belt to the DSN's braces, with a comment saying which is which. Regression: <code>TestOpenSQLiteAppliesBusyTimeout</code> reads the pragma back off a real connection.</p></dd>
+</dl>
+</article>
+
+<article class="finding" data-sev="crit" data-status="reproduced" id="A03" data-fixed="yes">
+<div class="f-head"><span class="f-id">A-03</span><span class="chip crit">critical</span><span class="chip rep">reproduced</span><span class="chip fix">fixed</span></div>
+<h3>Plan Mode is bypassed by naming a path outside the workspace</h3>
+<p class="f-loc"><span>internal/chat/permissions.go:40</span> <code>PermissionPolicy.Decide</code>, the outside-workspace test at <span>:44</span> precedes the Plan Mode test at <span>:47</span></p>
+<dl class="f-body">
+<dt>Requirements</dt><dd><code>features.chat</code> on, a session in Plan Mode, and a <code>bash</code>, <code>edit</code> or <code>write</code> call naming an absolute path outside the workspace root. Approval mode is irrelevant — the deny it should hit is unconditional.</dd>
+<dt>Effect</dt><dd><p>The checks run in the wrong order. <code>referencesOutsideWorkspace</code> returns <code>ask</code>, and <code>ask</code> returns immediately, so the Plan Mode <code>deny</code> below it never executes. The result inverts the intended safety gradient: a mutation aimed <em>inside</em> the workspace is refused outright, and the same mutation aimed at the rest of the filesystem is merely put to the user for approval.</p>
+<p>Plan Mode is the mode a user selects specifically to be sure nothing is executed. This is the one path where it does not hold.</p></dd>
+<dt>Evidence</dt><dd>
+<div class="evidence">
+<pre><code>plan-mode bash inside  workspace -> <b>deny</b> (tool is not allowed in Plan Mode)
+plan-mode bash outside workspace -> <span class="em">ask</span>  (access outside workspace scope: /etc/nginx)
+plan-mode write to /etc/hosts    -> <span class="em">ask</span>  (access outside workspace scope: /etc/hosts)</code></pre>
+</div>
+</dd>
+<dt>Fix</dt><dd>Evaluate denials before escalations. The mode gate is a hard rule and the scope gate is a prompt, so the hard rule has to be first:
+<pre><code>if mode == ModePlan &amp;&amp; (isMutatingTool(toolName) || toolName == "bash") {
+    return permissionDecision{Action: permissionDeny, …}
+}
+if outside, path := p.referencesOutsideWorkspace(args); outside { … }</code></pre>
+The general rule worth encoding in a test: no branch of <code>Decide</code> may return an action weaker than one a later branch would have returned.</dd>
+
+<dt>Landed</dt><dd class="landed"><p><strong>Fixed in <code>chat/permissions.go</code>.</strong> The Plan Mode test moved above the workspace-scope test, so the hard refusal is decided before the prompt. The doc comment states the general rule the ordering encodes: no branch may return an action weaker than one a later branch would have returned. Regression: <code>TestPlanModeDeniesEvenOutsideTheWorkspace</code> covers <code>bash</code>, <code>write</code> and <code>edit</code> aimed both inside and outside the workspace.</p></dd>
+</dl>
+</article>
+
+<article class="finding" data-sev="crit" data-status="read" id="A04" data-fixed="yes">
+<div class="f-head"><span class="f-id">A-04</span><span class="chip crit">critical</span><span class="chip read">read</span><span class="chip fix">fixed</span></div>
+<h3><code>arac disable</code> deletes any Claude Code hook whose command contains "arac"</h3>
+<p class="f-loc"><span>internal/cli/disable.go:347</span> <code>isAracneHookEntry</code>, the test at <span>:355</span></p>
+<dl class="f-body">
+<dt>Requirements</dt><dd>The user runs <code>arac disable</code>, and their <code>.claude/settings.json</code> holds any other hook whose command string contains the four characters <code>arac</code> anywhere.</dd>
+<dt>Effect</dt><dd><p>The ownership test is <code>strings.Contains(cmd, "arac")</code> on the raw command. It matches an unrelated hook that merely contains the substring — <code>characterize.sh</code>, <code>barracuda-lint</code>, <code>./scripts/paracelsus</code>, a path under <code>~/aracnid/</code>, or anything referencing a directory whose name happens to contain it. That entry is then removed from the user's settings file.</p>
+<p>This is destructive to a file aracne does not own, in a command whose whole promise is that it cleanly removes only what <code>arac setup</code> added, and there is no backup and no diff shown.</p></dd>
+<dt>Fix</dt><dd>Match what setup actually writes. The generated hooks are <code>arac-guard.sh</code> and <code>arac-update-file.sh</code>, both under the project's hooks directory, so the test can be exact:
+<pre><code>func isAracneHookEntry(entry interface{}) bool {
+    …
+    base := filepath.Base(<b>firstWord(cmd)</b>)
+    return base == "arac-guard.sh" || base == "arac-update-file.sh" ||
+           <b>strings.TrimSuffix(base, ".exe") == "arac"</b>
+}</code></pre>
+Better still, have <code>arac setup</code> stamp a marker key on the entries it writes (<code>"_aracne": true</code>) and have disable remove exactly those — then ownership is recorded rather than guessed. Either way, print which entries are being removed before writing.</dd>
+
+<dt>Landed</dt><dd class="landed"><p><strong>Fixed in <code>cli/disable.go</code>, <code>cli/native_hooks.go</code>.</strong> Ownership is decided by the command WORD and by the script names setup writes, never by a substring. <code>isAracneHookEntry</code> delegates to <code>native_hooks.go</code>'s own predicates — so the writer and the remover cannot name different things — plus a command-word test for the legacy bare <code>arac &lt;subcommand&gt;</code> form older binaries installed, which <code>arac disable</code> still has to clean up. <code>hookEntryCommandContains</code> was itself too loose and became <code>hookEntryRunsScript</code>, which base-names the command word instead of scanning the whole string; every spelling in this repository's history is a bare script path, so all of them still match. Regression: a table case asserting <code>characterize.sh</code>, <code>/opt/bin/barracuda-lint</code>, <code>~/aracnid/run.sh</code> and <code>echo not-arac-guard.sh</code> are all kept.</p></dd>
+</dl>
+</article>
+
+<!-- ==================== HIGH ==================== -->
+<h2>High</h2>
+
+<article class="finding" data-sev="high" data-status="reproduced" id="B01" data-fixed="yes">
+<div class="f-head"><span class="f-id">B-01</span><span class="chip high">high</span><span class="chip rep">reproduced</span><span class="chip fix">fixed</span></div>
+<h3>A legal <code>tools/call</code> with no <code>arguments</code> fails every tool</h3>
+<p class="f-loc"><span>internal/mcp/server.go:131</span> <code>handleCallTool</code> · every <code>Run</code> implementation, e.g. <span>llm/tools/warnings_list.go:41</span>, <span>bug_list.go:41</span></p>
+<dl class="f-body">
+<dt>Requirements</dt><dd>An MCP client that omits the <code>arguments</code> member when a tool has no required parameters. <code>warnings_list</code>, <code>bug_list</code> and <code>node_list_no_description</code> all declare every parameter optional, so this is the natural call for them.</dd>
+<dt>Effect</dt><dd><p><code>CallToolParams.Arguments</code> is a <code>json.RawMessage</code> with <code>omitempty</code>. When the member is absent it stays <code>nil</code>, and every tool's first line is <code>json.Unmarshal(args, &amp;params)</code>, which on nil input returns <code>unexpected end of JSON input</code>. The call comes back as a tool error carrying a JSON parser message, which tells the model nothing about what it did wrong.</p>
+<p>Claude Code sends <code>"arguments": {}</code> and never hits this, which is precisely why it has survived — it is a defect that shows up on the second host, the same class as the <code>*int</code> request ID the protocol comment already describes fixing for the same reason.</p></dd>
+<dt>Evidence</dt><dd>
+<div class="evidence">
+<pre><code>{"method":"tools/call","params":{"name":"warnings_list"}}
+  -> {"content":[{"text":"<span class="em">unexpected end of JSON input</span>"}],"isError":true}
+
+{"method":"tools/call","params":{"name":"warnings_list","arguments":null}}
+  -> {"content":[{"text":"<b>ok</b>"}]}</code></pre>
+<p>An explicit <code>null</code> works, because a <code>RawMessage</code> then holds the four bytes <code>null</code>. Only the absent member fails.</p>
+</div>
+</dd>
+<dt>Fix</dt><dd>Normalise once, at the one place that decodes the envelope, rather than in twenty <code>Run</code> methods:
+<pre><code>if <b>len(call.Arguments) == 0</b> {
+    call.Arguments = json.RawMessage("{}")
+}
+result, err := t.Run(call.Arguments)</code></pre>
+<code>handleCallTool</code> also rejects a <code>tools/call</code> with no <code>params</code> at all for the same reason; guard that with <code>len(params) &gt; 0</code> before unmarshalling.</dd>
+
+<dt>Landed</dt><dd class="landed"><p><strong>Fixed in <code>mcp/server.go</code>.</strong> An absent <code>arguments</code> member is normalised to <code>{}</code> at the one place that decodes the envelope, so every tool gets a valid payload — including tools added later. An absent <code>params</code> no longer reaches <code>json.Unmarshal</code> either, and a call with no tool name is reported as <code>Invalid params</code> rather than as whatever the JSON parser says about nil input. Regression: <code>TestCallToolAcceptsOmittedArguments</code> drives all three spellings (omitted, <code>null</code>, <code>{}</code>) through <code>dispatch</code> and asserts the tool was reached.</p></dd>
+</dl>
+</article>
+
+<article class="finding" data-sev="high" data-status="reproduced" id="B02" data-fixed="yes">
+<div class="f-head"><span class="f-id">B-02</span><span class="chip high">high</span><span class="chip rep">reproduced</span><span class="chip fix">fixed</span></div>
+<h3>The chat workspace scope never inspects <code>ids</code>, so any absolute path reads</h3>
+<p class="f-loc"><span>internal/chat/permissions.go:63</span> <code>referencesOutsideWorkspace</code> — keys checked are <code>file_path</code>, <code>path</code>, <code>workdir</code>, <code>command</code> · <span>:118</span> <code>isReadOnlyTool</code></p>
+<dl class="f-body">
+<dt>Requirements</dt><dd><code>features.chat</code> on, and <code>read</code> / <code>read_resource</code> in the chat agent's tool list — which is the default. <code>read.kinds</code> must include <code>file</code>, which is also the default.</dd>
+<dt>Effect</dt><dd><p>The scope check looks at four argument names. The read tool's parameter is called <code>ids</code>, so nothing in a read is ever examined. <code>isReadOnlyTool</code> then classifies <code>read</code> and <code>read_resource</code> as read-only and returns <code>allow</code> with the reason "read-only <em>in workspace</em>" — a claim nothing verified.</p>
+<p>An absolute path that is not a resource ID falls through <code>unitFor</code> to <code>rawFileUnit</code>, which reads the file off disk. So a chat session can read any file the process can read, without approval, in every approval mode. The comment above the <code>command</code> branch describes discovering this exact class of hole for <code>bash</code>; the read tool is the other half of it.</p></dd>
+<dt>Evidence</dt><dd>
+<div class="evidence">
+<pre><code>read_resource {"ids":["/etc/passwd"]}
+  -> <span class="em">allow</span> (read-only in workspace)</code></pre>
+</div>
+</dd>
+<dt>Fix</dt><dd>Make the extractor cover list-valued arguments, and treat the read tool's ids as candidate paths:
+<pre><code>for _, key := range []string{"file_path", "path", "workdir", <b>"ids"</b>} {
+    for _, v := range <b>stringOrStringSlice</b>(values[key]) {
+        if <b>looksLikePath(v)</b> &amp;&amp; !p.insideWorkspace(v) { return true, v }
+    }
+}</code></pre>
+A resource ID such as <code>internal/cli.RunGuard</code> is not a path and must not be rejected, so gate on <code>filepath.IsAbs</code> or the presence of a separator, as <code>toolspec.CommandPaths</code> already does. The deeper fix is to enforce the workspace boundary inside <code>rawFileUnit</code> as well, so a bypass at the policy layer is not the only thing standing between a chat session and the filesystem.</dd>
+
+<dt>Landed</dt><dd class="landed"><p><strong>Fixed in <code>chat/permissions.go</code>.</strong> The scope extractor now reads list-valued arguments and includes <code>ids</code>. Only absolute tokens among the ids are judged, which is the rule the <code>command</code> branch already applied, so resource ids like <code>internal/cli.RunGuard</code> and relative paths keep working. Regression: <code>TestReadIDsOutsideWorkspaceAreNotAutoAllowed</code>, with <code>TestReadIDsInsideWorkspaceStayAllowed</code> pinning that ordinary reads did not become scope questions.</p></dd>
+</dl>
+</article>
+
+<article class="finding" data-sev="high" data-status="reproduced" id="B03" data-fixed="yes">
+<div class="f-head"><span class="f-id">B-03</span><span class="chip high">high</span><span class="chip rep">reproduced</span><span class="chip fix">fixed</span></div>
+<h3><code>descriptions apply</code> writes LF comments into CRLF files</h3>
+<p class="f-loc"><span>internal/helper/apply.go:81</span> split on <code>"\n"</code> · <span>:100</span> rejoin with <code>"\n"</code></p>
+<dl class="f-body">
+<dt>Requirements</dt><dd>A source file with CRLF line endings — a Windows checkout, or any repository without <code>* text=auto</code> — containing at least one described resource, and a run of <code>arac descriptions apply</code>.</dd>
+<dt>Effect</dt><dd><p><code>applyFile</code> splits on bare <code>"\n"</code>, so each existing line keeps its trailing <code>\r</code> and round-trips unharmed. The <em>inserted</em> lines come from <code>renderLineComment</code> / <code>renderJSDoc</code> / <code>renderRustDoc</code>, which produce no <code>\r</code>, and the rejoin uses <code>"\n"</code>. The new doc comment therefore lands as a bare-LF line in a CRLF file.</p>
+<p>The result is a file with mixed endings — noisy in a diff, and the exact whole-file-conflict outcome that <code>matchLineEndings</code> in <code>llm/tools/edit.go</code> was written to prevent, with a comment explaining why. The edit tool learned this lesson; the descriptions writer did not.</p></dd>
+<dt>Evidence</dt><dd>
+<div class="evidence">
+<pre><code>after apply: CRLF lines=5  bare-LF lines=<span class="em">1</span>
+"package a\r\n\r\n<span class="em">// Does foo.\n</span>func Foo() {\r\n\treturn\r\n}\r\n"</code></pre>
+</div>
+</dd>
+<dt>Fix</dt><dd>Detect the file's convention once and use it for both the split and the join, exactly as <code>updateMarkdownIntegrationSegment</code> already does with <code>markdownLineEnding</code>:
+<pre><code>eol := "\n"
+if strings.Contains(string(data), "\r\n") { eol = "\r\n" }
+lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+…
+return AtomicWriteFile(path, []byte(strings.Join(lines, <b>eol</b>)+trailer), 0644)</code></pre>
+Handle B-04's trailer in the same change.</dd>
+
+<dt>Landed</dt><dd class="landed"><p><strong>Fixed in <code>helper/apply.go</code>.</strong> <code>applyFile</code> detects the file's convention once, normalises to LF for the insertion pass, and rejoins with the ending the file actually had — so a doc comment written into a CRLF file arrives as a CRLF line. Stripping the carriage returns before the insertion pass also means the staleness and doc-block checks no longer see one inside a line. Regression: <code>TestApply_PreservesCRLFLineEndings</code> counts bare-LF lines in the result.</p></dd>
+</dl>
+</article>
+
+<article class="finding" data-sev="high" data-status="reproduced" id="B04" data-fixed="yes">
+<div class="f-head"><span class="f-id">B-04</span><span class="chip high">high</span><span class="chip rep">reproduced</span><span class="chip fix">fixed</span></div>
+<h3><code>descriptions apply</code> appends a trailing newline the file never had</h3>
+<p class="f-loc"><span>internal/helper/apply.go:81–100</span> <code>applyFile</code></p>
+<dl class="f-body">
+<dt>Requirements</dt><dd>A described file whose last line has no terminating newline. Common in generated files, fixtures, and any corpus not written by an editor that adds one.</dd>
+<dt>Effect</dt><dd><p>The read strips a trailing empty element (<code>lines[len-1] == ""</code>) only when the file <em>did</em> end with a newline; the write unconditionally appends <code>+"\n"</code>. So a file without a final newline gains one, in a run the user asked to insert doc comments.</p>
+<p>Small in isolation, but <code>descriptions apply</code> is a sweep: it touches every described file in the project at once, and each such file gets a spurious one-line diff. In <code>testing_ground/</code>, where line numbers are asserted by roughly twenty test suites, an unintended trailing-newline change is the kind of edit CLAUDE.md warns about.</p></dd>
+<dt>Evidence</dt><dd>
+<div class="evidence">
+<pre><code>before ends with newline: <b>false</b>
+after  ends with newline: <span class="em">true</span></code></pre>
+</div>
+</dd>
+<dt>Fix</dt><dd>Remember whether the trailing newline was there and reproduce it:
+<pre><code>trailing := strings.HasSuffix(string(data), "\n")
+…
+out := strings.Join(lines, eol)
+if <b>trailing</b> { out += eol }
+return AtomicWriteFile(path, []byte(out), 0644)</code></pre></dd>
+
+<dt>Landed</dt><dd class="landed"><p><strong>Fixed in <code>helper/apply.go</code>.</strong> The same change records whether the file ended with a newline and reproduces that exactly, instead of appending one unconditionally. Regressions: <code>TestApply_PreservesAMissingTrailingNewline</code> and <code>TestApply_PreservesASingleTrailingNewline</code> pin both directions.</p></dd>
+</dl>
+</article>
+
+<article class="finding" data-sev="high" data-status="reproduced" id="B05" data-fixed="yes">
+<div class="f-head"><span class="f-id">B-05</span><span class="chip high">high</span><span class="chip rep">reproduced</span><span class="chip fix">fixed</span></div>
+<h3>Deleting a language's last source file aborts the whole incremental scan</h3>
+<p class="f-loc"><span>internal/helper/manifest.go:368</span> the refusal · <span>topology/manager.go:143</span> <code>if diffErr != nil { return nil, diffErr }</code></p>
+<dl class="f-body">
+<dt>Requirements</dt><dd>A multi-language project where every source file of one language is removed or renamed — a Python helper script deleted, a single <code>.rs</code> prototype dropped, a lone <code>.java</code> file moved out — while at least one such file is still in the manifest.</dd>
+<dt>Effect</dt><dd><p><code>DiffScanFiles</code> has a guard against mass deletion: if the walk finds zero files of a language while the manifest holds some, it refuses and returns an error. The guard is sound as a guard, but <code>IncrementalScan</code> treats any <code>diffErr</code> as fatal and returns immediately — <em>before</em> processing the other languages' diffs.</p>
+<p>So one deleted Python file wedges the incremental scan for the entire project. Every subsequent <code>arac scan</code>, every guard pre-tool scan and every drift check fails the same way, forever, because the manifest entry that triggers it is never removed. The graph silently stops tracking Go, TypeScript and Rust changes too, and the only recovery is a manual <code>arac scan --all</code> that nothing tells the user to run.</p></dd>
+<dt>Evidence</dt><dd>
+<div class="evidence">
+<pre><code>added=[] modified=[] deleted=[]
+err=<span class="em">no python source files found under root …;
+     refusing to mark 1 manifest files deleted</span></code></pre>
+</div>
+</dd>
+<dt>Fix</dt><dd>Two changes, and both are worth making. Make the refusal per-language rather than fatal, so the other languages still scan:
+<pre><code>a, mod, d, diffErr := helper.DiffScanFiles(root, ls.Name(), manifestPath)
+if diffErr != nil {
+    <b>topo.Errors["scan:"+ls.Name()] = diffErr.Error()</b>
+    <b>continue</b>   // this language is skipped, the rest are not
+}</code></pre>
+And make the guard distinguish "the tree really has none of these any more" from "the walk failed". Comparing against the previous scan's count, or requiring the root to be readable and non-empty, lets a genuine last-file deletion be processed instead of refused — otherwise the state stays unrecoverable by incremental scan by design.</dd>
+
+<dt>Landed</dt><dd class="landed"><p><strong>Fixed in <code>helper/manifest.go</code>, <code>topology/manager.go</code>.</strong> Both halves, as the fix described. <code>IncrementalScan</code> records a failed language diff under a <code>diff:&lt;lang&gt;</code> key and continues, so one language no longer vetoes the others; the errors land in <code>topo.Errors</code> (cleared each scan, so one cannot outlive its cause) and the partial fast path is skipped while any is outstanding, since it has nowhere to record them. A scan where every diff failed still returns an error rather than reporting a quiet success. <code>DiffScanFiles</code>' guard now fires only while some manifest file is still on disk — a file the walk missed stats, a deleted one does not — so a genuine last-file deletion is processed. Regressions: <code>TestOneLanguagesDiffFailureDoesNotVetoTheScan</code> end to end (with the <code>pyproject.toml</code> that keeps Python detected after its last source file goes, which is what makes the wedge reachable), plus <code>TestDiffScanFilesRefusesMassDeleteWhenFilesStillExist</code> and <code>TestDiffScanFilesReportsDeletionOfTheLastFileOfALanguage</code> for the two sides of the guard.</p></dd>
+</dl>
+</article>
+
+<article class="finding" data-sev="high" data-status="read" id="B06" data-fixed="yes">
+<div class="f-head"><span class="f-id">B-06</span><span class="chip high">high</span><span class="chip read">read</span><span class="chip fix">fixed</span></div>
+<h3>The config is written non-atomically, and an unreadable config is replaced with defaults</h3>
+<p class="f-loc"><span>internal/helper/config.go:1493</span> <code>SaveConfig</code> uses <code>os.WriteFile</code> · <span>:1513</span> <code>EnsureConfig</code> overwrites on a parse failure</p>
+<dl class="f-body">
+<dt>Requirements</dt><dd>A <code>SaveConfig</code> interrupted between truncate and write — Ctrl-C, a hook timeout that kills the process, an OOM kill, a full disk. Writers include <code>arac init</code>, <code>arac setup</code>, <code>arac descriptions generate</code> (which writes back the provider answers), and the viz <code>PUT /api/config</code>.</dd>
+<dt>Effect</dt><dd><p>These two behaviours are individually defensible and jointly destructive. <code>os.WriteFile</code> truncates first, so an interruption leaves a zero-byte or half-written <code>config.json</code>. On the next run <code>validConfig</code> sees no known key, <code>LoadConfigStrict</code> reports <code>false</code>, and <code>EnsureConfig</code> — by design, and with a stderr notice — <em>replaces the file with defaults</em>. The project's mode, feature flags, ignore rules, agent tool lists and provider settings are gone.</p>
+<p>The irony is documented: <code>atomicwrite.go</code>'s own comment explains that <code>WriteManifest</code> was hardened after this repository's manifest was found empty, and that source files were next. The config is the one file where "empty" is not merely lost work but an automatic overwrite, and it is still on <code>os.WriteFile</code>.</p></dd>
+<dt>Fix</dt><dd>Use the writer that already exists:
+<pre><code>func SaveConfig(cfg *Config, path string) error {
+    …
+    return <b>AtomicWriteFile</b>(path, buf.Bytes(), 0644)
+}</code></pre>
+Then consider making the clean break less absolute: before overwriting, move the unreadable file aside as <code>config.json.bak</code> and name it in the stderr notice. A user who lost a hand-tuned config can then get it back.</dd>
+
+<dt>Landed</dt><dd class="landed"><p><strong>Fixed in <code>helper/config.go</code>.</strong> <code>SaveConfig</code> writes through <code>AtomicWriteFile</code>, so a reader never sees a truncated config and <code>EnsureConfig</code> is never handed one to replace with defaults. Regression: <code>TestSaveConfigNeverLeavesATruncatedFile</code> reads the file in a tight loop across 200 saves and fails if any read does not parse — it catches the old code immediately, on an empty file.</p></dd>
+</dl>
+</article>
+
+<article class="finding" data-sev="high" data-status="read" id="B07" data-fixed="yes">
+<div class="f-head"><span class="f-id">B-07</span><span class="chip high">high</span><span class="chip read">read</span><span class="chip fix">fixed</span></div>
+<h3>The post-write drift scan uses <code>"."</code>, not the topology root</h3>
+<p class="f-loc"><span>internal/cli/guard_drift.go:116</span> <code>mgr.IncrementalScan(".", reg)</code> · contrast <span>topology/manager.go:56</span> <code>RunPreToolScan</code>, which reads <code>topo.Root</code></p>
+<dl class="f-body">
+<dt>Requirements</dt><dd>The guard hook process runs with a working directory that is not the project root, and a PostToolUse Bash event that <code>mayHaveWrittenSource</code> accepts. <code>guardDBPath</code> explicitly supports this case — it resolves the database from the hook event's <code>cwd</code>, from <code>$CLAUDE_PROJECT_DIR</code>, or by walking upward from the process cwd — so the database can be found while <code>"."</code> is a subdirectory.</dd>
+<dt>Effect</dt><dd><p>Three failures, in increasing severity. <code>applyPathVisibility(".")</code> builds the ignore matcher rooted at the subdirectory, so <code>scan.ignore</code> patterns resolve against the wrong base. <code>reg.DetectAll(".")</code> sees only the languages present below that directory, so the others are not diffed at all. And if it detects none, <code>IncrementalScan</code> returns <code>no language scanner detected</code>, which <code>runGuardScan</code> swallows — the drift backstop does nothing and says nothing.</p>
+<p>The backstop exists because eight of twenty-seven benchmark agents wrote source through paths nobody had enumerated. It is the mechanism that turns an arms race into a converging one, and it stops converging the moment the model runs <code>cd</code>. <code>guardDBPath</code>'s own doc comment records a whole benchmark cell lost to precisely this shape of bug.</p></dd>
+<dt>Fix</dt><dd>Use the same root resolution the pre-tool scan uses. It is already available two ways:
+<pre><code>runGuardScan(dbPath, func(mgr *topology.TopologyManager, reg *scanner.Registry) (…) {
+    return mgr.IncrementalScan(<b>ProjectRootFor(dbPath)</b>, reg)
+})</code></pre>
+<code>ProjectRootFor</code> in <code>guard_paths.go</code> exists for exactly this and has no caller here. Better still, give <code>TopologyManager</code> a <code>scanRoot()</code> helper that prefers the stored <code>topo.Root</code> and falls back to the database's directory, and route both <code>RunPreToolScan</code> and <code>driftCheck</code> through it so they cannot drift apart again.</dd>
+
+<dt>Landed</dt><dd class="landed"><p><strong>Fixed in <code>cli/guard_drift.go</code>.</strong> <code>driftCheck</code> scans <code>ProjectRootFor(dbPath)</code> — the helper that existed for this and had no caller — instead of a literal <code>"."</code>, matching what <code>RunPreToolScan</code> does on the way in. Regression: <code>TestDriftCheckScansTheProjectRootFromASubdirectory</code> scans a project, edits a file at its root, <code>chdir</code>s into a source-free subdirectory and asserts the new symbol was indexed; it fails on the old code.</p></dd>
+</dl>
+</article>
+
+<!-- ==================== MEDIUM ==================== -->
+<h2>Medium</h2>
+
+<article class="finding" data-sev="med" data-status="reproduced" id="C01">
+<div class="f-head"><span class="f-id">C-01</span><span class="chip med">medium</span><span class="chip rep">reproduced</span></div>
+<h3><code>rg -r</code>, <code>ag -G</code> and <code>rg -y</code> are read with GNU grep's meanings</h3>
+<p class="f-loc"><span>internal/shellcmd/shellcmd.go:613</span> <code>parseGrep</code> · <span>:661</span> the <code>-r</code> arm · <span>:838</span> <code>clusterable</code></p>
+<dl class="f-body">
+<dt>Requirements</dt><dd>A search typed as <code>rg</code>, <code>ag</code> or <code>ack</code> using a short flag whose meaning differs from GNU grep's. The guard intercepts searches in <em>every</em> mode, so this is on by default for every project.</dd>
+<dt>Effect</dt><dd><p>Long flags are correctly gated by tool family — <code>includeFamily</code> and <code>typeFamily</code> exist precisely so <code>grep --glob</code> and <code>rg --include</code> are refused. Short flags are not gated at all, and three of them mean different things:</p>
+<p><code>rg -r</code> is <code>--replace</code> and <em>takes a value</em>; the parser reads it as "recursive", consumes nothing, and the replacement text becomes the pattern while the real pattern becomes a path operand. <code>ag -G</code> is <code>--file-search-regex</code> and also takes a value; the parser reads it as the BRE dialect flag, so the file filter becomes the pattern. <code>rg -y</code> is not a ripgrep flag at all — real <code>rg</code> exits 2 with a usage error — and the parser accepts it as case-insensitive.</p>
+<p>The package's opening comment is unambiguous that this is the failure it exists to prevent: "a flag this package does not model returns KindPassthrough… answering any of those would be a wrong answer wearing a helpful face." Most of the time the mis-shifted operand is not a real path, so <code>arac cmd</code> falls through and only a subprocess is wasted. When it <em>is</em> a real path — <code>rg -r NEW old src/</code> with a file called <code>old</code> — a wrong search is answered confidently.</p></dd>
+<dt>Evidence</dt><dd>
+<div class="evidence">
+<pre><code>rg -r REPLACEMENT pattern  =>  kind=grep pattern=<span class="em">"REPLACEMENT"</span> operands=["pattern"]
+    (real rg: replace with REPLACEMENT, search for "pattern")
+
+ag -G '\.go$' needle       =>  kind=grep pattern=<span class="em">"\.go$"</span>   operands=["needle"]
+    (real ag: filter files by \.go$, search for "needle")
+
+rg -y needle               =>  kind=grep ignorecase=<span class="em">true</span>
+    (real rg: exit 2, unrecognised flag)</code></pre>
+</div>
+</dd>
+<dt>Fix</dt><dd>Give short flags the same family gating the long ones have, keyed on the command word:
+<pre><code>// -r means --recursive for grep/egrep/fgrep and --replace (with a value) for rg.
+case a == "-r" || a == "-R":
+    if <b>typeFamily[name]</b> { return pass(name, name+" -r takes a replacement") }
+    sawRecursive = true</code></pre>
+Do the same for <code>-G</code> (dialect for the grep family, a value-taking file filter for <code>ag</code>) and remove <code>-y</code> from <code>clusterable</code> unless the tool is in <code>includeFamily</code>. The existing table test in <code>shellcmd_test.go</code> is the right home for a per-tool row on each of these — it is described as the executable spec of what is and is not modelled, and these three are currently modelled wrongly rather than not modelled.</dd>
+</dl>
+</article>
+
+<article class="finding" data-sev="med" data-status="reproduced" id="C02">
+<div class="f-head"><span class="f-id">C-02</span><span class="chip med">medium</span><span class="chip rep">reproduced</span></div>
+<h3>A second leading <code>^</code> stays an anchor in the BRE→RE2 rewrite</h3>
+<p class="f-loc"><span>internal/shellcmd/shellcmd.go:1026</span> the <code>'^'</code> case in <code>breToRE2</code> — <code>leading</code> is deliberately not cleared</p>
+<dl class="f-body">
+<dt>Requirements</dt><dd>A plain <code>grep</code> (BRE, the default dialect) whose pattern begins with two or more carets — searching for a literal caret at the start of a line. Realistic in this codebase's own domain: shell prompts, diff markers, regex source, caret-anchored patterns quoted inside other patterns.</dd>
+<dt>Effect</dt><dd><p><code>leading</code> is intentionally left true after a <code>^</code>, with a comment explaining that a caret does not give a following <code>*</code> something to repeat. That reasoning is right for <code>*</code> and wrong for <code>^</code>: POSIX BRE makes only the <em>first</em> caret an anchor, and every later one an ordinary character. GNU grep 3.11 agrees.</p>
+<p>So <code>^^foo</code> passes through unchanged and RE2 reads it as two anchors plus <code>foo</code> — a search for lines starting with <code>foo</code>, when the caller asked for lines starting with <code>^foo</code>. Both patterns are valid and both return results, so nothing marks the answer as wrong. This is a silent wrong answer of the exact kind the dialect machinery was built to eliminate; the interior case (<code>a^b</code>) is already handled correctly.</p></dd>
+<dt>Evidence</dt><dd>
+<div class="evidence">
+<pre><code>/usr/bin/grep (GNU grep 3.11), file: "^foo" / "foo" / "bar"
+  grep '^^foo'     -> <b>1:^foo</b>          (second caret is a literal)
+  grep 'a^b'       -> <b>1:a^b</b>           (interior caret is a literal)
+
+breToRE2("^^foo")  -> <span class="em">"^^foo"</span>, ok=true
+  as RE2 this matches <span class="em">"foo"</span> — a different line</code></pre>
+</div>
+</dd>
+<dt>Fix</dt><dd>Track "we are at a position where an anchor is possible" separately from "we are at a position where <code>*</code> is ordinary". The first is false after any caret; the second is not:
+<pre><code>case '^':
+    if leading <b>&amp;&amp; anchorable</b> {
+        b.WriteByte('^')
+    } else {
+        b.WriteString(`\^`)
+    }
+    <b>anchorable = false</b>   // leading survives, for the `*` rule
+</code></pre>
+Reset <code>anchorable = true</code> wherever <code>leading</code> is set true — the start of the pattern and just past <code>\(</code> or <code>\|</code> — so <code>\(^^a\)</code> behaves the same way inside a group.</dd>
+</dl>
+</article>
+
+<article class="finding" data-sev="med" data-status="reproduced" id="C03">
+<div class="f-head"><span class="f-id">C-03</span><span class="chip med">medium</span><span class="chip rep">reproduced</span></div>
+<h3><code>Parse</code> rewrites the caller's argv in place</h3>
+<p class="f-loc"><span>internal/shellcmd/shellcmd.go:638</span> <code>args = append(args[:i], append(expanded, args[i+1:]...)...)</code></p>
+<dl class="f-body">
+<dt>Requirements</dt><dd>A search command with a short-flag cluster (<code>-rn</code>, <code>-in</code>, <code>-rm1</code>) whose argv slice has spare capacity beyond its length. Today's two callers happen not to: <code>os.Args[2:]</code> has none, and <code>segmentArgv</code> builds a slice whose length equals its capacity. A third caller, or a caller that builds argv with <code>append</code> to a larger buffer, gets the aliasing.</dd>
+<dt>Effect</dt><dd><p><code>Parse</code> is documented as a pure function of argv, and both callers are said to depend on that. The cluster expansion writes the expanded tokens back into <code>args</code>, which aliases the caller's slice, so <code>Parse</code> mutates its input. The corruption is total, not partial — operands shift left and the last one is written past the visible length.</p>
+<p>The concrete consequence sits in <code>RunCmd</code>: it calls <code>serveCommand(argv)</code> and, on a passthrough, <code>passthrough(argv)</code> with the same slice. Under an argv with spare capacity, aracne would <code>exec</code> a command the user did not type. It is latent rather than live today, which makes it exactly the kind of thing to fix while it is cheap.</p></dd>
+<dt>Evidence</dt><dd>
+<div class="evidence">
+<pre><code>argv := make([]string, 0, 8)
+argv = append(argv, "grep", "-rn", "foo", ".")
+Parse(argv)
+
+before: ["grep" "-rn" "foo" "."]
+after:  ["grep" <span class="em">"-r"  "-n"  "foo"</span>]     // "." pushed past len, into spare cap</code></pre>
+</div>
+</dd>
+<dt>Fix</dt><dd>Copy once, at the top, and never touch the caller's memory:
+<pre><code>func Parse(argv []string) Request {
+    if len(argv) == 0 { return pass("", "empty command") }
+    name := Base(argv[0])
+    args := <b>append([]string(nil), argv[1:]...)</b>
+    …</code></pre>
+One allocation per call, on a path that already compiles regexes. Add a test asserting the caller's slice is unchanged — the case above is a two-line reproducer.</dd>
+</dl>
+</article>
+
+<article class="finding" data-sev="med" data-status="reproduced" id="C04">
+<div class="f-head"><span class="f-id">C-04</span><span class="chip med">medium</span><span class="chip rep">reproduced</span></div>
+<h3>Three typo checks in <code>Validate()</code> can never fire</h3>
+<p class="f-loc"><span>internal/helper/config.go:733</span> <code>Validate</code> · <span>:1405</span> <code>normalizeConfig</code> stamps <code>Mode</code>, <code>ContractVerbosity</code> and <code>Read.ContextFilter</code> first</p>
+<dl class="f-body">
+<dt>Requirements</dt><dd>A hand-edited <code>.aracne/config.json</code> with a misspelled <code>mode</code>, <code>contract_verbosity</code> or <code>read.context_filter</code>. All four <code>Validate()</code> call sites — <code>chat/manager.go:71</code>, <code>cli/init.go:89</code>, <code>cli/serve.go:22</code>, <code>cli/setup.go:73</code> — receive a config that has already been through <code>normalizeConfig</code>.</dd>
+<dt>Effect</dt><dd><p><code>normalizeConfig</code> coerces each of those three fields to a valid value before <code>Validate</code> ever sees them, so the three <code>switch</code> statements always land on their accepting arm. The checks are dead code, and their doc comments state the opposite: <code>EffectiveMode</code> and <code>EffectiveContractVerbosity</code> each say "Validate() is where a typo is reported, loudly and once."</p>
+<p>The user-visible result: <code>"mode": "mpc"</code> silently becomes <code>cli</code>. The project quietly runs on a different surface from the one it configured, and every diagnostic path that would have said so has been disabled. The re-stamping makes it worse — the next <code>SaveConfig</code> writes <code>"mode": "cli"</code> into the file, so the evidence of the typo is erased too.</p></dd>
+<dt>Evidence</dt><dd>
+<div class="evidence">
+<pre><code>{"mode":"mpc","contract_verbosity":"HIGHH","read":{"context_filter":"ful"}}
+
+LoadConfigStrict -> ok=true  mode=<span class="em">"cli"</span> verbosity=<span class="em">"low"</span> filter=<span class="em">"normal"</span>
+cfg.Validate()   -> <span class="em">nil</span></code></pre>
+</div>
+</dd>
+<dt>Fix</dt><dd>Validate the raw bytes, not the normalised struct. The cleanest seam is inside <code>LoadConfigStrict</code>, before normalisation:
+<pre><code>var loaded Config
+if err := json.Unmarshal(data, &amp;loaded); err != nil { … }
+<b>if err := loaded.validateRawValues(); err != nil {   // mode, verbosity, filter</b>
+<b>    fmt.Fprintf(os.Stderr, "aracne: %s: %v\n", path, err)</b>
+<b>}</b>
+normalizeConfig(&amp;loaded)</code></pre>
+Reporting rather than failing keeps the "a config aracne cannot read must never leave a project with no surface" rule those accessors describe, while making the typo visible. If <code>Validate()</code> is to keep the checks, it must be handed the pre-normalisation values.</dd>
+</dl>
+</article>
+
+<article class="finding" data-sev="med" data-status="reproduced" id="C05">
+<div class="f-head"><span class="f-id">C-05</span><span class="chip med">medium</span><span class="chip rep">reproduced</span></div>
+<h3>Every doc-commented resource is re-written on every incremental scan</h3>
+<p class="f-loc"><span>internal/helper/incremental.go:33</span> <code>resourceSignature</code> hashes the raw <code>res.Description</code> · <span>topology/domain/description.go:96</span> <code>DescriptionForStorage</code> normalises whitespace and clears over-budget text</p>
+<dl class="f-body">
+<dt>Requirements</dt><dd>Any resource whose harvested doc comment spans more than one line, or overruns its kind's budget. For Go that is most multi-line doc comments: <code>commentText</code> joins the comment lines with <code>"\n"</code> and stores that verbatim in the topology.</dd>
+<dt>Effect</dt><dd><p>The write path passes descriptions through <code>DescriptionForStorage</code>, which collapses whitespace (<code>strings.Join(strings.Fields(s), " ")</code>) and returns <code>""</code> for anything over budget. The fingerprint path does not. So the signature computed from a freshly parsed resource never equals the signature computed from the same resource read back out of the database.</p>
+<p><code>DiffResources</code> therefore reports an upsert for every such resource on every incremental scan of its file, and <code>WriteIncremental</code> rewrites the row plus a full delete-and-reinsert of its connections. The whole point of the fingerprinting — "an unchanged resource is never re-written", per the function's own comment — does not hold for the majority of documented code. It is wasted write volume on the path a project is on almost all of the time, and it means the in-memory graph and the database disagree about what a description says, which <code>ApplyDescriptions</code> then writes back to source from the in-memory side.</p></dd>
+<dt>Evidence</dt><dd>
+<div class="evidence">
+<pre><code>scanner produced  "First line of a Go doc comment.<span class="em">\n</span>Second line of it."
+database  holds   "First line of a Go doc comment.<span class="em"> </span>Second line of it."
+
+upserts on a re-parse with NO source change: <span class="em">1</span></code></pre>
+</div>
+</dd>
+<dt>Fix</dt><dd>Fingerprint what is actually stored:
+<pre><code>b.WriteString(<b>domain.DescriptionForStorage(res.Kind, res.Description)</b>)</code></pre>
+That makes the two sides agree by construction. The stronger fix is to normalise at the source — have the scanners emit the storage form, so the topology in memory and the topology on disk hold the same string and neither <code>ApplyDescriptions</code> nor the read renderer can see a value the database never had.</dd>
+</dl>
+</article>
+
+<article class="finding" data-sev="med" data-status="read" id="C06">
+<div class="f-head"><span class="f-id">C-06</span><span class="chip med">medium</span><span class="chip read">read</span></div>
+<h3>CLAUDE.md and AGENTS.md are rewritten non-atomically</h3>
+<p class="f-loc"><span>internal/cli/setup.go:754</span> <code>writeMarkdownIntegrationFile</code> · <span>:665</span> <code>writeMarkdownFile</code> · <span>cli/disable.go:381</span> <code>removeAracneIntegrationSection</code></p>
+<dl class="f-body">
+<dt>Requirements</dt><dd>An <code>arac setup</code> or <code>arac disable</code> interrupted mid-write. <code>arac setup</code> runs on every re-render of the contract and is called by <code>arac init</code>; both are interactive commands where Ctrl-C is a normal thing to do.</dd>
+<dt>Effect</dt><dd><p>These files are the user's, not aracne's — CLAUDE.md in this very repository carries a hand-written half below the injected block, and the whole design of the marker-less block detection exists to preserve it. An interrupted <code>os.WriteFile</code> truncates it. There is no backup and the merge is not idempotent against a truncated file: on the next run <code>findAracIntegrationStart</code> may find nothing and simply insert a fresh block into whatever survived.</p>
+<p>Same reasoning as B-06, on a file with more of the user's own writing in it.</p></dd>
+<dt>Fix</dt><dd>Route all three through <code>helper.AtomicWriteFile</code>, as <code>llm/tools/edit.go</code>, <code>llm/tools/write.go</code> and <code>helper/apply.go</code> already do:
+<pre><code>if err := <b>helper.AtomicWriteFile</b>(path, []byte(updated), 0644); err != nil { … }</code></pre>
+The remaining <code>os.WriteFile</code> callers worth the same treatment are <code>viz/server.go:615</code> (optimization rules), <code>chat/store.go:35</code> (sessions) and <code>chat/provider_config.go:117</code> — the last one writes credentials configuration at mode <code>0600</code>, and <code>AtomicWriteFile</code> preserves an existing file's mode, so pass <code>0600</code> for the create case.</dd>
+</dl>
+</article>
+
+<article class="finding" data-sev="med" data-status="read" id="C07">
+<div class="f-head"><span class="f-id">C-07</span><span class="chip med">medium</span><span class="chip read">read</span></div>
+<h3>An over-budget read of a resource ID falls through to the real command</h3>
+<p class="f-loc"><span>internal/cli/cmd.go:160</span> the <code>withinBudget</code> gate · <span>:157</span> the render-error gate · both <code>return "", nil, false</code></p>
+<dl class="f-body">
+<dt>Requirements</dt><dd>An intercepting mode, a shell read whose operand is a resource ID rather than a path (<code>cat app.Flask</code>, <code>head -40 pkg.BigType</code>), and an answer that exceeds <code>terminal.max_overserve</code> — or a render that errors.</dd>
+<dt>Effect</dt><dd><p><code>serveRead</code> hands the command back to the shell. The shell then runs <code>cat app.Flask</code>, which reports <code>No such file or directory</code> — "a true sentence about the wrong thing", in the words of the comment three lines above the gate.</p>
+<p>The file distinguishes these two outcomes carefully everywhere else. <code>resolveReadOperand</code> returns a <em>refusal</em> rather than a passthrough for a kind <code>read.kinds</code> excludes, for exactly this reason, and <code>rawWindowBytes</code>'s comment records fixing a previous instance of this bug where a resource ID scored zero bytes. The budget gate and the render-error gate were not brought along.</p></dd>
+<dt>Fix</dt><dd>Make the passthrough conditional on the operands being paths. Track it while resolving:
+<pre><code>if !withinBudget(answer, rawWindowBytes(resolved), cfg) {
+    if <b>sawResourceID</b> {
+        return "", fmt.Errorf(
+            "answer for %s exceeds terminal.max_overserve; read it with `arac read %s`",
+            operand, operand), false
+    }
+    return "", nil, false
+}</code></pre>
+The same guard belongs on the <code>renderReadOperand</code> error path at <code>:157</code>. A refusal that names the surface which <em>can</em> answer costs one turn; a shell error about a nonexistent file costs the model an exploration.</dd>
+</dl>
+</article>
+
+<article class="finding" data-sev="med" data-status="read" id="C08">
+<div class="f-head"><span class="f-id">C-08</span><span class="chip med">medium</span><span class="chip read">read</span></div>
+<h3>A full incremental scan runs after almost every Bash call</h3>
+<p class="f-loc"><span>internal/cli/guard_drift.go:154</span> <code>mayHaveWrittenSource</code> · <span>toolspec/toolspec.go:85</span> <code>shellCmdToKey</code></p>
+<dl class="f-body">
+<dt>Requirements</dt><dd>Any Bash command whose command word is not in <code>shellCmdToKey</code>. That is <code>ls</code>, <code>go build</code>, <code>go test</code>, <code>npm</code>, <code>make</code>, <code>cargo</code>, <code>docker</code>, <code>find</code>, <code>echo</code> — the large majority of what an agent runs.</dd>
+<dt>Effect</dt><dd><p><code>commandKeys</code> returns only <code>"bash"</code> for an unclassified command; <code>mayHaveWrittenSource</code> skips <code>"bash"</code> and, seeing nothing else, returns <code>true</code>. So the drift check fires: a directory walk of the whole project, a manifest diff per detected language, a potential <code>ReadDb</code>, a warnings-table read and a state-file rewrite — after nearly every shell call, in the PostToolUse hook, on the agent's critical path.</p>
+<p>The function's own comment says the opposite is happening: "Running an incremental scan after every shell call would be the wrong trade — most are <code>ls</code>, <code>go build</code> or a test run." Those three are exactly the commands that trigger it. On a repository the size of the ones in <code>bench/fixtures</code>, this is seconds of latency per tool call.</p></dd>
+<dt>Fix</dt><dd>The "unclassified means it might have written" instinct is right; the cost is not. Two options, and they compose:
+<pre><code>// 1. Classify the common read-only build/test verbs as harmless.
+var benignCommands = map[string]bool{"ls":true, "go":true, "cargo":true,
+    "npm":true, "pnpm":true, "yarn":true, "make":true, "pytest":true, …}
+
+// 2. Cheap gate before the scan: has anything actually changed?
+if <b>helper.QuickManifestDrift(dbPath)</b> { … run the scan … }</code></pre>
+The second is the real fix and the primitive already exists — <code>TopologyManager.IndexHealth</code>, which <code>arac check-updates</code> uses, answers "has anything drifted" from the manifest without loading the graph. Gate <code>driftCheck</code> on it and the common case becomes one directory walk instead of a full scan. Note that <code>go build</code> writing into <code>bin/</code> is itself a manifest change, so the benign list matters too.</dd>
+</dl>
+</article>
+
+<article class="finding" data-sev="med" data-status="read" id="C09">
+<div class="f-head"><span class="f-id">C-09</span><span class="chip med">medium</span><span class="chip read">read</span></div>
+<h3>The warning-state file is raced and written non-atomically</h3>
+<p class="f-loc"><span>internal/cli/guard_warnstate.go:61</span> <code>writeReportedWarnings</code> uses <code>os.WriteFile</code> · <span>:94</span> <code>seedReportedWarnings</code> and <span>:132</span> <code>unreportedWarnings</code> are unsynchronised read-modify-writes</p>
+<dl class="f-body">
+<dt>Requirements</dt><dd>Two guard hook processes overlapping — which happens whenever the harness issues parallel tool calls, and whenever a PostToolUse hook for one call overlaps a PreToolUse hook for the next.</dd>
+<dt>Effect</dt><dd><p><code>guard-reported-warnings.json</code> is read, modified and written by two separate functions with no file lock. Two hooks running together can lose one's update, which either re-reports a warning the model has already seen or — worse — records a warning as reported that was never shown, permanently suppressing it. The design goal in the file's own header is "the model hears about it exactly once"; both failure directions violate it.</p>
+<p>The non-atomic write compounds it. A truncated file makes <code>readReportedWarnings</code> return <code>(empty, false)</code>, which <code>seedReportedWarnings</code> reads as "this session has shown nothing yet" — so the next shell write dumps every pre-existing warning in the repository at the model, which is the exact behaviour the seeding was added to prevent.</p></dd>
+<dt>Fix</dt><dd>Atomic write plus a lock file, both already available in the tree:
+<pre><code>_ = <b>helper.AtomicWriteFile</b>(warnStateFile(dbPath), raw, 0o644)</code></pre>
+and wrap the read-modify-write pair in <code>TopologyManager.WithFileLock</code> (used by the edit tool to serialise concurrent sub-agents on one file — the same problem), or store the reported set as a table in <code>topology.db</code>, where the SQLite write lock already serialises it and the atomicity is free.</dd>
+</dl>
+</article>
+
+<article class="finding" data-sev="med" data-status="read" id="C10">
+<div class="f-head"><span class="f-id">C-10</span><span class="chip med">medium</span><span class="chip read">read</span></div>
+<h3><code>~</code> and <code>$HOME</code> paths read as inside the workspace</h3>
+<p class="f-loc"><span>internal/toolspec/toolspec.go:765</span> <code>CommandPaths</code> · <span>chat/permissions.go:89</span> <code>if filepath.IsAbs(path) &amp;&amp; !p.insideWorkspace(path)</code></p>
+<dl class="f-body">
+<dt>Requirements</dt><dd><code>features.chat</code> on, and a <code>bash</code> command naming a path through <code>~</code> or a variable: <code>cat ~/.ssh/id_rsa</code>, <code>cp $HOME/.aws/credentials .</code>, <code>cat "$SECRET_PATH"</code>.</dd>
+<dt>Effect</dt><dd><p><code>CommandPaths</code> is a lexical extractor that does no expansion, so it yields the literal token <code>~/.ssh/id_rsa</code>. <code>filepath.IsAbs</code> is false for it, and the permission policy's rule is "relative paths are resolved against the workspace, so they are inside it by construction". The shell then expands the tilde and reads a file well outside the workspace, with no scope question raised.</p>
+<p>The guard's <code>operatesOutsideProject</code> makes the same assumption but fails safe — treating a relative path as inside means the command stays <em>governed</em>. In the permission policy the same assumption fails open. One helper, two callers, opposite risk directions.</p></dd>
+<dt>Fix</dt><dd>Expand the two forms that are cheap and unambiguous, at the policy layer rather than in the shared extractor:
+<pre><code>func (p PermissionPolicy) normalize(tok string) string {
+    if tok == "~" || strings.HasPrefix(tok, "~/") {
+        if home, err := os.UserHomeDir(); err == nil {
+            return filepath.Join(home, strings.TrimPrefix(tok, "~"))
+        }
+    }
+    return <b>os.ExpandEnv</b>(tok)
+}</code></pre>
+And treat a token that <em>still</em> contains <code>$</code> or <code>~</code> after expansion as unresolvable — which should return <code>ask</code>, not <code>allow</code>, since an unknown path is precisely the case worth a question.</dd>
+</dl>
+</article>
+
+<!-- ==================== LOW ==================== -->
+<h2>Low</h2>
+
+<article class="finding" data-sev="low" data-status="reproduced" id="D01">
+<div class="f-head"><span class="f-id">D-01</span><span class="chip low">low</span><span class="chip rep">reproduced</span></div>
+<h3>An unknown subcommand exits 0</h3>
+<p class="f-loc"><span>cmd/arac/main.go:117</span> the <code>default</code> arm · also <span>:22</span> (no arguments) and <span>:63</span> (unknown <code>descriptions</code> subcommand)</p>
+<dl class="f-body">
+<dt>Requirements</dt><dd>A typo, or a script pinned to a version where a subcommand does not exist yet.</dd>
+<dt>Effect</dt><dd>Three of the dispatcher's error paths print usage and return success; <code>resource</code>, <code>node</code> and <code>warnings</code> print usage and <code>os.Exit(1)</code>. A wrapper doing <code>arac setpu || fallback</code> takes the success branch, and CI treats a misspelled step as passing.
+<div class="evidence">
+<pre><code>arac totally-not-a-command  -> exit=<span class="em">0</span>
+arac                        -> exit=<span class="em">0</span>
+arac descriptions bogus     -> exit=<span class="em">0</span>
+arac resource bogus         -> exit=<b>1</b></code></pre>
+</div></dd>
+<dt>Fix</dt><dd>Make the three failure arms match the three that are already right:
+<pre><code>default:
+    cli.PrintUsage()
+    <b>os.Exit(1)</b></code></pre>
+Bare <code>arac</code> with no arguments is arguably a success (it is the "show me help" call), but an unknown subcommand and an unknown <code>descriptions</code> verb are not.</dd>
+</dl>
+</article>
+
+<article class="finding" data-sev="low" data-status="read" id="D02">
+<div class="f-head"><span class="f-id">D-02</span><span class="chip low">low</span><span class="chip read">read</span></div>
+<h3>Orphan-bug cleanup prints to stdout, inside a hook whose stdout is parsed as JSON</h3>
+<p class="f-loc"><span>internal/helper/db.go:1010</span> and <span>:1070</span> — <code>fmt.Printf("Warning: failed to delete orphaned bug …")</code></p>
+<dl class="f-body">
+<dt>Requirements</dt><dd><code>features.bug_management</code> on, at least one bug whose node has disappeared, and a <code>DeleteBug</code> that fails — which <a href="#A01">A-01</a> makes reachable under contention, since <code>DeleteBug</code> is on the locked path but its <code>ReadBugs</code> feed is not. <code>CleanupOrphanedBugs</code> runs from <code>IncrementalScan</code>, which the PreToolUse guard hook invokes on every tool call.</dd>
+<dt>Effect</dt><dd>The hook's stdout is the channel Claude Code parses as the hook decision JSON. A stray <code>Warning: …</code> line on it makes the decision unparseable, which at best discards a rewrite or a denial and at worst is reported as a broken hook. These are the only two <code>fmt.Printf</code> calls in <code>internal/helper</code> and <code>internal/topology</code>; everything else in the engine already writes diagnostics to stderr.</dd>
+<dt>Fix</dt><dd><pre><code><b>fmt.Fprintf(os.Stderr,</b> "Warning: failed to delete orphaned bug %s: %v\n", bug.ID, err)</code></pre>
+A package-level rule is worth enforcing: nothing under <code>internal/helper</code> or <code>internal/topology</code> may write to stdout, since every one of their callers owns its own stdout contract. A grep-based test would cost nothing.</dd>
+</dl>
+</article>
+
+<article class="finding" data-sev="low" data-status="read" id="D03">
+<div class="f-head"><span class="f-id">D-03</span><span class="chip low">low</span><span class="chip read">read</span></div>
+<h3><code>--addr</code> accepts a bind the API then refuses on every request</h3>
+<p class="f-loc"><span>internal/cli/viz.go:33</span> the <code>--addr</code> flag · <span>viz/server.go:162</span> and <span>:1652</span> <code>localOriginAllowed</code></p>
+<dl class="f-body">
+<dt>Requirements</dt><dd><code>arac viz serve --addr 0.0.0.0:7331</code> (or any LAN address) and a browser that reaches it by something other than a loopback host.</dd>
+<dt>Effect</dt><dd>The static SPA is served — it is not behind the origin check — and then every <code>/api/</code> request returns <code>403 forbidden: cross-origin request rejected</code>, because <code>localOriginAllowed</code> requires <code>r.Host</code> itself to be loopback. The user gets a page that loads and does nothing, with the real reason only visible in a network panel. The guard is correct as security; the flag advertises a configuration the server has decided not to support.
+<p>(The check itself is sound: DNS rebinding is blocked because the rebound host header is not loopback, and an absent <code>Origin</code> is only accepted after that test.)</p></dd>
+<dt>Fix</dt><dd>Refuse the bind rather than the requests, so the failure is at startup and legible:
+<pre><code>if !isLoopbackHost(*addr) {
+    fmt.Fprintf(os.Stderr,
+        "arac viz: --addr must be a loopback address (got %s); the API is local-only\n", *addr)
+    os.Exit(1)
+}</code></pre>
+If a non-loopback bind is ever to be supported, that is a separate feature with its own authentication, and the flag should stay refused until it exists.</dd>
+</dl>
+</article>
+
+<article class="finding" data-sev="low" data-status="read" id="D04">
+<div class="f-head"><span class="f-id">D-04</span><span class="chip low">low</span><span class="chip read">read</span></div>
+<h3>A Python syntax error is reported as a missing interpreter</h3>
+<p class="f-loc"><span>internal/topology/scanner/pyscanner/parser.go:135</span> <code>parsePythonFile</code> — <code>cmdErr</code> is overwritten on each loop iteration</p>
+<dl class="f-body">
+<dt>Requirements</dt><dd><code>python3</code> present on PATH, <code>python</code> absent (the normal modern layout), and a <code>.py</code> file the embedded parse script cannot handle — a syntax error, a version-specific construct, an encoding problem.</dd>
+<dt>Effect</dt><dd><p>The loop tries <code>python3</code>, records a real diagnostic including the interpreter's stderr, then tries <code>python</code> and overwrites <code>cmdErr</code> with <code>python parse failed: : exec: "python": executable file not found in $PATH</code>. That is what lands in <code>topo.Errors</code> and what a user sees.</p>
+<p>The one message that would have said what is wrong — the traceback with the file and line — is discarded, and its replacement points at a nonexistent problem. Given that Python is the only scanner with a runtime dependency outside the binary, this is the diagnostic that matters most.</p></dd>
+<dt>Fix</dt><dd>Keep the first real failure and only fall through on a <em>launch</em> failure:
+<pre><code>if errors.Is(runErr, exec.ErrNotFound) {
+    if cmdErr == nil { cmdErr = fmt.Errorf("%s not found", exe) }
+    continue                       // try the next interpreter
+}
+<b>return nil, fmt.Errorf("%s parse failed: %s: %w", exe, stderr.String(), runErr)</b></code></pre>
+An interpreter that ran and rejected the file has answered the question; there is nothing the second interpreter can add.</dd>
+</dl>
+</article>
+
+<article class="finding" data-sev="low" data-status="read" id="D05">
+<div class="f-head"><span class="f-id">D-05</span><span class="chip low">low</span><span class="chip read">read</span></div>
+<h3>The atomic writer replaces symlinks and breaks hard links</h3>
+<p class="f-loc"><span>internal/helper/atomicwrite.go:24</span> <code>AtomicWriteFile</code> — <code>os.Stat</code> follows the link, <code>os.Rename</code> replaces it</p>
+<dl class="f-body">
+<dt>Requirements</dt><dd>A source file reached through a symlink or sharing an inode via a hard link, then edited by <code>arac edit</code>, <code>arac write</code> or <code>descriptions apply</code>. Realistic in monorepos with linked packages, in dotfile repositories, and in <code>node_modules</code>-style link farms.</dd>
+<dt>Effect</dt><dd>The temp-file-and-rename pattern is right for durability and wrong for links: the rename replaces the link itself with a regular file, so the target keeps the old content and the link relationship is gone. Permissions are read from the link target and applied to the replacement, which makes the result look correct. The plain <code>os.WriteFile</code> this replaced followed the link and wrote through it, so the hardening quietly changed behaviour here.</dd>
+<dt>Fix</dt><dd>Resolve the path before writing, so the temp file is created beside the real target and the rename lands on it:
+<pre><code>if resolved, err := <b>filepath.EvalSymlinks</b>(path); err == nil {
+    path = resolved
+}
+dir := filepath.Dir(path)</code></pre>
+Hard links cannot be preserved by rename at all; if that matters, detect <code>Stat_t.Nlink &gt; 1</code> and fall back to a write-through (truncate and write) for that case, documenting the durability trade.</dd>
+</dl>
+</article>
+
+<article class="finding" data-sev="low" data-status="read" id="D06">
+<div class="f-head"><span class="f-id">D-06</span><span class="chip low">low</span><span class="chip read">read</span></div>
+<h3><code>ClearOversizedDescriptions</code> writes outside a transaction</h3>
+<p class="f-loc"><span>internal/helper/db.go:1089</span> — the write loop calls <code>db.Prepare</code> / <code>stmt.Exec</code> with no <code>db.Begin</code></p>
+<dl class="f-body">
+<dt>Requirements</dt><dd>A sweep large enough to fail partway — the doc comment cites 34% of harvested doc comments on <code>grafana/k6</code> — and any error mid-loop.</dd>
+<dt>Effect</dt><dd>Each <code>UPDATE</code> autocommits, so an error leaves some descriptions cleared and some not, with a non-nil error and a count that under-reports what actually landed. Every sibling bulk writer in the file (<code>UpdateDescriptions</code>, <code>WriteResourceAliases</code>, <code>RemapBugNodes</code>) wraps its loop in a transaction, both for atomicity and because one transaction per row "makes that minutes rather than seconds" — the same argument applies here.</dd>
+<dt>Fix</dt><dd><pre><code>err := withSQLiteWrite(dbPath, func(db *sql.DB) error {
+    <b>tx, err := db.Begin(); if err != nil { return err }</b>
+    <b>defer tx.Rollback()</b>
+    stmt, err := <b>tx</b>.Prepare("UPDATE resources SET description = '' WHERE id = ?")
+    …
+    <b>return tx.Commit()</b>
+})</code></pre></dd>
+</dl>
+</article>
+
+<article class="finding" data-sev="low" data-status="read" id="D07">
+<div class="f-head"><span class="f-id">D-07</span><span class="chip low">low</span><span class="chip read">read</span></div>
+<h3>Two resources on one line insert two doc blocks, in random order</h3>
+<p class="f-loc"><span>internal/helper/apply.go:72</span> <code>sort.Slice(entries, …StartsAt &gt; StartsAt)</code> — not stable, and no tie-break</p>
+<dl class="f-body">
+<dt>Requirements</dt><dd>Two described resources sharing a declaration line: <code>var a, b int</code> in Go, <code>let x = 1, y = 2</code> in JS/TS, a one-line class with an inline method, or a <code>const ( … )</code> group where the parser records the group's line for several specs.</dd>
+<dt>Effect</dt><dd>Both entries pass the staleness guard (each name appears on the line), so both insert a doc block above the same declaration — two comments stacked, one describing each variable, with no way to tell which is which. <code>sort.Slice</code> is not stable and equal keys have no tie-break, so which comment ends up on top varies between runs, making <code>descriptions apply</code> non-deterministic on those files.</dd>
+<dt>Fix</dt><dd>Sort deterministically, and collapse ties:
+<pre><code>sort.SliceStable(entries, func(i, j int) bool {
+    if entries[i].Loc.StartsAt != entries[j].Loc.StartsAt {
+        return entries[i].Loc.StartsAt &gt; entries[j].Loc.StartsAt
+    }
+    return entries[i].Name &lt; entries[j].Name
+})</code></pre>
+Then either skip all but the first entry on a shared line, or merge them into one block (<code>// a: …</code> / <code>// b: …</code>). Skipping is the safer default: a description that cannot be placed unambiguously is better left in the database than written into source.</dd>
+</dl>
+</article>
+
+<article class="finding" data-sev="low" data-status="read" id="D08">
+<div class="f-head"><span class="f-id">D-08</span><span class="chip low">low</span><span class="chip read">read</span></div>
+<h3>Annotation is dropped by the byte budget with nothing said</h3>
+<p class="f-loc"><span>internal/topogrep/grep.go:554</span> the <code>annotate</code> gate · <span>:654</span> the trailer, keyed only on <code>DistinctResources &gt; AnnotateLimit</code></p>
+<dl class="f-body">
+<dt>Requirements</dt><dd>A search with 30 or fewer distinct resources whose headers exceed <code>AnnotateOverheadBudget</code> (25% of matched content) and total more than <code>AnnotateFreeBytes</code> (512). A narrow search over well-described code — the <code>grep -rn 'pub struct' src/</code> shape the constant's own comment describes.</dd>
+<dt>Effect</dt><dd>Annotation is silently withheld and the result renders as plain grep. The explanatory trailer — "N distinct resources matched, so topology annotation is omitted" plus <code>narrowAdvice</code> — only fires on the resource-count branch, so this path produces a bare list with nothing to say that node descriptions were available and suppressed. The caller cannot tell aracne's grep from a plain one, and has no lever to get the annotation back.</dd>
+<dt>Fix</dt><dd>Say so, in the vocabulary of whichever surface asked:
+<pre><code>if !annotate &amp;&amp; res.DistinctResources &gt; 0 {
+    if res.DistinctResources &gt; AnnotateLimit {
+        … existing message …
+    } else {
+        fmt.Fprintf(&amp;b, "\n… annotation omitted: the headers for %d resource(s) "+
+            "would outweigh the matches. %s", res.DistinctResources, narrowAdvice(opt))
+    }
+}</code></pre></dd>
+</dl>
+</article>
+
+<article class="finding" data-sev="low" data-status="read" id="D09">
+<div class="f-head"><span class="f-id">D-09</span><span class="chip low">low</span><span class="chip read">read</span></div>
+<h3>A write landing during a scan is invisible to every later scan</h3>
+<p class="f-loc"><span>internal/helper/manifest.go:70</span> <code>SyncManifest</code> stamps <code>fi.ModTime()</code> <em>after</em> the parse · <span>:349</span> <code>DiffScanFiles</code> compares against that stamp</p>
+<dl class="f-body">
+<dt>Requirements</dt><dd>A file modified between the moment the scanner parsed it and the moment <code>SyncManifest</code> stats it. The window is the length of the scan — seconds on a large repository — and the writers are ordinary: an editor autosave, a formatter, a <code>git checkout</code>, another agent's edit, a watch-mode build.</dd>
+<dt>Effect</dt><dd><p>The manifest records the <em>new</em> mtime while the graph holds the <em>old</em> content. The next diff compares that new mtime against itself, sees no change, and the file is never re-parsed. The topology keeps stale spans and stale edges for it indefinitely, and reads answered from those spans return the wrong lines with nothing marking them wrong.</p>
+<p>Recovery is only through <code>arac scan --all</code> or a subsequent edit to the same file. <code>arac check-updates</code> cannot detect it either, since it uses the same manifest comparison.</p></dd>
+<dt>Fix</dt><dd>Stamp the mtime observed at parse time, not at sync time. Capture it when the file is read and carry it through, or — cheaper and nearly as good — record the pre-scan mtime and refuse to advance a stamp past it:
+<pre><code>// taken before the parse, in CollectSourceFiles / the scan walk
+observed[path] = fi.ModTime()
+…
+// SyncManifest
+if t, ok := observed[path]; ok {
+    manifest[path] = t.UTC().Format(time.RFC3339Nano)   // not the current mtime
+}</code></pre>
+A file written during the scan then still looks modified on the next diff and is re-parsed, which is the correct outcome. Hashing content instead of comparing mtimes removes the class entirely, at the cost of reading every file on every diff.</dd>
+</dl>
+</article>
+
+<div class="foot">
+<p><strong>Method.</strong> Every non-test file under <code>internal/</code> and <code>cmd/</code> was read — the shell parser and guard, the topology manager and its storage layer, the read and search paths, the MCP server, the chat harness and its permission policy, the viz HTTP surface, the config layer, the scanners' entry points, and the CLI dispatcher. Fourteen findings were then confirmed by temporary Go tests placed in the relevant package, run, and deleted; their output is quoted verbatim above. <code>go test ./...</code> passes on this tree, and <code>go vet ./internal/... ./cmd/...</code> is clean, so none of these are caught today.</p>
+<p><strong>What has been fixed.</strong> All eleven critical and high findings — A-01 through B-07 — are fixed in the working tree, each with a regression test placed beside the code it guards. Five of those tests were checked against the old behaviour by reverting the fix and watching them fail (A-01, B-05, B-06, B-07 and the SaveConfig tear); the rest assert an output the old code demonstrably did not produce. <code>go test ./...</code> passes under both build tags, <code>go vet</code> is clean, and <code>gofmt</code> reports nothing.</p>
+<p><strong>Two contracts changed deliberately,</strong> and both are worth knowing about. <code>DiffScanFiles</code> no longer refuses to report a deletion when every manifest file is genuinely gone from disk — the old test that pinned the refusal was replaced by two that pin each side of the new rule. And <code>arac disable</code> now decides hook ownership by command word rather than substring, so a hook installed under a spelling neither this repository's history nor the legacy bare-<code>arac</code> form covers would be left in place rather than removed.</p>
+<p><strong>Still open:</strong> the ten medium and nine low findings, C-01 through D-09. The two with the widest blast radius are C-08 (a full incremental scan after almost every Bash call, on the agent's critical path) and C-05 (every doc-commented resource re-written on every incremental scan); C-04 is the cheapest, and C-01 and C-02 are the two that can still return a confidently wrong search result.</p>
+</div>
+
+</div>
+
+<script>
+(function () {
+  var buttons = Array.prototype.slice.call(document.querySelectorAll("button.f"));
+  var findings = Array.prototype.slice.call(document.querySelectorAll(".finding"));
+  var rows = Array.prototype.slice.call(document.querySelectorAll("#index-body tr"));
+  var empty = document.getElementById("empty-note");
+  var heads = Array.prototype.slice.call(document.querySelectorAll("h2"));
+
+  function matches(el, f) {
+    if (f === "all") return true;
+    if (f === "reproduced") return el.getAttribute("data-status") === "reproduced";
+    if (f === "fixed") return el.getAttribute("data-fixed") === "yes";
+    if (f === "open") return el.getAttribute("data-fixed") !== "yes";
+    return el.getAttribute("data-sev") === f;
+  }
+
+  function apply(f) {
+    var shown = 0;
+    findings.forEach(function (el) {
+      var ok = matches(el, f);
+      el.hidden = !ok;
+      if (ok) shown++;
+    });
+    rows.forEach(function (r) { r.hidden = !matches(r, f); });
+    // Severity headings only make sense when severities are mixed.
+    heads.forEach(function (h) {
+      var t = h.textContent.trim().toLowerCase();
+      if (t === "critical" || t === "high" || t === "medium" || t === "low") {
+        h.hidden = (f !== "all" && f !== "reproduced" && f !== "fixed" && f !== "open");
+      }
+    });
+    empty.style.display = shown === 0 ? "block" : "none";
+    buttons.forEach(function (b) {
+      b.setAttribute("aria-pressed", String(b.getAttribute("data-filter") === f));
+    });
+  }
+
+  buttons.forEach(function (b) {
+    b.addEventListener("click", function () { apply(b.getAttribute("data-filter")); });
+  });
+})();
+</script>

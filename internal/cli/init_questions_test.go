@@ -53,8 +53,8 @@ func TestTheDefaultRunIsClaudeCodeCliAnthropic(t *testing.T) {
 	if a.APIKeyEnv != "ANTHROPIC_API_KEY" {
 		t.Errorf("api_key_env = %q, want ANTHROPIC_API_KEY", a.APIKeyEnv)
 	}
-	if a.Model != "claude-haiku-5" {
-		t.Errorf("model = %q, want claude-haiku-5", a.Model)
+	if a.Model != "claude-haiku-4-5" {
+		t.Errorf("model = %q, want claude-haiku-4-5", a.Model)
 	}
 	if a.Verbosity != helper.ContractVerbosityLow {
 		t.Errorf("contract_verbosity = %q, want low", a.Verbosity)
@@ -126,7 +126,7 @@ func TestTheQuestionsOpenOnTheCurrentConfig(t *testing.T) {
 // are one keystroke.
 func TestAPIBranchDefaultsFollowTheFormat(t *testing.T) {
 	for _, tc := range []struct{ moves, provider, env, model string }{
-		{"", helper.ProviderNameAnthropic, "ANTHROPIC_API_KEY", "claude-haiku-5"},
+		{"", helper.ProviderNameAnthropic, "ANTHROPIC_API_KEY", "claude-haiku-4-5"},
 		{down, helper.ProviderNameOpenAI, "OPENAI_API_KEY", "gpt-5.4-mini"},
 		{down + down, helper.ProviderNameDeepSeek, "DEEPSEEK_API_KEY", "deepseek-v4-flash"},
 	} {

@@ -441,7 +441,7 @@ func (ba *bodyAnalyzer) resolveCallExpr(call *ast.CallExpr) {
 		pkgTypedID := golang.StructID(string(ba.pr.PkgPath) + "." + fun.Name)
 		if _, exists := ba.gt.Structs[pkgTypedID]; exists {
 			ba.add(golang.ConnUsesStruct, string(pkgTypedID))
-			ba.add(golang.ConnUsesPkg, string(ba.pr.PkgPath))
+			ba.addExternalPkg(ba.pr.PkgPath)
 			return
 		}
 
@@ -449,20 +449,20 @@ func (ba *bodyAnalyzer) resolveCallExpr(call *ast.CallExpr) {
 		for _, nt := range ba.pr.NamedTypes {
 			if nt.Name == fun.Name {
 				ba.add(golang.ConnUsesNamedType, string(namedTypeID))
-				ba.add(golang.ConnUsesPkg, string(ba.pr.PkgPath))
+				ba.addExternalPkg(ba.pr.PkgPath)
 				return
 			}
 		}
 		if _, exists := ba.gt.NamedTypes[namedTypeID]; exists {
 			ba.add(golang.ConnUsesNamedType, string(namedTypeID))
-			ba.add(golang.ConnUsesPkg, string(ba.pr.PkgPath))
+			ba.addExternalPkg(ba.pr.PkgPath)
 			return
 		}
 
 		pkgFuncID := golang.FunctionID(string(ba.pr.PkgPath) + "." + fun.Name)
 		if _, exists := ba.gt.Functions[pkgFuncID]; exists {
 			ba.add(golang.ConnCalls, string(pkgFuncID))
-			ba.add(golang.ConnUsesPkg, string(ba.pr.PkgPath))
+			ba.addExternalPkg(ba.pr.PkgPath)
 			return
 		}
 
@@ -486,6 +486,22 @@ func (ba *bodyAnalyzer) resolveCallExpr(call *ast.CallExpr) {
 			ba.resolveQualifiedCall(x.Name, fun.Sel.Name)
 		}
 	}
+}
+
+// addExternalPkg records a uses_package edge only when the package is not the caller's own.
+//
+// The unqualified branches above resolve a bare name against ba.pr.PkgPath -- the package the
+// CALLER is in -- and used to record a uses_package edge to it anyway. A package does not use
+// itself, and gotools.goImportBlock renders that edge, so a read of almost any function in a
+// multi-file package opened with `import ("<its own package>")`: a self-import, which is a
+// compile error in Go, printed inside the fence a read promises is verbatim source. It fired
+// only when the callee lived in a DIFFERENT FILE of the same package, because a same-file
+// callee is resolved by the ba.pr.Functions loop and returns before reaching here.
+func (ba *bodyAnalyzer) addExternalPkg(pkg golang.PackagePath) {
+	if pkg == ba.pr.PkgPath {
+		return
+	}
+	ba.add(golang.ConnUsesPkg, string(pkg))
 }
 
 // Resolves qualified calls (X.sel) to functions, methods, or interfaces based on import map, variable type map, and struct/interface definitions.

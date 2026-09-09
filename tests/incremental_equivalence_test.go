@@ -296,3 +296,43 @@ func Do(x string) {}
 `)
 	})
 }
+
+// Renaming a file inside its package — the shape where the added file and the deleted one
+// declare the SAME resource ids, because a Go id is `module/package.Symbol` and carries no
+// filename.
+//
+// IncrementalScan registers added and modified files before it removes deleted ones, so
+// RemoveFileResources used to delete ids the new file had just re-registered: the graph kept
+// b.go and lost every declaration in it, the package lost its has_function edges, and the model
+// was told to "verify b.go", the file that still holds the declaration. Nothing recovered it —
+// the manifest already called b.go current, so later incremental scans had nothing to do — and
+// the guard's pre-tool and drift scans both run this path, so an ordinary `mv`/`git mv` during a
+// session emptied the graph for the rest of it.
+func TestIncrEquiv_RenameFileKeepsItsDeclarations(t *testing.T) {
+	assertIncrEqualsFull(t, map[string]string{
+		"go.mod": "module eqrename\n\ngo 1.21\n",
+		"pkg/a.go": `package pkg
+
+// One is renamed with its file.
+func One() int { return 1 }
+
+// Two calls One from the same file.
+func Two() int { return One() + 1 }
+`,
+		"pkg/keep.go": `package pkg
+
+// Other stays where it is and keeps calling across the rename.
+func Other() int { return One() }
+`,
+		"main.go": `package main
+
+import "eqrename/pkg"
+
+func main() { _ = pkg.Two() }
+`,
+	}, func(t *testing.T, dir string) {
+		if err := os.Rename(filepath.Join(dir, "pkg", "a.go"), filepath.Join(dir, "pkg", "b.go")); err != nil {
+			t.Fatal(err)
+		}
+	})
+}

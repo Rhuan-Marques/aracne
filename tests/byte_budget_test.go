@@ -143,12 +143,25 @@ func TestGrepIsCappedByDefault(t *testing.T) {
 }
 
 func TestGrepReportsNoMatchesExplicitly(t *testing.T) {
-	// An empty tool result reads to a model as a broken tool, not as "nothing matched".
+	// `arac grep` answers in grep's own vocabulary: nothing matched is exit 1, and the
+	// explanation goes to STDERR. It used to exit 0 and print the sentence on stdout, so a
+	// script or an agent branching on the status could not tell "found nothing" from "found
+	// something", and `files=$(arac grep ...)` captured the prose as if it were a filename.
+	//
+	// The message itself stays -- an empty answer with no explanation reads as a broken
+	// command -- it simply goes where a diagnostic goes. (The MCP `grep` tool is a separate
+	// surface and keeps prose on its result, where an empty string reads as a broken tool.)
 	root := scanCorpus(t)
-	out := mustRun(t, root, "grep", "zzz_no_such_symbol_zzz", ".")
+	out, err := runLtp(t, root, "grep", "zzz_no_such_symbol_zzz", ".")
+	if err == nil {
+		t.Fatalf("a search that found nothing exited 0; want grep's exit 1\n%s", out)
+	}
 	if !strings.Contains(out, "no matches") {
 		t.Fatalf("want an explicit no-match message, got %q", out)
 	}
+
+	// And a search that DID find something still exits 0.
+	mustRun(t, root, "grep", "func ", ".")
 }
 
 // resourceRow is enough of a resource to locate its source span.

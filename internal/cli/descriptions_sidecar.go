@@ -23,8 +23,9 @@ const defaultSidecarPath = ".aracne/" + helper.DescriptionsSidecarName
 func RunDescriptionsExport(args []string) {
 	fs := flag.NewFlagSet("descriptions-export", flag.ExitOnError)
 	out := fs.String("out", defaultSidecarPath, "path to write the JSONL sidecar")
-	dbPath := fs.String("db", ".aracne/topology.db", "topology database")
+	dbPath := fs.String("db", DefaultDBRelative, "topology database")
 	fs.Parse(args)
+	*dbPath = ProjectDBPath(*dbPath)
 
 	manager, _ := InitRegistry(*dbPath)
 	topo, err := manager.ReadAll()
@@ -55,13 +56,14 @@ func RunDescriptionsExport(args []string) {
 func RunDescriptionsImport(args []string) {
 	fs := flag.NewFlagSet("descriptions-import", flag.ExitOnError)
 	in := fs.String("in", defaultSidecarPath, "path to the JSONL sidecar to restore")
-	dbPath := fs.String("db", ".aracne/topology.db", "topology database")
+	dbPath := fs.String("db", DefaultDBRelative, "topology database")
 	dryRun := fs.Bool("dry-run", false, "report what would be restored without writing")
 	// A migration that silently restores 60% of descriptions looks like success in the
 	// console and is a disaster on disk. This makes the acceptable loss explicit.
 	minRate := fs.Float64("min-rate", 0, "fail (exit 2) when the match rate is below this (0..1)")
 	reportPath := fs.String("report", "", "write unmatched records to this JSONL path")
 	fs.Parse(args)
+	*dbPath = ProjectDBPath(*dbPath)
 
 	recs, err := helper.ReadDescriptionRecords(*in)
 	if err != nil {

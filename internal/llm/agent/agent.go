@@ -62,6 +62,10 @@ func (a *Agent) Run(input string) error {
 			Role:      "assistant",
 			Content:   resp.Content,
 			ToolCalls: resp.ToolCalls,
+			// Carried so the next request can send them back. A provider with extended
+			// thinking on rejects an assistant turn that made a tool call and arrives
+			// without its thinking blocks; providers without the concept ignore them.
+			Thinking: resp.Thinking,
 		}
 		a.messages = append(a.messages, asstMsg)
 
@@ -124,6 +128,7 @@ func (a *Agent) RunSubAgent(systemPrompt, input string, toolMap map[string]tools
 			Role:      "assistant",
 			Content:   resp.Content,
 			ToolCalls: resp.ToolCalls,
+			Thinking:  resp.Thinking,
 		})
 
 		for _, tc := range resp.ToolCalls {

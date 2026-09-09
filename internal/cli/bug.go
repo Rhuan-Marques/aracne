@@ -35,7 +35,7 @@ func RunBug(args []string) {
 
 // Creates a bug report for a topology resource with a given node ID and description.
 func RunBugReport(args []string) {
-	dbPath := ".aracne/topology.db"
+	dbPath := ProjectDBPath(DefaultDBRelative)
 	nodeID := ""
 	description := ""
 	for i := 0; i < len(args); i++ {
@@ -95,7 +95,7 @@ func bugManager(dbPath string) *topology.TopologyManager {
 
 // Lists topology bugs filtered by node ID and/or state.
 func RunBugList(args []string) {
-	dbPath := ".aracne/topology.db"
+	dbPath := ProjectDBPath(DefaultDBRelative)
 	nodeID := ""
 	asJSON := false
 	var state domain.BugState
@@ -157,7 +157,7 @@ func RunBugList(args []string) {
 
 // Marks a bug as acknowledged in the topology database.
 func RunBugAcknowledge(args []string) {
-	dbPath := ".aracne/topology.db"
+	dbPath := ProjectDBPath(DefaultDBRelative)
 	bugID := ""
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -187,7 +187,7 @@ func RunBugAcknowledge(args []string) {
 
 // Marks a bug as dismissed in the topology database.
 func RunBugDismiss(args []string) {
-	dbPath := ".aracne/topology.db"
+	dbPath := ProjectDBPath(DefaultDBRelative)
 	bugID := ""
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -217,7 +217,7 @@ func RunBugDismiss(args []string) {
 
 // Removes a bug from the topology database.
 func RunBugDelete(args []string) {
-	dbPath := ".aracne/topology.db"
+	dbPath := ProjectDBPath(DefaultDBRelative)
 	bugID := ""
 	for i := 0; i < len(args); i++ {
 		switch args[i] {

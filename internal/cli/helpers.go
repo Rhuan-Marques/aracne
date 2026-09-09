@@ -85,14 +85,21 @@ func TopologyLanguagesFor(manager *topology.TopologyManager) []string {
 
 // Initializes topology manager and scanner registry, performing initial scan if needed.
 func InitRegistry(dbPath string) (*topology.TopologyManager, *scanner.Registry) {
+	// Resolved, not taken literally. A verb run from a subdirectory used to build a second
+	// topology there; see ProjectDBPath.
+	dbPath = ProjectDBPath(dbPath)
 	reg := NewScannerRegistry()
 	mgr := topology.New()
 	os.MkdirAll(filepath.Dir(dbPath), 0755)
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
 		mgr.Load(dbPath)
+		// Rooted at the project the database belongs to rather than at the process
+		// working directory, so a first scan triggered from a subdirectory still indexes
+		// the whole project.
+		root := ProjectRootFor(dbPath)
 		fmt.Fprintf(os.Stderr, "No topology found. Scanning project...\n")
 		start := time.Now()
-		if _, err := mgr.IncrementalScan(".", reg); err != nil {
+		if _, err := mgr.IncrementalScan(root, reg); err != nil {
 			fmt.Fprintf(os.Stderr, "Error scanning project: %v\n", err)
 			os.Exit(1)
 		}
@@ -121,7 +128,10 @@ func MapResourceKind(name string) domain.ResourceKind {
 		return domain.ResourceFunction
 	case "method":
 		return domain.ResourceMethod
-	case "struct":
+	// "type" is what this kind was called before migration v1 renamed it, and "class" is
+	// what Python, JS/TS and Java users call it -- including the architecture doc. Both
+	// were rejected while `arac read`'s own usage line advertised "type".
+	case "struct", "type", "class":
 		return domain.ResourceStruct
 	case "named_type":
 		return domain.ResourceNamedType

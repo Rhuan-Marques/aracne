@@ -25,6 +25,8 @@ import (
 // HTTP server that manages the visualization database, WebSocket connections, and chat initialization.
 type Server struct {
 	dbPath   string
+	mux      *http.ServeMux
+	muxOnce  sync.Once
 	ws       *WebSocketManager
 	chatMu   sync.Mutex
 	chatInit bool
@@ -34,16 +36,21 @@ type Server struct {
 
 // Snapshot of topology statistics including node/edge counts, language, warnings, bugs, and kind/type distributions.
 type Summary struct {
-	Root         string         `json:"root"`
-	Language     string         `json:"language"`
-	Languages    []string       `json:"languages"`
-	NodeCount    int            `json:"node_count"`
-	EdgeCount    int            `json:"edge_count"`
-	WarningCount int            `json:"warning_count"`
-	BugCount     int            `json:"bug_count"`
-	Kinds        map[string]int `json:"kinds"`
-	EdgeTypes    map[string]int `json:"edge_types"`
-	GeneratedAt  time.Time      `json:"generated_at"`
+	Root         string   `json:"root"`
+	Language     string   `json:"language"`
+	Languages    []string `json:"languages"`
+	NodeCount    int      `json:"node_count"`
+	EdgeCount    int      `json:"edge_count"`
+	WarningCount int      `json:"warning_count"`
+	BugCount     int      `json:"bug_count"`
+	// ErrorCount is how many scan errors the topology holds, and Errors is the sample it
+	// stored. Nothing surfaced these before, so a project could carry a file its scanner
+	// could not parse and see only a number in `arac scan` -- or, here, nothing at all.
+	ErrorCount  int               `json:"error_count"`
+	Errors      map[string]string `json:"errors,omitempty"`
+	Kinds       map[string]int    `json:"kinds"`
+	EdgeTypes   map[string]int    `json:"edge_types"`
+	GeneratedAt time.Time         `json:"generated_at"`
 }
 
 // Represents a codebase resource node with metadata, location info, and topology metrics for visualization.
@@ -149,37 +156,56 @@ func Listen(addr, dbPath string) error {
 }
 
 // HTTP handler that routes API and static requests, enforcing cross-origin checks for /api/ endpoints.
+//
+// The mux is built ONCE, lazily, and reused. It used to be allocated and populated with eleven
+// routes on every single request -- and, through chatEnabled/bugManagementEnabled, two config
+// file reads and JSON parses with it. Reading the config per call is deliberate (the viz
+// process is long-lived and /api/config can rewrite it underneath itself); rebuilding the
+// router around that was not. The feature-gated routes are registered unconditionally and each
+// checks its own flag, so a disabled feature still 404s and stays verifiable from outside.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(r.URL.Path, "/api/") && !localOriginAllowed(r) {
 		http.Error(w, "forbidden: cross-origin request rejected", http.StatusForbidden)
 		return
 	}
-	mux := http.NewServeMux()
-	mux.Handle("/", staticFileServer())
-	mux.HandleFunc("/api/ws", s.handleWebSocket)
-	mux.HandleFunc("/api/summary", s.handleSummary)
-	mux.HandleFunc("/api/graph", s.handleGraph)
-	mux.HandleFunc("/api/neighborhood", s.handleNeighborhood)
-	mux.HandleFunc("/api/search", s.handleSearch)
-	mux.HandleFunc("/api/node/", s.handleNode)
-	mux.HandleFunc("/api/optimization-rules", s.handleOptimizationRules)
-	mux.HandleFunc("/api/config", s.handleConfig)
-	mux.HandleFunc("/api/warnings", s.handleWarnings)
-	// Chat ships behind features.chat, absent by default. /api/context-graph belongs to it
-	// too: it derives its graph from the resources a chat session's tool calls touched, so
-	// with no chat there is nothing for it to answer from.
-	if s.chatEnabled() {
-		mux.HandleFunc("/api/chat", s.handleChat)
-		mux.HandleFunc("/api/chat/", s.handleChat)
-		mux.HandleFunc("/api/context-graph", s.handleContextGraph)
+	s.muxOnce.Do(func() {
+		mux := http.NewServeMux()
+		mux.Handle("/", staticFileServer())
+		mux.HandleFunc("/api/ws", s.handleWebSocket)
+		mux.HandleFunc("/api/summary", s.handleSummary)
+		mux.HandleFunc("/api/graph", s.handleGraph)
+		mux.HandleFunc("/api/neighborhood", s.handleNeighborhood)
+		mux.HandleFunc("/api/search", s.handleSearch)
+		mux.HandleFunc("/api/node/", s.handleNode)
+		mux.HandleFunc("/api/optimization-rules", s.handleOptimizationRules)
+		mux.HandleFunc("/api/config", s.handleConfig)
+		mux.HandleFunc("/api/warnings", s.handleWarnings)
+		// Chat ships behind features.chat, absent by default. /api/context-graph belongs to
+		// it too: it derives its graph from the resources a chat session's tool calls
+		// touched, so with no chat there is nothing for it to answer from.
+		mux.HandleFunc("/api/chat", s.gated(s.chatEnabled, s.handleChat))
+		mux.HandleFunc("/api/chat/", s.gated(s.chatEnabled, s.handleChat))
+		mux.HandleFunc("/api/context-graph", s.gated(s.chatEnabled, s.handleContextGraph))
+		// The bug pipeline ships behind features.bug_management; with it off the endpoint
+		// 404s rather than serving an empty list, so the disabled state is verifiable from
+		// outside the process.
+		mux.HandleFunc("/api/bugs", s.gated(s.bugManagementEnabled, s.handleBugs))
+		s.mux = mux
+	})
+	s.mux.ServeHTTP(w, r)
+}
+
+// gated serves a handler only while its feature flag is on, and 404s otherwise -- the same
+// answer an unregistered route gives, kept per request so flipping a flag in .aracne/config.json
+// takes effect without restarting the server.
+func (s *Server) gated(enabled func() bool, h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !enabled() {
+			http.NotFound(w, r)
+			return
+		}
+		h(w, r)
 	}
-	// The bug pipeline ships behind features.bug_management; with it off the endpoint is
-	// absent (404 via the mux default) rather than serving an empty list, so the disabled
-	// state is verifiable from outside the process.
-	if s.bugManagementEnabled() {
-		mux.HandleFunc("/api/bugs", s.handleBugs)
-	}
-	mux.ServeHTTP(w, r)
 }
 
 // Loads topology database and bugs, then builds an index with graph edges, degrees, and warning/bug counts for each resource.
@@ -255,6 +281,8 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		NodeCount:    len(idx.topo.Resources),
 		WarningCount: len(idx.topo.Warnings),
 		BugCount:     len(idx.bugs),
+		ErrorCount:   len(idx.topo.Errors),
+		Errors:       idx.topo.Errors,
 		Kinds:        make(map[string]int),
 		EdgeTypes:    make(map[string]int),
 		GeneratedAt:  time.Now(),
@@ -591,7 +619,7 @@ func (s *Server) writeOptimizationRules(rules []OptimizationRule) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(data, '\n'), 0644)
+	return helper.AtomicWriteFile(path, append(data, '\n'), 0644)
 }
 
 // Returns default graph optimization rules for filtering non-exported leaf and short functions.

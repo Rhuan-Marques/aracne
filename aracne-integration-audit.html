@@ -1,0 +1,1767 @@
+<title>Aracne Harness Defect Register</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&display=swap">
+
+<style>
+  /* ---------------------------------------------------------------
+     Tokens. Complete light palette on bare :root; the two dark
+     blocks redefine only tokens, never component rules.
+     --------------------------------------------------------------- */
+  :root {
+    --ground:      #F9FAF7;
+    --surface:     #F0F2EC;
+    --surface-2:   #E6EAE0;
+    --ink:         #141A16;
+    --ink-2:       #4C564F;
+    --ink-3:       #79837B;
+    --rule:        #D5DAD0;
+    --rule-strong: #B7BFB2;
+    --thread:      #17624F;
+    --thread-soft: #DDEBE5;
+
+    /* The terminal panel is the same in both themes on purpose:
+       it is the subject's own material, not a surface. */
+    --term-bg:     #0E1B17;
+    --term-ink:    #D3E3DC;
+    --term-dim:    #7C9189;
+    --term-rule:   #22352E;
+    --term-prompt: #62BFA1;
+
+    --sev-critical: #A32B22;
+    --sev-high:     #A96612;
+    --sev-medium:   #6C6720;
+    --sev-low:      #3F6076;
+
+    --font-display: "Newsreader", Georgia, "Times New Roman", serif;
+    --font-body: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+    color-scheme: light dark;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:      #0D110F;
+      --surface:     #151A17;
+      --surface-2:   #1D2420;
+      --ink:         #E4EAE4;
+      --ink-2:       #A2ACA5;
+      --ink-3:       #7B857E;
+      --rule:        #28302B;
+      --rule-strong: #3A443E;
+      --thread:      #5FC3A4;
+      --thread-soft: #16302A;
+
+      --sev-critical: #E8756A;
+      --sev-high:     #E0A44F;
+      --sev-medium:   #C2BB68;
+      --sev-low:      #8FB6CE;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground:      #0D110F;
+    --surface:     #151A17;
+    --surface-2:   #1D2420;
+    --ink:         #E4EAE4;
+    --ink-2:       #A2ACA5;
+    --ink-3:       #7B857E;
+    --rule:        #28302B;
+    --rule-strong: #3A443E;
+    --thread:      #5FC3A4;
+    --thread-soft: #16302A;
+
+    --sev-critical: #E8756A;
+    --sev-high:     #E0A44F;
+    --sev-medium:   #C2BB68;
+    --sev-low:      #8FB6CE;
+  }
+
+  /* --------------------------------------------------------------- */
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--font-body);
+    font-size: 16px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 1120px;
+    margin: 0 auto;
+    padding: 40px 28px 96px;
+  }
+
+  a { color: var(--thread); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:focus-visible, button:focus-visible {
+    outline: 2px solid var(--thread);
+    outline-offset: 2px;
+    border-radius: 1px;
+  }
+
+  code, kbd, samp { font-family: var(--font-mono); }
+
+  /* ---- masthead ---- */
+
+  .masthead { display: flex; flex-direction: column; gap: 26px; }
+
+  .runrecord {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+    gap: 2px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    font-family: var(--font-mono);
+    font-size: 12px;
+  }
+  .runrecord div { background: var(--ground); padding: 9px 12px; display: flex; flex-direction: column; gap: 2px; }
+  .runrecord dt {
+    color: var(--ink-3);
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    font-size: 10px;
+    font-weight: 500;
+  }
+  .runrecord dd { margin: 0; color: var(--ink); font-weight: 500; word-break: break-word; }
+
+  h1 {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: clamp(2.4rem, 6vw, 3.7rem);
+    line-height: 1.04;
+    letter-spacing: -0.018em;
+    margin: 0;
+    text-wrap: balance;
+  }
+
+  .deck {
+    font-family: var(--font-display);
+    font-style: italic;
+    font-size: clamp(1.08rem, 2.3vw, 1.3rem);
+    line-height: 1.55;
+    color: var(--ink-2);
+    margin: 0;
+    max-width: 62ch;
+  }
+
+  .scope {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 22px 40px;
+    padding-top: 22px;
+    border-top: 1px solid var(--rule);
+    max-width: 100%;
+  }
+  .scope h3 {
+    margin: 0 0 4px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--thread);
+  }
+  .scope p { margin: 0; font-size: 14.5px; color: var(--ink-2); }
+
+  /* ---- tally ---- */
+
+  .tally {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    margin-top: 44px;
+  }
+  .tally-cell { background: var(--ground); padding: 14px 16px 12px; }
+  .tally-n {
+    font-family: var(--font-mono);
+    font-size: 30px;
+    font-weight: 600;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    display: block;
+  }
+  .tally-label {
+    display: block;
+    margin-top: 8px;
+    font-size: 11px;
+    font-family: var(--font-mono);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .tally-cell[data-sev="critical"] .tally-n { color: var(--sev-critical); }
+  .tally-cell[data-sev="high"]     .tally-n { color: var(--sev-high); }
+  .tally-cell[data-sev="medium"]   .tally-n { color: var(--sev-medium); }
+  .tally-cell[data-sev="low"]      .tally-n { color: var(--sev-low); }
+  .tally-cell[data-sev="total"]    .tally-n { color: var(--ink); }
+
+  /* ---- filter + index ---- */
+
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 10px;
+    margin: 30px 0 8px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .controls-label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin-right: 4px;
+  }
+  .filter {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 5px 11px;
+    border: 1px solid var(--rule-strong);
+    background: transparent;
+    color: var(--ink-2);
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+  }
+  .filter:hover { border-color: var(--thread); color: var(--ink); }
+  .filter[aria-pressed="true"] {
+    background: var(--thread);
+    border-color: var(--thread);
+    color: var(--ground);
+  }
+  .filter-note {
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .index { margin: 0 0 4px; padding: 0; list-style: none; }
+  .index li {
+    display: grid;
+    grid-template-columns: 52px 1fr auto;
+    gap: 14px;
+    align-items: baseline;
+    padding: 9px 0;
+    border-bottom: 1px solid var(--rule);
+  }
+  .index .idx-id { font-family: var(--font-mono); font-size: 12px; color: var(--thread); font-weight: 500; }
+  .index a { color: var(--ink); text-decoration: none; font-size: 15px; }
+  .index a:hover { text-decoration: underline; }
+  .index .idx-sev {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  /* ---- findings ---- */
+
+  .findings { margin-top: 64px; display: flex; flex-direction: column; gap: 0; }
+
+  .finding {
+    padding: 34px 0 40px;
+    border-top: 2px solid var(--ink);
+  }
+  .finding + .finding { border-top: 1px solid var(--rule-strong); }
+
+  .f-head { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; margin-bottom: 14px; }
+
+  .f-id {
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    color: var(--thread);
+  }
+  .chip {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border: 1px solid currentColor;
+    color: var(--ink-3);
+    white-space: nowrap;
+  }
+  .chip.sev { font-weight: 600; }
+  .finding[data-sev="critical"] .chip.sev { color: var(--sev-critical); }
+  .finding[data-sev="high"]     .chip.sev { color: var(--sev-high); }
+  .finding[data-sev="medium"]   .chip.sev { color: var(--sev-medium); }
+  .finding[data-sev="low"]      .chip.sev { color: var(--sev-low); }
+  .chip.status { color: var(--thread); background: var(--thread-soft); border-color: transparent; }
+  .chip.status.inferred { color: var(--ink-2); background: var(--surface-2); }
+  .chip.status.fixed { color: var(--ground); background: var(--thread); border-color: var(--thread); }
+
+  .resolved {
+    border-left: 3px solid var(--thread);
+    background: var(--thread-soft);
+    padding: 12px 16px;
+    margin: 0 0 22px;
+    font-size: 14.5px;
+  }
+  .resolved p { margin: 0; max-width: 74ch; }
+  .resolved p + p { margin-top: 8px; }
+  .resolved strong { font-weight: 600; }
+  .finding[data-fixed="yes"] h2 { text-decoration: none; }
+
+  .finding h2 {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: clamp(1.5rem, 3.4vw, 1.95rem);
+    line-height: 1.18;
+    letter-spacing: -0.01em;
+    margin: 0 0 22px;
+    text-wrap: balance;
+    max-width: 30ch;
+  }
+  @media (min-width: 900px) { .finding h2 { max-width: 34ch; } }
+
+  .rows { display: grid; gap: 18px; }
+  .row { display: grid; gap: 6px; }
+  @media (min-width: 860px) {
+    .row { grid-template-columns: 132px minmax(0, 1fr); gap: 24px; align-items: start; }
+  }
+  .row > h3 {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    padding-top: 5px;
+  }
+  .row > div { min-width: 0; }
+  .row p { margin: 0 0 10px; max-width: 74ch; }
+  .row p:last-child { margin-bottom: 0; }
+  .row ul { margin: 0 0 10px; padding-left: 1.15em; max-width: 74ch; }
+  .row ul:last-child { margin-bottom: 0; }
+  .row li { margin-bottom: 5px; }
+
+  .ref { font-family: var(--font-mono); font-size: 13px; }
+  .ref-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 5px; }
+  .ref-list li { font-family: var(--font-mono); font-size: 12.5px; color: var(--ink-2); margin: 0; }
+  .ref-list b { color: var(--ink); font-weight: 500; }
+
+  p code, li code, .row code {
+    font-size: 0.875em;
+    background: var(--surface);
+    padding: 1px 5px;
+    border: 1px solid var(--rule);
+    white-space: nowrap;
+  }
+
+  /* ---- terminal ---- */
+
+  .term {
+    background: var(--term-bg);
+    color: var(--term-ink);
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    line-height: 1.66;
+    padding: 14px 16px;
+    overflow-x: auto;
+    border-left: 3px solid var(--term-prompt);
+    margin: 0 0 12px;
+    white-space: pre;
+    tab-size: 4;
+  }
+  .term:last-child { margin-bottom: 0; }
+  .term b { color: #fff; font-weight: 500; }
+  .term i { color: var(--term-dim); font-style: normal; }
+  .term u { color: var(--term-prompt); text-decoration: none; }
+  .term .bad { color: #F09A8E; }
+
+  .term-cap {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin: 0 0 6px;
+  }
+
+  /* ---- appendix ---- */
+
+  .appendix { margin-top: 84px; padding-top: 34px; border-top: 2px solid var(--ink); }
+  .appendix h2 {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 1.7rem;
+    letter-spacing: -0.01em;
+    margin: 0 0 8px;
+  }
+  .appendix > p { max-width: 72ch; color: var(--ink-2); margin: 0 0 28px; }
+
+  .checklist {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(272px, 1fr));
+    gap: 0 40px;
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .checklist li {
+    padding: 11px 0;
+    border-bottom: 1px solid var(--rule);
+    font-size: 14.5px;
+    display: grid;
+    grid-template-columns: 18px 1fr;
+    gap: 10px;
+    align-items: baseline;
+  }
+  .checklist .mark { font-family: var(--font-mono); color: var(--thread); font-size: 12px; }
+  .checklist .mark.warn { color: var(--sev-medium); }
+  .checklist b { font-weight: 600; }
+  .checklist span.note { color: var(--ink-2); }
+
+  .section-gap { margin-top: 54px; }
+
+  footer {
+    margin-top: 72px;
+    padding-top: 20px;
+    border-top: 1px solid var(--rule);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--ink-3);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 24px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+  }
+</style>
+
+<div class="page">
+
+  <header class="masthead">
+    <dl class="runrecord">
+      <div><dt>Repository</dt><dd>Rhuan-Marques/aracne</dd></div>
+      <div><dt>Branch</dt><dd>chore/debloat</dd></div>
+      <div><dt>Commit</dt><dd>07aee2b (dirty)</dd></div>
+      <div><dt>Binary</dt><dd>arac 07aee2b-dirty</dd></div>
+      <div><dt>Audited</dt><dd>2026-09-08</dd></div>
+      <div><dt>Baseline</dt><dd>go build ./... ok · go test ./... all green</dd></div>
+    </dl>
+
+    <h1>Ten defects between the model and the graph</h1>
+
+    <p class="deck">An audit of the Claude&nbsp;Code and OpenCode surfaces — the guard hook, the shell
+      classifier, <code>arac&nbsp;cmd</code>, the annotated grep, and the generated integration files.
+      Nine of the twelve were reproduced against a scanned fixture with the built binary; the other three are
+      read off the code and the artifacts it writes, and each entry says which it is.</p>
+
+    <div class="scope">
+      <div>
+        <h3>What was examined</h3>
+        <p>The PreToolUse/PostToolUse guard, command interception and rewriting, <code>internal/shellcmd</code>,
+          <code>arac cmd</code> passthrough fidelity, <code>topogrep</code> output parity against GNU grep 3.11,
+          the MCP server's JSON-RPC handling, <code>arac setup</code>/<code>disable</code> round-trips, and the
+          incremental scan that keeps the graph current under the hooks.</p>
+      </div>
+      <div>
+        <h3>What was excluded</h3>
+        <p>Per the brief: the viz Chat tab, <code>internal/chat</code>, and the internal <code>arac agent</code>
+          REPL. The bug-pipeline agents are only covered where <code>arac setup</code> writes or prunes their files.</p>
+      </div>
+      <div>
+        <h3>What counts as a defect here</h3>
+        <p>Only behaviour the code's own stated contract forbids: a confidently wrong answer, a capability
+          that is manufactured and then withdrawn, or two enforcement paths that disagree. Deliberate
+          divergences are listed separately at the end, unflagged.</p>
+      </div>
+    </div>
+  </header>
+
+  <div class="tally">
+    <div class="tally-cell" data-sev="critical"><span class="tally-n">1</span><span class="tally-label">Critical · fixed</span></div>
+    <div class="tally-cell" data-sev="high"><span class="tally-n">2</span><span class="tally-label">High</span></div>
+    <div class="tally-cell" data-sev="medium"><span class="tally-n">5</span><span class="tally-label">Medium · 1 fixed</span></div>
+    <div class="tally-cell" data-sev="low"><span class="tally-n">4</span><span class="tally-label">Low</span></div>
+    <div class="tally-cell" data-sev="total"><span class="tally-n">12</span><span class="tally-label">Findings · 2 fixed</span></div>
+  </div>
+
+  <div class="controls">
+    <span class="controls-label">Severity</span>
+    <button class="filter" data-filter="critical" aria-pressed="true" type="button">Critical</button>
+    <button class="filter" data-filter="high" aria-pressed="true" type="button">High</button>
+    <button class="filter" data-filter="medium" aria-pressed="true" type="button">Medium</button>
+    <button class="filter" data-filter="low" aria-pressed="true" type="button">Low</button>
+    <span class="filter-note" id="shown">10 of 10 shown</span>
+  </div>
+
+  <ol class="index">
+    <li><span class="idx-id">F-01</span><a href="#f01">Renaming a source file deletes its declarations from the topology</a><span class="idx-sev" style="color:var(--sev-critical)">Critical</span></li>
+    <li><span class="idx-id">F-02</span><a href="#f02">A stderr redirect is read as an stdout redirect</a><span class="idx-sev" style="color:var(--sev-high)">High</span></li>
+    <li><span class="idx-id">F-03</span><a href="#f03">A non-recursive <code>grep</code> on a directory is answered as a recursive search</a><span class="idx-sev" style="color:var(--sev-high)">High</span></li>
+    <li><span class="idx-id">F-04</span><a href="#f04">OpenCode's permission block bypasses <code>BlockableInMode</code></a><span class="idx-sev" style="color:var(--sev-medium)">Medium</span></li>
+    <li><span class="idx-id">F-05</span><a href="#f05"><code>grep -c</code> drops zero-count files and reorders the rest</a><span class="idx-sev" style="color:var(--sev-medium)">Medium</span></li>
+    <li><span class="idx-id">F-06</span><a href="#f06">Topology warnings reach the model in a random order</a><span class="idx-sev" style="color:var(--sev-medium)">Medium</span></li>
+    <li><span class="idx-id">F-07</span><a href="#f07">Nothing pre-approves the command the guard rewrites into</a><span class="idx-sev" style="color:var(--sev-medium)">Medium</span></li>
+    <li><span class="idx-id">F-08</span><a href="#f08"><code>arac scan</code> is the one verb that can create a second project</a><span class="idx-sev" style="color:var(--sev-low)">Low</span></li>
+    <li><span class="idx-id">F-09</span><a href="#f09">A recursive search drops the <code>./</code> prefix real grep prints</a><span class="idx-sev" style="color:var(--sev-low)">Low</span></li>
+    <li><span class="idx-id">F-10</span><a href="#f10">The edit-sync hook and the guard disagree about what a native edit is</a><span class="idx-sev" style="color:var(--sev-low)">Low</span></li>
+    <li><span class="idx-id">F-11</span><a href="#f11">Moving a file discards the descriptions of every symbol in it</a><span class="idx-sev" style="color:var(--sev-medium)">Medium</span></li>
+    <li><span class="idx-id">F-12</span><a href="#f12">A package whose last file moves away is left behind as a phantom</a><span class="idx-sev" style="color:var(--sev-low)">Low</span></li>
+  </ol>
+
+  <main class="findings">
+
+    <!-- ============================ F-01 ============================ -->
+    <article class="finding" id="f01" data-sev="critical" data-fixed="yes">
+      <div class="f-head">
+        <span class="f-id">F-01</span>
+        <span class="chip sev">Critical</span>
+        <span class="chip">Incremental scan</span>
+        <span class="chip">Graph integrity</span>
+        <span class="chip status fixed">Fixed · tests added</span>
+      </div>
+      <h2>Renaming a source file deletes its declarations from the topology</h2>
+
+      <div class="resolved">
+        <p><strong>Resolved.</strong> <code>RemoveFileResources</code> now spares any owned symbol whose
+          <code>Location.Path</code> no longer names the file being removed, via a new
+          <code>movedOutOfFile</code> helper. The file node itself is exempt from the test — a file resource
+          carries an empty <code>Location.Path</code> because its identity <em>is</em> its path — and the
+          connection-strip pass reads the same set, so the new file's and the package's ownership edges
+          survive with it.</p>
+        <p>Verified through the guard on a fresh fixture: 6 resources before the rename, 6 after,
+          <code>arac read Alpha</code> answering from <code>pkg/b.go</code>, the annotated grep keeping its
+          headers, and the only remaining warning the true one — the old file node really is gone. Two unit
+          tests in <code>internal/helper/referrers_test.go</code> and one scan-level equivalence test in
+          <code>tests/incremental_equivalence_test.go</code>; the unit tests fail on the pre-fix code with the
+          exact bogus warning this entry documents. <code>go test ./...</code> green.</p>
+        <p><strong>One thing the fix does not restore: see <a href="#f11">F-11</a>.</strong> The graph and its
+          edges survive a rename now; a description that aracne generated for a symbol with no doc comment
+          still does not, and that is a separate defect one layer down in the scanners.</p>
+      </div>
+
+      <div class="rows">
+        <div class="row">
+          <h3>Symptom</h3>
+          <div>
+            <p>An incremental scan that sees one file added and another deleted registers the added file
+              first and removes the deleted one second. <code>RemoveFileResources</code> deletes by resource
+              <em>ID</em>, so when the two files declare the same IDs — which is exactly what a rename is in
+              Go, where an ID is <code>module/package.Symbol</code> and carries no filename — the removal takes
+              the declarations the new file has just re-registered.</p>
+            <p>The graph keeps the new <em>file</em> node and loses every symbol in it. It does not heal:
+              the manifest is stamped with the new file's current mtime, so every subsequent incremental
+              scan sees nothing to do.</p>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Reproduction</h3>
+          <div>
+            <p class="term-cap">Fixture: a two-file Go package, scanned with <code>--all</code>.</p>
+<pre class="term"><u>$</u> <b>arac scan --all</b> &amp;&amp; arac resource list
+<i>Found 6 resources.</i>
+  …/pkg/a.go
+  …/pkg/keep.go
+  example.com/ren/pkg
+  example.com/ren/pkg.One
+  example.com/ren/pkg.Other
+  example.com/ren/pkg.Two
+
+<u>$</u> <b>mv pkg/a.go pkg/b.go</b>
+<u>$</u> <b>arac scan</b>            <i># the default incremental scan</i>
+<span class="bad">[node_removed] example.com/ren/pkg.One was removed from …/pkg/a.go,
+    verify …/pkg/b.go which references it via has_function</span>
+
+<u>$</u> <b>arac resource list</b>
+<i>Found 4 resources.</i>
+  …/pkg/b.go
+  …/pkg/keep.go
+  example.com/ren/pkg
+  example.com/ren/pkg.Other       <span class="bad">← One and Two are gone</span>
+
+<u>$</u> <b>arac read One</b>
+<span class="bad"># UNRESOLVED:
+- One: resource "One" not found in topology</span></pre>
+            <p class="term-cap">And through the harness, which is how a session actually hits it.</p>
+<pre class="term"><u>$</u> <i>PostToolUse hook event for</i> <b>mv pkg/a.go pkg/b.go</b>
+{"hookSpecificOutput":{"additionalContext":
+  "Topology re-synced.\nTopology warnings …
+   - [node_removed] example.com/e2e/pkg.Alpha was removed from …/pkg/a.go,
+     verify …/pkg/b.go which references it via has_function"}}
+
+<u>$</u> <b>arac node count</b>
+2                                  <i># was 4</i></pre>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Trigger paths</h3>
+          <div>
+            <ul>
+              <li><code>mv</code> / <code>git mv</code> of a <code>.go</code> file inside its package — the
+                classifier calls the command unclassified, so the PostToolUse drift check fires and runs
+                the scan that does the damage.</li>
+              <li>The <code>scan.pre_tool</code> incremental scan in front of the <em>next</em> tool call, if
+                the drift check did not get there first.</li>
+              <li><b>Renaming or moving the project directory itself.</b> Every path changes at once, so the
+                whole graph is added and then removed: a four-resource fixture came back with one node, and
+                <code>arac scan</code> then printed <code>Warning: detected go under … but indexed 0 files</code>.</li>
+              <li>A branch switch or <code>git checkout</code> that renames a file.</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Effect</h3>
+          <div>
+            <p>For the rest of the session the topology answers "not found" for symbols that plainly exist:
+              <code>arac read</code> fails, the annotated grep loses its headers for that file, and
+              <code>read.kinds</code>-gated reads fall through to raw bytes. The model is simultaneously told
+              to <em>verify the file that still contains the declaration</em>, which is a warning it cannot act on.</p>
+            <p>Recovery requires <code>arac scan --all</code> or touching the renamed file again; a second
+              incremental scan does not recover it. Nothing tells the operator to do either.</p>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Where</h3>
+          <div>
+            <ul class="ref-list">
+              <li><b>internal/topology/manager.go:316</b> — the <code>for _, path := range deleted</code> loop runs
+                <em>after</em> phase 1 and phase 2 have registered the added file</li>
+              <li><b>internal/helper/manifest.go:491</b> — <code>RemoveFileResources</code> collects
+                <code>toRemove</code> from the old file node's <code>ownedConnTypes</code> edges and deletes those
+                IDs unconditionally</li>
+              <li><b>internal/topology/manager.go:114</b> — <code>IncrementalScan</code>, the enclosing order</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Fix applied</h3>
+          <div>
+            <p><b>Ownership, not rename detection.</b> The removal never asks "was this a rename?" — a question
+              that needs content hashing (defeated by the rename-plus-edit that <code>git mv</code> usually is)
+              or an id-overlap threshold, and that answers per FILE where the graph needs an answer per SYMBOL.
+              It asks "does this resource still say it lives here?", which the graph already knows because
+              phases 1 and 2 have run:</p>
+<pre class="term">for connType, targets := range fileRes.Connections {
+    if !ownedConnTypes[connType] { continue }
+    for _, target := range targets {
+        <u>if movedOutOfFile(topo, target, fileID) {</u>
+            <u>continue</u>
+        <u>}</u>
+        toRemove[target] = true
+    }
+}</pre>
+            <p>It is right in every shape: a rename keeps the symbol (its path moved), a real deletion drops it
+              (its path did not), a delete-plus-unrelated-add drops the old and keeps the new, and a symbol
+              re-declared in a third file in the same batch is kept — which is correct, because it exists.</p>
+            <p><b>The alternative was reordering</b> the <code>deleted</code> loop above phase 1. It also works,
+              and better than first written up here: <code>ResolveReferrerWarnings</code>, already the last step
+              of <code>IncrementalScan</code>, retires a <code>node_removed</code> whose target is back in the
+              graph, so the transient warnings clean themselves up. Running the two halves as separate scans
+              confirms the resulting graph is fully correct. The ownership guard still won on being four lines
+              inside one function, not moving the phase boundaries <code>reverseCallerFiles</code> and
+              <code>removedSince</code> are written around.</p>
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <!-- ============================ F-02 ============================ -->
+    <article class="finding" id="f02" data-sev="high">
+      <div class="f-head">
+        <span class="f-id">F-02</span>
+        <span class="chip sev">High</span>
+        <span class="chip">Guard · shell scanner</span>
+        <span class="chip status">Reproduced</span>
+      </div>
+      <h2>A stderr redirect is read as an stdout redirect</h2>
+
+      <div class="rows">
+        <div class="row">
+          <h3>Symptom</h3>
+          <div>
+            <p><code>splitCommandSegments</code> sets <code>redirectsOut</code> on any unquoted <code>&gt;</code>
+              that is not followed by <code>&amp;</code>. It has no notion of a file-descriptor prefix, so
+              <code>2&gt;/dev/null</code> and <code>2&gt;&gt;err.log</code> are recorded as "this segment writes its
+              stdout to a file". Only <code>2&gt;&amp;1</code> escapes, and by accident — the <code>&amp;</code>
+              check was written for descriptor duplication.</p>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Two consequences</h3>
+          <div>
+            <ul>
+              <li><b>Interception silently switches off.</b> <code>interceptableSegment</code> refuses any
+                segment with <code>redirectsOut</code>, so <code>grep -rn foo . 2&gt;/dev/null</code> — one of the
+                most common shapes an agent writes — never reaches the annotated grep, in any mode. Nothing
+                reports this; it simply looks like aracne not helping.</li>
+              <li><b>A read is classified as a mutation.</b> <code>ShellCommandKeyForArgs</code> takes
+                <code>redirectsOut</code> as its signal that a stream editor writes, so
+                <code>sed -n '1,5p' f 2&gt;/dev/null</code> and <code>awk 'NR&lt;=3' f 2&gt;/dev/null</code> come back
+                as <code>edit</code>. Under <code>blocked_tools: ["edit"]</code> they are denied outright, with a
+                message telling the model to use <code>arac edit</code> on a command that reads. With the default
+                empty <code>blocked_tools</code> they still make <code>mayHaveWrittenSource</code> true, so every
+                such read pays a post-call drift check and manifest walk.</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Reproduction</h3>
+          <div>
+            <p class="term-cap">mode: mcp · blocked_tools: ["edit"] · PreToolUse events</p>
+<pre class="term"><u>$</u> <i>command:</i> <b>sed -n '1,5p' src/big.go</b>
+<i>(no output — allowed, as it should be)</i>
+
+<u>$</u> <i>command:</i> <b>sed -n '1,5p' src/big.go 2&gt;/dev/null</b>
+{"hookSpecificOutput":{"permissionDecision":<span class="bad">"deny"</span>,
+  "permissionDecisionReason":"Blocked by aracne config (blocked_tools: <span class="bad">edit</span>).
+   aracne: `echo '{\"edits\":[…]}' | arac edit` applies several replacements …"}}
+
+<u>$</u> <i>command:</i> <b>awk 'NR&lt;=3' src/big.go 2&gt;/dev/null</b>
+{"hookSpecificOutput":{"permissionDecision":<span class="bad">"deny"</span>, …}}</pre>
+            <p class="term-cap">mode: intercept_line_ranges · the rewrite that does not happen</p>
+<pre class="term"><u>$</u> <i>command:</i> <b>grep -rn "foo" .</b>
+{"hookSpecificOutput":{"updatedInput":{"command":"…/arac cmd -- grep -rn \"foo\" ."}}}
+
+<u>$</u> <i>command:</i> <b>grep -rn "foo" . 2&gt;/dev/null</b>
+<i>(no output — <span class="bad">not intercepted</span>, runs as plain grep)</i></pre>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Where</h3>
+          <div>
+            <ul class="ref-list">
+              <li><b>internal/cli/guard.go:592–597</b> — <code>case '&gt;'</code> in <code>splitCommandSegments</code></li>
+              <li><b>internal/cli/guard.go:466</b> — the <code>redirectsOut</code> field comment, which says
+                "an unquoted <code>&gt;</code> or <code>&gt;&gt;</code>" and means stdout</li>
+              <li><b>internal/cli/guard_intercept.go:98</b> — the interception refusal</li>
+              <li><b>internal/toolspec/toolspec.go</b> — <code>ShellCommandKeyForArgs</code>, the
+                <code>streamEditors</code> branch</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Fix</h3>
+          <div>
+            <p>At <code>case '&gt;'</code>, look back over the immediately preceding raw runes while they are
+              digits. An empty digit run, or exactly <code>1</code>, is a stdout redirect and sets
+              <code>curRedirect</code>; any other descriptor (<code>2</code>, <code>3</code>, …) does not.
+              The look-back must read the raw <code>runes</code> slice rather than the accumulated segment text,
+              for the same reason <code>isRedirectAmpersand</code> already does — quote characters have been
+              dropped from <code>cur</code>.</p>
+            <p><code>&amp;&gt;file</code> and <code>&amp;&gt;&gt;file</code> genuinely do redirect stdout and must keep
+              setting the flag; <code>isRedirectAmpersand</code> already recognises the pair, so the
+              <code>&amp;</code> arm needs the same treatment as <code>1&gt;</code>.</p>
+            <p>Add cases to <code>internal/shellcmd/shellcmd_test.go</code>'s companion in
+              <code>internal/cli/guard_intercept_test.go</code>: <code>2&gt;/dev/null</code> must intercept,
+              <code>&gt;out.txt</code> must not, <code>2&gt;&amp;1</code> must intercept, <code>&amp;&gt;log</code> must not.</p>
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <!-- ============================ F-03 ============================ -->
+    <article class="finding" id="f03" data-sev="high">
+      <div class="f-head">
+        <span class="f-id">F-03</span>
+        <span class="chip sev">High</span>
+        <span class="chip">shellcmd · arac cmd</span>
+        <span class="chip status">Reproduced</span>
+      </div>
+      <h2>A non-recursive <code>grep</code> on a directory is answered as a recursive search</h2>
+
+      <div class="rows">
+        <div class="row">
+          <h3>Symptom</h3>
+          <div>
+            <p><code>parseGrep</code> tracks <code>sawRecursive</code>, but only consults it for the
+              <em>path-less</em> form (<code>grep -r foo</code> with no operand). When an operand is present the
+              flag is dropped on the floor, and <code>grepRoots</code> walks any directory operand recursively.</p>
+            <p>POSIX grep does not. GNU grep 3.11 prints <code>grep: pkg: Is a directory</code> and exits 2;
+              BSD grep behaves equivalently. Only <code>rg</code>, <code>ag</code> and <code>ack</code> — already
+              handled by <code>searchesCwdByDefault</code> — recurse without being asked.</p>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Reproduction</h3>
+          <div>
+<pre class="term"><u>$</u> <b>/usr/bin/grep -l Add .</b>
+<span class="bad">/usr/bin/grep: .: Is a directory</span>
+<i>exit 2</i>
+
+<u>$</u> <b>arac cmd -- grep -l Add .</b>
+pkg/util.go
+<i>exit 0</i>
+
+<u>$</u> <b>/usr/bin/grep Add pkg</b>
+<span class="bad">/usr/bin/grep: pkg: Is a directory</span>
+<i>exit 2</i>
+
+<u>$</u> <b>arac cmd -- grep Add pkg</b>
+# pkg/util.go:4-6 — Add adds two ints.
+pkg/util.go:func Add(a, b int) int {
+<i>exit 0</i></pre>
+            <p class="term-cap">The same on this repository, through <code>arac cmd</code>:</p>
+<pre class="term"><u>$</u> <b>arac cmd -- grep -l TopologyManager internal/cli</b>
+internal/cli/bug.go
+internal/cli/check_updates.go
+internal/cli/cmd.go
+…                                <i># real grep: "Is a directory", exit 2</i></pre>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Effect</h3>
+          <div>
+            <p>This is precisely the failure <code>serveCommand</code> documents for <code>rg</code> on a box
+              without ripgrep, in the other direction: aracne manufactures a capability, the model learns the
+              spelling, and the capability vanishes the moment the command carries a flag
+              <code>shellcmd</code> does not model.</p>
+<pre class="term"><u>$</u> <b>arac cmd -- grep Add pkg</b>          <i># served, exit 0</i>
+# pkg/util.go:4-6 — Add adds two ints.
+pkg/util.go:func Add(a, b int) int {
+
+<u>$</u> <b>arac cmd -- grep -o Add pkg</b>       <i># -o is unmodelled → passthrough</i>
+<span class="bad">grep: pkg: Is a directory</span>
+<i>exit 2</i></pre>
+            <p>A model that has been rewarded for <code>grep pat somedir</code> will type it again with
+              <code>-o</code>, <code>-h</code> or <code>-P</code> and get an error, having been given no way to
+              tell the two apart.</p>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Where</h3>
+          <div>
+            <ul class="ref-list">
+              <li><b>internal/shellcmd/shellcmd.go:629, 685, 848</b> — <code>sawRecursive</code> is declared, set,
+                and used only in the no-operand branch; it never leaves <code>parseGrep</code></li>
+              <li><b>internal/cli/cmd.go:422</b> — <code>grepRoots</code> hands any operand to topogrep, which
+                walks a directory</li>
+              <li><b>tests/grep_parity_test.go</b> — every directory case in the suite passes <code>-r</code>,
+                so the shape is untested rather than pinned</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Fix</h3>
+          <div>
+            <p>Carry the flag out of the parser: add <code>Recursive bool</code> to
+              <code>shellcmd.GrepRequest</code> and set it from <code>sawRecursive</code>. The parser stays pure —
+              it still does no I/O — and the decision lands where the filesystem is already being consulted.</p>
+            <p>In <code>grepRoots</code>, when <code>req.Grep.Recursive</code> is false and the tool is not in
+              <code>searchesCwdByDefault</code>, <code>os.Stat</code> each operand and return
+              <code>ok == false</code> if any is a directory. That falls through to <code>passthrough()</code>,
+              which reproduces the real error and exit status byte for byte — the same trade
+              <code>commandIsAvailable</code> already makes.</p>
+            <p>Note that a directory operand reached through <code>-r</code> must keep working, and that a
+              single <em>file</em> operand is unaffected either way.</p>
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <!-- ============================ F-04 ============================ -->
+    <article class="finding" id="f04" data-sev="medium">
+      <div class="f-head">
+        <span class="f-id">F-04</span>
+        <span class="chip sev">Medium</span>
+        <span class="chip">arac setup · OpenCode</span>
+        <span class="chip status">Reproduced</span>
+      </div>
+      <h2>OpenCode's permission block bypasses <code>BlockableInMode</code></h2>
+
+      <div class="rows">
+        <div class="row">
+          <h3>Symptom</h3>
+          <div>
+            <p><code>initOpenCode</code> gates on <code>cfg.GuardBlocksNativeReads()</code> and then reads the
+              raw <code>blocked_tools</code> list. The Claude Code guard does not: it filters the same list through
+              <code>cfg.BlockableInMode()</code>, which drops <code>grep</code> outside <code>mcp</code> mode
+              because search is intercepted in every mode and refusing it would deny a command aracne was one
+              step from answering.</p>
+            <p>So in <code>mode: "cli"</code> with <code>blocked_tools: ["read", "grep"]</code>, the two harnesses
+              enforce different policies from the same config — and the generated contract describes the
+              Claude one to both of them.</p>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Reproduction</h3>
+          <div>
+<pre class="term"><u>$</u> <i>.aracne/config.json:</i> mode "cli", blocked_tools ["read","grep"]
+<u>$</u> <b>arac setup -y</b>
+
+<u>$</u> <b>cat .opencode/opencode.json | jq .permission</b>
+{
+  "read": "deny",
+  "edit": "allow",
+  "bash": { "*": "allow",
+            "cat *": "deny", "head *": "deny", "tail *": "deny", "less *": "deny",
+            <span class="bad">"grep *": "deny", "rg *": "deny"</span> }
+}
+
+<u>$</u> <i>Claude guard, same config, PreToolUse Bash</i> <b>grep -rn Greet pkg/util.go</b>
+<i>(no output — <span class="bad">not denied</span>)</i>
+
+<u>$</u> <b>cat CLAUDE.md</b>   <i># and AGENTS.md — the same document</i>
+## Tool Guard
+This project denies shell and native <span class="bad">read</span> calls that aracne can answer instead
+(`read` in its `blocked_tools`).      <i># grep correctly absent</i></pre>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Effect</h3>
+          <div>
+            <p>An OpenCode session refuses <code>grep …</code> and <code>rg …</code> with no explanation the
+              contract offers, and no alternative: the annotated grep in that mode arrives <em>as</em> the
+              command being refused. The comment directly above the code names this exact failure — "the one the
+              operator notices is this one, because it refuses silently".</p>
+            <p><b>Related, same block.</b> A static glob map cannot reproduce the guard's two denial exemptions
+              (<code>operatesOutsideProject</code> and <code>readsOnlyUntrackedFiles</code>), so
+              <code>cat CHANGELOG.md</code> and <code>cat /tmp/repro.py</code> are refused on OpenCode where the
+              Claude guard deliberately lets them through. That is inherent to the mechanism rather than a
+              coding error, but it belongs in the same review: it is the regression
+              <code>guard_untracked.go</code> was written to end.</p>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Where</h3>
+          <div>
+            <ul class="ref-list">
+              <li><b>internal/cli/setup.go:130–133</b> — <code>blocked = toolNameSet(mainEff.BlockedTools)</code></li>
+              <li><b>internal/helper/config.go:1354</b> — <code>BlockableInMode</code>, the filter that is skipped</li>
+              <li><b>internal/cli/guard.go</b> — <code>loadGuardConfig</code>, which does apply it</li>
+              <li><b>internal/cli/setup.go:591, 598</b> — <code>openCodeGrepDenyPatterns</code>,
+                <code>openCodeBashPermission</code></li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Fix</h3>
+          <div>
+            <p>One line: <code>blocked = cfg.BlockableInMode(toolNameSet(mainEff.BlockedTools))</code>. The
+              <code>GuardBlocksNativeReads()</code> guard around it becomes redundant —
+              <code>BlockableInMode</code> already returns an empty set when the mode may block nothing — so the
+              branch can collapse to the single call.</p>
+            <p>Then pin it: a test asserting that for each of the four modes, the set
+              <code>initOpenCode</code> writes and the set <code>loadGuardConfig</code> enforces are equal for the
+              same config. <code>tests/setup_test.go</code> is the right home; it already reads the generated
+              OpenCode config.</p>
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <!-- ============================ F-05 ============================ -->
+    <article class="finding" id="f05" data-sev="medium">
+      <div class="f-head">
+        <span class="f-id">F-05</span>
+        <span class="chip sev">Medium</span>
+        <span class="chip">topogrep</span>
+        <span class="chip status">Reproduced</span>
+      </div>
+      <h2><code>grep -c</code> drops zero-count files and reorders the rest</h2>
+
+      <div class="rows">
+        <div class="row">
+          <h3>Symptom</h3>
+          <div>
+            <p><code>Result.Counts</code> is built only from matches, so a searched file with no hits never
+              gets a key and <code>formatCounts</code> cannot print its row. GNU grep prints
+              <code>path:0</code> for every file it was asked about. <code>formatCounts</code> also sorts its
+              paths, where grep emits them in the order the operands were given.</p>
+            <p>The single-file case is correct — a bare number, and <code>0</code> with exit 1 when nothing
+              matched. It is multi-file and recursive <code>-c</code> that diverge.</p>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Reproduction</h3>
+          <div>
+<pre class="term"><u>$</u> <b>/usr/bin/grep -c Add pkg/util.go main.go</b>
+pkg/util.go:2
+<span class="bad">main.go:0</span>
+
+<u>$</u> <b>arac cmd -- grep -c Add pkg/util.go main.go</b>
+pkg/util.go:2
+<i>(main.go absent)</i>
+
+<u>$</u> <b>/usr/bin/grep -c "func " internal/cli/guard.go internal/cli/cmd.go</b>
+internal/cli/guard.go:21
+internal/cli/cmd.go:16
+
+<u>$</u> <b>arac cmd -- grep -c "func " internal/cli/guard.go internal/cli/cmd.go</b>
+<span class="bad">internal/cli/cmd.go:16</span>       <i># sorted, not operand order</i>
+<span class="bad">internal/cli/guard.go:21</span></pre>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Effect</h3>
+          <div>
+            <p>The parity brief in <code>tests/grep_parity_test.go</code> classifies <code>-c</code> as EXACT —
+              "a question whose answer is a NUMBER … where adding changes the answer rather than enriching
+              it". Removing a row changes it just as surely. A caller doing
+              <code>grep -rc pat . | awk -F: '$2==0'</code>, or reading counts positionally, gets a different
+              answer from the one it wrote the pipeline against.</p>
+            <p><b>Why the suite is green.</b> <code>TestCountModeCountsWhatTheRealGrepCounts</code> builds its
+              expectation with <code>if ok &amp;&amp; n != "0"</code>, which discards exactly the rows that go
+              missing, and then only checks the rows aracne <em>did</em> emit. The test cannot fail on this.</p>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Where</h3>
+          <div>
+            <ul class="ref-list">
+              <li><b>internal/topogrep/grep.go:371</b> — <code>out.Counts[m.Path]++</code>, the only writer</li>
+              <li><b>internal/topogrep/grep.go:714</b> — <code>formatCounts</code>, which sorts and can only
+                render what <code>Counts</code> holds</li>
+              <li><b>tests/grep_parity_test.go:411</b> — the expectation filter that excuses it</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Fix</h3>
+          <div>
+            <p>In count mode, seed <code>Counts</code> with <code>0</code> for every file
+              <code>walkSearch</code> visited, before the match loop increments it. The walker already calls
+              <code>visit(path)</code> per file, so the hook exists.</p>
+            <p>For ordering, carry the operand order through: when every root is a file,
+              <code>formatCounts</code> should emit in <code>Options.Roots</code> order and fall back to sorted
+              paths for a directory walk (grep's own directory order is not reproducible, and sorted is the
+              honest substitute). Then drop the <code>n != "0"</code> filter from the parity test so the
+              property is actually pinned.</p>
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <!-- ============================ F-06 ============================ -->
+    <article class="finding" id="f06" data-sev="medium">
+      <div class="f-head">
+        <span class="f-id">F-06</span>
+        <span class="chip sev">Medium</span>
+        <span class="chip">Guard · warnings</span>
+        <span class="chip status">Reproduced</span>
+      </div>
+      <h2>Topology warnings reach the model in a random order</h2>
+
+      <div class="rows">
+        <div class="row">
+          <h3>Symptom</h3>
+          <div>
+            <p><code>currentWarningIDs</code> ranges over the warnings map to build its slice, and neither
+              <code>unreportedWarnings</code> nor <code>formatDriftWarnings</code> sorts it. Go randomises map
+              iteration, so the PostToolUse block a model reads after an edit is shuffled on every run.
+              <code>arac warnings list</code>, answering the same question, sorts by kind then source.</p>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Reproduction</h3>
+          <div>
+            <p class="term-cap">One edit widening four signatures with six callers each — 24 warnings,
+              three identical runs.</p>
+<pre class="term"><i>run 1</i>  - [signature_changed] function <b>A</b> … verify caller …ord.<b>U6</b>
+       - [signature_changed] function <b>C</b> … verify caller …ord.<b>U5</b>
+       - [signature_changed] function <b>B</b> … verify caller …ord.<b>U3</b>
+
+<i>run 2</i>  - [signature_changed] function <b>C</b> … verify caller …ord.<b>U3</b>
+       - [signature_changed] function <b>B</b> … verify caller …ord.<b>U4</b>
+       - [signature_changed] function <b>C</b> … verify caller …ord.<b>U2</b>
+
+<i>run 3</i>  - [signature_changed] function <b>D</b> … verify caller …ord.<b>U1</b>
+       - [signature_changed] function <b>D</b> … verify caller …ord.<b>U4</b>
+       - [signature_changed] function <b>A</b> … verify caller …ord.<b>U5</b></pre>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Effect</h3>
+          <div>
+            <p>The contract's one non-negotiable instruction is "act on any topology warning that comes back".
+              A shuffled list of two dozen warnings interleaving four callees and six callers is materially
+              harder to work through than a grouped one, and the model has to re-derive the grouping itself
+              from text that is re-sent on every request.</p>
+            <p>It also makes the hook's own output untestable and un-diffable: two runs over identical state
+              produce different bytes, so a golden-output test for the warning channel cannot be written.</p>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Where</h3>
+          <div>
+            <ul class="ref-list">
+              <li><b>internal/cli/guard_warnstate.go:145</b> — <code>unreportedWarnings</code></li>
+              <li><b>internal/cli/guard_warnstate.go</b> — <code>currentWarningIDs</code>, the map range</li>
+              <li><b>internal/cli/guard_drift.go:184</b> — <code>formatDriftWarnings</code>, the renderer</li>
+              <li><b>internal/cli/warnings.go</b> — <code>RunWarningsList</code>, which does sort; the two
+                should agree</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Fix</h3>
+          <div>
+            <p>Sort in <code>formatDriftWarnings</code> — it is the one renderer both hooks go through
+              (<code>runClaudeUpdateFileHook</code> calls it too). Use the comparator
+              <code>RunWarningsList</code> already has: kind, then <code>SourceID</code>, then
+              <code>TargetID</code> as a tiebreak, since a signature change fans out to several callers of one
+              callee and grouping them is the whole readability win.</p>
+            <p>Lift that comparator into a shared helper so the CLI and the hook cannot drift; sorting in
+              <code>unreportedWarnings</code> instead would leave <code>writeReportedWarnings</code>'s own sort
+              as the only guarantee and miss the update-file hook's path.</p>
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <!-- ============================ F-07 ============================ -->
+    <article class="finding" id="f07" data-sev="medium">
+      <div class="f-head">
+        <span class="f-id">F-07</span>
+        <span class="chip sev">Medium</span>
+        <span class="chip">arac setup · permissions</span>
+        <span class="chip status inferred">Artifacts verified · effect inferred</span>
+      </div>
+      <h2>Nothing pre-approves the command the guard rewrites into</h2>
+
+      <div class="rows">
+        <div class="row">
+          <h3>Symptom</h3>
+          <div>
+            <p>Interception replaces the model's <code>command</code> with
+              <code>/abs/path/to/arac cmd -- &lt;original&gt;</code> through <code>updatedInput</code>.
+              <code>arac setup</code> writes a <code>permissions.allow</code> block that names every
+              <code>mcp__aracne__*</code> tool — precisely so the harness does not prompt on each call — and no
+              rule at all for the rewritten Bash command.</p>
+            <p>The generated <code>settings.json</code> on a project in <code>cli</code> mode with
+              <code>blocked_tools</code> set:</p>
+<pre class="term">"permissions": {
+  "allow": [
+    "mcp__aracne__node_list_no_description",
+    "mcp__aracne__read",
+    "mcp__aracne__read_resource",
+    "mcp__aracne__update_description",
+    "mcp__aracne__warnings_list"
+  ]
+}                       <i># no Bash rule of any kind</i></pre>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Effect</h3>
+          <div>
+            <p>Any Bash allow-rule a user or team has written — <code>Bash(grep:*)</code>,
+              <code>Bash(head:*)</code>, <code>Bash(sed:*)</code> — is written against the command the model
+              types, not against the command that ends up running. Once the guard rewrites, those rules no
+              longer match their target, and the very commands aracne is best at are the ones that stop being
+              pre-approved.</p>
+            <p><b>Confidence.</b> The absence of the rule, and the shape of the rewrite, are verified in the
+              generated files. Whether the harness re-evaluates permissions against <code>updatedInput</code>
+              or against the original was not reproduced here — it needs a live session with a Bash allow-rule
+              in place. Treat this as a one-session check before release rather than a confirmed defect.</p>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Where</h3>
+          <div>
+            <ul class="ref-list">
+              <li><b>internal/cli/guard_intercept.go:45</b> — <code>interceptCommand</code>, which builds the
+                replacement from <code>os.Executable()</code></li>
+              <li><b>internal/cli/native_hooks.go:249</b> — <code>claudeMCPPermissionRules</code>, the only
+                allow-rules setup writes</li>
+              <li><b>internal/cli/native_hooks.go</b> — <code>writeClaudePermissions</code></li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Fix</h3>
+          <div>
+            <p>Two options, and they are not exclusive:</p>
+            <ul>
+              <li>Have <code>writeClaudePermissions</code> add a rule covering the rewritten form —
+                <code>Bash(&lt;aracBinary()&gt; cmd:*)</code> — beside the MCP rules, upserted by the same
+                prefix-strip so it self-heals across re-runs. The binary path is already resolved there by
+                <code>aracBinary()</code>, which the hook commands use.</li>
+              <li>Or have <code>emitPreToolRewrite</code> return <code>permissionDecision: "allow"</code>
+                alongside <code>updatedInput</code>. That is a stronger statement — aracne is answering the
+                call, not asking to — and it makes the rewrite invisible to the permission layer entirely.
+                It also means the guard must be certain, which after F-02 and F-03 it is closer to being.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <!-- ============================ F-08 ============================ -->
+    <article class="finding" id="f08" data-sev="low">
+      <div class="f-head">
+        <span class="f-id">F-08</span>
+        <span class="chip sev">Low</span>
+        <span class="chip">CLI · db resolution</span>
+        <span class="chip status">Code-verified</span>
+      </div>
+      <h2><code>arac scan</code> is the one verb that can create a second project</h2>
+
+      <div class="rows">
+        <div class="row">
+          <h3>Symptom</h3>
+          <div>
+            <p><code>ProjectDBPath</code> exists because a verb run from a subdirectory used to build a second,
+              partial topology there — its doc comment says so at length. Every verb routes through it.
+              <code>RunScan</code> does not: it takes <code>-output</code> with the literal default
+              <code>.aracne/topology.db</code> and passes it straight to <code>manager.Load</code>.</p>
+            <p>So <code>cd internal/cli &amp;&amp; arac scan</code> inside a configured project writes
+              <code>internal/cli/.aracne/topology.db</code> and a fresh default config beside it. Every later
+              verb run from that subdirectory then prefers the nested database, because
+              <code>ProjectDBPath</code> stops at the first hit walking up.</p>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Effect</h3>
+          <div>
+            <p>A partial graph answering reads under default (<code>cli</code>) semantics regardless of the
+              real project's mode, plus a stray <code>.aracne/</code> directory. This is the exact situation
+              <code>arac init</code> refuses by name — "This directory is inside a project aracne already
+              configures at …" — so the two commands disagree about whether it is allowed.</p>
+            <p>Low severity because the contract tells the model never to ask for a re-scan, and a person
+              scanning a subdirectory on purpose is a real use case. It is listed because the inconsistency is
+              the kind that surfaces once and then wastes an afternoon.</p>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Where</h3>
+          <div>
+            <ul class="ref-list">
+              <li><b>internal/cli/scan.go:22</b> — <code>output := fs.String("output", ".aracne/topology.db", …)</code></li>
+              <li><b>internal/cli/guard_paths.go</b> — <code>ProjectDBPath</code> and the bug it documents</li>
+              <li><b>internal/cli/init.go</b> — the outer-project refusal <code>arac scan</code> lacks</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Fix</h3>
+          <div>
+            <p>Route the default through <code>ProjectDBPath</code> like every other verb — it already leaves an
+              explicitly-passed <code>-output</code> alone, which is the escape hatch a deliberate nested scan
+              needs. Pair it with <code>ProjectRootFor</code> for the scan root so a scan started from a
+              subdirectory indexes the project, matching <code>InitRegistry</code>.</p>
+            <p>If a bare <code>arac scan</code> in a subdirectory should stay a way to create a nested project,
+              say so where <code>arac init</code> says the opposite: print the outer project's root and require
+              an explicit <code>-root .</code> or <code>-output</code>.</p>
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <!-- ============================ F-09 ============================ -->
+    <article class="finding" id="f09" data-sev="low">
+      <div class="f-head">
+        <span class="f-id">F-09</span>
+        <span class="chip sev">Low</span>
+        <span class="chip">topogrep · output</span>
+        <span class="chip status">Reproduced</span>
+      </div>
+      <h2>A recursive search drops the <code>./</code> prefix real grep prints</h2>
+
+      <div class="rows">
+        <div class="row">
+          <h3>Symptom</h3>
+          <div>
+            <p><code>grep -rn pat .</code> prints rows rooted at the operand — <code>./src/big.go:3:…</code>.
+              aracne's rows are relative to the topology root and carry no <code>./</code>.</p>
+<pre class="term"><u>$</u> <b>/usr/bin/grep -rn --include=*.go F1 .</b>
+<span class="bad">./</span>src/big.go:3:// F1 does thing 1.
+<span class="bad">./</span>src/big.go:4:func F1(a int) int {
+
+<u>$</u> <b>arac cmd -- grep -rn --include=*.go F1 .</b>
+src/big.go:4:func F1(a int) int {
+src/big.go:3:// F1 does thing 1.</pre>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Effect</h3>
+          <div>
+            <p>Cosmetic for a human and for most pipelines, since both spellings resolve. It matters for the
+              one shape the interception rules explicitly permit — piping a search into a line filter — where
+              a pattern anchored on <code>^\./</code> silently matches nothing, and for
+              <code>| sort -u</code>-style de-duplication across a mixed set of intercepted and unintercepted
+              searches.</p>
+            <p>The codebase treats this class as a real defect elsewhere: <code>GrepRequest</code>'s comment on
+              <code>-H</code>/<code>-n</code> is that "either one moves the field a caller reads". Here the
+              field's contents change rather than its position.</p>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Where</h3>
+          <div>
+            <ul class="ref-list">
+              <li><b>internal/cli/cmd.go:483</b> — <code>displayRoot</code>, which relativises against the cwd</li>
+              <li><b>internal/topogrep/grep.go</b> — the row renderer, which echoes the walked path</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Fix</h3>
+          <div>
+            <p>Echo the operand as the caller spelled it. When a search root is given as <code>.</code> or as a
+              relative path, join the walked path onto that literal prefix rather than re-deriving it — grep's
+              rule is simply "the operand, then the rest of the path". <code>displayRoot</code> already has the
+              operand in hand at the point where it discards it.</p>
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <!-- ============================ F-10 ============================ -->
+    <article class="finding" id="f10" data-sev="low">
+      <div class="f-head">
+        <span class="f-id">F-10</span>
+        <span class="chip sev">Low</span>
+        <span class="chip">arac setup · hooks</span>
+        <span class="chip status">Code-verified</span>
+      </div>
+      <h2>The edit-sync hook and the guard disagree about what a native edit is</h2>
+
+      <div class="rows">
+        <div class="row">
+          <h3>Symptom</h3>
+          <div>
+            <p>The guard's matcher is derived from <code>toolspec.nativeToolToKey</code> and comes out as
+              <code>Bash|Edit|Grep|MultiEdit|NotebookEdit|Read|Write</code>. The edit-sync hook next to it is
+              hand-written as <code>"Edit|Write|MultiEdit"</code> — the exact drift
+              <code>NativeToolNames()</code> was introduced to end, one file away from the comment that
+              explains it.</p>
+            <p><code>claudeHookPaths</code> has the matching gap: it reads <code>file_path</code>,
+              <code>filePath</code>, <code>path</code> and nested <code>edits</code>, but not
+              <code>notebook_path</code>, so even if the matcher were widened the hook would find no path to
+              re-index.</p>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Effect</h3>
+          <div>
+            <p>Small, because the plugin is opt-in and no shipped path enables it, and because the guard's own
+              drift check covers <code>NotebookEdit</code> either way (<code>driftCheckApplies</code> maps it to
+              <code>edit</code>). A project that turns the plugin on for the inline sync gets that sync for
+              <code>Edit</code>/<code>Write</code>/<code>MultiEdit</code> and the slower drift path for
+              notebooks, with nothing saying so.</p>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Where</h3>
+          <div>
+            <ul class="ref-list">
+              <li><b>internal/cli/native_hooks.go:44</b> — <code>"matcher": "Edit|Write|MultiEdit"</code></li>
+              <li><b>internal/cli/native_hooks.go</b> — <code>guardHookMatcher</code>, derived and correct</li>
+              <li><b>internal/cli/update_file.go</b> — <code>claudeHookPaths</code>, no <code>notebook_path</code></li>
+              <li><b>internal/toolspec/toolspec.go</b> — <code>nativeToolToKey</code>, the source of truth</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Fix</h3>
+          <div>
+            <p>Derive the edit-sync matcher the same way the guard's is: filter
+              <code>toolspec.NativeToolNames()</code> to the names whose key is <code>edit</code> or
+              <code>write</code> and join them. Add <code>notebook_path</code> to
+              <code>claudeHookPaths</code>'s key list, and extend
+              <code>TestGuardHookMatcherCoversNativeTools</code> to cover both matchers so a name added to the
+              map can only be forgotten in one place, not two.</p>
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <!-- ============================ F-11 ============================ -->
+    <article class="finding" id="f11" data-sev="medium" data-fixed="yes">
+      <div class="f-head">
+        <span class="f-id">F-11</span>
+        <span class="chip sev">Medium</span>
+        <span class="chip">Scanners · descriptions</span>
+        <span class="chip status fixed">Fixed where the ID survives</span>
+      </div>
+      <h2>Moving a file discards the descriptions of every symbol in it</h2>
+
+      <div class="resolved">
+        <p><strong>Resolved for the id-stable half.</strong>
+          <code>TopologyManager.restoreDescriptions</code> refills a blank description from the pre-update
+          snapshot <b>by id</b>, in <code>IncrementalScan</code> after the deletion pass and inside
+          <code>UpdateFile</code>'s <code>finish</code> so both entrances agree. It is the rule
+          <code>FullReScan</code> already applies to a cold rescan and the rule each scanner applies within a
+          file — stated once more where <em>ids</em>, not files, are the unit of identity.</p>
+        <p><strong>Which languages that reaches is decided by their id schemes, not by the fix.</strong>
+          Measured before and after, per language, on the matrix in the next row: <b>Go and Java are fixed</b>
+          — a Go id is <code>module/package.Symbol</code> and a Java id is an FQN from the
+          <code>package</code> declaration plus a signature, so neither moves with the file. <b>Python,
+          JavaScript, TypeScript and Rust are not reachable this way</b>: they are modules-first and mint a
+          new id from the new filename, so there is no surviving id to carry anything to. That is the
+          identity-remap work, deferred.</p>
+        <p>Java gets a bonus from the same property: moving <code>A.java</code> to a different directory while
+          the <code>package</code> declaration stays — the <code>src/</code> → <code>src/main/java/</code>
+          restructuring — now keeps its descriptions too. Verified.</p>
+        <p>Tests: <code>tests/description_rename_test.go</code> — a six-language table asserting the invariant
+          <em>a description follows a surviving id</em>, plus per-language ordinary-edit preservation and the
+          <code>update-file</code> two-call rename the hooks drive. It also pins each language's
+          <code>idSurvivesRename</code>, so a change to an id scheme fails loudly here instead of silently
+          widening or narrowing what the carry-over covers. Without the fix, the go, java and update-file
+          cases fail; the ordinary-edit cases pass either way, which is what shows the scanners' own
+          preservation is intact. <code>go test ./...</code> green, both build flavours.</p>
+      </div>
+
+      <div class="rows">
+        <div class="row">
+          <h3>Symptom</h3>
+          <div>
+            <p>Each scanner carries a description across a re-parse only when the resource was owned by
+              <em>the same file</em> before: <code>goscanner</code> builds <code>oldFunctions</code> from
+              <code>oldFile.Functions()</code> and fills a blank description from it. On a rename the file being
+              registered is brand new, so that map is empty — and the descriptions sitting on the identical ids
+              under the old path are never consulted.</p>
+            <p>It bites the descriptions that <em>cost something</em>. A Go function with a doc comment gets its
+              description re-harvested from source on every parse, so it is never at risk. A function with no doc
+              comment — precisely the one an <code>arac descriptions generate</code> sweep paid a model to
+              describe — comes back blank.</p>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Reproduction</h3>
+          <div>
+            <p class="term-cap">Four undocumented functions, described, then the file renamed in place.</p>
+<pre class="term"><u>$</u> <b>arac scan --all</b>
+<u>$</u> <b>arac update-description example.com/x/pkg.One function "Description for One."</b>   <i>(×4)</i>
+   example.com/x/pkg.One    desc='Description for One.'
+   example.com/x/pkg.Two    desc='Description for Two.'
+   …
+
+<u>$</u> <b>mv pkg/a.go pkg/b.go &amp;&amp; arac scan</b>
+   example.com/x/pkg.One    desc=<span class="bad">''</span>          <i># id unchanged, prose gone</i>
+   example.com/x/pkg.Two    desc=<span class="bad">''</span>
+
+<u>$</u> <i>and an ORDINARY edit of the same file, for contrast</i>
+<u>$</u> <b>echo '…func Three…' &gt;&gt; pkg/a.go &amp;&amp; arac scan</b>
+   example.com/x/pkg.One    desc='Description for One.'   <i># preserved</i>
+   example.com/x/pkg.Three  desc=''</pre>
+            <p class="term-cap">Moving to another folder loses them twice over — the Go id changes too.</p>
+<pre class="term"><u>$</u> <b>mv pkg/a.go internal/other/a.go &amp;&amp; arac scan</b>
+   example.com/x/<b>internal/other</b>.One   desc=<span class="bad">''</span>
+   example.com/x/<b>internal/other</b>.Two   desc=<span class="bad">''</span></pre>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Per language</h3>
+          <div>
+            <p>Same fixture in each: one undocumented declaration, a description hung on it, then the file
+              renamed inside its own folder and an incremental scan. What decides the outcome is whether the
+              language's id moves with the file.</p>
+<pre class="term"><i>language     id after `mv a → b`              description  before → after fix</i>
+go           example.com/g/pkg.Alpha          <span class="bad">''</span>  →  <u>'DESC'</u>     id is module/package.Symbol
+java         com.example.A.alpha()            <span class="bad">''</span>  →  <u>'DESC'</u>     id is FQN + signature
+python       mod_a.alpha → <b>mod_b</b>.alpha         <span class="bad">''</span>  →  <span class="bad">''</span>          modules-first: new id
+javascript   a.alpha → <b>b</b>.alpha                 <span class="bad">''</span>  →  <span class="bad">''</span>          modules-first: new id
+typescript   a.alpha → <b>b</b>.alpha                 <span class="bad">''</span>  →  <span class="bad">''</span>          modules-first: new id
+rust         r::a::alpha → r::<b>b</b>::alpha         <span class="bad">''</span>  →  <span class="bad">''</span>          module IS the filename
+
+<i>an ordinary edit of the same file, all six languages, both before and after:</i>
+             'DESC' preserved                 <i>← each scanner's own file-keyed carry-over</i></pre>
+            <p>So the fix is language-agnostic in its implementation and language-dependent in its reach, and
+              the reach is exactly the set of languages whose id survives. The other four keep their
+              descriptions through an ordinary edit as they always did; what they still lose is a rename,
+              and that needs the id to be remapped, not the description to be carried.</p>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>What does and does not recover it</h3>
+          <div>
+            <ul>
+              <li><b>Rename in place, <code>arac scan --all</code> run first:</b> recovered.
+                <code>FullReScan</code> matches by exact id, and a same-package rename does not change ids.</li>
+              <li><b>Rename in place, an incremental scan run first:</b> lost for good. The description is
+                already out of the database, and <code>--all</code> matches against the database.
+                <b>The guard runs an incremental scan before every tool call</b>, so in a session this is
+                the case that happens.</li>
+              <li><b>Folder move, <code>--all</code> run first:</b> still lost.
+                <code>MatchDescriptions</code> has a <code>moved_src</code> tier keyed on kind + name + parent
+                + source hash that is designed for exactly this, but <code>BuildDescriptionRecords</code>
+                computes that hash by reading the file at the path the <em>old</em> topology recorded — which
+                the move has just emptied. The tier can never fire on a re-scan after a move.</li>
+              <li><b>The sidecar does work</b>, because it is written while the files are still in place:
+                <code>arac descriptions export -out d.jsonl</code> → move → scan →
+                <code>arac descriptions import -in d.jsonl</code> restored 2 of 2 at the
+                <code>name_source</code> tier. The export even says so: "2 have a source hash (needed to
+                survive a file move)".</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Where</h3>
+          <div>
+            <ul class="ref-list">
+              <li><b>internal/topology/scanner/goscanner/scanner.go:405–470</b> — the carry-over, keyed on
+                <code>oldFile</code>; <code>jsscanner</code> and <code>rustscanner</code> have the same shape</li>
+              <li><b>internal/topology/manager.go:541</b> — the id-keyed rule <code>FullReScan</code> applies,
+                which the incremental path has no equivalent of</li>
+              <li><b>internal/helper/descriptions_sidecar.go:418</b> — <code>hashSpan</code>, which reads the old
+                path off disk and returns "" once it is gone</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Fix</h3>
+          <div>
+            <p><b>Applied: one language-agnostic pass, in the place that already has the data.</b>
+              <code>IncrementalScan</code> deep-clones the pre-update graph into
+              <code>beforeResources</code> for the reverse-caller sweep. After the deletion pass, fill any
+              blank description from it by id — the same rule <code>FullReScan</code> applies at
+              <code>manager.go:541</code>, and the same rule each scanner applies per file, stated once more
+              where ids rather than files are the unit of identity. <code>UpdateFile</code> gets it inside
+              <code>finish</code>, so the hook path and the scan path cannot answer differently:</p>
+<pre class="term">for id, res := range topo.Resources {
+    if res.Description != "" { continue }
+    if old, ok := beforeResources[id]; ok &amp;&amp; old.Description != "" {
+        res.Description = old.Description
+        topo.Resources[id] = res
+    }
+}</pre>
+            <p>It cannot resurrect a cleared description (<code>descriptions clear</code> writes the database
+              directly, so the next scan's <code>beforeResources</code> is already empty), and it defers to a
+              freshly harvested doc comment, which arrives non-empty.</p>
+            <p><b>Still open, deferred by decision:</b> the four modules-first languages, and any move that
+              changes the id. Those need <code>resource_alias</code> and the identity remap
+              (<code>helper.MatchDescriptions</code>), today reachable only from <code>FullReScan</code> — and
+              its <code>moved_src</code> tier needs the source hash to be taken while the old path still
+              exists, which a re-scan after the move cannot do. The cheap interim is to make the loss
+              discoverable: when a scan drops descriptions it cannot re-home, say so, and point at
+              <code>arac descriptions export</code>/<code>import</code>, which does work.</p>
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <!-- ============================ F-12 ============================ -->
+    <article class="finding" id="f12" data-sev="low">
+      <div class="f-head">
+        <span class="f-id">F-12</span>
+        <span class="chip sev">Low</span>
+        <span class="chip">Incremental scan</span>
+        <span class="chip status">Reproduced</span>
+      </div>
+      <h2>A package whose last file moves away is left behind as a phantom</h2>
+
+      <div class="rows">
+        <div class="row">
+          <h3>Symptom</h3>
+          <div>
+            <p>Move a package's only file to another directory and the incremental scan builds the new package
+              correctly but never retires the old one. The package node survives with no files, and every caller
+              keeps its <code>uses_package</code> and <code>__call_sites</code> edges pointing at it.</p>
+            <p>Found by feeding the move to <code>assertIncrEqualsFull</code>, the harness that compares an
+              incremental result against a cold full scan of the same tree:</p>
+<pre class="term">resource "eqmove.main" differs:
+  full: function|main|go||…/main.go|{…}|
+  incr: function|main|go||…/main.go|{…}|<span class="bad">__call_sites=eqmove/pkg.Add=&gt;&gt;{…};uses_package=eqmove/pkg;</span>
+resource <span class="bad">"eqmove/pkg" present after incremental but absent from full rescan (stale row)</span></pre>
+            <p>Confirmed pre-existing: the failure is byte-identical with and without the F-01 fix, which
+              cannot reach it — <code>movedOutOfFile</code> only spares resources whose recorded path moved, and
+              a package node carries no path and is never owned by a file.</p>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Effect</h3>
+          <div>
+            <p>A phantom package in the graph: it can be listed, it appears in a caller's context block, and a
+              <code>read</code> of it returns a package with nothing in it. The stale <code>__call_sites</code>
+              entry is the one with teeth — that edge is what <code>signature_changed</code> is decided
+              against, so a warning could be raised or discharged against a call site that no longer exists.</p>
+            <p>Low because it needs a cross-directory move of a package's last file, and because
+              <code>arac scan --all</code> clears it.</p>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Where</h3>
+          <div>
+            <ul class="ref-list">
+              <li><b>internal/topology/manager.go:316</b> — the deletion path handles files and the symbols they
+                own; nothing prunes a container left empty by it</li>
+              <li><b>internal/helper/manifest.go</b> — <code>ownedConnTypes</code> covers
+                <code>has_function</code> and friends, not <code>has_file</code></li>
+              <li><b>tests/incremental_equivalence_test.go</b> — <code>assertIncrEqualsFull</code> reproduces it
+                in about fifteen lines</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="row">
+          <h3>Fix</h3>
+          <div>
+            <p>After the deletion loop, drop any package/module node whose <code>has_file</code> set is now
+              empty, and run it through the same referrer strip so the callers' <code>uses_package</code> and
+              <code>__call_sites</code> edges go with it. Then add the move as a case in
+              <code>assertIncrEqualsFull</code> — it is the harness that found it, and it will keep it fixed.</p>
+          </div>
+        </div>
+      </div>
+    </article>
+
+  </main>
+
+  <!-- ============================ appendix ============================ -->
+
+  <section class="appendix">
+    <h2>Behaviour confirmed as deliberate, not filed</h2>
+    <p>Each of these diverges from the plain command and each is argued for in the code or pinned by a test.
+      They are listed so the register can be read as complete: they were examined and deliberately not
+      reported.</p>
+    <ul class="checklist">
+      <li><span class="mark">·</span><span><b>Tiered result ordering.</b> Title hits, then description hits,
+        then line hits — where grep is in file order. Pinned by the parity suite as a permitted divergence.</span></li>
+      <li><span class="mark">·</span><span><b>Description-tier rows.</b> <code>grep -n Retries f</code> returns a
+        declaration line that does not contain the pattern, under a header that explains why, and exits 0 where
+        grep exits 1. This is the product.</span></li>
+      <li><span class="mark">·</span><span><b>Annotation lines counting toward a downstream <code>head -N</code>.</b>
+        Measured and accepted in <code>consumer.go</code>; the alternative was refusing 41 of 133 piped greps.</span></li>
+      <li><span class="mark">·</span><span><b>The 200-row default cap and its trailer.</b> Documented at the top of
+        <code>topogrep</code> as the first of two rules.</span></li>
+      <li><span class="mark">·</span><span><b>Pruned directories</b> — <code>.git</code>, <code>.aracne</code>,
+        <code>vendor</code>, <code>node_modules</code>, the cache trees. A deliberate list, and deliberately not a
+        dot-prefix rule.</span></li>
+      <li><span class="mark">·</span><span><b>A window widening to its declaration.</b> <code>sed -n '10,14p'</code>
+        answering from line 9 with an elision marker is the framing the contract promises.</span></li>
+      <li><span class="mark">·</span><span><b><code>read.kinds</code> refusing an intercepted <code>cat</code></b>
+        rather than passing it through — argued in <code>resolveReadOperand</code>.</span></li>
+      <li><span class="mark">·</span><span><b>Warn-only <code>blocked_tools</code> by default</b>, and the
+        <code>hard</code> pre-tool scan being rejected by <code>Validate</code> and re-mapped by
+        <code>EffectivePreToolScan</code>.</span></li>
+    </ul>
+
+    <h2 class="section-gap">Checked and found sound</h2>
+    <p>Exercised against the built binary on a scanned fixture and on this repository. Recorded because the
+      value of a defect register is partly in what it clears.</p>
+    <ul class="checklist">
+      <li><span class="mark">✓</span><span><b>Interception guard rails.</b> Pipes into an opaque consumer,
+        <code>$(…)</code> and backtick substitution, subshells, stdout redirects, heredocs, <code>sudo</code> and
+        unknown wrappers, <code>for … do cat $f; done</code>, and a second <code>arac</code> pass — all correctly
+        left alone.</span></li>
+      <li><span class="mark">✓</span><span><b>Segment-wise splicing.</b> <code>ls &amp;&amp; head -3 f &amp;&amp; echo done</code>
+        and <code>a; b</code> rewrite the read segments in place and leave every other byte, including quoting.</span></li>
+      <li><span class="mark">✓</span><span><b>Passthrough fidelity.</b> <code>cat</code>, <code>head</code>,
+        <code>tail</code>, <code>sed -n</code>, <code>awk NR</code> on untracked and mixed operands come back
+        byte-identical, including <code>==&gt; f &lt;==</code> banners and a missing trailing newline.</span></li>
+      <li><span class="mark">✓</span><span><b>Grep flag handling.</b> <code>-i -w -x -F -E</code>, BRE→RE2
+        translation, <code>-A/-B/-C</code> with grep's own <code>--</code> separators, per-file
+        <code>-m</code>, repeated <code>--include/--exclude/--exclude-dir</code>, and the
+        <code>-H</code>/<code>-n</code> field rules.</span></li>
+      <li><span class="mark">✓</span><span><b>MCP protocol.</b> String and numeric ids echoed verbatim,
+        <code>ping</code>, notifications suppressed, omitted <code>arguments</code> normalised, missing tool name
+        as <code>-32602</code>, and a clean <code>initialize</code>/<code>tools/list</code>/<code>tools/call</code>
+        round trip.</span></li>
+      <li><span class="mark">✓</span><span><b>Setup and disable.</b> Idempotent across re-runs;
+        a user's own PostToolUse hook and <code>permissions.allow</code> entries survive setup and are restored
+        intact by disable; the injected CLAUDE.md block is replaced, not stacked, and removed cleanly.</span></li>
+      <li><span class="mark">✓</span><span><b>Native-edit reporting.</b> A signature change made outside aracne
+        produces the right <code>signature_changed</code> warning through the PostToolUse drift path, and the
+        ledger suppresses the duplicate.</span></li>
+      <li><span class="mark">✓</span><span><b>Generated plugins.</b> Both OpenCode plugins parse under Node 24;
+        the <code>Warning number 0</code> probe matches what <code>arac update-file</code> prints.</span></li>
+      <li><span class="mark">✓</span><span><b>Guard latency.</b> ~0.10 s per PreToolUse call on this repository
+        with the default incremental pre-tool scan.</span></li>
+      <li><span class="mark">✓</span><span><b>Build and tests.</b> <code>go build ./...</code> and
+        <code>go test ./...</code> clean before and after every experiment.</span></li>
+    </ul>
+
+    <h2 class="section-gap">Suggested order of work</h2>
+    <p><b>F-01 and F-11 are done.</b> A rename now keeps the graph in every language, and keeps the
+      descriptions in the two whose ids survive one — Go and Java. What is left of F-11 is the identity
+      remap for the four modules-first languages, deferred by decision; until it lands,
+      <code>arac descriptions export</code> before a move and <code>import</code> after it is the working
+      answer, and it is worth saying so somewhere the operator will see it.</p>
+    <p>Next is <b>F-02 and F-03</b>: they are the two that make the terminal surface behave differently from
+      the shell it is standing in, which is the promise the whole mode rests on. F-04 through F-07 are one
+      afternoon between them. F-08 to F-10 and F-12 are cleanup that can ride along with anything.</p>
+  </section>
+
+  <footer>
+    <span>Aracne harness defect register</span>
+    <span>07aee2b · chore/debloat</span>
+    <span>Reproduced with bin/arac against fixtures under a scratch directory</span>
+  </footer>
+
+</div>
+
+<script>
+  (function () {
+    var buttons = Array.prototype.slice.call(document.querySelectorAll(".filter"));
+    var findings = Array.prototype.slice.call(document.querySelectorAll(".finding"));
+    var readout = document.getElementById("shown");
+
+    function apply() {
+      var on = {};
+      buttons.forEach(function (b) {
+        on[b.dataset.filter] = b.getAttribute("aria-pressed") === "true";
+      });
+      var visible = 0;
+      findings.forEach(function (f) {
+        var show = !!on[f.dataset.sev];
+        f.hidden = !show;
+        if (show) visible++;
+      });
+      readout.textContent = visible + " of " + findings.length + " shown";
+    }
+
+    buttons.forEach(function (b) {
+      b.addEventListener("click", function () {
+        b.setAttribute("aria-pressed", b.getAttribute("aria-pressed") === "true" ? "false" : "true");
+        apply();
+      });
+    });
+
+    apply();
+  })();
+</script>

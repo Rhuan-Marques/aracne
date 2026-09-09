@@ -3,11 +3,53 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"strings"
 )
 
-// guardDBRelative is the project-relative location of the topology database. Every guard call
-// site used to pass this string directly, which is exactly the bug guardDBPath fixes.
-const guardDBRelative = ".aracne/topology.db"
+// DefaultDBRelative is the project-relative location of the topology database. Every guard
+// call site used to pass this string directly, which is exactly the bug guardDBPath fixes --
+// and every CLI verb still did, which is what ProjectDBPath fixes.
+const DefaultDBRelative = ".aracne/topology.db"
+
+// guardDBRelative is DefaultDBRelative under the name the guard has always used for it.
+const guardDBRelative = DefaultDBRelative
+
+// ProjectDBPath resolves the topology database a CLI verb should open.
+//
+// WHY THE CLI NEEDS THIS TOO. guardDBPath exists because a relative ".aracne/topology.db" is
+// resolved against a working directory the caller controls, and a hook that opened it from a
+// subdirectory silently found nothing. Every `arac` verb had the same bug with a worse
+// outcome: InitRegistry does not fail on a missing database, it CREATES one -- so
+// `arac read` from a subdirectory built a second, partial topology under `<subdir>/.aracne/`,
+// answered from it, and left a stray database and a fresh default config behind. A project on
+// intercept_line_ranges then answered those calls under cli semantics.
+//
+// Only the DEFAULT spelling walks up. An explicit `--db out/topo.db` names a path the caller
+// chose and is resolved where they typed it, exactly as before.
+func ProjectDBPath(dbPath string) string {
+	if strings.TrimSpace(dbPath) == "" {
+		dbPath = DefaultDBRelative
+	}
+	if filepath.IsAbs(dbPath) || fileExists(dbPath) || dbPath != DefaultDBRelative {
+		return dbPath
+	}
+	if wd, err := os.Getwd(); err == nil {
+		if p, ok := findUpward(wd, dbPath); ok {
+			return p
+		}
+	}
+	return dbPath
+}
+
+// ProjectRootFor is the directory a resolved database indexes, or "." when the path does not
+// sit under a `.aracne` directory. It is what a scan should be rooted at, so a first scan
+// triggered from a subdirectory indexes the project rather than the subdirectory.
+func ProjectRootFor(dbPath string) string {
+	if root := projectRoot(dbPath); root != "" {
+		return root
+	}
+	return "."
+}
 
 // guardDBPath resolves the topology database the guard should consult.
 //

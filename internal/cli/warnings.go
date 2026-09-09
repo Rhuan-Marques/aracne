@@ -4,13 +4,33 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
+// warningKinds is the set `--kind` accepts, in the order the summary prints them.
+var warningKinds = []domain.WarningKind{
+	domain.WarnUseMissingNode, domain.WarnNodeRemoved,
+	domain.WarnSignatureChanged, domain.WarnInterfaceConflict,
+}
+
+// parseWarningKind resolves a `--kind` value, naming the alternatives on a miss.
+func parseWarningKind(value string) (domain.WarningKind, error) {
+	want := domain.WarningKind(strings.TrimSpace(value))
+	names := make([]string, 0, len(warningKinds))
+	for _, k := range warningKinds {
+		if k == want {
+			return k, nil
+		}
+		names = append(names, string(k))
+	}
+	return "", fmt.Errorf("unknown warning kind %q (valid: %s)", value, strings.Join(names, ", "))
+}
+
 // Lists topology warnings filtered by source, target, or kind with sorted output and summary counts.
 func RunWarningsList(args []string) {
-	dbPath := ".aracne/topology.db"
+	dbPath := ProjectDBPath(DefaultDBRelative)
 	sourceID := ""
 	targetID := ""
 	var kind domain.WarningKind
@@ -33,7 +53,17 @@ func RunWarningsList(args []string) {
 			}
 		case "--kind":
 			if i+1 < len(args) {
-				kind = domain.WarningKind(args[i+1])
+				// VALIDATED, because the failure mode is silence. An unknown kind matched
+				// nothing and printed "No warnings found." with exit 0 -- indistinguishable
+				// from a clean topology, which is the answer a caller is most likely to
+				// believe. `--kind signature-changed` (a hyphen) is the easy mistake, and the
+				// usage banner lists the four spellings right next to it.
+				k, err := parseWarningKind(args[i+1])
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+					os.Exit(1)
+				}
+				kind = k
 				i++
 			}
 		}
@@ -64,8 +94,7 @@ func RunWarningsList(args []string) {
 	}
 
 	fmt.Printf("Found %d warning(s):\n\n", len(warnings))
-	for _, k := range []domain.WarningKind{domain.WarnUseMissingNode, domain.WarnNodeRemoved, domain.WarnSignatureChanged,
-		domain.WarnInterfaceConflict} {
+	for _, k := range warningKinds {
 		if c := counts[k]; c > 0 {
 			fmt.Printf("  %s: %d\n", k, c)
 		}

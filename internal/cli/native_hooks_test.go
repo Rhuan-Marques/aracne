@@ -23,27 +23,27 @@ func TestClaudeNativeEditHookForOS(t *testing.T) {
 			goos:       "windows",
 			scriptName: "arac-update-file.ps1",
 			shell:      "powershell",
-			command:    "${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-update-file.ps1",
+			command:    "& '${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-update-file.ps1'",
 		},
 		{
 			name:       "linux uses shell hook",
 			goos:       "linux",
 			scriptName: "arac-update-file.sh",
 			shell:      "bash",
-			command:    "${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-update-file.sh",
+			command:    `"${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-update-file.sh"`,
 		},
 		{
 			name:       "macos uses shell hook",
 			goos:       "darwin",
 			scriptName: "arac-update-file.sh",
 			shell:      "bash",
-			command:    "${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-update-file.sh",
+			command:    `"${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-update-file.sh"`,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			hook := claudeNativeEditHookForOS(tt.goos)
+			hook := claudeNativeEditHookForOS(tt.goos, ".claude/hooks", false)
 			if hook.scriptName != tt.scriptName {
 				t.Fatalf("scriptName = %q, want %q", hook.scriptName, tt.scriptName)
 			}
@@ -65,17 +65,100 @@ func TestClaudeGuardHookForOS(t *testing.T) {
 		shell      string
 		command    string
 	}{
-		{"windows", "windows", "arac-guard.ps1", "powershell", "${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-guard.ps1"},
-		{"linux", "linux", "arac-guard.sh", "bash", "${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-guard.sh"},
-		{"darwin", "darwin", "arac-guard.sh", "bash", "${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-guard.sh"},
+		{"windows", "windows", "arac-guard.ps1", "powershell", "& '${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-guard.ps1'"},
+		{"linux", "linux", "arac-guard.sh", "bash", `"${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-guard.sh"`},
+		{"darwin", "darwin", "arac-guard.sh", "bash", `"${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-guard.sh"`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			hook := claudeGuardHookForOS(tt.goos)
+			hook := claudeGuardHookForOS(tt.goos, ".claude/hooks", false)
 			if hook.scriptName != tt.scriptName || hook.shell != tt.shell || hook.command != tt.command {
 				t.Fatalf("claudeGuardHookForOS(%q) = %+v", tt.goos, hook)
 			}
 		})
+	}
+}
+
+// The generated command is handed to a shell with the placeholder already substituted, so an
+// unquoted path word-splits: a project under "My Projects" failed every tool call with
+// `bash: line 1: /Users/x/My: No such file or directory`, exit 127 -- the guard dead, loudly,
+// on every turn. Both spellings have to survive a path with a space.
+func TestHookCommandSurvivesAPathWithSpaces(t *testing.T) {
+	const root = "/Users/x/My Projects/repo"
+
+	for _, tt := range []struct {
+		goos string
+		want string
+	}{
+		{"linux", `"` + root + `/.claude/hooks/arac-guard.sh"`},
+		{"windows", `& '` + root + `/.claude/hooks/arac-guard.ps1'`},
+	} {
+		hook := claudeGuardHookForOS(tt.goos, root+"/.claude/hooks", true)
+		if hook.command != tt.want {
+			t.Fatalf("%s: command = %q, want %q", tt.goos, hook.command, tt.want)
+		}
+		// And the entry must still be recognizable as aracne's own, or setup stacks a
+		// duplicate beside it and disable leaves it behind.
+		entry := map[string]interface{}{
+			"hooks": []interface{}{map[string]interface{}{"command": hook.command}},
+		}
+		if !isGuardHookEntry(entry) {
+			t.Fatalf("%s: quoted command %q not recognized as the guard entry", tt.goos, hook.command)
+		}
+		if !isAracneHookEntry(entry) {
+			t.Fatalf("%s: quoted command %q not recognized as aracne's", tt.goos, hook.command)
+		}
+	}
+}
+
+// `arac setup --global` writes the scripts under the user's HOME while ${CLAUDE_PROJECT_DIR}
+// still expands to the PROJECT root -- so the entry named a file setup had never created and
+// the guard was silently dead in every project without a local copy.
+func TestGlobalHookNamesTheScriptItActuallyWrote(t *testing.T) {
+	hooksDir := filepath.Join(t.TempDir(), ".claude", "hooks")
+
+	for _, hook := range []claudeNativeEditHook{
+		claudeGuardHookForOS("linux", hooksDir, true),
+		claudeNativeEditHookForOS("linux", hooksDir, true),
+	} {
+		if strings.Contains(hook.command, "CLAUDE_PROJECT_DIR") {
+			t.Fatalf("global hook still names the project dir: %q", hook.command)
+		}
+		want := filepath.ToSlash(filepath.Join(hooksDir, hook.scriptName))
+		if hook.command != `"`+want+`"` {
+			t.Fatalf("global command = %q, want %q", hook.command, `"`+want+`"`)
+		}
+	}
+
+	// A local install keeps the portable placeholder: settings.json is usually committed,
+	// and an absolute path there means the wrong thing on a teammate's checkout.
+	local := claudeGuardHookForOS("linux", ".claude/hooks", false)
+	if !strings.Contains(local.command, "${CLAUDE_PROJECT_DIR}") {
+		t.Fatalf("local command lost the placeholder: %q", local.command)
+	}
+}
+
+// hookCommandWord is what keeps a quoted command recognizable. It has to read past
+// PowerShell's call operator and through the quotes, and it must NOT match a hook that merely
+// mentions the script's name.
+func TestHookCommandWord(t *testing.T) {
+	for _, tt := range []struct{ in, want string }{
+		{`"${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-guard.sh"`, "${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-guard.sh"},
+		{`& '/Users/x/My Projects/.claude/hooks/arac-guard.ps1'`, "/Users/x/My Projects/.claude/hooks/arac-guard.ps1"},
+		{`${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-guard.sh`, "${CLAUDE_PROJECT_DIR}/.claude/hooks/arac-guard.sh"},
+		{"arac update-file --claude-hook", "arac"},
+		{"", ""},
+	} {
+		if got := hookCommandWord(tt.in); got != tt.want {
+			t.Fatalf("hookCommandWord(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+
+	notMine := map[string]interface{}{
+		"hooks": []interface{}{map[string]interface{}{"command": "echo not-arac-guard.sh"}},
+	}
+	if isGuardHookEntry(notMine) || isAracneHookEntry(notMine) {
+		t.Fatal("a user hook that merely mentions the script name was claimed as aracne's")
 	}
 }
 
@@ -87,9 +170,9 @@ func TestWriteClaudeGuardHookMerges(t *testing.T) {
 	hooksDir := filepath.Join(dir, "hooks")
 
 	// Install edit-sync hook first, then the guard hook (init order), twice.
-	writeClaudeNativeEditHook(settingsPath, hooksDir, true)
-	writeClaudeGuardHook(settingsPath, hooksDir, true)
-	writeClaudeGuardHook(settingsPath, hooksDir, true) // idempotent
+	writeClaudeNativeEditHook(settingsPath, hooksDir, false, true)
+	writeClaudeGuardHook(settingsPath, hooksDir, false, true)
+	writeClaudeGuardHook(settingsPath, hooksDir, false, true) // idempotent
 
 	data, err := os.ReadFile(settingsPath)
 	if err != nil {
@@ -147,7 +230,7 @@ func TestWriteClaudePermissions(t *testing.T) {
 	}
 
 	cfg := helper.DefaultConfig()
-	writeClaudeGuardHook(settingsPath, hooksDir, true)
+	writeClaudeGuardHook(settingsPath, hooksDir, false, true)
 	writeClaudePermissions(settingsPath, cfg)
 	writeClaudePermissions(settingsPath, cfg) // idempotent
 

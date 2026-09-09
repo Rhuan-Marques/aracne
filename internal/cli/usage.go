@@ -2,6 +2,8 @@ package cli
 
 import (
 	"fmt"
+	"io"
+	"os"
 	"strings"
 
 	"github.com/Rhuan-Marques/aracne/internal/helper"
@@ -13,11 +15,15 @@ import (
 // stays dispatchable either way -- it is the orchestration channel the generated slash
 // commands use and the debugging path -- but an undocumented command is the "unlisted"
 // half of gating an unshipped feature.
-func PrintUsage() {
-	cfg := helper.LoadConfig(helper.ConfigPath(".aracne/topology.db"))
+func PrintUsage() { PrintUsageTo(os.Stdout) }
+
+// PrintUsageTo writes the banner to a chosen stream. An unknown subcommand sends it to stderr,
+// where a diagnostic belongs: on stdout it is indistinguishable from a command's output.
+func PrintUsageTo(w io.Writer) {
+	cfg := helper.LoadConfig(helper.ConfigPath(ProjectDBPath(DefaultDBRelative)))
 	text := gateBugUsage(usageText, cfg.BugManagementEnabled())
 	text = gateAgentUsage(text, cfg.AgentEnabled())
-	fmt.Println(gateVizUsage(text, vizBuilt))
+	fmt.Fprintln(w, gateVizUsage(text, vizBuilt))
 }
 
 // gateVizUsage removes the `viz serve` lines and their flag block when this binary was
@@ -28,7 +34,7 @@ func gateVizUsage(text string, hasViz bool) string {
 		return text
 	}
 	return dropUsageBlock(text, `Flags for "viz serve"`, func(trimmed string) bool {
-		return strings.HasPrefix(trimmed, "Aracne viz ") || strings.HasPrefix(trimmed, "arac viz ")
+		return strings.HasPrefix(trimmed, "arac viz ")
 	})
 }
 
@@ -39,7 +45,7 @@ func gateAgentUsage(text string, agent bool) string {
 		return text
 	}
 	return dropUsageBlock(text, "", func(trimmed string) bool {
-		return strings.HasPrefix(trimmed, "Aracne agent ") || strings.HasPrefix(trimmed, "arac agent ")
+		return strings.HasPrefix(trimmed, "arac agent ")
 	})
 }
 
@@ -89,7 +95,7 @@ func gateBugUsage(text string, bugManagement bool) string {
 			}
 			continue
 		}
-		if strings.HasPrefix(trimmed, "arac bug ") || strings.HasPrefix(trimmed, "Aracne bug ") {
+		if strings.HasPrefix(trimmed, "arac bug ") {
 			continue
 		}
 		// `--tool-profile` names the servable agent profiles; the bug ones are not servable
@@ -104,19 +110,18 @@ func gateBugUsage(text string, bugManagement bool) string {
 const usageText = `arac - Go/Python/JavaScript/TypeScript/Rust/Java project topology analyzer
 
 Usage:
-  Aracne scan    [flags]    Incremental scan (changed files only); --all for full re-scan, --hard for full rebuild
-  Aracne agent   [prompt]   Run the AI coding agent
-  Aracne serve   [flags]    Start MCP server (for OpenCode / Claude Code integration)
-  Aracne viz serve [flags]  Start local topology graph visualization UI
-  Aracne init    [flags]    Set this repository up: asks the setup questions, scans, writes the integration
-  Aracne setup   [flags]    Write the integration files from the current config (--claude, --opencode, --global)
-  arac disable   [flags]    Remove the aracne integration this project's setup wrote (--claude, --opencode, --global, --all)
+  arac scan     [flags]     Incremental scan (changed files only); --all for full re-scan, --hard for full rebuild
+  arac agent    [prompt]    Run the AI coding agent
+  arac serve    [flags]     Start MCP server (for OpenCode / Claude Code integration)
+  arac viz serve [flags]    Start local topology graph visualization UI
+  arac init     [flags]     Set this repository up: asks the setup questions, scans, writes the integration
+  arac setup    [flags]     Write the integration files from the current config (--claude, --opencode, --global)
+  arac disable  [flags]     Remove the aracne integration this project's setup wrote (--claude, --opencode, --global, --all)
   arac scanner run [--db <path>]  Watch the tree and keep the topology current in the background
-  Aracne descriptions generate [flags]  Generate descriptions for targeted undocumented resources
-  Aracne descriptions apply            Write topology descriptions back into source as doc comments
-  Aracne descriptions clear [flags]    Clear stored topology descriptions (--oversized: only over-budget ones)
-  Aracne descriptions export [flags]   Back up descriptions to an ID-independent JSONL sidecar
-  Aracne descriptions import [flags]   Restore descriptions from a sidecar after a re-scan
+  arac descriptions generate [flags]  Generate descriptions for targeted undocumented resources
+  arac descriptions clear [flags]    Clear stored topology descriptions (--oversized: only over-budget ones)
+  arac descriptions export [flags]   Back up descriptions to an ID-independent JSONL sidecar
+  arac descriptions import [flags]   Restore descriptions from a sidecar after a re-scan
   arac read [--kind <kind>] [--full] <resource-id>...  Read one or more resources by ID; --kind forces exact kind (function, method, struct, named_type, interface, variable, file, package, dependency); --full returns whole file bodies under read.file_mode "skeleton"
   arac resource list [query] [--kind <kind>]... [--no-description]  List resources, optionally filtered by query, kind, or missing description
   arac grep [flags] <pattern> [path]  Search node names, node descriptions and file contents (ranked in that order)
@@ -244,15 +249,15 @@ Flags for "setup":
   blocks). Edit that file to customize what each agent can do.
 
   Examples:
-    Aracne scan -root ./myproject -output myproject.db
-    Aracne agent "list all structs"
-    Aracne init
-    Aracne setup --claude
-    Aracne setup --opencode
-    Aracne viz serve
-    Aracne serve --tool-profile descriptions-generation-executor
-    Aracne descriptions generate
-    Aracne descriptions clear --target function,type
+    arac scan -root ./myproject -output myproject.db
+    arac agent "list all structs"
+    arac init
+    arac setup --claude
+    arac setup --opencode
+    arac viz serve
+    arac serve --tool-profile descriptions-generation-executor
+    arac descriptions generate
+    arac descriptions clear --target function,type
     arac read internal/topology/golang.GoManager
     arac read internal/cli/read.go
     arac read internal/cli.RunRead internal/cli.parseReadArgs`

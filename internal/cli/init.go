@@ -49,6 +49,23 @@ func RunInit(args []string) {
 		os.Exit(1)
 	}
 
+	// A PROJECT ALREADY CONFIGURED ABOVE THIS DIRECTORY IS NOT A NEW PROJECT.
+	//
+	// Every other verb resolves its database with ProjectDBPath, which walks upward, because a
+	// verb run from a subdirectory used to build a second topology there (see its comment).
+	// `arac init` was the exception, and its version was worse: it saved the wizard's answers
+	// to <subdir>/.aracne/config.json and scanned "." -- a nested project indexing one subtree,
+	// whose config the outer project's tooling never reads. Refusing with a pointer is the only
+	// answer that is not silently wrong, since setting up the subdirectory really is a thing
+	// someone might mean.
+	if outer := ProjectDBPath(DefaultDBRelative); outer != DefaultDBRelative && fileExists(outer) {
+		fmt.Fprintf(os.Stderr, "This directory is inside a project aracne already configures at %s.\n"+
+			"Run `arac init` there to change its answers, or `arac setup` here to re-render its\n"+
+			"integration files. To set THIS directory up as its own project, scan it first:\n"+
+			"  arac scan -root .\n", ProjectRootFor(outer))
+		os.Exit(1)
+	}
+
 	// Loaded, never created. EnsureConfig would write a default config here, before a single
 	// question had been asked -- and then a cancel at question one would leave a .aracne
 	// directory behind and make "nothing was written" a lie. Nothing is written until every

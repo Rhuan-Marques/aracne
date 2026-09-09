@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -42,9 +44,6 @@ type pyClass struct {
 	HasAbstractMethods bool   `json:"has_abstract_methods"`
 	Lineno             int    `json:"lineno"`
 	EndLineno          int    `json:"end_lineno"`
-	BodyLineno         int    `json:"body_lineno"`
-	DocStart           int    `json:"doc_start"`
-	DocEnd             int    `json:"doc_end"`
 }
 
 // Represents a function or method call within a Python function body with the called function name, object/method context, and line number.
@@ -90,9 +89,6 @@ type pyFunc struct {
 	Parent     *string        `json:"parent"`
 	BodyCalls  []pyBodyCall   `json:"body_calls"`
 	BodyAssign []pyBodyAssign `json:"body_assignments"`
-	BodyLineno int            `json:"body_lineno"`
-	DocStart   int            `json:"doc_start"`
-	DocEnd     int            `json:"doc_end"`
 }
 
 // Represents a Python variable definition with its name and type annotation.
@@ -140,6 +136,13 @@ func parsePythonFile(filePath string) (*pyFileResult, error) {
 
 	dir := filepath.Dir(absPath)
 
+	// THE LOOP TRIES INTERPRETER NAMES, NOT ATTEMPTS. Only a missing binary is a reason to
+	// go on to the next name: a non-zero exit from an interpreter that RAN means the target
+	// file failed to parse, and continuing then threw that diagnosis away. On a machine with
+	// no `python` (which is most of them now) the final error became
+	// `python parse failed: : exec: "python": executable file not found in $PATH` -- a
+	// sentence about PATH for a file with a SyntaxError, pointing at the wrong fix and
+	// discarding the stderr from python3 that named the file, the line and the error.
 	pythonExes := []string{"python3", "python"}
 	var cmdErr error
 	for _, exe := range pythonExes {
@@ -149,6 +152,7 @@ func parsePythonFile(filePath string) (*pyFileResult, error) {
 		cmd.Stdout = &stdout
 		cmd.Stderr = &stderr
 		runErr := cmd.Run()
+		timedOut := ctx.Err() == context.DeadlineExceeded
 		cancel()
 		if runErr == nil {
 			// Decode only stdout: anything the interpreter writes to stderr
@@ -160,13 +164,33 @@ func parsePythonFile(filePath string) (*pyFileResult, error) {
 			}
 			return &result, nil
 		}
-		if ctx.Err() == context.DeadlineExceeded {
-			cmdErr = fmt.Errorf("%s parse timed out after 30s for %s", exe, absPath)
+		if timedOut {
+			// The interpreter ran; it just did not finish. Nothing is gained by asking a
+			// second one to take the same 30 seconds.
+			return nil, fmt.Errorf("%s parse timed out after 30s for %s", exe, absPath)
+		}
+		if isExeNotFound(runErr) {
+			// This NAME is not on PATH. Keep the error in case no name is, and try the next.
+			cmdErr = fmt.Errorf("%s: %w", exe, runErr)
 			continue
 		}
-		cmdErr = fmt.Errorf("%s parse failed: %s: %w", exe, stderr.String(), runErr)
+		// The interpreter ran and refused the file. That is the answer, and its stderr is
+		// the only thing that says why.
+		return nil, fmt.Errorf("%s could not parse %s: %w\n%s",
+			exe, absPath, runErr, strings.TrimSpace(stderr.String()))
 	}
-	return nil, cmdErr
+	if cmdErr == nil {
+		cmdErr = fmt.Errorf("no python interpreter found on PATH (tried %s)",
+			strings.Join(pythonExes, ", "))
+	}
+	return nil, fmt.Errorf("python is required to scan %s: %w", absPath, cmdErr)
+}
+
+// isExeNotFound reports whether a command failed because the binary is not on PATH, as
+// opposed to running and exiting non-zero. It is the difference between "try the next
+// interpreter name" and "this interpreter has answered".
+func isExeNotFound(err error) bool {
+	return errors.Is(err, exec.ErrNotFound) || errors.Is(err, fs.ErrNotExist)
 }
 
 // Holds parsed Python file contents: module path, imports, classes, functions, and variables with cross-file symbol resolution maps.
@@ -434,9 +458,6 @@ func convertClass(cls pyClass, filePath string, modulePath string) python.Python
 		IsABC:              cls.IsABC,
 		IsProtocol:         cls.IsProtocol,
 		HasAbstractMethods: cls.HasAbstractMethods,
-		BodyLine:           cls.BodyLineno,
-		DocStart:           cls.DocStart,
-		DocEnd:             cls.DocEnd,
 	}
 }
 
@@ -478,9 +499,6 @@ func convertFunction(fn pyFunc, filePath string, modulePath string, classID *pyt
 		Connections: make(map[python.ConnectionKind][]string),
 		MethodFrom:  classID,
 		IsAsync:     fn.IsAsync,
-		BodyLine:    fn.BodyLineno,
-		DocStart:    fn.DocStart,
-		DocEnd:      fn.DocEnd,
 	}
 }
 

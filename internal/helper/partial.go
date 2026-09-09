@@ -60,12 +60,14 @@ func scanResourceRows(rows *sql.Rows, hasLanguage bool, defaultLang string) (map
 	out := make(map[string]domain.Resource)
 	for rows.Next() {
 		var id, kind, name, language, desc, propsJSON, locPath string
+		var exactHash, normHash string
+		var normLines int
 		var startsAt, endsAt int
 		var err error
 		if hasLanguage {
-			err = rows.Scan(&id, &kind, &name, &language, &desc, &propsJSON, &startsAt, &endsAt, &locPath)
+			err = rows.Scan(&id, &kind, &name, &language, &desc, &propsJSON, &startsAt, &endsAt, &locPath, &exactHash, &normHash, &normLines)
 		} else {
-			err = rows.Scan(&id, &kind, &name, &desc, &propsJSON, &startsAt, &endsAt, &locPath)
+			err = rows.Scan(&id, &kind, &name, &desc, &propsJSON, &startsAt, &endsAt, &locPath, &exactHash, &normHash, &normLines)
 		}
 		if err != nil {
 			return nil, err
@@ -86,6 +88,9 @@ func scanResourceRows(rows *sql.Rows, hasLanguage bool, defaultLang string) (map
 			},
 			Properties:  fromJSONMap(propsJSON),
 			Connections: make(map[string][]string),
+			ExactHash:   exactHash,
+			NormHash:    normHash,
+			NormLines:   normLines,
 		}
 	}
 	return out, rows.Err()
@@ -95,9 +100,11 @@ func scanResourceRows(rows *sql.Rows, hasLanguage bool, defaultLang string) (map
 // query for the modern (with language) or legacy (without) schema.
 func resourceSelectColumns(hasLanguage bool) string {
 	if hasLanguage {
-		return "id, kind, name, language, description, properties_json, starts_at, ends_at, loc_path"
+		return "id, kind, name, language, description, properties_json, starts_at, ends_at, loc_path, " +
+			"COALESCE(exact_hash, ''), COALESCE(norm_hash, ''), COALESCE(norm_lines, 0)"
 	}
-	return "id, kind, name, description, properties_json, starts_at, ends_at, loc_path"
+	return "id, kind, name, description, properties_json, starts_at, ends_at, loc_path, " +
+		"COALESCE(exact_hash, ''), COALESCE(norm_hash, ''), COALESCE(norm_lines, 0)"
 }
 
 // hydrateConnections fills the Connections map of each resource with its
@@ -362,7 +369,7 @@ func WriteDelta(dbPath string, upserts []domain.Resource, deletes []string) erro
 
 		// Upserts: replace resource rows and re-derive their outgoing connections.
 		if len(upserts) > 0 {
-			resStmt, err := tx.Prepare("INSERT OR REPLACE INTO resources (id, kind, name, language, description, properties_json, starts_at, ends_at, loc_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+			resStmt, err := tx.Prepare("INSERT OR REPLACE INTO resources (id, kind, name, language, description, properties_json, starts_at, ends_at, loc_path, exact_hash, norm_hash, norm_lines) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
 			if err != nil {
 				return err
 			}
@@ -382,7 +389,8 @@ func WriteDelta(dbPath string, upserts []domain.Resource, deletes []string) erro
 					locPath = res.Location.Path
 				}
 				if _, err := resStmt.Exec(res.ID, string(res.Kind), res.Name, res.Language,
-					domain.DescriptionForStorage(res.Kind, res.Description), toJSON(res.Properties), startsAt, endsAt, locPath); err != nil {
+					domain.DescriptionForStorage(res.Kind, res.Description), toJSON(res.Properties), startsAt, endsAt, locPath,
+					res.ExactHash, res.NormHash, res.NormLines); err != nil {
 					return err
 				}
 				// Clear stale outgoing edges for this source before re-inserting.

@@ -212,8 +212,49 @@ func RunScan(args []string) {
 	fmt.Printf("Analyzed in %s\n", elapsed.Round(time.Millisecond))
 	fmt.Printf("-%d packages\n-%d files\n-%d functions\n-%d structs\n-%d named types\n-%d interfaces\n-%d variables\n-%d dependencies\n-%d errors\n",
 		pkgCount, fileCount, funcCount, structCount, namedTypeCount, ifaceCount, varCount, depCount, len(topo.Errors))
+	printScanErrors(topo.Errors)
 
 	warnEmptyScan(*root, fileCount, reg)
+}
+
+// maxPrintedScanErrors is how many scan errors the summary spells out before it stops and
+// says how many are left.
+const maxPrintedScanErrors = 5
+
+// printScanErrors spells out what the error count counted.
+//
+// A NUMBER WITH NO WAY TO READ IT IS NOT A REPORT. The errors have always been stored -- as
+// `error:<key>` rows in `info`, capped by writeScanErrors -- and nothing anywhere read them
+// back: `arac warnings list` lists topology WARNINGS, a different table, and /api/summary
+// reports warnings and bugs and no errors at all. So the summary printed "-3 errors" and left
+// a SQLite client as the only way to find out what they were. This repository reported three
+// for a long time; one of them was a source file the scanner could not parse.
+func printScanErrors(errs map[string]string) {
+	if len(errs) == 0 {
+		return
+	}
+	keys := make([]string, 0, len(errs))
+	for k := range errs {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for i, k := range keys {
+		if i >= maxPrintedScanErrors {
+			fmt.Fprintf(os.Stderr, "  … and %d more (every error is stored in the topology; "+
+				"`arac warnings list` covers warnings, not these)\n", len(keys)-maxPrintedScanErrors)
+			break
+		}
+		fmt.Fprintf(os.Stderr, "  error: %s: %s\n", k, firstLine(errs[k]))
+	}
+}
+
+// firstLine keeps a multi-line diagnostic (a Python traceback, say) to one line in a summary.
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return strings.TrimSpace(s[:i]) + " …"
+	}
+	return s
 }
 
 // warnEmptyScan reports a scan that detected a project but indexed nothing.

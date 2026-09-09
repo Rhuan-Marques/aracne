@@ -15,7 +15,7 @@ func RunUpdateDescription(args []string) {
 	id, resourceName := args[0], args[1]
 	description := strings.Join(args[2:], " ")
 
-	manager, _ := InitRegistry(".aracne/topology.db")
+	manager, _ := InitRegistry(ProjectDBPath(DefaultDBRelative))
 
 	kind := MapResourceKind(resourceName)
 	if kind == "" {

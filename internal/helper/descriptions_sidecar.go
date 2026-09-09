@@ -2,11 +2,8 @@ package helper
 
 import (
 	"bufio"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -47,7 +44,21 @@ type DescriptionRecord struct {
 	EndsAt   int    `json:"ends_at,omitempty"`
 	// SrcSHA256 hashes the resource's own source span, so a resource that MOVED to a
 	// different file is still recognisable.
-	SrcSHA256   string `json:"src_sha256,omitempty"`
+	//
+	// READ FROM THE RESOURCE, NOT FROM THE FILE. This used to be computed here by opening
+	// RelPath and hashing the span, which cannot work for the case it exists to serve: after a
+	// real `git mv` the old path is gone, the read fails, the hash comes back empty and both
+	// source-hash tiers below go dark exactly when they are needed. (The test that claimed to
+	// cover it, TestSurvivesAFileMoveViaSourceHash, passed only because its fixture COPIED the
+	// file and left the original in place.) The scan path now fingerprints every resource
+	// while its file is still there and stores the result, so this reads what was recorded.
+	SrcSHA256 string `json:"src_sha256,omitempty"`
+	// NormSHA256 is the same span with comments and blank lines removed, so a resource that
+	// moved AND was reformatted or recommented on the way still matches. See helper.BodyHashes.
+	NormSHA256 string `json:"norm_sha256,omitempty"`
+	// NormLines is the normalized body's line count, which decides whether the weaker match
+	// tiers may trust the hashes above. See helper.WeakTierMinLines.
+	NormLines   int    `json:"norm_lines,omitempty"`
 	Description string `json:"description"`
 }
 
@@ -72,6 +83,7 @@ func BuildDescriptionRecords(topo *domain.Topology, root string) []DescriptionRe
 		if strings.TrimSpace(res.Description) == "" {
 			continue
 		}
+		exact, norm, normLines := storedOrComputedHashes(cache, res)
 		out = append(out, DescriptionRecord{
 			ID:          id,
 			Kind:        string(res.Kind),
@@ -80,7 +92,9 @@ func BuildDescriptionRecords(topo *domain.Topology, root string) []DescriptionRe
 			RelPath:     relPath(root, resourcePath(res)),
 			StartsAt:    res.Location.StartsAt,
 			EndsAt:      res.Location.EndsAt,
-			SrcSHA256:   cache.hashSpan(res),
+			SrcSHA256:   exact,
+			NormSHA256:  norm,
+			NormLines:   normLines,
 			Description: res.Description,
 		})
 	}
@@ -195,6 +209,42 @@ type descIndex struct {
 	byNameSrc  map[string][]string
 }
 
+// dedupeHashes returns the distinct non-empty fingerprints among its arguments, preserving
+// order so the exact hash is always tried first.
+func dedupeHashes(hashes ...string) []string {
+	out := make([]string, 0, len(hashes))
+	for _, h := range hashes {
+		if h == "" {
+			continue
+		}
+		seen := false
+		for _, kept := range out {
+			if kept == h {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// storedOrComputedHashes prefers the fingerprints the scan path stamped onto the resource,
+// and computes them only when they are absent -- a database written before the columns
+// existed, or a topology assembled in memory that never went through StampBodyHashes.
+//
+// The fallback goes through the same BodyHashes the stamp uses, size floor included, so a
+// computed hash and a stored one are interchangeable. Hashing the raw span here instead would
+// produce a value that never equals a stored one for any small body.
+func storedOrComputedHashes(cache *lineCache, res domain.Resource) (exact, norm string, normLines int) {
+	if res.ExactHash != "" || res.NormHash != "" {
+		return res.ExactHash, res.NormHash, res.NormLines
+	}
+	return cache.bodyHashes(res)
+}
+
 func identityKey(kind, relPath, name, parent string) string {
 	return kind + "\x00" + relPath + "\x00" + name + "\x00" + parent
 }
@@ -220,13 +270,30 @@ func buildDescIndex(topo *domain.Topology, root string) *descIndex {
 		kind, name := string(res.Kind), res.Name
 		parent := parentName(topo, res)
 		rel := relPath(root, resourcePath(res))
+		exact, norm, normLines := storedOrComputedHashes(cache, res)
 		idx.byIdentity[identityKey(kind, rel, name, parent)] =
 			append(idx.byIdentity[identityKey(kind, rel, name, parent)], id)
-		if sha := cache.hashSpan(res); sha != "" {
+		// Indexed under BOTH fingerprints. A record carrying either one can then find this
+		// resource: the exact hash answers a verbatim move without depending on the
+		// normalizer, and the normalized hash answers a move that picked up a reformat or a
+		// rewritten comment on the way.
+		//
+		// DEDUPLICATED, because a body with no comments in it normalizes to itself and the two
+		// hashes are then the same string. Indexing it twice put the same id in one bucket
+		// twice, and `unique` reads a two-entry bucket as an ambiguous match and refuses it --
+		// so the commonest case of all, a verbatim move of uncommented code, was the one that
+		// stopped working.
+		for _, sha := range dedupeHashes(exact, norm) {
 			idx.byMovedSrc[movedSrcKey(kind, name, parent, sha)] =
 				append(idx.byMovedSrc[movedSrcKey(kind, name, parent, sha)], id)
-			idx.byNameSrc[nameSrcKey(kind, name, sha)] =
-				append(idx.byNameSrc[nameSrcKey(kind, name, sha)], id)
+			// name_source has dropped the enclosing type, so a short body shared by ten
+			// implementations of one method would collapse them all into this bucket. Only
+			// substantial bodies are offered to it -- moved_source above keeps the parent and
+			// needs no such guard.
+			if normLines >= WeakTierMinLines {
+				idx.byNameSrc[nameSrcKey(kind, name, sha)] =
+					append(idx.byNameSrc[nameSrcKey(kind, name, sha)], id)
+			}
 		}
 	}
 	return idx
@@ -264,13 +331,22 @@ func MatchDescriptions(recs []DescriptionRecord, topo *domain.Topology, root str
 				id, tier = hit, MatchIdentity
 			}
 		}
-		if id == "" && rec.SrcSHA256 != "" {
-			if hit := unique(idx.byMovedSrc[movedSrcKey(rec.Kind, rec.Name, rec.Parent, rec.SrcSHA256)]); hit != "" {
+		// Exact before normalized, at each tier: a verbatim move is the commonest kind and
+		// should never depend on the normalizer having classified the language correctly.
+		recHashes := dedupeHashes(rec.SrcSHA256, rec.NormSHA256)
+		for _, sha := range recHashes {
+			if id != "" {
+				break
+			}
+			if hit := unique(idx.byMovedSrc[movedSrcKey(rec.Kind, rec.Name, rec.Parent, sha)]); hit != "" {
 				id, tier = hit, MatchMovedSrc
 			}
 		}
-		if id == "" && rec.SrcSHA256 != "" {
-			if hit := unique(idx.byNameSrc[nameSrcKey(rec.Kind, rec.Name, rec.SrcSHA256)]); hit != "" {
+		for _, sha := range recHashes {
+			if id != "" || rec.NormLines < WeakTierMinLines {
+				break
+			}
+			if hit := unique(idx.byNameSrc[nameSrcKey(rec.Kind, rec.Name, sha)]); hit != "" {
 				id, tier = hit, MatchNameSrc
 			}
 		}
@@ -410,38 +486,6 @@ func (c *lineCache) lines(path string) []string {
 	}
 	c.files[path] = readLines(path)
 	return c.files[path]
-}
-
-// hashSpan hashes a resource's own source text: [StartsAt, EndsAt] for a span, or the
-// whole file when the resource has no line range (files, packages, dependencies).
-// Returns "" when the source is unavailable — a weaker match, never an error.
-func (c *lineCache) hashSpan(res domain.Resource) string {
-	path := resourcePath(res)
-	if path == "" {
-		return ""
-	}
-	lines := c.lines(path)
-	if lines == nil {
-		return ""
-	}
-	start, end := res.Location.StartsAt, res.Location.EndsAt
-	if start <= 0 || end <= 0 || start > end {
-		start, end = 1, len(lines)
-	}
-	if start > len(lines) {
-		return ""
-	}
-	if end > len(lines) {
-		end = len(lines)
-	}
-	h := sha256.New()
-	for i := start - 1; i < end; i++ {
-		// Trailing whitespace and line-ending differences must not change the identity of
-		// a resource that is otherwise untouched.
-		io.WriteString(h, strings.TrimRight(lines[i], " \t\r"))
-		io.WriteString(h, "\n")
-	}
-	return hex.EncodeToString(h.Sum(nil))
 }
 
 // readLines returns a file's lines, or nil when it cannot be read or is not text.

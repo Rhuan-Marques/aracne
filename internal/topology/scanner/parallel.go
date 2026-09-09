@@ -1,6 +1,8 @@
 package scanner
 
 import (
+	"fmt"
+	"os"
 	"runtime"
 	"sync"
 )
@@ -72,7 +74,7 @@ func ParallelParse[R any](paths []string, label string, parse func(path string) 
 		go func() {
 			defer wg.Done()
 			for i := range idx {
-				results[i] = parse(paths[i])
+				results[i] = safeParse(parse, paths[i])
 				progressStep()
 			}
 		}()
@@ -83,4 +85,23 @@ func ParallelParse[R any](paths []string, label string, parse func(path string) 
 	close(idx)
 	wg.Wait()
 	return results
+}
+
+// safeParse runs one file's parse and turns a panic into the zero result, which every caller
+// already handles as "this file did not parse".
+//
+// WHY. A tree-sitter binding or an index calculation that panics on one malformed file used to
+// take `arac scan` down with it -- the whole scan, for one file. Every other place a scan runs
+// on a critical path recovers explicitly and says why (runGuardScan, proxyRead, trackedFiles);
+// the scan itself was the one that did not, and it is the one with the most files to be wrong
+// about. The panic is reported on stderr so it is not silent.
+func safeParse[R any](parse func(path string) R, path string) (out R) {
+	defer func() {
+		if r := recover(); r != nil {
+			var zero R
+			out = zero
+			fmt.Fprintf(os.Stderr, "aracne: parsing %s panicked (%v); skipping this file\n", path, r)
+		}
+	}()
+	return parse(path)
 }

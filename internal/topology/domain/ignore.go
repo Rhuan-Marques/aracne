@@ -56,6 +56,13 @@ func BuildIgnoreMatcher(root string, patterns []string) *IgnoreMatcher {
 		}
 		p = filepath.ToSlash(p)
 		dirOnly := false
+		// `X/**` means "everything under X", which is what a directory rule already
+		// means -- and spelling it as a regex instead left MatchDir unable to prune X
+		// itself, so a walk descended into an ignored tree to reject it file by file.
+		if strings.HasSuffix(p, "/**") {
+			dirOnly = true
+			p = strings.TrimSuffix(p, "/**")
+		}
 		if strings.HasSuffix(p, "/") {
 			dirOnly = true
 			p = strings.TrimRight(p, "/")
@@ -71,7 +78,7 @@ func BuildIgnoreMatcher(root string, patterns []string) *IgnoreMatcher {
 		if p == "" {
 			continue
 		}
-		re, err := globToRegexp(p)
+		re, err := GlobToRegexp(p)
 		if err != nil {
 			continue
 		}
@@ -80,9 +87,19 @@ func BuildIgnoreMatcher(root string, patterns []string) *IgnoreMatcher {
 	return &IgnoreMatcher{root: absRoot, rules: rules}
 }
 
-// globToRegexp converts a glob pattern (with *, **, ?) to a compiled, fully
-// anchored regexp. "**" spans path separators, "*" and "?" do not.
-func globToRegexp(pattern string) (*regexp.Regexp, error) {
+// GlobToRegexp converts a glob pattern (with *, **, ?) to a compiled, fully anchored regexp.
+// "**" spans path separators, "*" and "?" do not.
+//
+// A "**" FOLLOWED BY A SLASH MATCHES ZERO DIRECTORIES, which is what `.gitignore` means by
+// it and what the configuration reference promises. Compiling `**/` to `.*/` instead required
+// at least one directory above the match, so `**/node_modules/` skipped a nested
+// node_modules and silently indexed the one at the repository root -- the failure in the
+// direction that costs most, since the tree the project asked to skip got scanned anyway.
+//
+// Exported because the chat glob tool needs exactly this compiler and had grown a
+// byte-identical private copy, carrying the same bug: `**/*.go` there never matched a file at
+// the search root.
+func GlobToRegexp(pattern string) (*regexp.Regexp, error) {
 	var b strings.Builder
 	b.WriteString("^")
 	for i := 0; i < len(pattern); i++ {
@@ -90,6 +107,11 @@ func globToRegexp(pattern string) (*regexp.Regexp, error) {
 		switch ch {
 		case '*':
 			if i+1 < len(pattern) && pattern[i+1] == '*' {
+				if i+2 < len(pattern) && pattern[i+2] == '/' {
+					b.WriteString("(?:.*/)?") // "**/" spans zero or more directories
+					i += 2
+					continue
+				}
 				b.WriteString(".*")
 				i++
 			} else {

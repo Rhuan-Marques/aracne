@@ -117,20 +117,19 @@ func runClaudeGuardHook(input io.Reader, output io.Writer) {
 	case "PostToolUse":
 		keys := implicatedKeys(event.ToolName, event.ToolInput, exemptPiped)
 		parts := []string{}
-		// On the terminal surface a Bash read was either already answered by aracne (the
-		// PreToolUse rewrite) or is one aracne cannot answer at all; nudging it is bytes
-		// spent advertising something the agent just got, or something that does not exist.
-		// A NATIVE Read/Grep/Edit/Write is different: interception never sees it, so the
-		// nudge is the only place the model learns the shell forms are the cheaper question.
-		// Where reads are intercepted, a Bash read was either already answered by aracne (the
-		// PreToolUse rewrite) or is one aracne cannot answer at all; nudging it is bytes spent
-		// advertising something the agent just got, or something that does not exist. A NATIVE
-		// Read/Grep/Edit/Write is different: interception never sees it, so the nudge is the
-		// only place the model learns which spelling is the cheaper question.
+		// A Bash read was either already answered by aracne (the PreToolUse rewrite) or is one
+		// aracne cannot answer at all; nudging it is bytes spent advertising something the
+		// agent just got, or something that does not exist. A NATIVE Read/Grep/Edit/Write is
+		// different: interception never sees it, so the nudge is the only place the model
+		// learns which spelling is the cheaper question.
 		switch {
 		case event.ToolName != "Bash":
 			// A native Read/Grep/Edit/Write. Interception never sees these, so the nudge is
-			// the only place the model learns the shell forms are the cheaper question.
+			// the only place the model learns the shell forms are the cheaper question --
+			// but only where aracne has something to offer in exchange. See worthNudging.
+			if !worthNudging(keys, event.ToolInput, dbPath) {
+				break
+			}
 			if msg := warningMessage(keys, !blocked[toolspec.ReadToolName], cfg.Surface()); msg != "" {
 				parts = append(parts, msg)
 			}
@@ -146,16 +145,7 @@ func runClaudeGuardHook(input io.Reader, output io.Writer) {
 				parts = append(parts, msg)
 			}
 		}
-		// The backstop for everything the classifier does not know how to refuse. Only Bash
-		// needs it: a native Edit/Write is already followed by the update-file hook.
-		//
-		// `arac` itself is exempt: it is unclassified (not a shell read/edit command), so the
-		// backstop would otherwise run a full incremental scan after EVERY aracne call. That
-		// matters most for the bug pipeline, whose slash commands orchestrate through
-		// `arac bug list` several times per fan-out round -- and whose scans would each run
-		// the orphan-bug cleanup. Any arac subcommand that touches source already syncs the
-		// topology itself.
-		if event.ToolName == "Bash" && mayHaveWrittenSource(keys) && !isAracCommand(event.ToolInput) {
+		if driftCheckApplies(event.ToolName, keys, event.ToolInput) {
 			if msg := driftCheck(dbPath); msg != "" {
 				parts = append(parts, msg)
 			}
@@ -165,6 +155,71 @@ func runClaudeGuardHook(input io.Reader, output io.Writer) {
 			emitPostToolWarning(output, strings.Join(parts, "\n\n"))
 		}
 	}
+}
+
+// worthNudging reports whether a native tool call has anything to gain from the pointer.
+//
+// THE READ/SEARCH CASE NEEDS EVIDENCE. For a file the topology holds no nodes for -- a
+// CHANGELOG, a lockfile, a template, an unsupported language -- aracne cannot answer the read
+// better, and the nudge tells the model that "`cat` on an indexed file is answered from the
+// topology" about a file that is not indexed. The hook fires on every matching call and its
+// text is injected into the transcript each time, so that is real cost spent teaching a rule
+// that fails the next time the model tries it. namesAnIndexedFile is the evidence test, and it
+// requires a positive: unlike interception, the nudge has no second check downstream -- what it
+// decides is what the model reads.
+//
+// A MUTATION IS NUDGED UNCONDITIONALLY. Its guidance is about the SYNC (`arac edit` updates the
+// topology inline), which is true whether or not the file has nodes today -- and an edit that
+// creates the first declaration in a file is exactly the case that would fail an index test.
+func worthNudging(keys []string, toolInput map[string]interface{}, dbPath string) bool {
+	readOnly := true
+	for _, k := range keys {
+		if k == "edit" || k == "write" {
+			readOnly = false
+		}
+	}
+	if !readOnly {
+		return true
+	}
+	paths := claudeHookPaths(toolInput)
+	if len(paths) == 0 {
+		// A Grep names a pattern and maybe a path glob; with nothing to resolve there is no
+		// counter-evidence, and the search guidance holds for the tree as a whole.
+		return true
+	}
+	return namesAnIndexedFile(paths, dbPath)
+}
+
+// driftCheckApplies reports whether a tool call is worth re-syncing the topology after.
+//
+// TWO KINDS OF CALL REACH IT, and the second was missing.
+//
+// A BASH command fires the check when the classifier saw a write, and ALSO when it
+// recognized nothing at all: an unclassified command is precisely the case the backstop
+// exists for, since a command the classifier understands is already governed by the guard's
+// own rules. `arac` itself is exempt -- it is unclassified (not a shell read/edit command),
+// so the backstop would otherwise run a full incremental scan after EVERY aracne call. That
+// matters most for the bug pipeline, whose slash commands orchestrate through `arac bug list`
+// several times per fan-out round -- and whose scans would each run the orphan-bug cleanup.
+// Any arac subcommand that touches source already syncs the topology itself.
+//
+// A NATIVE Edit/Write/MultiEdit/NotebookEdit fires it too, and used not to. The reasoning was
+// that the `arac update-file` hook already covers those -- but that hook is installed only
+// when the project lists the edit-update-db-plugin, and NO shipped path lists it: the default
+// config sets no plugins and `arac init` never asks. So a native edit produced no warning at
+// all at the moment it broke something, and the warning the next PreToolUse scan discovered
+// was delivered by whichever later Bash command happened to be unclassified -- an `ls`, a
+// `go build` -- and attributed to it. The contract promises "act on any topology warning that
+// comes back" in every mode; this is what makes that true for the default editing path.
+func driftCheckApplies(toolName string, keys []string, toolInput map[string]interface{}) bool {
+	if toolName == "Bash" {
+		return mayHaveWrittenSource(keys) && !isAracCommand(toolInput)
+	}
+	// Reads and searches change nothing, so only the native mutators qualify. Asking
+	// toolspec rather than listing the names keeps this in step with the hook matcher, which
+	// is derived from the same map.
+	key, ok := toolspec.NativeToolKey(toolName)
+	return ok && (key == "edit" || key == "write")
 }
 
 // guardLoggedCommand pulls the command text out of a tool input for the event log, or ""
@@ -413,6 +468,17 @@ type commandSegment struct {
 	// time the segment text is re-split into fields the quotes are gone and a
 	// `sed 's/a>b/c/'` expression is indistinguishable from a real redirect.
 	redirectsOut bool
+	// depth is how many unclosed substitutions, subshells or groups this segment sits
+	// inside: 0 for a command whose stdout the caller reads, 1 or more for one whose output
+	// is a VALUE the enclosing command consumes.
+	//
+	// It is captured during the scan for the same reason redirectsOut is -- afterwards the
+	// nesting is gone. The scanner has always had to cut on `(`, `)` and a backtick so that a
+	// subshell's contents are classified, and the resulting list said nothing about where a
+	// segment had come from. Interception then spliced `arac cmd --` into the body of a
+	// `$(...)`, so `X=$(cat f)` captured aracne's rendering -- fences, elision markers and a
+	// `# CONTEXT:` block -- in place of the file, and nothing downstream could tell.
+	depth int
 }
 
 // splitCommandSegments splits a shell command into simple-command candidates on
@@ -421,6 +487,17 @@ type commandSegment struct {
 // so a quoted pipe never causes a split. Each segment records whether it is the
 // consumer side of a single `|` pipe; `||` (logical OR) and `&&`/`&` are list
 // separators, not pipes.
+//
+// AN `&` THAT BELONGS TO A REDIRECTION IS NOT A SEPARATOR. `2>&1`, `>&2` and `&>log` are one
+// operator each, and cutting them in half produced a segment list whose neighbours were no
+// longer the pipeline's own stages: `cat f 2>&1 | grep x` scanned as
+// ["cat f 2>", "1 ", " grep x"], so the check that asks what a producer feeds looked at the
+// `1` fragment, decided the read fed no pipe, and let it be rewritten -- the grep then
+// searched aracne's rendering and returned FEWER matches than the real command, with nothing
+// to mark it as a different answer.
+//
+// Each segment also records the nesting depth it sits at, so a caller can tell a top-level
+// command from the body of a substitution. See commandSegment.depth.
 func splitCommandSegments(command string) []commandSegment {
 	runes := []rune(command)
 	// Byte offset of each rune, so a segment can be located in the original string.
@@ -437,12 +514,15 @@ func splitCommandSegments(command string) []commandSegment {
 	var quote rune
 	curPiped := false    // is the segment currently accumulating downstream of a `|`?
 	curRedirect := false // has this segment redirected stdout to a file?
+	depth := 0           // unclosed `(`, `{` and backticks around the current segment
+	inBacktick := false  // a backtick is its own closer, so it toggles rather than nests
 	segStart := 0        // rune index where the current segment began
 	flush := func(endRune, nextStart int, nextPiped bool) {
 		segs = append(segs, commandSegment{
 			text:         cur.String(),
 			pipedInto:    curPiped,
 			redirectsOut: curRedirect,
+			depth:        depth,
 			start:        byteOf[segStart],
 			end:          byteOf[endRune],
 		})
@@ -479,8 +559,36 @@ func splitCommandSegments(command string) []commandSegment {
 			} else {
 				flush(i, i+1, true)
 			}
-		case ';', '&', '\n', '(', ')', '`', '{', '}':
+		case ';', '\n':
 			flush(i, i+1, false)
+		case '&':
+			// `2>&1` and `&>log` are redirection operators; only a bare `&` separates.
+			if isRedirectAmpersand(runes, i) {
+				cur.WriteRune(r)
+				continue
+			}
+			flush(i, i+1, false)
+		case '(', '{':
+			// Flushed at the OUTER depth -- the segment ending here is the one around the
+			// group, not the one inside it -- and everything after opens one level deeper.
+			flush(i, i+1, false)
+			depth++
+		case ')', '}':
+			flush(i, i+1, false)
+			if depth > 0 {
+				depth--
+			}
+		case '`':
+			flush(i, i+1, false)
+			if inBacktick {
+				if depth > 0 {
+					depth--
+				}
+				inBacktick = false
+			} else {
+				depth++
+				inBacktick = true
+			}
 		case '>':
 			// `2>&1` duplicates a descriptor, it does not write a file.
 			if i+1 >= len(runes) || runes[i+1] != '&' {
@@ -493,6 +601,24 @@ func splitCommandSegments(command string) []commandSegment {
 	}
 	flush(len(runes), len(runes), false)
 	return segs
+}
+
+// isRedirectAmpersand reports whether the `&` at i is half of a redirection operator rather
+// than a command separator.
+//
+// Two shapes, and both are ordinary in agent-written commands: `2>&1` / `>&2` duplicate a file
+// descriptor, and `&>file` / `&>>file` send both streams to one place. Neither ends a command,
+// and treating them as if they did is what broke the pipeline adjacency the interception rules
+// depend on -- see splitCommandSegments.
+//
+// The look-back is at the RAW runes rather than at the accumulated segment text, which has had
+// its quote characters dropped: `echo ">"&ls` really is a separator, and runes[i-1] there is
+// the quote, not the `>`.
+func isRedirectAmpersand(runes []rune, i int) bool {
+	if i > 0 && runes[i-1] == '>' {
+		return true
+	}
+	return i+1 < len(runes) && runes[i+1] == '>'
 }
 
 // commandFields returns a segment's command word followed by its arguments,
@@ -552,16 +678,6 @@ func wrappedCommandIndex(fields []string, start int) int {
 		}
 	}
 	return start
-}
-
-// commandWord returns just the base command name of a segment, or "" when it
-// has none.
-func commandWord(segment string) string {
-	fields := commandFields(segment)
-	if len(fields) == 0 {
-		return ""
-	}
-	return fields[0]
 }
 
 // Returns true if a token is a valid environment variable assignment (VAR=value format).

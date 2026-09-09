@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/Rhuan-Marques/aracne/internal/helper"
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
@@ -40,6 +41,12 @@ func warnStateFile(dbPath string) string {
 // readReportedWarnings returns the IDs already shown to the model, and whether a record
 // existed at all. The two are different: no record means "this session has shown nothing yet",
 // which is what suppresses a first-write dump of every pre-existing warning.
+//
+// A file that is THERE and unreadable counts as seeded, with an unknown set. That asymmetry is
+// deliberate and it is the safe direction: reporting a warning twice costs a few lines, while
+// treating a torn or unparseable record as "never seeded" makes seedReportedWarnings write
+// every warning standing at that moment in as already-delivered -- permanently suppressing the
+// one channel the design says has no substitute.
 func readReportedWarnings(dbPath string) (map[string]bool, bool) {
 	raw, err := os.ReadFile(warnStateFile(dbPath))
 	if err != nil {
@@ -47,7 +54,7 @@ func readReportedWarnings(dbPath string) (map[string]bool, bool) {
 	}
 	var ids []string
 	if err := json.Unmarshal(raw, &ids); err != nil {
-		return map[string]bool{}, false
+		return map[string]bool{}, true
 	}
 	out := make(map[string]bool, len(ids))
 	for _, id := range ids {
@@ -58,16 +65,22 @@ func readReportedWarnings(dbPath string) (map[string]bool, bool) {
 
 // writeReportedWarnings records the set, best-effort. A hook must not fail a tool call because
 // it could not write a bookkeeping file.
+//
+// ATOMIC, and sorted. os.WriteFile truncates first and writes second, and hooks for concurrent
+// tool calls are separate processes -- so an interrupted write left a file that parses as
+// nothing, which readReportedWarnings used to read as "never seeded". Sorted because the set
+// comes from a map and a stable file is one a person can diff.
 func writeReportedWarnings(dbPath string, ids map[string]bool) {
 	list := make([]string, 0, len(ids))
 	for id := range ids {
 		list = append(list, id)
 	}
+	sort.Strings(list)
 	raw, err := json.Marshal(list)
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile(warnStateFile(dbPath), raw, 0o644)
+	_ = helper.AtomicWriteFile(warnStateFile(dbPath), raw, 0o644)
 }
 
 // currentWarningIDs reads the whole warnings table as an id set.
@@ -92,11 +105,34 @@ func currentWarningIDs(dbPath string) (map[string]bool, []domain.TopologyWarning
 // warning the repository already had -- none of which the model caused, all of which it would
 // then learn to skim past.
 func seedReportedWarnings(dbPath string) {
-	if _, seeded := readReportedWarnings(dbPath); seeded {
+	ids, _, ok := currentWarningIDs(dbPath)
+	if !ok {
 		return
 	}
-	if ids, _, ok := currentWarningIDs(dbPath); ok {
+	seen, seeded := readReportedWarnings(dbPath)
+	if !seeded {
 		writeReportedWarnings(dbPath, ids)
+		return
+	}
+	// PRUNED to what the table still holds, every time.
+	//
+	// unreportedWarnings replaces the record wholesale, which is what is supposed to make a
+	// warning that was fixed and reintroduced count as new again -- but it only runs from
+	// driftCheck, so an id that left the table and came back between two shell writes was
+	// still in the record when it returned and was filtered out silently. Pruning here, on a
+	// pass that already reads the table before every tool call, gives that rule the
+	// opportunity it was missing: the moment a warning is gone, so is its record.
+	pruned := make(map[string]bool, len(seen))
+	changed := false
+	for id := range seen {
+		if ids[id] {
+			pruned[id] = true
+			continue
+		}
+		changed = true
+	}
+	if changed {
+		writeReportedWarnings(dbPath, pruned)
 	}
 }
 

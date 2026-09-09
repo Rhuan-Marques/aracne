@@ -314,22 +314,6 @@ def extract_body(body, parent, import_map):
             pass
     return functions, classes, variables
 
-def doc_positions(node):
-    # Returns (first_body_statement_line, docstring_start, docstring_end). The
-    # docstring lines are 0 when the node has no docstring. Used by apply to insert
-    # or replace a docstring as the first body statement.
-    body = getattr(node, 'body', [])
-    if not body:
-        return 0, 0, 0
-    first = body[0]
-    body_lineno = getattr(first, 'lineno', 0)
-    doc_start = 0
-    doc_end = 0
-    if ast.get_docstring(node) is not None:
-        doc_start = body_lineno
-        doc_end = getattr(first, 'end_lineno', body_lineno)
-    return body_lineno, doc_start, doc_end
-
 def parse_func(node, parent, import_map):
     decs = decorator_names(node)
     is_prop = any(d in ('property', 'cached_property', 'functools.cached_property')
@@ -360,7 +344,6 @@ def parse_func(node, parent, import_map):
     if getattr(node, 'returns', None):
         results.append({'name': '', 'typing': expr_str(node.returns),
                         'type_refs': annot_refs(node.returns)})
-    body_lineno, doc_start, doc_end = doc_positions(node)
     return {
         'name': node.name,
         'docstring': ast.get_docstring(node) or '',
@@ -375,9 +358,6 @@ def parse_func(node, parent, import_map):
         'parent': parent,
         'body_calls': extract_body_calls(node.body),
         'body_assignments': extract_local_assignments(node.body),
-        'body_lineno': body_lineno,
-        'doc_start': doc_start,
-        'doc_end': doc_end,
     }
 
 def parse_class(node, import_map):
@@ -396,7 +376,6 @@ def parse_class(node, import_map):
 
     funcs, subclasses, vars_ = extract_body(node.body, node.name, import_map)
     has_abstract = any(f.get('is_abstract') for f in funcs)
-    body_lineno, doc_start, doc_end = doc_positions(node)
 
     return {
         'name': node.name,
@@ -412,9 +391,6 @@ def parse_class(node, import_map):
         'has_abstract_methods': has_abstract,
         'lineno': node.lineno,
         'end_lineno': getattr(node, 'end_lineno', node.lineno),
-        'body_lineno': body_lineno,
-        'doc_start': doc_start,
-        'doc_end': doc_end,
     }
 
 def parse_file(path, module_root):

@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+
+	"github.com/Rhuan-Marques/aracne/internal/helper"
 )
 
 // Manages file storage directory for chat data.
@@ -32,7 +34,7 @@ func (s *Store) Save(session *Session) error {
 	if err != nil {
 		return fmt.Errorf("marshal session: %w", err)
 	}
-	return os.WriteFile(s.sessionPath(session.ID), data, 0644)
+	return helper.AtomicWriteFile(s.sessionPath(session.ID), data, 0644)
 }
 
 // Loads and unmarshals a session from a JSON file by ID

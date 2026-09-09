@@ -72,17 +72,17 @@ func TestApplyPinsTheModelWhereBothHarnessesSeeIt(t *testing.T) {
 	initAnswers{
 		Provider:  helper.ProviderNameAnthropic,
 		APIKeyEnv: "ANTHROPIC_API_KEY",
-		Model:     "claude-haiku-5",
+		Model:     "claude-haiku-4-5",
 		Mode:      helper.ModeCLI,
 		Verbosity: helper.ContractVerbosityLow,
 	}.apply(cfg)
 
 	for _, harness := range []string{"claude_code", "opencode"} {
-		if got := cfg.EffectiveAgent(harness, helper.DescriptionsExecutorAgent).Model; got != "claude-haiku-5" {
+		if got := cfg.EffectiveAgent(harness, helper.DescriptionsExecutorAgent).Model; got != "claude-haiku-4-5" {
 			t.Errorf("%s resolves the executor model to %q", harness, got)
 		}
 	}
-	if got := cfg.EffectiveLazyDescriptions(helper.DefaultLazyHarness).Model; got != "claude-haiku-5" {
+	if got := cfg.EffectiveLazyDescriptions(helper.DefaultLazyHarness).Model; got != "claude-haiku-4-5" {
 		t.Errorf("the lazy fill resolves the model to %q", got)
 	}
 	// It must survive a round trip through the file, or the next command reads the
@@ -91,7 +91,7 @@ func TestApplyPinsTheModelWhereBothHarnessesSeeIt(t *testing.T) {
 	if err := helper.SaveConfig(cfg, path); err != nil {
 		t.Fatalf("SaveConfig: %v", err)
 	}
-	if got := helper.LoadConfig(path).EffectiveLazyDescriptions(helper.DefaultLazyHarness).Model; got != "claude-haiku-5" {
+	if got := helper.LoadConfig(path).EffectiveLazyDescriptions(helper.DefaultLazyHarness).Model; got != "claude-haiku-4-5" {
 		t.Errorf("after a save and load the model is %q", got)
 	}
 }
@@ -151,7 +151,7 @@ func TestAnAppendedModelSplitsBackOut(t *testing.T) {
 
 func TestDefaultModelFollowsTheProvider(t *testing.T) {
 	for provider, want := range map[string]string{
-		helper.ProviderNameAnthropic: "claude-haiku-5",
+		helper.ProviderNameAnthropic: "claude-haiku-4-5",
 		helper.ProviderNameOpenAI:    "gpt-5.4-mini",
 		helper.ProviderNameDeepSeek:  "deepseek-v4-flash",
 		// A different string for the same model: this one goes on a command line,

@@ -135,25 +135,94 @@ func TestParentIsRecordedAsANameNotAnID(t *testing.T) {
 	}
 }
 
-func TestSurvivesAFileMoveViaSourceHash(t *testing.T) {
-	root := t.TempDir()
-	old := buildTopo(t, root, identity, true)
-	recs := BuildDescriptionRecords(old, root)
+// movedSrc is a body large enough to be fingerprinted. The size floor in BodyHashes refuses
+// anything smaller, deliberately: a two-line function shares its body with every other
+// two-line function, and matching on that is how a description lands on unrelated code.
+const movedSrc = `def summarize(rows):
+    total = 0
+    seen = set()
+    for row in rows:
+        if row.key in seen:
+            continue
+        seen.add(row.key)
+        total += row.value
+    return total, sorted(seen)
+`
 
-	// Same code, different path AND different IDs: only the source hash can bridge it.
-	moved := writeFile(t, root, "lib/shapes.py", shapesSrc)
-	dst := &domain.Topology{Root: root, Resources: map[string]domain.Resource{
-		"lib.shapes.make": {
-			ID: "lib.shapes.make", Kind: domain.ResourceFunction, Name: "make",
-			Location: domain.Location{Path: moved, StartsAt: 5, EndsAt: 6},
+// movedTopo is one described function in one real file, fingerprinted the way a scan would.
+func movedTopo(t *testing.T, root, rel, id, description string) *domain.Topology {
+	t.Helper()
+	path := writeFile(t, root, rel, movedSrc)
+	topo := &domain.Topology{Root: root, Resources: map[string]domain.Resource{
+		id: {
+			ID: id, Kind: domain.ResourceFunction, Name: "summarize", Language: "python",
+			Description: description,
+			Location:    domain.Location{Path: path, StartsAt: 1, EndsAt: 9},
 		},
 	}}
-	res := MatchDescriptions(recs, dst, root)
-	if res.ByTier[MatchMovedSrc] != 1 {
-		t.Fatalf("want 1 moved_source match, got %v", res.ByTier)
+	StampBodyHashes(topo, nil)
+	return topo
+}
+
+// TestSurvivesARealFileMoveViaSourceHash. THE OLD FILE IS DELETED, which is the entire point.
+//
+// This test used to write the moved copy to a new path and leave the original sitting on disk,
+// so BuildDescriptionRecords could still open it and hash the span. That is not what a move
+// looks like. A real `git mv` leaves nothing at the old path, the read fails, the hash comes
+// back empty, and both source-hash tiers stop firing -- so the test passed while the feature
+// it was guarding did not work at all. The fix was to fingerprint on the scan path and store
+// the result; this asserts it, by removing the file first.
+func TestSurvivesARealFileMoveViaSourceHash(t *testing.T) {
+	root := t.TempDir()
+	before := movedTopo(t, root, "src/report.py", "src.report.summarize", "Totals the distinct rows.")
+	recs := BuildDescriptionRecords(before, root)
+	if len(recs) != 1 || recs[0].SrcSHA256 == "" {
+		t.Fatalf("export produced no source hash: %+v", recs)
 	}
-	if len(res.Matched) != 1 || res.Matched[0].Record.Description != "Builds a circle." {
+
+	// The move: same code at a new path, and the old path gone.
+	if err := os.Remove(filepath.Join(root, "src", "report.py")); err != nil {
+		t.Fatal(err)
+	}
+	after := movedTopo(t, root, "lib/report.py", "lib.report.summarize", "")
+
+	res := MatchDescriptions(recs, after, root)
+	if res.ByTier[MatchMovedSrc] != 1 {
+		t.Fatalf("want 1 moved_source match, got %v (unmatched: %+v)", res.ByTier, res.Unmatched)
+	}
+	if len(res.Matched) != 1 || res.Matched[0].Record.Description != "Totals the distinct rows." {
 		t.Fatalf("wrong record restored: %+v", res.Matched)
+	}
+}
+
+// TestSurvivesAMoveThatAlsoRecommented is what the normalized hash buys. The body is the same
+// code, moved, with its comments rewritten on the way -- which breaks the exact hash and must
+// not break the match.
+func TestSurvivesAMoveThatAlsoRecommented(t *testing.T) {
+	root := t.TempDir()
+	before := movedTopo(t, root, "src/report.py", "src.report.summarize", "Totals the distinct rows.")
+	recs := BuildDescriptionRecords(before, root)
+	if err := os.Remove(filepath.Join(root, "src", "report.py")); err != nil {
+		t.Fatal(err)
+	}
+
+	recommented := "# a brand new explanation\n" + movedSrc
+	path := writeFile(t, root, "lib/report.py", recommented)
+	after := &domain.Topology{Root: root, Resources: map[string]domain.Resource{
+		"lib.report.summarize": {
+			ID: "lib.report.summarize", Kind: domain.ResourceFunction, Name: "summarize",
+			Language: "python",
+			Location: domain.Location{Path: path, StartsAt: 1, EndsAt: 10},
+		},
+	}}
+	StampBodyHashes(after, nil)
+
+	if before.Resources["src.report.summarize"].ExactHash == after.Resources["lib.report.summarize"].ExactHash {
+		t.Fatal("fixture is wrong: the comment edit should have moved the exact hash")
+	}
+	res := MatchDescriptions(recs, after, root)
+	if res.ByTier[MatchMovedSrc] != 1 {
+		t.Fatalf("a recommented move did not match: %v (unmatched: %+v)", res.ByTier, res.Unmatched)
 	}
 }
 
@@ -348,6 +417,29 @@ func TestExportIsDeterministic(t *testing.T) {
 	for i := range a {
 		if a[i] != b[i] {
 			t.Fatalf("export is not deterministic at %d", i)
+		}
+	}
+}
+
+// TestUncommentedBodyIsNotSelfAmbiguous. A body with no comments in it normalizes to itself,
+// so its exact and normalized fingerprints are the same string. Indexing a resource once per
+// fingerprint then filed the same id in one bucket twice, and `unique` reads a two-entry
+// bucket as ambiguous and refuses -- which broke the single commonest case the feature exists
+// for, a verbatim move of uncommented code, while every commented fixture kept passing.
+func TestUncommentedBodyIsNotSelfAmbiguous(t *testing.T) {
+	root := t.TempDir()
+	before := movedTopo(t, root, "src/report.py", "src.report.summarize", "Totals the distinct rows.")
+	res := before.Resources["src.report.summarize"]
+	if res.ExactHash != res.NormHash {
+		t.Fatalf("fixture must be comment-free so both hashes agree: %q vs %q", res.ExactHash, res.NormHash)
+	}
+
+	after := movedTopo(t, root, "lib/report.py", "lib.report.summarize", "")
+	idx := buildDescIndex(after, root)
+	for key, ids := range idx.byMovedSrc {
+		if len(ids) != 1 {
+			t.Errorf("bucket %q holds %v; one resource must be filed once per bucket, or "+
+				"`unique` refuses it as ambiguous", key, ids)
 		}
 	}
 }

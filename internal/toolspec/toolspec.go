@@ -31,9 +31,15 @@ var specs = []Spec{
 	// whether an agent may read at all. The registered tool answers to "read_resource" when
 	// the harness has its own native read (see toolspec.ReadToolName).
 	{"read", "read any resources by ID -- one call takes several, and returns their source plus connected context", true, true},
-	{"grep", "search node names, node descriptions and code contents, ranked in that order", true, true},
-	{"edit", "apply exact string replacements to a file, or delete text with an empty new_string", true, true},
-	{"write", "create or overwrite a file", true, true},
+	// grep, edit and write are CHAT tools only. There is no MCP tool for any of them in any
+	// mode, and there is no constructor either -- see retiredMCPTools. ModeMCP serves exactly
+	// one tool, `read`; search arrives as the shell `grep` the model already typed, and a
+	// mutation as the native edit (re-synced by the update-file hook) or as `arac edit` /
+	// `arac write`. The chat harness is a different harness with its own registry, and there
+	// these three are real tools it builds directly.
+	{"grep", "search node names, node descriptions and code contents, ranked in that order", false, true},
+	{"edit", "apply exact string replacements to a file, or delete text with an empty new_string", false, true},
+	{"write", "create or overwrite a file", false, true},
 	{"warnings_list", "list topology warnings", true, true},
 	{"bug_report", "report a confirmed bug on a node", true, true},
 	{"bug_list", "list bugs by node and/or state", true, true},
@@ -65,8 +71,32 @@ var nativeBlockable = map[string]bool{
 
 // nativeToolToKey maps a Claude Code native tool name (PascalCase, as seen in
 // a hook's tool_name) to its aracne tool key. Used by the guard hook.
+//
+// MultiEdit and NotebookEdit are here because leaving them out was a blocked_tools bypass.
+// The guard's hook matcher is derived from these keys (see NativeToolNames), so a name absent
+// from this map is a name the hook never sees: `blocked_tools: ["edit"]` refused Edit and
+// Write and waved MultiEdit -- the tool a model reaches for when it has several hunks --
+// straight through, the PostToolUse nudge never fired for it, and the scan.pre_tool freshness
+// scan never ran in front of it. The edit-sync hook next door already matched MultiEdit, so
+// the two disagreed about what a native edit is.
 var nativeToolToKey = map[string]string{
 	"Read": "read", "Grep": "grep", "Edit": "edit", "Write": "write", "Bash": "bash",
+	"MultiEdit": "edit", "NotebookEdit": "edit",
+}
+
+// NativeToolNames lists the native tool names the guard must be invoked for, sorted so the
+// generated hook matcher is stable.
+//
+// DERIVED, so a name can only be added in one place. The matcher used to be a hand-written
+// string beside this map and fell behind it; TestGuardHookMatcherCoversNativeTools pins them
+// together.
+func NativeToolNames() []string {
+	out := make([]string, 0, len(nativeToolToKey))
+	for name := range nativeToolToKey {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // shellCmdToKey maps a POSIX-shell command name to the aracne tool key it
@@ -124,28 +154,6 @@ var powershellCmdToKey = map[string]string{
 	"add-content":   "edit",
 	"out-file":      "edit",
 }
-
-// nativeWarnings is the model-facing guidance shown when a native tool or its shell
-// equivalent is used. Keyed by aracne tool key; bash has no MCP equivalent and so has no
-// warning.
-//
-// These are deliberately SHORT. The hook fires on every matching call and its text is
-// injected into the transcript each time, so a 200-character nag repeated across eighty
-// native calls costs ~16 KB — spent telling the model something the CLAUDE.md contract
-// already explains once, for free, in the cached prompt.
-//
-// They are also phrased as an offer rather than a correction, which is what the shipped
-// warn-only default actually means: the native tools are allowed, and aracne's equivalents
-// have to win on merit. Forbidding them is what produced redundant read turns.
-//
-// The read key is absent here on purpose: its tool answers to two names depending on the
-// agent's blocked_tools, so its guidance is built at call time by readWarning.
-//
-// grep, edit and write are absent for a different reason -- they are not MCP tools in ANY mode
-// since the rework (IsShellServedTool), so their guidance is the shell form on every surface
-// and lives in sharedShellWarnings. Naming `mcp__aracne__grep` here pointed a ModeMCP agent at
-// a tool its own server does not register, which is the one failure guaranteed to cost a turn.
-var nativeWarnings = map[string]string{}
 
 // The per-mode guidance tables, keyed by aracne tool key.
 //
@@ -586,10 +594,18 @@ func streamEditorMutates(word string, args []string) bool {
 			}
 		}
 	case "awk":
-		// gawk edits in place only via the inplace extension: -i inplace, or
-		// --include=inplace.
-		for _, a := range args {
-			if strings.Contains(a, "inplace") {
+		// gawk edits in place only via the inplace extension: `-i inplace` (or `-iinplace`),
+		// or `--include=inplace`.
+		//
+		// Matched as a FLAG VALUE, not as a substring of any argument. The substring test it
+		// replaces classified `awk '/inplace/ {print}' f` -- a read -- as a mutation, which
+		// loses the pipe exemption and can earn a denial. The sed branch above is careful
+		// about exactly this and restricts itself to short-flag clusters.
+		for i, a := range args {
+			if a == "--include=inplace" || a == "-iinplace" {
+				return true
+			}
+			if (a == "-i" || a == "--include") && i+1 < len(args) && args[i+1] == "inplace" {
 				return true
 			}
 		}
@@ -624,29 +640,36 @@ func baseCommandName(tok string) string {
 
 // WarningFor returns the model-facing guidance for an aracne tool key, or ""
 // when the key has no MCP equivalent (e.g. "bash") or is unknown.
+//
+// Two tiers, not three. There used to be a `nativeWarnings` table consulted between these
+// two; every entry left it when grep/edit/write were retired as MCP tools, and an empty map
+// with a branch over it is a lookup that can only ever miss.
 func WarningFor(key string, nativeReadAvailable bool) string {
 	if key == ReadToolName {
 		return readWarning(nativeReadAvailable)
 	}
-	if w, ok := nativeWarnings[key]; ok {
-		return w
-	}
 	return sharedShellWarnings[key]
 }
 
-// shellServedTools are the capabilities that stopped being MCP tools when the modes were
-// unscrambled: in ModeMCP the shell forms of all three are intercepted and answered by aracne,
-// so registering a tool for them served the same question twice and cost a schema block per
-// request to let the model pick.
+// retiredMCPTools are the names that were MCP tools and are not any more.
 //
-// They stay in the catalog, and stay valid in a config's mcp_tools, so an existing config that
-// names one is not a validation error -- it is simply not registered. Config.ServableMCPTools
-// is the filter every consumer goes through.
-var shellServedTools = map[string]bool{"grep": true, "edit": true, "write": true}
+// They went when the modes were unscrambled. In ModeMCP the shell form of a search is
+// intercepted and answered by aracne whatever the model types, and a mutation is answered by
+// the native edit tool (which the `arac update-file` hook re-syncs the topology after) or by
+// `arac edit` / `arac write`. Registering an MCP tool for any of the three served the same
+// question twice and charged a schema block per request for the privilege of letting the
+// model pick. There is no constructor for them any more either: ModeMCP serves exactly one
+// tool, `read`.
+//
+// The NAMES are still tolerated in a config's mcp_tools, which is the whole reason this set
+// exists. An existing project that lists one is not a broken config -- it is a config naming
+// something that is no longer served, and failing it would turn a retirement into an outage.
+// ValidateMCPTools accepts them; Config.ServableMCPTools and SubAgentMCPTools drop them.
+var retiredMCPTools = map[string]bool{"grep": true, "edit": true, "write": true}
 
-// IsShellServedTool reports whether a capability is served by shell interception rather than by
-// an MCP tool.
-func IsShellServedTool(name string) bool { return shellServedTools[strings.TrimSpace(name)] }
+// IsRetiredMCPTool reports whether a name was an MCP tool and no longer is: accepted in a
+// config, never registered.
+func IsRetiredMCPTool(name string) bool { return retiredMCPTools[strings.TrimSpace(name)] }
 
 // Surface is the mode's guidance table, named here rather than in helper so this package can
 // pick a warning without importing the config it would then be imported by.
@@ -697,7 +720,13 @@ func validate(names []string, ok func(string) bool, kind string) error {
 }
 
 // ValidateMCPTools returns an error naming any entry that is not a known MCP tool.
-func ValidateMCPTools(names []string) error { return validate(names, IsMCPTool, "MCP") }
+//
+// A RETIRED name passes. `mcp_tools: ["read", "grep"]` was a correct config once, and the
+// project that wrote it should get a server with `read` on it -- not a hard failure telling
+// it a name it was told to use is now unknown. See retiredMCPTools.
+func ValidateMCPTools(names []string) error {
+	return validate(names, func(n string) bool { return IsMCPTool(n) || IsRetiredMCPTool(n) }, "MCP")
+}
 
 // ValidateChatTools returns an error naming any entry that is not a known chat tool.
 func ValidateChatTools(names []string) error { return validate(names, IsChatTool, "chat") }
@@ -727,4 +756,88 @@ func ToolsSection(names []string, nativeReadAvailable bool) string {
 		fmt.Fprintf(&b, "- `%s` -- %s\n", ResolveToolName(n, nativeReadAvailable), desc)
 	}
 	return b.String()
+}
+
+// CommandPaths pulls the file-shaped operands out of a shell command: anything carrying a
+// directory separator or a file extension, minus flags and the pieces of shell syntax that
+// merely look like paths.
+//
+// It reads the whole command string rather than the segment structure, because the point here
+// is "does this command touch the project AT ALL" -- one operand inside the root is enough to
+// keep the guard engaged, so over-collecting is the safe error.
+func CommandPaths(command string) []string {
+	// A heredoc BODY is usually data, not operands: `cat > /tmp/x.mjs <<'EOF' … "/repo/a.js"`
+	// writes to /tmp and merely MENTIONS the repo. Judging it by that mention would keep the
+	// very case this function exists to release.
+	//
+	// Unless an interpreter is running it. `python3 - <<'EOF' … open('/repo/x.py')` performs
+	// its file operations inside the body, which is exactly why the classifier reads the whole
+	// command line for interpreters (InterpreterProgramKey). Dropping the body here
+	// while the classifier keeps it would free a genuine repo read -- caught by replaying the
+	// run's real denials, where one `python3` heredoc reading a worktree file slipped through.
+	//
+	// When the body is dropped, only the body is: a redirect may follow the heredoc marker on
+	// the same line (`python3 - <<'EOF' > /tmp/out.txt`), and cutting at the marker loses the
+	// one operand saying where the command was actually writing.
+	if strings.Contains(command, "<<") && !runsAnInterpreter(command) {
+		if nl := strings.IndexByte(command, '\n'); nl >= 0 {
+			command = command[:nl]
+		}
+	}
+	var out []string
+	for _, tok := range strings.FieldsFunc(command, func(r rune) bool {
+		return r == ' ' || r == '\t' || r == '\n' || r == '|' || r == ';' || r == '&' ||
+			r == '(' || r == ')' || r == '\'' || r == '"' || r == '<'
+	}) {
+		tok = strings.TrimLeft(tok, ">")
+		tok = strings.Trim(tok, "'\"`")
+		if tok == "" || strings.HasPrefix(tok, "-") {
+			continue
+		}
+		// A `rev:path` operand (git) names a path but not one on disk to compare; the git
+		// classifier decides those, so they are not this function's business.
+		if strings.Contains(tok, ":") && !filepath.IsAbs(tok) {
+			continue
+		}
+		if strings.ContainsRune(tok, filepath.Separator) || hasFileExtension(tok) {
+			out = append(out, tok)
+		}
+	}
+	return out
+}
+
+// runsAnInterpreter reports whether any command word before the heredoc body runs an inline
+// program, in which case the body is that program and its paths are real operands.
+func runsAnInterpreter(command string) bool {
+	head := command
+	if nl := strings.IndexByte(head, '\n'); nl >= 0 {
+		head = head[:nl]
+	}
+	for _, tok := range strings.Fields(head) {
+		if IsInterpreter(strings.Trim(tok, "'\"`")) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasFileExtension is a cheap "looks like a filename" test: a dot with something after it and
+// no path separator needed. `NR>=1` and `2.13` are excluded by requiring a letter to lead the
+// extension.
+func hasFileExtension(tok string) bool {
+	dot := strings.LastIndex(tok, ".")
+	if dot <= 0 || dot == len(tok)-1 {
+		return false
+	}
+	ext := tok[dot+1:]
+	if len(ext) > 8 {
+		return false
+	}
+	for i := 0; i < len(ext); i++ {
+		c := ext[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9') {
+			return false
+		}
+	}
+	return ext[0] >= 'a' && ext[0] <= 'z' || ext[0] >= 'A' && ext[0] <= 'Z'
 }

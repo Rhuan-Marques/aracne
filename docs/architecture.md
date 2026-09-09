@@ -55,7 +55,7 @@ internal/
       javascanner/    Java parser (tree-sitter)
     golang/ python/ javascript/ rust/ java/
                     Per-language managers + mapper/connections/resources/visibility (graph builders)
-  helper/         Storage + plumbing: sqlite/db, manifest, incremental & partial writes, config, apply/edit, normalize
+  helper/         Storage + plumbing: sqlite/db, manifest, incremental & partial writes, config, edit, normalize
   lazydesc/       The read-path description fill: plans the nodes a response will name,
                   generates the missing ones, waits for them to land, re-renders. See §8.
   progress/       One in-place progress bar, shared by `arac scan` and `descriptions generate`
@@ -63,7 +63,9 @@ internal/
     provider.go     Provider interface (Chat / StreamChat) + message/tool types
     providers/      anthropic, openai, deepseek implementations
     agent/          Internal REPL agent loop + sub-agent runner
-    tools/          MCP tool implementations (read*, grep, edit, write, bug_*, warnings_list, ls) + Registry
+    tools/          Tool implementations (read, bug_*, warnings_list, update_description, …) +
+                    Registry. grep/edit/write live here too but are no longer MCP tools: they
+                    back the chat harness and the `arac edit`/`arac write` verbs — see §6.
     languages/      Per-language tool flavors: gotools / jstools / pythontools / rusttools /
                     javatools / universaltools, over two shared pieces —
       readunit/       the language-neutral shape one resolved resource takes into a response
@@ -160,9 +162,15 @@ tool (`viz.chat.*.tools`). Catalog highlights:
   source grouped by file under one `# CONTEXT:` section. It registers as
   `read_resource` when the harness keeps its own native read, and as `read` when
   `blocked_tools` denies that. Which kinds it resolves is `read.kinds`, not a
-  per-agent tool list. `grep` is topology-annotated and searches node names and
-  descriptions as well as file contents.
-- **Mutations** — `edit`, `write` (MCP versions sync the topology DB inline).
+  per-agent tool list. **It is the only capability `mcp` mode serves as a tool.**
+- **Search and mutation — no MCP tool, in any mode.** `grep`, `edit` and `write`
+  are *retired* MCP names (`toolspec.retiredMCPTools`): a search is intercepted
+  wherever the model types it and answered by the topology-annotated grep, and a
+  mutation goes through the harness's native edit — which the `arac update-file`
+  hook re-syncs the topology after — or through `arac edit` / `arac write`. A tool
+  for any of them asked one question twice and charged a schema block per request
+  to let the model pick. The names still *validate* in an existing config's
+  `mcp_tools`, and are dropped rather than served.
 - **Topology/maintenance** — `warnings_list`, `update_description`,
   `node_list_no_description`.
 - **Bugs** — `bug_report`, `bug_list`, `bug_acknowledge`, `bug_dismiss`, `bug_delete`.
@@ -190,7 +198,7 @@ binary prints is what that binary can do. Grouped:
 |---|---|
 | Scan | `scan` (`--all`/`--hard`/`--default`/`--debug`/`--workers`/`--progress`), `scanner run` |
 | Read & search | `read`, `grep`, `cmd -- <command…>`, `resource list`, `node count` |
-| Descriptions | `descriptions <generate\|apply\|clear\|export\|import>`, `update-description` |
+| Descriptions | `descriptions <generate\|clear\|export\|import>`, `update-description` |
 | Mutate | `edit`, `write` (stdin JSON), `update-file` |
 | Health | `warnings list`, `check-updates`, `bug <report\|list\|acknowledge\|dismiss\|delete>` |
 | Integration | `init`, `setup`, `disable`, `guard`, `serve`, `viz serve`, `agent` |
@@ -206,8 +214,10 @@ the class body.
 Anything else runs for real. `internal/shellcmd` returns `KindPassthrough` for every flag it
 does not model (`head -c`, `tail -f`, `grep -o`, `sed` substitutions) and for the readers that
 transform rather than window (`nl`, `tac`, `xxd`, `od`, `hexdump`, `strings`); `arac cmd` also
-passes through for an unindexed file, an over-budget answer or a missing database, and execs
-the real binary with its exit status. That fidelity is what makes interception safe on by
+passes through for an unindexed file, an over-budget answer, a missing database, or a command
+whose **binary is not installed** — serving `rg` on a box without ripgrep taught the model a
+capability that vanished on the next unmodelled flag — and execs the real binary with its exit
+status. That fidelity is what makes interception safe on by
 default: everything aracne does not model runs exactly as it would have, and
 `tests/terminal_e2e_test.go` asserts byte-identical output for those cases.
 
@@ -258,8 +268,13 @@ in-repo skills:
 
 - **Descriptions** — `descriptions generate` lists undocumented resources,
   batches them, and fans out **descriptions-generation-executor** sub-agents that
-  read each resource and write a concise description; `descriptions apply` writes
-  them back as source doc-comments; `descriptions clear` removes them.
+  read each resource and write a concise description; `descriptions clear` removes them.
+  Descriptions live in the topology and are rendered from it; there is deliberately no
+  command that writes them back into source. `descriptions apply` did, and it decided a
+  file's comment syntax from the resource's `Language` tag rather than from the file's
+  extension — which put Go `//` comments into a Python file in this very repository and
+  left it unparseable. `descriptions export`/`import` carry descriptions across a rescan
+  instead, without touching a byte of source.
 - **Bug pipeline** — **off by default**, behind `features.bug_management`: a
   hunter/judge/solver fan-out over `KnownBug` nodes. With it off, `arac setup` writes none
   of its agents or commands, the `bug_*` tools are not servable, and the `arac bug` usage
@@ -328,9 +343,19 @@ plugins. Two hooks ship for Claude Code:
 - **`arac-update-file.sh`** → `arac update-file --claude-hook`: re-parses a file
   into the topology after a **native** edit, keeping the graph current even when
   the change bypassed the MCP `edit`/`write` tools. Installed only when the main
-  agent lists the `edit-update-db-plugin` plugin.
+  agent lists the `edit-update-db-plugin` plugin — an optimization, not the
+  warning channel: it syncs *inline* with the edit rather than on the next call.
+  The warnings themselves come from the guard either way (below), and both hooks
+  report through the same `guard-reported-warnings.json` ledger, so whichever
+  runs first reports and the other adds nothing.
 - OpenCode additionally gets `arac-native-edit-sync.js` (a plugin doing the same
   topology sync on native edits), under the same plugin flag.
+
+Both hook commands **quote** the script path and, under `--global`, name the absolute path
+`arac setup` actually wrote rather than `${CLAUDE_PROJECT_DIR}` — which expands to the
+*project* root, not the user's home. Unquoted, a project under `~/My Projects` word-split and
+every tool call failed with exit 127; under `--global`, the entry named a file that was never
+created. See `hookScriptRef` / `bashHookCommand` in `internal/cli/native_hooks.go`.
 
 Freshness itself is not a plugin. **Before** every tool call the guard sees, it runs the
 `scan.pre_tool` scan (default: incremental) so the call is answered from a graph that
@@ -342,7 +367,16 @@ Both read the same config key at call time, so `scan.pre_tool: "none"` disables 
 both surfaces without re-running init. The pre-call scan reports nothing (a PreToolUse
 hook cannot address the model without blocking it); the warnings it finds are persisted
 in the topology and surface through `warnings_list` / `arac warnings list`, and the
-**post**-call drift check still reports the ones a shell write causes.
+**post**-call drift check reports whatever is new in the warnings table.
+
+That check fires after a Bash command the classifier read as a write (or could not classify
+at all) **and after a native `Edit`/`Write`/`MultiEdit`/`NotebookEdit`**. The native half was
+missing: nothing else reported those, since the `arac update-file` hook that was supposed to
+is behind a plugin flag no shipped path sets — so a native edit produced no warning when it
+broke a caller, and the one the next pre-tool scan found was delivered by whichever later
+shell command happened to be unclassified, and blamed on it. The header says
+"Topology re-synced." and nothing about a cause, because the reporter reports what is new in
+the table however it got there.
 
 ## 10. Languages & known quirks
 

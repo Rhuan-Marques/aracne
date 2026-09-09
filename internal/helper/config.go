@@ -3,9 +3,12 @@ package helper
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -443,13 +446,14 @@ const DefaultContractVerbosity = ContractVerbosityLow
 // prefer_resource_ids -- and every one of them has become a fact about the mode instead. A
 // project does not want "interception on, files off": it wants one of the four products.
 // MaxOverserve survives because it is genuinely orthogonal, a numeric ceiling that means the
-// same thing whichever mode is answering.
+// same thing whichever mode is answering, and on every surface that answers in something
+// else's place. See OverserveBudget.
 type TerminalSection struct {
-	// MaxOverserve bounds the answer against what was asked for: past this multiple of the
-	// raw bytes the command would have printed, aracne runs the real command instead.
+	// MaxOverserve bounds an answer against the plain one it replaces: past this multiple of
+	// what that would have cost, the surface falls back to it -- the real command where there
+	// is one, and the source or the matches without aracne's additions where there is not.
 	//
-	// It is the same trade guard_proxy.go makes, for the same reason. A window is a narrow
-	// question, and an answer disproportionate to it is not a cheaper read -- it is a way to
+	// A narrow question answered disproportionately is not a cheaper read; it is a way to
 	// spend the context window on one `head -1`. 0 or negative disables the check.
 	MaxOverserve *int `json:"max_overserve"`
 }
@@ -504,6 +508,9 @@ func normalizePreToolScan(s string) PreToolScanMode {
 	case PreToolScanFull:
 		return PreToolScanFull
 	case PreToolScanHard:
+		// Recognized so Validate can REJECT it by name. The stamped value has to survive
+		// normalization or the error would never fire; EffectivePreToolScan is what keeps a
+		// config that bypassed Validate from actually running a rebuild per tool call.
 		return PreToolScanHard
 	default:
 		return PreToolScanDefault
@@ -514,7 +521,15 @@ func normalizePreToolScan(s string) PreToolScanMode {
 // PreToolScanDefault. A non-none value asks the guard to scan before the tool
 // call it is about to let through.
 func (c *Config) EffectivePreToolScan() PreToolScanMode {
-	return normalizePreToolScan(string(c.Scan.PreTool))
+	mode := normalizePreToolScan(string(c.Scan.PreTool))
+	if mode == PreToolScanHard {
+		// Validate refuses this, loudly, so the setting is a typo someone fixes. This is the
+		// belt: a config that reached the guard without being validated gets the incremental
+		// scan rather than a from-scratch rebuild -- which would drop every description and
+		// bug before EVERY tool call.
+		return PreToolScanDefault
+	}
+	return mode
 }
 
 // EffectivePipePassthrough reports whether the tool guard should treat a
@@ -544,7 +559,6 @@ func (c *Config) EffectiveIncludeIncoming() bool {
 	return c.EffectiveContextFilter().IncludeIncoming
 }
 
-// Returns whether to hide resources without descriptions in context output.
 // FileModeSkeleton renders a file as its declarations with large bodies elided;
 // FileModeFull returns the file verbatim.
 const (
@@ -552,9 +566,9 @@ const (
 	FileModeSkeleton = "skeleton"
 )
 
-// EffectiveFileMode resolves read.file_mode, defaulting to "full" for anything unrecognized
-// so a typo degrades to today's behaviour rather than to a surprising one -- EXCEPT on the
-// terminal surface, where an unset value means "skeleton".
+// EffectiveFileMode resolves read.file_mode. An explicit "full" or "skeleton" is honoured;
+// anything else -- unset, or a typo -- resolves to "skeleton" everywhere except ModeMCP,
+// which resolves to "full".
 //
 // WHY THE SURFACE CHANGES THE DEFAULT. Skeleton mode is opt-in on the MCP surface because a
 // model that has only seen signatures must not build an `edit` old_string from them, and that
@@ -737,6 +751,16 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("mode: unknown mode %q (want %s, %s, %s or %s)",
 			c.Mode, ModeMCP, ModeCLI, ModeInterceptID, ModeInterceptLineRanges)
 	}
+	// `hard` is a valid `arac scan` mode and a catastrophic PRE-TOOL one: it rebuilds from
+	// scratch, which drops every description and every bug -- before EVERY tool call the guard
+	// sees. Nothing warned, and the loss is unrecoverable without a descriptions sidecar. The
+	// heavier modes exist here for the same reason `arac scan` has them, but only the one that
+	// preserves what a project has paid for.
+	if PreToolScanMode(strings.ToLower(strings.TrimSpace(string(c.Scan.PreTool)))) == PreToolScanHard {
+		return fmt.Errorf("scan.pre_tool: %q rebuilds from scratch and would clear every "+
+			"description and bug before every tool call (want %s, %s or %s; use `arac scan --hard` "+
+			"for a one-off rebuild)", PreToolScanHard, PreToolScanNone, PreToolScanDefault, PreToolScanFull)
+	}
 	switch strings.ToLower(strings.TrimSpace(c.ContractVerbosity)) {
 	case "", ContractVerbosityLow, ContractVerbosityHigh:
 	default:
@@ -800,8 +824,8 @@ func DefaultNeedDescription() []domain.ResourceKind {
 	}
 }
 
+// Returns the default description resource kinds to generate descriptions for.
 func DefaultDescribeTargets() []domain.ResourceKind {
-	// Returns the default description resource kinds to generate descriptions for.
 	return DefaultNeedDescription()
 }
 
@@ -822,11 +846,12 @@ func DefaultGrepDescriptionKinds() []domain.ResourceKind {
 // listing an agent's readable KINDS is now read.kinds, which is a project-wide setting, and
 // "read" here only says whether this agent may read at all.
 //
-// grep, edit and write are gone too, for a different reason: their shell forms are intercepted
-// and answered by aracne in every mode, so a tool for them offered a second way to ask one
-// question and charged a schema block per request for the privilege. See
-// toolspec.IsShellServedTool. A config that still lists one is not an error -- ServableMCPTools
-// drops it -- but a config aracne writes should not.
+// grep, edit and write are gone too, for a different reason: aracne answers all three without
+// a tool -- a search is intercepted wherever the model types it, and a mutation goes through
+// the native edit (re-synced by the update-file hook) or `arac edit` / `arac write`. A tool for
+// them offered a second way to ask one question and charged a schema block per request for the
+// privilege. See toolspec.IsRetiredMCPTool. A config that still lists one is not an error --
+// ServableMCPTools drops it -- but a config aracne writes should not.
 func DefaultAgentMCPTools(agentName string) []string {
 	switch agentName {
 	case "descriptions-generation-executor", "descriptions-executor":
@@ -862,16 +887,14 @@ func defaultBlockedTools() []string {
 	return []string{}
 }
 
+// Returns the default tool set for the chat main agent including bash, MCP lookups, file operations, and topology utilities.
 func defaultChatMainAgentTools() []string {
-	// Returns the default tool set for the chat main agent including bash, MCP lookups, file operations, and topology utilities.
 	return []string{"ls", "bash", "glob", "ask_user_question", "CreateTasks", "grep", "read", "edit", "write", "warnings_list", "bug_report", "bug_list", "bug_acknowledge", "bug_dismiss", "bug_delete", "update_description", "node_list_no_description"}
 }
 
 // DefaultChatAgentTools returns the default tool list for a proprietary-chat
 // sub-agent (used by CreateTasks). These are independent from the llm section.
 func DefaultChatAgentTools(agentName string) []string {
-	// DefaultChatAgentTools returns the default tool list for a proprietary-chat
-	// sub-agent (used by CreateTasks). These are independent from the llm section.
 	switch agentName {
 	case "explorer":
 		return []string{"read", "grep"}
@@ -894,19 +917,10 @@ func DefaultChatAgentTools(agentName string) []string {
 // do not support reasoning (see chat newProvider).
 const DefaultBugJudgeThinkingBudget = 4096
 
-// DefaultBugJudgeThinkingBudget is the default extended-reasoning token budget
-// for the proprietary-chat bug-judge sub-agent. Triage is a judgment task, so
-// it reasons harder than the default. It is a no-op for providers/models that
-// do not support reasoning (see chat newProvider).
-
 // DefaultDescriptionStyleExemplars is how many neighbor descriptions are fed to
 // the description executor as house-style anchors by default. Set to 0 to
 // disable and save tokens.
 const DefaultDescriptionStyleExemplars = 1
-
-// DefaultDescriptionStyleExemplars is how many neighbor descriptions are fed to
-// the description executor as house-style anchors by default. Set to 0 to
-// disable and save tokens.
 
 // DefaultBugSolverThinkingBudget is the default extended-reasoning token budget
 // for the proprietary-chat bug-solver sub-agent. Producing a minimal correct
@@ -914,23 +928,12 @@ const DefaultDescriptionStyleExemplars = 1
 // for providers/models that do not support reasoning (see chat newProvider).
 const DefaultBugSolverThinkingBudget = 4096
 
-// DefaultBugSolverThinkingBudget is the default extended-reasoning token budget
-// for the proprietary-chat bug-solver sub-agent. Producing a minimal correct
-// fix is reasoning-heavy, so it reasons harder than the default. It is a no-op
-// for providers/models that do not support reasoning (see chat newProvider).
-
 // DefaultBugHunterThinkingBudget is the default extended-reasoning token budget
 // for the proprietary-chat bug-hunter sub-agent. Spotting real defects across a
 // slice of resources is reasoning-heavy, so it reasons harder than the default.
 // It is a no-op for providers/models that do not support reasoning (see chat
 // newProvider).
 const DefaultBugHunterThinkingBudget = 4096
-
-// DefaultBugHunterThinkingBudget is the default extended-reasoning token budget
-// for the proprietary-chat bug-hunter sub-agent. Spotting real defects across a
-// slice of resources is reasoning-heavy, so it reasons harder than the default.
-// It is a no-op for providers/models that do not support reasoning (see chat
-// newProvider).
 
 func boolPtr(b bool) *bool { return &b }
 
@@ -940,8 +943,8 @@ func intPtr(i int) *int { return &i }
 
 // Helper function that converts a boolean value to a pointer to bool.
 
+// Returns default Config with scan/read/scanner/LLM/viz defaults and agent configurations.
 func DefaultConfig() *Config {
-	// Returns default Config with scan/read/scanner/LLM/viz defaults and agent configurations.
 	subAgent := func(name string) AgentConfig {
 		ac := AgentConfig{
 			Model:        InheritsModel,
@@ -951,14 +954,16 @@ func DefaultConfig() *Config {
 		if name == "descriptions-generation-executor" {
 			ac.Params = map[string]int{"max-batch-size": DefaultDescriptionBatchSize}
 		}
-		// The hunter and the judge only ever read and record a verdict; only the solver
-		// changes code. Leaving them the native Edit/Write contradicted their own prompts
-		// ("use only its restricted tools") and handed two read-only agents the ability to
-		// rewrite the codebase.
+		// The hunter and the judge only ever read and record a verdict; the descriptions
+		// executor only ever reads and calls update_description. Only the solver changes code.
+		// Leaving the other three the native Edit/Write contradicted their own prompts
+		// ("Touch only assigned resources. Never write scripts to bulk-generate.", "use only
+		// its restricted tools") and handed three read-only agents the ability to rewrite the
+		// codebase.
 		//
 		// Deliberately NOT "read": blocking read renames the aracne read tool
 		// (toolspec.ResolveReadToolName), which is a separate decision from privilege.
-		if name == "bug-hunter" || name == "bug-judge" {
+		if name != "bug-solver" {
 			ac.BlockedTools = []string{"edit", "write"}
 		}
 		return ac
@@ -1043,8 +1048,8 @@ func DefaultConfig() *Config {
 // Agent resolution (inheritance + per-harness merge)
 // ---------------------------------------------------------------------------
 
+// Returns the LLM harness configuration block for the specified harness name.
 func harnessBlock(c *Config, harness string) LLMHarness {
-	// Returns the LLM harness configuration block for the specified harness name.
 	switch harness {
 	case "opencode":
 		return c.LLM.OpenCode
@@ -1060,13 +1065,9 @@ func harnessBlock(c *Config, harness string) LLMHarness {
 // main agent. The per-harness block wins over <any>, and "<inherits>"/absent
 // fields fall back to the main agent.
 func (c *Config) EffectiveAgent(harness, agentName string) AgentConfig {
-	// EffectiveAgent resolves the config for (harness, agentName). harness is
-	// "opencode" or "claude_code"; agentName "" / "main" / "default" resolves the
-	// main agent. The per-harness block wins over <any>, and "<inherits>"/absent
-	// fields fall back to the main agent.
 	hb := harnessBlock(c, harness)
 	main := mergeAgent(c.LLM.Any.MainAgent, hb.MainAgent)
-	if agentName == "" || agentName == "main" || agentName == "default" {
+	if IsMainAgentName(agentName) {
 		out := resolveInherits(main, main)
 		out.MCPTools = c.ServableMCPTools(out.MCPTools)
 		return out
@@ -1080,8 +1081,26 @@ func (c *Config) EffectiveAgent(harness, agentName string) AgentConfig {
 	}
 	merged := mergeAgent(anyAg, hAg)
 	out := resolveInherits(merged, main)
-	out.MCPTools = c.ServableMCPTools(out.MCPTools)
+	// A SUB-AGENT is not on the main agent's surface, so the mode does not narrow it.
+	//
+	// The mode answers "which capabilities does the MAIN agent get, and how do they
+	// reach it". A generated sub-agent gets its own scoped server declared inline in its
+	// frontmatter precisely because it is outside that answer: it exists to call
+	// update_description or bug_*, which have no shell equivalent worth teaching, and its
+	// schema cost is paid inside a short-lived sub-agent instead of on every request.
+	//
+	// Running the mode filter here returned nil in three of the four modes, which left the
+	// descriptions executor with no update_description, an `arac serve` that refused to
+	// start, and a sweep that failed after max-retries -- while docs/architecture.md
+	// promised the pipelines keep working on the terminal surface. They now do.
+	out.MCPTools = c.SubAgentMCPTools(out.MCPTools)
 	return out
+}
+
+// IsMainAgentName reports whether a tool-profile name resolves to the main agent. "" is the
+// unnamed default; "main" and "default" are the two spellings --tool-profile accepts.
+func IsMainAgentName(agentName string) bool {
+	return agentName == "" || agentName == "main" || agentName == "default"
 }
 
 // ServableMCPTools narrows a configured mcp_tools list to what this mode's server actually
@@ -1101,7 +1120,7 @@ func (c *Config) ServableMCPTools(names []string) []string {
 	}
 	out := make([]string, 0, len(names))
 	for _, n := range names {
-		if toolspec.IsShellServedTool(n) {
+		if toolspec.IsRetiredMCPTool(n) {
 			continue
 		}
 		out = append(out, n)
@@ -1109,8 +1128,27 @@ func (c *Config) ServableMCPTools(names []string) []string {
 	return out
 }
 
+// SubAgentMCPTools narrows a SUB-agent's mcp_tools to what its own scoped server registers.
+//
+// The same shell-served filter as ServableMCPTools, and deliberately without the mode gate:
+// a sub-agent's server is declared in its own frontmatter and started per run, so it exists
+// in every mode. See EffectiveAgent for what running the mode gate here used to cost.
+func (c *Config) SubAgentMCPTools(names []string) []string {
+	if len(names) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		if toolspec.IsRetiredMCPTool(n) {
+			continue
+		}
+		out = append(out, n)
+	}
+	return out
+}
+
+// Merges an override agent config into a base config, combining model, tools, plugins, and parameters.
 func mergeAgent(base, over AgentConfig) AgentConfig {
-	// Merges an override agent config into a base config, combining model, tools, plugins, and parameters.
 	result := base
 	if over.Model != "" {
 		result.Model = over.Model
@@ -1137,8 +1175,8 @@ func mergeAgent(base, over AgentConfig) AgentConfig {
 	return result
 }
 
+// Resolves agent configuration by inheriting unset fields (Model, MCPTools, BlockedTools) from a main agent.
 func resolveInherits(ag, main AgentConfig) AgentConfig {
-	// Resolves agent configuration by inheriting unset fields (Model, MCPTools, BlockedTools) from a main agent.
 	if ag.Model == "" || ag.Model == InheritsModel {
 		ag.Model = main.Model
 	}
@@ -1154,8 +1192,6 @@ func resolveInherits(ag, main AgentConfig) AgentConfig {
 // AgentParam returns the integer param for (harness, agentName, key), or
 // fallback when unset or non-positive.
 func (c *Config) AgentParam(harness, agentName, key string, fallback int) int {
-	// AgentParam returns the integer param for (harness, agentName, key), or
-	// fallback when unset or non-positive.
 	eff := c.EffectiveAgent(harness, agentName)
 	if eff.Params != nil {
 		if v, ok := eff.Params[key]; ok && v > 0 {
@@ -1169,49 +1205,50 @@ func (c *Config) AgentParam(harness, agentName, key string, fallback int) int {
 // Load / save
 // ---------------------------------------------------------------------------
 
-// validConfig reports whether a decoded config looks like the new schema. An
-// old-format file decodes to all-zero new-schema fields and is rejected so
-// EnsureConfig can clean-break migrate it.
-func validConfig(c *Config) bool {
-	// validConfig reports whether a decoded config looks like the new schema. An
-	// old-format file decodes to all-zero new-schema fields and is rejected so
-	// EnsureConfig can clean-break migrate it.
-	return c.LLM.Any.MainAgent.MCPTools != nil ||
-		len(c.LLM.Any.Agents) > 0 ||
-		c.Scan.PreTool != "" ||
-		// Non-nil rather than non-empty: an explicit [] disables description matching, and
-		// judging that file legacy would overwrite the one setting it exists to express.
-		c.Grep.DescriptionKinds != nil ||
-		c.Read.MaxFileSize != 0 ||
-		len(c.Descriptions.Kinds) > 0 ||
-		c.Viz.Chat.MainAgent.Tools != nil ||
-		c.Scanner.UpdateFrequency != 0 ||
-		// A features-only file is a legitimate new-schema config: turning a feature on is
-		// the one edit a user makes by hand. Without this line the file decodes to all-zero
-		// sentinels, is judged legacy, and EnsureConfig overwrites it with defaults -- so
-		// enabling the feature would silently turn it back off.
-		c.Features.BugManagement || c.Features.Chat || c.Features.Agent ||
-		// A `{"descriptions": {"lazy": false}}` file is the other edit a user makes by
-		// hand, and for the same reason it has to be recognised: judged legacy, it would be
-		// overwritten with defaults and silently turn the feature back on.
-		c.Descriptions.Lazy.Enabled != nil ||
-		// And `{"descriptions":{"provider":"cli","cli_provider_command":"claude -p"}}` is
-		// the third: naming the describer is a hand edit too, and a file that says only
-		// that must not be mistaken for a legacy one and overwritten back to "no provider".
-		strings.TrimSpace(c.Descriptions.Provider) != "" ||
-		// Same reasoning for the mode: `{"mode":"mcp"}` is a legitimate hand-written file,
-		// and treating it as legacy would overwrite it with defaults -- silently putting the
-		// project back on the mode it just opted out of. The two retired keys stay on this
-		// list for exactly as long as they are still mapped forward.
-		c.Mode != "" ||
-		c.Terminal.MaxOverserve != nil
+// configSchemaKeys is every top-level key the current schema defines. It is derived from the
+// struct tags rather than typed out, so it cannot fall behind a field added to Config.
+var configSchemaKeys = func() map[string]bool {
+	out := map[string]bool{}
+	t := reflect.TypeOf(Config{})
+	for i := 0; i < t.NumField(); i++ {
+		tag := t.Field(i).Tag.Get("json")
+		if name, _, _ := strings.Cut(tag, ","); name != "" && name != "-" {
+			out[name] = true
+		}
+	}
+	return out
+}()
+
+// validConfig reports whether a decoded config looks like the new schema.
+//
+// The test is PRESENCE OF A KNOWN KEY, not the value of a hand-picked sentinel. It used to be
+// a list of "does this field look set" probes, extended once per hand-editable key -- and it
+// fell behind six of them. A file saying only `{"scan": {"ignore": ["generated/**"]}}` or
+// `{"contract_verbosity": "high"}` decoded to all-zero sentinels, failed every probe, was
+// judged legacy, and EnsureConfig replaced it with defaults: the one setting the file existed
+// to express was the one thing lost.
+//
+// Reading the raw keys cannot fall behind, because the key set comes from Config's own tags.
+// A genuinely old-format file shares none of them and is still cleanly rejected; a file whose
+// keys are all unknown is rejected for the same reason.
+func validConfig(raw []byte) bool {
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &keys); err != nil {
+		return false
+	}
+	for key := range keys {
+		if configSchemaKeys[key] {
+			return true
+		}
+	}
+	return false
 }
 
 // Terminal-surface defaults. Interception ships ON: it is the product, and every branch it
 // takes is either an aracne answer or the command the caller typed.
 const (
-	// DefaultTerminalMaxOverserve mirrors guard_proxy.go's proxyOverServeFactor, which was
-	// calibrated against real runs rather than picked.
+	// DefaultTerminalMaxOverserve was calibrated against real runs rather than picked: it is
+	// the factor the guard's proxied read has always applied.
 	DefaultTerminalMaxOverserve = 4
 )
 
@@ -1388,11 +1425,15 @@ func (c *Config) ChatEnabled() bool { return c.Features.Chat }
 // AgentEnabled reports whether `arac agent` is turned on for this project.
 func (c *Config) AgentEnabled() bool { return c.Features.Agent }
 
+// Applies defaults to config fields for scan modes, file limits, visibility filters, descriptions, optimization rules, and LLM agents.
 func normalizeConfig(c *Config) {
-	// Applies defaults to config fields for scan modes, file limits, visibility filters, descriptions, optimization rules, and LLM agents.
 	// Resolve the mode once and stamp it, so a re-saved config states its surface instead of
 	// leaving it implicit.
 	c.Mode = c.EffectiveMode()
+	// Stamped for the same reason as Mode, and previously only claimed to be: the dial that
+	// decides how big every request's contract is should be visible in the file rather than
+	// inferred from a missing key.
+	c.ContractVerbosity = c.EffectiveContractVerbosity()
 	if c.Scanner.UpdateFrequency <= 0 {
 		c.Scanner.UpdateFrequency = 200
 	}
@@ -1447,36 +1488,70 @@ func normalizeConfig(c *Config) {
 	}
 }
 
-// LoadConfigStrict loads the config and reports whether it parsed cleanly as
-// the new schema. A missing file, a JSON error, or an old-format file all
-// return (DefaultConfig(), false).
+// LoadConfigStrict loads the config and reports whether it parsed cleanly as the new
+// schema. A missing file, a JSON error, or an old-format file all return
+// (DefaultConfig(), false).
+//
+// It is LoadConfigRead without the read error, kept because almost every caller only
+// wants "did I get a real config". The one caller that must distinguish an unreadable
+// file from an unparseable one is EnsureConfig, which overwrites on false -- see
+// LoadConfigRead for what conflating the two cost.
 func LoadConfigStrict(path string) (*Config, bool) {
-	// LoadConfigStrict loads the config and reports whether it parsed cleanly as
-	// the new schema. A missing file, a JSON error, or an old-format file all
-	// return (DefaultConfig(), false).
+	cfg, ok, _ := LoadConfigRead(path)
+	return cfg, ok
+}
+
+// LoadConfigRead is LoadConfigStrict with the third answer a writer needs.
+//
+// WHY THREE RETURNS AND NOT TWO. "I could not read this file" and "this file is not the
+// current schema" are opposite facts with opposite remedies, and they used to be the same
+// `false`. EnsureConfig treats false as licence to overwrite -- which is right for an
+// old-format file and catastrophic for one that is merely unreadable right now: a
+// permission change, a Windows lock, an NFS hiccup, a config written mode 0600 by another
+// user. The project's mode, feature flags, ignore rules, agent tool lists and provider
+// settings were then replaced by defaults for a reason that had nothing to do with their
+// contents, under a message that said the schema was wrong when it had never been read.
+//
+// readErr is non-nil ONLY when the bytes could not be obtained. A file that was read and
+// then failed validConfig or json.Unmarshal returns (defaults, false, nil), which is the
+// clean-break case and the only one an overwrite is allowed for.
+func LoadConfigRead(path string) (cfg *Config, ok bool, readErr error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return DefaultConfig(), false
+		return DefaultConfig(), false, err
+	}
+	if !validConfig(data) {
+		return DefaultConfig(), false, nil
 	}
 	var loaded Config
 	if err := json.Unmarshal(data, &loaded); err != nil {
-		return DefaultConfig(), false
-	}
-	if !validConfig(&loaded) {
-		return DefaultConfig(), false
+		return DefaultConfig(), false, nil
 	}
 	normalizeConfig(&loaded)
-	return &loaded, true
+	return &loaded, true, nil
 }
 
+// Loads config from a path, returning the config without error handling.
 func LoadConfig(path string) *Config {
-	// Loads config from a path, returning the config without error handling.
 	cfg, _ := LoadConfigStrict(path)
 	return cfg
 }
 
+// SaveConfig writes a Config to JSON with pretty-printing, preserving special tokens like
+// "<any>" and "<inherits>" as readable literals.
+//
+// ATOMIC, because of what EnsureConfig does to a config it cannot read. os.WriteFile truncates
+// first and writes second; interrupted in between -- a Ctrl-C during `arac init`, a hook whose
+// timeout takes the process with it, a full disk -- it leaves a zero-byte or half-written
+// config.json. On the next run validConfig finds no known key, LoadConfigStrict reports false,
+// and EnsureConfig REPLACES the file with defaults. The project's mode, feature flags, ignore
+// rules, agent tool lists and provider settings are then gone, for a reason that had nothing to
+// do with their contents.
+//
+// That combination is what makes this the one file where a torn write is unrecoverable rather
+// than merely inconvenient -- the same argument atomicwrite.go makes for the manifest, which
+// was hardened after this repository's own was found empty.
 func SaveConfig(cfg *Config, path string) error {
-	// Writes a Config struct to a JSON file with pretty-printing, preserving special tokens like "<any>" and "<inherits>" as readable literals.
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
@@ -1489,34 +1564,50 @@ func SaveConfig(cfg *Config, path string) error {
 	if err := enc.Encode(cfg); err != nil {
 		return err
 	}
-	return os.WriteFile(path, buf.Bytes(), 0644)
+	return AtomicWriteFile(path, buf.Bytes(), 0644)
 }
 
 // EnsureConfig returns the config at path, creating it with defaults when
 // missing. If an existing file does not parse as the new schema (e.g. an
 // old-format config), it is overwritten with fresh defaults (clean break).
 func EnsureConfig(path string) *Config {
-	// EnsureConfig returns the config at path, creating it with defaults when
-	// missing. If an existing file does not parse as the new schema (e.g. an
-	// old-format config), it is overwritten with fresh defaults (clean break).
-	if _, err := os.Stat(path); os.IsNotExist(err) {
+	if _, err := os.Stat(path); err != nil {
 		cfg := DefaultConfig()
+		// Only ABSENCE gets a fresh config written for it. Any other stat error -- a
+		// permission denial, a broken symlink, an unmounted share -- means the file may
+		// well be there and readable later, and writing defaults over it would destroy a
+		// config for a reason that had nothing to do with its contents.
+		if !errors.Is(err, fs.ErrNotExist) {
+			fmt.Fprintf(os.Stderr, "aracne: %s could not be read (%v); using defaults for this run "+
+				"without changing the file.\n", path, err)
+			return cfg
+		}
 		if saveErr := SaveConfig(cfg, path); saveErr != nil {
 			return cfg
 		}
 		return cfg
 	}
-	cfg, ok := LoadConfigStrict(path)
-	if !ok {
-		// Say so. A clean break is the right call for a file that cannot be read as this
-		// schema, but doing it silently means a project loses hand-set keys -- a feature it
-		// switched on, an agent's tool list -- and finds out later, from the behaviour. On
-		// stderr because this runs inside hooks whose stdout is parsed as JSON.
-		fmt.Fprintf(os.Stderr,
-			"aracne: %s could not be read as the current config schema and was replaced with "+
-				"defaults. Any keys it set are gone; re-apply them if you need them.\n", path)
-		_ = SaveConfig(cfg, path)
+	cfg, ok, readErr := LoadConfigRead(path)
+	if ok {
+		return cfg
 	}
+	// The file is there and could not be READ. That says nothing about its contents, so it
+	// keeps them: run on defaults for this process and leave the file exactly as it is. The
+	// stat above already guards the same case for a path that will not stat; this is the
+	// same rule for one that stats and then refuses to open.
+	if readErr != nil {
+		fmt.Fprintf(os.Stderr, "aracne: %s could not be read (%v); using defaults for this run "+
+			"without changing the file.\n", path, readErr)
+		return cfg
+	}
+	// Read, and not this schema. Say so. A clean break is the right call for a file that
+	// cannot be read as this schema, but doing it silently means a project loses hand-set
+	// keys -- a feature it switched on, an agent's tool list -- and finds out later, from
+	// the behaviour. On stderr because this runs inside hooks whose stdout is parsed as JSON.
+	fmt.Fprintf(os.Stderr,
+		"aracne: %s could not be read as the current config schema and was replaced with "+
+			"defaults. Any keys it set are gone; re-apply them if you need them.\n", path)
+	_ = SaveConfig(cfg, path)
 	return cfg
 }
 
@@ -1524,8 +1615,8 @@ func EnsureConfig(path string) *Config {
 // Describe-target helpers (unchanged)
 // ---------------------------------------------------------------------------
 
+// Parses comma-separated describe targets into a deduplicated slice of ResourceKinds.
 func ParseDescribeTargets(value string) ([]domain.ResourceKind, error) {
-	// Parses comma-separated describe targets into a deduplicated slice of ResourceKinds.
 	if strings.TrimSpace(value) == "" {
 		return nil, fmt.Errorf("describe targets cannot be empty")
 	}
@@ -1541,8 +1632,8 @@ func ParseDescribeTargets(value string) ([]domain.ResourceKind, error) {
 	return dedupeDescribeTargets(targets), nil
 }
 
+// Parses and dedupes describe targets into a normalized ResourceKind slice.
 func NormalizeDescribeTargets(targets []domain.ResourceKind) ([]domain.ResourceKind, error) {
-	// Parses and dedupes describe targets into a normalized ResourceKind slice.
 	normalized := make([]domain.ResourceKind, 0, len(targets))
 	for _, target := range targets {
 		kind, err := ParseDescribeTarget(string(target))
@@ -1554,8 +1645,8 @@ func NormalizeDescribeTargets(targets []domain.ResourceKind) ([]domain.ResourceK
 	return dedupeDescribeTargets(normalized), nil
 }
 
+// Parses a single describe target string into a ResourceKind, normalizing whitespace and hyphens.
 func ParseDescribeTarget(value string) (domain.ResourceKind, error) {
-	// Parses a single describe target string into a ResourceKind, normalizing whitespace and hyphens.
 	s := strings.ToLower(strings.TrimSpace(value))
 	s = strings.ReplaceAll(s, "-", "_")
 	s = strings.ReplaceAll(s, " ", "_")
@@ -1585,8 +1676,8 @@ func ParseDescribeTarget(value string) (domain.ResourceKind, error) {
 	}
 }
 
+// Converts a list of target resource kinds into a lookup map, defaulting to DefaultDescribeTargets if nil.
 func DescribeTargetSet(targets []domain.ResourceKind) map[domain.ResourceKind]bool {
-	// Converts a list of target resource kinds into a lookup map, defaulting to DefaultDescribeTargets if nil.
 	if targets == nil {
 		targets = DefaultDescribeTargets()
 	}
@@ -1642,8 +1733,8 @@ func ShouldRegenerateDescription(res domain.Resource, targetSet map[domain.Resou
 	return filter.For(res.Kind, locLineSpan(res.Location), true) == domain.VisibilityNormal
 }
 
+// Formats a slice of describe targets into a comma-separated string.
 func FormatDescribeTargets(targets []domain.ResourceKind) string {
-	// Formats a slice of describe targets into a comma-separated string.
 	if targets == nil {
 		targets = DefaultDescribeTargets()
 	}
@@ -1654,8 +1745,8 @@ func FormatDescribeTargets(targets []domain.ResourceKind) string {
 	return strings.Join(values, ", ")
 }
 
+// Removes duplicate ResourceKind targets, returning only the first occurrence of each unique kind.
 func dedupeDescribeTargets(targets []domain.ResourceKind) []domain.ResourceKind {
-	// Removes duplicate ResourceKind targets, returning only the first occurrence of each unique kind.
 	seen := make(map[domain.ResourceKind]bool, len(targets))
 	result := make([]domain.ResourceKind, 0, len(targets))
 	for _, target := range targets {

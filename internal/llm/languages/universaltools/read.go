@@ -248,7 +248,11 @@ func (r *Read) ReadIDs(rawIDs []string, opt ReadIDsOptions) (string, error) {
 		return "", fmt.Errorf("missing required argument: ids")
 	}
 
-	cfg := helper.LoadConfig(helper.ConfigPath(r.mgr.DbPath()))
+	// The config the tool was CONSTRUCTED with, not a fresh read off disk. Every caller
+	// passes one and this re-read discarded it -- harmless today because they all load from
+	// the same path, but it made the injected config silently inert and cost a JSON parse on
+	// every read. cfgOrLoad is the same accessor the sibling read paths use.
+	cfg := r.cfgOrLoad()
 	kinds := opt.Kinds
 	if kinds == nil {
 		kinds = cfg.EffectiveReadKinds()
@@ -325,6 +329,21 @@ func (r *Read) ReadIDs(rawIDs []string, opt ReadIDsOptions) (string, error) {
 		Locate:          locator(topo, cfg),
 	})
 
+	// The over-serve ceiling. This tool stands in for the harness's own read, and past a few
+	// multiples of the source it delivered, the context block is no longer what makes it the
+	// cheaper one. The fallback is the same source without aracne's sections -- rebuilt
+	// against a fresh ledger, since the render above has already spent this one.
+	if !cfg.WithinOverserve(out, bodyBytes(units), helper.OverserveReadFree) {
+		plainState := renderstate.New()
+		plain, _ := build(topo, topoErr, plainState)
+		if bare := readunit.Render(withoutTopology(plain), readunit.Options{
+			State:  plainState,
+			Locate: locator(topo, cfg),
+		}); bare != "" {
+			out = bare
+		}
+	}
+
 	// A bad id in a batch must not throw away the good ones: the whole point of batching is
 	// that one call answers several questions, and failing all of them over one typo would
 	// cost exactly the extra turn this tool exists to save.
@@ -348,6 +367,29 @@ func (r *Read) ReadIDs(rawIDs []string, opt ReadIDsOptions) (string, error) {
 		return "", fmt.Errorf("no readable resources for the given ids")
 	}
 	return out, nil
+}
+
+// bodyBytes is the source a read delivers, and the denominator the over-serve ceiling divides
+// by. Everything else in the answer -- the group headers, the import block, the context and
+// used-by sections -- is what aracne added to it.
+func bodyBytes(units []readunit.Unit) int {
+	total := 0
+	for _, u := range units {
+		total += len(u.Body)
+	}
+	return total
+}
+
+// withoutTopology is the units with their topology sections dropped: the source and its
+// imports, and nothing aracne put around them.
+func withoutTopology(units []readunit.Unit) []readunit.Unit {
+	out := make([]readunit.Unit, len(units))
+	copy(out, units)
+	for i := range out {
+		out[i].Context = nil
+		out[i].Incoming = nil
+	}
+	return out
 }
 
 // unitIDs is the canonical ids a response will show as source: the seeds a read fill plans
@@ -488,7 +530,10 @@ func (r *Read) unitFor(topo *domain.Topology, topoErr error, id string, allowed 
 			}
 			u, buildNote, buildErr := r.buildUnit(topo, target, filter, st, fileMode, smallThreshold)
 			if se, stale := topology.AsStaleIndex(buildErr); stale {
-				return r.healStale(se, id, match, allowed, filter, buildErr, st, fileMode, smallThreshold)
+				// `lookup`, not `id`: for the `path/to/file.go:Symbol` form they differ, and
+				// re-resolving the composite string fails every time -- so the self-heal
+				// re-parsed the file and then handed back the original error anyway.
+				return r.healStale(se, lookup, match, allowed, filter, buildErr, st, fileMode, smallThreshold)
 			}
 			return u, buildNote, buildErr
 		}
@@ -592,8 +637,11 @@ func (r *Read) indexHealthNote() string {
 // formatter is involved.
 func (r *Read) buildUnit(topo *domain.Topology, t readTarget, filter topology.TopologyOption, st *renderstate.State,
 	fileMode string, smallThreshold int) (readunit.Unit, string, error) {
+	// The language-neutral readers below take the RESOLVED filter rather than the option,
+	// because they render their context themselves instead of going through a manager.
+	ctxFilter := r.cfgOrLoad().EffectiveContextFilter()
 	if t.res.Kind == domain.ResourceFile {
-		return r.fileUnit(topo, t, fileMode, smallThreshold)
+		return r.fileUnit(topo, t, ctxFilter, fileMode, smallThreshold)
 	}
 
 	switch t.res.Kind {
@@ -689,7 +737,7 @@ func (r *Read) buildUnit(topo *domain.Topology, t readTarget, filter topology.To
 
 	// Variables, and any kind a language has no enriched reader for, still read: source cut
 	// plus a generic neighbour walk. A resource the model can name should never be a dead end.
-	return r.genericUnit(topo, t)
+	return r.genericUnit(topo, t, ctxFilter)
 }
 
 // wrap adapts a (context, error) manager call into a Unit, keeping the dispatch table above to
@@ -715,10 +763,14 @@ func wrapStateful[T any](build func(T, *renderstate.State) readunit.Unit, ctx T,
 // Covers names every declaration in the file, which is what keeps them out of the context
 // section; Neighbors is what those declarations reach outside the file, which is what the
 // context section should have been showing all along.
-func (r *Read) fileUnit(topo *domain.Topology, t readTarget, fileMode string, smallThreshold int) (readunit.Unit, string, error) {
+func (r *Read) fileUnit(topo *domain.Topology, t readTarget, filter domain.ContextFilter,
+	fileMode string, smallThreshold int) (readunit.Unit, string, error) {
 	var body string
 	if fileMode == helper.FileModeSkeleton {
-		sk, skErr := skeletonBody(topo, r.mgr, t.id, smallThreshold)
+		// The locator is passed so the skeleton's markers speak the identification mode's
+		// vocabulary: a span under intercept_line_ranges, where a resource id is the one
+		// token the mode exists not to hand back.
+		sk, skErr := skeletonBody(topo, r.mgr, t.id, smallThreshold, locator(topo, r.cfgOrLoad()))
 		if skErr != nil {
 			return readunit.Unit{}, "", skErr
 		}
@@ -742,13 +794,13 @@ func (r *Read) fileUnit(topo *domain.Topology, t readTarget, fileMode string, sm
 		Body:   body,
 		Covers: members,
 	}
-	u.Context = neighborContext(neighbors)
+	u.Context = neighborContext(neighbors, filter)
 	return u, "", nil
 }
 
 // genericUnit is the language-neutral fallback: the resource's own cut plus its outgoing
 // neighbours straight off the graph.
-func (r *Read) genericUnit(topo *domain.Topology, t readTarget) (readunit.Unit, string, error) {
+func (r *Read) genericUnit(topo *domain.Topology, t readTarget, filter domain.ContextFilter) (readunit.Unit, string, error) {
 	entry, err := r.mgr.Cut(t.res.Location)
 	if err != nil {
 		return readunit.Unit{}, "", err
@@ -761,7 +813,7 @@ func (r *Read) genericUnit(topo *domain.Topology, t readTarget) (readunit.Unit, 
 		Fence: t.res.Language,
 		Body:  entry.Cut,
 	}
-	u.Context = neighborContext(domain.OutgoingNeighbors(topo, []string{t.id}, nil))
+	u.Context = neighborContext(domain.OutgoingNeighbors(topo, []string{t.id}, nil), filter)
 	return u, "", nil
 }
 
@@ -771,7 +823,7 @@ func (r *Read) rawFileUnit(topo *domain.Topology, id string) (readunit.Unit, err
 	if topo != nil {
 		root = topo.Root
 	}
-	maxSize := helper.LoadConfig(helper.ConfigPath(r.mgr.DbPath())).EffectiveMaxFileSize()
+	maxSize := r.cfgOrLoad().EffectiveMaxFileSize()
 	for _, cand := range readPathCandidates(id, root) {
 		info, err := os.Stat(cand)
 		if err != nil || info.IsDir() {
@@ -811,8 +863,16 @@ func readPathCandidates(id, root string) []string {
 }
 
 // neighborContext renders a flat neighbour list, skipping whatever the response already shows
-// in full.
-func neighborContext(neighbors []domain.Resource) func(*strings.Builder, *renderstate.State) {
+// in full and whatever read.context_filter says not to render.
+//
+// THE FILTER HAS TO BE APPLIED HERE TOO. ReadIDs resolves read.context_filter and threads it
+// into the per-language managers, which honour it -- but the two language-neutral readers,
+// fileUnit and genericUnit, build their context through this function and used to take no
+// filter at all. So the project-wide dial had no effect on the two shapes a terminal-surface
+// project sees most: an intercepted `cat file.go`, and any variable or unsupported-language
+// resource. A project that set "off" to stop paying for context blocks kept paying for them
+// on exactly the reads it was trimming.
+func neighborContext(neighbors []domain.Resource, filter domain.ContextFilter) func(*strings.Builder, *renderstate.State) {
 	if len(neighbors) == 0 {
 		return nil
 	}
@@ -822,6 +882,10 @@ func neighborContext(neighbors []domain.Resource) func(*strings.Builder, *render
 			if !st.Renderable(n.ID) || !g.More() {
 				continue
 			}
+			hasDescription := strings.TrimSpace(n.Description) != ""
+			if filter.For(n.Kind, locSpan(n.Location), hasDescription) == domain.VisibilityHidden {
+				continue
+			}
 			description := n.Description
 			if description == "" {
 				description = "no description"
@@ -829,6 +893,15 @@ func neighborContext(neighbors []domain.Resource) func(*strings.Builder, *render
 			fmt.Fprintf(b, "## %s (%s): %s\n", n.ID, n.Kind, domain.RenderDescription(n.Kind, description))
 		}
 	}
+}
+
+// locSpan is a resource's inclusive line count, or 0 when it has no usable span -- which is
+// what ContextFilter.For reads as "unknown".
+func locSpan(loc domain.Location) int {
+	if loc.StartsAt < 1 || loc.EndsAt < loc.StartsAt {
+		return 0
+	}
+	return loc.EndsAt - loc.StartsAt + 1
 }
 
 // displayPath renders a file ID for the group header: relative to the topology root when it

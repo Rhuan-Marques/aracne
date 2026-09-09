@@ -97,8 +97,11 @@ func TestReadCommandsAreModelledOrPassedThrough(t *testing.T) {
 		{"awk /foo/ main.go", want{kind: KindPassthrough}},
 
 		// git: only a HEAD: path.
-		{"git show HEAD:main.go", want{KindRead, whole, []string{"main.go"}}},
-		{"git cat-file -p HEAD:main.go", want{KindRead, whole, []string{"main.go"}}},
+		// git is not modelled at all. `git show HEAD:f` prints the COMMITTED bytes and the
+		// topology indexes the CHECKED-OUT ones -- the same file only while nothing is
+		// uncommitted, which is precisely when nobody asks.
+		{"git show HEAD:main.go", want{kind: KindPassthrough}},
+		{"git cat-file -p HEAD:main.go", want{kind: KindPassthrough}},
 		{"git show abc123:main.go", want{kind: KindPassthrough}},
 		{"git show HEAD", want{kind: KindPassthrough}},
 		{"git log --oneline", want{kind: KindPassthrough}},
@@ -170,8 +173,8 @@ func TestGrepFlagsMapOntoTopogrepOptions(t *testing.T) {
 			}
 		}},
 		{"grep --include=*.go foo .", func(t *testing.T, r Request) {
-			if r.Grep.Glob != "*.go" {
-				t.Errorf("glob = %q", r.Grep.Glob)
+			if len(r.Grep.Globs) != 1 || r.Grep.Globs[0] != "*.go" {
+				t.Errorf("globs = %q", r.Grep.Globs)
 			}
 		}},
 		{"rg -t go foo", func(t *testing.T, r Request) {
@@ -190,8 +193,9 @@ func TestGrepFlagsMapOntoTopogrepOptions(t *testing.T) {
 			}
 		}},
 		{"grep -m 5 foo .", func(t *testing.T, r Request) {
-			if r.Grep.HeadLimit != 5 {
-				t.Errorf("head limit = %d", r.Grep.HeadLimit)
+			// -m is a PER-FILE cap, which is not topogrep's head limit under another name.
+			if r.Grep.MaxCount != 5 {
+				t.Errorf("max count = %d", r.Grep.MaxCount)
 			}
 		}},
 	} {
@@ -260,10 +264,15 @@ func TestShortFlagClustersExpand(t *testing.T) {
 			t.Errorf("%q: -i lost in the cluster", cmd)
 		}
 	}
-	// A cluster holding a flag that takes an argument must NOT be expanded: we cannot know
-	// whether the letter wanted the next token.
-	if got := Parse(strings.Fields("grep -nA 3 foo .")); got.Kind != KindPassthrough {
-		t.Errorf("cluster with an argument-taking flag: kind = %v, want passthrough", got.Kind)
+	// A cluster may end in a flag that takes an argument -- grep reads `-nA 3` as `-n -A 3`
+	// -- but the letter has to be LAST, because everything after it is its value.
+	if got := Parse(strings.Fields("grep -nA 3 foo .")); got.Kind != KindGrep || got.Grep.After != 3 {
+		t.Errorf("cluster ending in -A: kind = %v after = %d", got.Kind, got.Grep.After)
+	}
+	// A cluster holding a letter aracne does not model must not be expanded at all: we
+	// cannot know whether it wanted the next token.
+	if got := Parse(strings.Fields("grep -nO 3 foo .")); got.Kind != KindPassthrough {
+		t.Errorf("cluster with an unmodelled flag: kind = %v, want passthrough", got.Kind)
 	}
 }
 
@@ -275,5 +284,99 @@ func TestPathlessSearchFollowsTheToolsOwnDefault(t *testing.T) {
 	}
 	if got := Parse(strings.Fields("rg foo")); got.Kind != KindGrep {
 		t.Errorf("`rg foo` walks the cwd: kind = %v (%s), want grep", got.Kind, got.Why)
+	}
+}
+
+// The dialect table. topogrep compiles with Go's regexp (RE2), so a pattern written in
+// POSIX BRE -- which is what plain `grep` takes -- has to be rewritten before it means the
+// same thing. The rows come in pairs on purpose: each BRE operator that RE2 spells bare,
+// and each character BRE leaves ordinary that RE2 would read as an operator. Getting
+// either backwards returns a confident answer to a different question, which is the one
+// failure mode interception may never have.
+func TestGrepBREPatternsAreTranslatedForRE2(t *testing.T) {
+	for _, tc := range []struct{ cmd, want string }{
+		// BRE's escaped operators lose the backslash.
+		{`grep a\|b .`, `a|b`},
+		{`grep a\+ .`, `a+`},
+		{`grep a\?b .`, `a?b`},
+		{`grep \(ab\)\|c .`, `(ab)|c`},
+		{`grep a\{2,3\} .`, `a{2,3}`},
+		{`grep \<word\> .`, `\bword\b`},
+
+		// ...and the same characters, bare, are ordinary in BRE and must gain one.
+		{`grep a|b .`, `a\|b`},
+		{`grep a+b .`, `a\+b`},
+		{`grep a?b .`, `a\?b`},
+		{`grep (ab) .`, `\(ab\)`},
+		{`grep a{2} .`, `a\{2\}`},
+
+		// Anchors and `*` are positional in BRE: operators where they lead or trail,
+		// ordinary characters anywhere else.
+		{`grep ^foo$ .`, `^foo$`},
+		{`grep a^b .`, `a\^b`},
+		{`grep a$b .`, `a\$b`},
+		{`grep *foo .`, `\*foo`},
+		{`grep a*b .`, `a*b`},
+
+		// A bracket expression is copied through: POSIX and RE2 read its contents alike,
+		// so the `+` inside stays ordinary without any help.
+		{`grep [a+b] .`, `[a+b]`},
+		{`grep [[:alpha:]]+ .`, `[[:alpha:]]\+`},
+
+		// The other dialects are already RE2 or already literal, and are left alone.
+		{`grep -E a|b .`, `a|b`},
+		{`egrep a|b .`, `a|b`},
+		{`rg a+b .`, `a+b`},
+		{`grep -F a+b .`, `a+b`},
+	} {
+		got := Parse(strings.Fields(tc.cmd))
+		if got.Kind != KindGrep {
+			t.Errorf("%q: kind = %v (%s), want grep", tc.cmd, got.Kind, got.Why)
+			continue
+		}
+		if got.Grep.Pattern != tc.want {
+			t.Errorf("%q: pattern = %q, want %q", tc.cmd, got.Grep.Pattern, tc.want)
+		}
+	}
+}
+
+// What BRE can say and RE2 cannot. Each of these has to reach the real grep rather than a
+// rewrite that nearly means it.
+func TestGrepBREPatternsRE2CannotExpressPassThrough(t *testing.T) {
+	for _, cmd := range []string{
+		`grep \(a\)\1 .`, // a backreference; RE2 has none
+		`grep [a\]b] .`,  // `\` is ordinary inside POSIX brackets and an escape in RE2
+		`grep [abc .`,    // unterminated bracket
+		`grep [[.a.]] .`, // a collating element RE2 will not compile
+	} {
+		if got := Parse(strings.Fields(cmd)); got.Kind != KindPassthrough {
+			t.Errorf("%q: kind = %v, want passthrough", cmd, got.Kind)
+		}
+	}
+}
+
+// -E, -F and -G are one setting spelled three ways, and GNU grep lets the last one win.
+// Tracking them independently made `-F -E` both fixed and extended.
+func TestGrepDialectFlagsResolveLastWins(t *testing.T) {
+	for _, tc := range []struct {
+		cmd     string
+		pattern string
+		fixed   bool
+	}{
+		{`grep -F -E a|b .`, `a|b`, false},
+		{`grep -E -F a|b .`, `a|b`, true},
+		{`grep -E -G a\|b .`, `a|b`, false},
+		{`fgrep a+b .`, `a+b`, true},
+		{`grep -rnG a\|b .`, `a|b`, false}, // -G must survive a short-flag cluster
+	} {
+		got := Parse(strings.Fields(tc.cmd))
+		if got.Kind != KindGrep {
+			t.Errorf("%q: kind = %v (%s), want grep", tc.cmd, got.Kind, got.Why)
+			continue
+		}
+		if got.Grep.Pattern != tc.pattern || got.Grep.Fixed != tc.fixed {
+			t.Errorf("%q: pattern = %q fixed = %v, want %q / %v",
+				tc.cmd, got.Grep.Pattern, got.Grep.Fixed, tc.pattern, tc.fixed)
+		}
 	}
 }

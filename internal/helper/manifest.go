@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -63,33 +64,25 @@ func WriteManifest(m FileManifest, path string) error {
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // No-op once the rename succeeds; cleans up every path that fails.
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	// Flushed before the rename, so a crash right after it cannot leave the manifest pointing
-	// at bytes the filesystem has not committed.
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Chmod(tmpName, 0644); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, path)
+	return AtomicWriteFile(path, data, 0644)
 }
 
-// Synchronizes file manifest with current topology, updating timestamps and removing stale entries.
-func SyncManifest(topo *domain.Topology, dbPath string) {
+// SyncManifest stamps the manifest for the files this scan covered and drops the entries for
+// files it no longer holds.
+//
+// `attempted` is the set of paths the scan TRIED to parse, whether or not each produced a
+// node, and it is why this takes an argument at all. The kept set used to be derived purely
+// from the topology's file nodes -- so a file the scanner could not parse produced no node,
+// was never stamped, and DiffScanFiles reported it as `added` on the next run, and the run
+// after that, forever. Every incremental scan then re-parsed it: on this repository that was
+// a python3 subprocess per scan, which under the default `scan.pre_tool` is a subprocess in
+// front of every tool call. Retrying a file that has not changed on disk cannot succeed, so
+// the mtime is the right thing to trust; the parse error is recorded in topo.Errors, which is
+// where a reader should learn about it.
+//
+// A path that no longer exists must not be passed here: the stamp would resurrect a manifest
+// entry the deletion sweep below exists to remove.
+func SyncManifest(topo *domain.Topology, dbPath string, attempted []string) {
 	manifestPath := ManifestPath(dbPath)
 	manifest := ReadManifest(manifestPath)
 
@@ -101,6 +94,15 @@ func SyncManifest(topo *domain.Topology, dbPath string) {
 		}
 		if res.Kind == domain.ResourceFile && IsSourceFile(topo.Root, res.ID, language) {
 			currentFiles[res.ID] = true
+		}
+	}
+	for _, path := range attempted {
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			abs = path
+		}
+		if info, statErr := os.Stat(abs); statErr == nil && info.Mode().IsRegular() {
+			currentFiles[abs] = true
 		}
 	}
 
@@ -387,8 +389,27 @@ func DiffScanFiles(root, language, manifestPath string) (added, modified, delete
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	// THE MASS-DELETION GUARD, AND THE CASE IT MUST NOT REFUSE.
+	//
+	// A walk that returns nothing while the manifest holds files is usually a walk that went
+	// wrong -- a config change that hid a tree, a new ignore rule, a scan rooted somewhere
+	// unexpected -- and marking every one of those files deleted would take the language out
+	// of the graph. That is what this refuses.
+	//
+	// But it also refused the honest case: remove the last .py file from a mixed repo and the
+	// diff errored instead of reporting the deletion, permanently, because nothing ever cleared
+	// the manifest entry that triggered it.
+	//
+	// The two are told apart by asking whether the files are still THERE. A file the walk
+	// missed still stats; a file that was deleted does not. So the refusal now stands only
+	// while some manifest file survives on disk, and a genuine last-file deletion is processed.
 	if len(currentFiles) == 0 && len(manifestTimes) > 0 {
-		return nil, nil, nil, fmt.Errorf("no %s source files found under root %s; refusing to mark %d manifest files deleted", language, root, len(manifestTimes))
+		if survivor, ok := anyPathExists(manifestTimes); ok {
+			return nil, nil, nil, fmt.Errorf(
+				"no %s source files found under root %s, but %s is still on disk; "+
+					"refusing to mark %d manifest files deleted",
+				language, root, survivor, len(manifestTimes))
+		}
 	}
 
 	currentSet := make(map[string]bool, len(currentFiles))
@@ -412,6 +433,23 @@ func DiffScanFiles(root, language, manifestPath string) (added, modified, delete
 	}
 
 	return added, modified, deleted, nil
+}
+
+// anyPathExists reports the first manifest path that is still a file on disk, in sorted order
+// so the message names the same one every run. It is what separates "the walk missed these"
+// from "these are gone"; see DiffScanFiles.
+func anyPathExists(paths map[string]time.Time) (string, bool) {
+	keys := make([]string, 0, len(paths))
+	for p := range paths {
+		keys = append(keys, p)
+	}
+	sort.Strings(keys)
+	for _, p := range keys {
+		if info, err := os.Stat(p); err == nil && info.Mode().IsRegular() {
+			return p, true
+		}
+	}
+	return "", false
 }
 
 // Resolves a manifest path to absolute form, with fallback to WSL path conversion on Windows.
@@ -450,6 +488,26 @@ func windowsPathToWSL(path string) string {
 }
 
 // Removes a file and its owned resources from the topology, cleaning up all references and returning warnings for resources that now reference deleted nodes.
+//
+// A SYMBOL THAT HAS MOVED IS NOT THIS FILE'S TO DELETE, and that is the whole of the rename
+// case. IncrementalScan registers every added and modified file BEFORE it removes the deleted
+// ones, so by the time this runs a symbol that lives in another file now has already had its
+// Location rewritten there. Deleting by id alone therefore took the declarations the new file
+// had just re-registered: `mv pkg/a.go pkg/b.go` left the b.go file node with no members, the
+// package with no functions, and `arac read One` answering "not found" until someone ran
+// `arac scan --all`. In Go a resource id is `module/package.Symbol` and carries no filename, so
+// a rename inside a package collides on every id in the file; the same applies to Java's FQNs.
+// Renaming the project directory is this at whole-graph scale.
+//
+// The test is ownership, not rename detection -- which is the wrong question, and a harder one.
+// "Did a.go become b.go?" needs content hashing (defeated by the rename-plus-edit that `git mv`
+// usually is) or an id-set overlap threshold, and it answers per FILE where the graph needs an
+// answer per SYMBOL: a rename that also moves two of five declarations to a third file has a
+// different answer for each of them. "Does this resource still say it lives here?" is a fact the
+// graph already holds, and it is right in every one of those shapes.
+//
+// The file node itself is never subject to the test: a file resource carries an empty
+// Location.Path because its identity IS its path, and it really is gone.
 func RemoveFileResources(topo *domain.Topology, fileID string) []domain.TopologyWarning {
 	fileRes, ok := topo.Resources[fileID]
 	if !ok {
@@ -460,6 +518,9 @@ func RemoveFileResources(topo *domain.Topology, fileID string) []domain.Topology
 	for connType, targets := range fileRes.Connections {
 		if ownedConnTypes[connType] {
 			for _, target := range targets {
+				if movedOutOfFile(topo, target, fileID) {
+					continue
+				}
 				toRemove[target] = true
 			}
 		}
@@ -491,6 +552,21 @@ func RemoveFileResources(topo *domain.Topology, fileID string) []domain.Topology
 	}
 
 	return warnings
+}
+
+// movedOutOfFile reports whether a resource the removed file used to own now lives somewhere
+// else, which is what makes it survive the removal. See RemoveFileResources.
+//
+// An id that is no longer in the graph at all reports false: there is nothing to keep, and
+// leaving it in the removal set is what strips the stale edges still pointing at it.
+// A resource with no recorded path reports false too -- absence of evidence is not a move, and
+// the conservative answer here is the old behaviour.
+func movedOutOfFile(topo *domain.Topology, id, fileID string) bool {
+	res, ok := topo.Resources[id]
+	if !ok || res.Location.Path == "" {
+		return false
+	}
+	return filepath.Clean(res.Location.Path) != filepath.Clean(fileID)
 }
 
 // Removes warnings from topology for resources that no longer exist.

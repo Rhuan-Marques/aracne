@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/Rhuan-Marques/aracne/internal/helper"
@@ -76,6 +77,20 @@ func serveCommand(argv []string) (out string, status int, refusal error, ok bool
 	if req.Kind == shellcmd.KindPassthrough {
 		return "", 0, nil, false
 	}
+	// A COMMAND THAT WOULD NOT HAVE RUN IS NOT A QUESTION ARACNE WAS ASKED.
+	//
+	// aracne answers IN PLACE OF the real command, and the whole safety argument for
+	// interception is that whatever it does not model runs exactly as it would have. Serving
+	// a command whose binary is not installed inverts that: on a box without ripgrep,
+	// `rg foo` came back as a full annotated search with exit 0, so the model concluded
+	// ripgrep was available -- and the next `rg` carrying a flag shellcmd does not model
+	// (`-o`, `--files`, `--hidden`) fell through to passthrough and returned
+	// "rg: command not found", exit 127. aracne had manufactured a capability and then
+	// withdrawn it unpredictably. Falling through here reproduces the real failure exactly,
+	// because passthrough() is what produces it.
+	if !commandIsAvailable(argv[0]) {
+		return "", 0, nil, false
+	}
 	dbPath := guardDBPath("")
 	if !fileExists(dbPath) {
 		return "", 0, nil, false
@@ -108,6 +123,24 @@ func serveCommand(argv []string) (out string, status int, refusal error, ok bool
 	return "", 0, nil, false
 }
 
+// shellResolvedCommands are the commands a shell resolves itself rather than finding on PATH,
+// so exec.LookPath is the wrong question for them.
+//
+// One entry, and it earns it: `Get-Content` is the PowerShell reader shellcmd models, and it
+// is a cmdlet -- there is no executable of that name anywhere, on any machine. Judging it by
+// LookPath would refuse to serve the one shape the PowerShell surface has, and hand it to a
+// passthrough that cannot run it either.
+var shellResolvedCommands = map[string]bool{"get-content": true}
+
+// commandIsAvailable reports whether the shell could actually have run this command word.
+func commandIsAvailable(word string) bool {
+	if shellResolvedCommands[shellcmd.Base(word)] {
+		return true
+	}
+	_, err := exec.LookPath(word)
+	return err == nil
+}
+
 // serveRead answers a read command. Every operand must be answerable: a half-enhanced
 // `cat a.go b.go`, part topology and part raw bytes, is harder to read than either.
 //
@@ -116,58 +149,69 @@ func serveCommand(argv []string) (out string, status int, refusal error, ok bool
 func serveRead(rd *universaltools.Read, cfg *helper.Config,
 	req shellcmd.Request, dbPath string) (string, error, bool) {
 
+	// SEVERAL OPERANDS ARE SEVERAL ANSWERS, and only for the readers where that is true.
+	// `cat`, `head` and `tail` restart at line 1 per file, so answering each in turn means
+	// what the command means; the group header above each block carries the filename that
+	// head's own `==> f <==` banner would have. `sed` and `awk` number lines across the
+	// whole concatenation and never reach here with more than one operand -- shellcmd
+	// passes those through rather than answer them per file.
 	blocks := make([]string, 0, len(req.Operands))
+	resolved := make([]domain.Location, 0, len(req.Operands))
 	for _, operand := range req.Operands {
-		out, refusal, ok := serveOneRead(rd, cfg, req, operand, dbPath)
+		path, from, to, refusal, ok := resolveReadOperand(rd, cfg, req, operand, dbPath)
 		if refusal != nil {
 			return "", fmt.Errorf("%s: %w", operand, refusal), false
 		}
 		if !ok {
+			// The operand resolved but its window falls outside what is there. That is a
+			// real, empty answer -- `tail -n +900` on a 40-line file prints nothing -- and
+			// NOT a reason to hand the command back: for a resource id the real command
+			// would then report "No such file or directory" about an id, which is a true
+			// sentence about the wrong thing. See resolveReadOperand.
+			if path != "" {
+				continue
+			}
+			return "", nil, false
+		}
+		out, err := renderReadOperand(rd, req, operand, path, from, to)
+		if err != nil || strings.TrimSpace(out) == "" {
 			return "", nil, false
 		}
 		blocks = append(blocks, out)
+		resolved = append(resolved, domain.Location{Path: path, StartsAt: from, EndsAt: to})
 	}
 	if len(blocks) == 0 {
+		// Every operand resolved to an empty window. The command printed nothing, and so
+		// does this -- with a zero exit status, which is what it would have had.
+		if len(req.Operands) > 0 {
+			return "", nil, true
+		}
 		return "", nil, false
 	}
 	answer := strings.Join(blocks, "\n")
-	if !withinBudget(answer, rawWindowBytes(req, req.Operands), cfg) {
+	if !withinBudget(answer, rawWindowBytes(resolved), cfg) {
 		return "", nil, false
 	}
 	return answer, nil, true
 }
 
-// serveOneRead answers a read for a single operand: a path aracne indexes, or a resource ID.
-func serveOneRead(rd *universaltools.Read, cfg *helper.Config,
-	req shellcmd.Request, operand, dbPath string) (string, error, bool) {
+// renderReadOperand renders one already-resolved operand.
+//
+// A whole-file (or whole-resource) request goes through the ordinary read, which already
+// applies read.file_mode. Re-implementing it here as a 1..N slice would emit the file
+// verbatim plus a context block -- strictly more than `cat`, which is the exact regression
+// skeleton mode exists to prevent.
+//
+// No Kinds override: read.kinds gates this surface like every other one, and the gate has
+// already run in resolveReadOperand -- which is where the WINDOWED branch below can also
+// reach it -- so this call agreeing with it is belt and braces rather than the check.
+func renderReadOperand(rd *universaltools.Read, req shellcmd.Request,
+	operand, path string, from, to int) (string, error) {
 
-	path, from, to, refusal, ok := resolveReadOperand(rd, cfg, req, operand, dbPath)
-	if refusal != nil {
-		return "", refusal, false
-	}
-	if !ok {
-		return "", nil, false
-	}
-	// A whole-file (or whole-resource) request goes through the ordinary read, which already
-	// applies read.file_mode. Re-implementing it here as a 1..N slice would emit the file
-	// verbatim plus a context block -- strictly more than `cat`, which is the exact regression
-	// skeleton mode exists to prevent.
-	//
-	// No Kinds override: read.kinds gates this surface like every other one. The gate has
-	// already run in resolveReadOperand, which is where the WINDOWED branch below can also
-	// reach it, so this call agreeing with it is belt and braces rather than the check.
 	if req.Window.Mode == shellcmd.WholeFile {
-		out, err := rd.ReadIDs([]string{operand}, universaltools.ReadIDsOptions{})
-		if err != nil || strings.TrimSpace(out) == "" {
-			return "", nil, false
-		}
-		return out, nil, true
+		return rd.ReadIDs([]string{operand}, universaltools.ReadIDsOptions{})
 	}
-	out, err := rd.ReadSlice(path, from, to)
-	if err != nil || strings.TrimSpace(out) == "" {
-		return "", nil, false
-	}
-	return out, nil, true
+	return rd.ReadSlice(path, from, to)
 }
 
 // resolveReadOperand turns one operand plus the command's window into an absolute line range
@@ -214,6 +258,9 @@ func resolveReadOperand(rd *universaltools.Read, cfg *helper.Config, req shellcm
 			return "", 0, 0, nil, false
 		}
 		f, t, wOK := resolveWindow(req.Window, 1, total)
+		// The path is returned whether or not the window landed, so the caller can tell an
+		// empty window on a resolved target ("print nothing") from an operand aracne cannot
+		// serve at all ("run the real command").
 		return abs, f, t, nil, wOK
 	}
 
@@ -290,21 +337,8 @@ func serveGrep(mgr *topology.TopologyManager, cfg *helper.Config, req shellcmd.R
 		return "", 0, false
 	}
 
-	root := "."
-	var restrict *domain.Location
-	switch len(req.Operands) {
-	case 0:
-		// Only reached for the tools whose path-less form already means "the tree"; see
-		// shellcmd.searchesCwdByDefault.
-	case 1:
-		r, loc, ok := grepScope(mgr, req.Operands[0], cfg)
-		if !ok {
-			return "", 0, false
-		}
-		root, restrict = r, loc
-	default:
-		// Several roots is a shape topogrep has no option for, and merging separate searches
-		// would misreport the caps that make its output bounded.
+	roots, restrict, ok := grepRoots(mgr, req.Operands, cfg)
+	if !ok {
 		return "", 0, false
 	}
 
@@ -312,22 +346,36 @@ func serveGrep(mgr *topology.TopologyManager, cfg *helper.Config, req shellcmd.R
 	if req.Grep.Fixed {
 		pattern = regexpQuote(pattern)
 	}
+	// `-w` and `-x` are anchorings of the pattern, not knobs. -w is only ever set for a
+	// pattern made of word characters, where `\b…\b` is exactly POSIX's rule; see
+	// shellcmd.wordSafe for the patterns that reach the real grep instead.
 	if req.Grep.WholeWord {
 		pattern = `\b(?:` + pattern + `)\b`
+	}
+	if req.Grep.WholeLine {
+		pattern = `^(?:` + pattern + `)$`
 	}
 
 	opt := topogrep.Options{
 		Pattern:          pattern,
-		Root:             root,
-		Glob:             req.Grep.Glob,
+		Roots:            roots,
+		Globs:            req.Grep.Globs,
+		ExcludeGlobs:     req.Grep.ExcludeGlobs,
+		ExcludeDirs:      req.Grep.ExcludeDirs,
 		Type:             req.Grep.Type,
 		IgnoreCase:       req.Grep.IgnoreCase,
+		WithFilename:     req.Grep.WithFilename,
+		LineNumbers:      req.Grep.LineNumbers,
 		Mode:             topogrep.OutputMode(req.Grep.Mode),
-		HeadLimit:        req.Grep.HeadLimit,
+		PerFileLimit:     req.Grep.MaxCount,
 		Before:           req.Grep.Before,
 		After:            req.Grep.After,
 		DescriptionKinds: cfg.Grep.DescriptionKinds,
 		LineRange:        cfg.LineRangeIdentification(),
+		// The shell surface answers the way grep answers: nothing at all when nothing
+		// matched, a bare number for one file's count, cap advice spelled in flags a
+		// caller can actually type. See topogrep.Options.Terse.
+		Terse: true,
 	}
 	if topo.Root != "" {
 		opt.Ignore = domain.BuildIgnoreMatcher(topo.Root, cfg.Scan.Ignore)
@@ -342,11 +390,60 @@ func serveGrep(mgr *topology.TopologyManager, cfg *helper.Config, req shellcmd.R
 	// After the range restriction, not before: a node the window dropped is a node this
 	// answer will never print, and describing it would be paying for a line nobody sees.
 	lazydesc.New(mgr, cfg, "").FillSearch(topo, res)
+	// grep's exit vocabulary, and it is mode-aware because the modes answer different
+	// questions: a result carrying nothing but node rows has something to PRINT in content
+	// mode and nothing to report as a file list or a count.
 	status := 0
-	if len(res.Matches) == 0 {
+	if !res.Found(opt.Mode) {
 		status = 1
 	}
-	return strings.TrimRight(topogrep.FormatResult(res, opt), "\n") + "\n", status, true
+	out := topogrep.FormatResult(res, opt)
+	// The ceiling the read surface applies, against what a plain grep would have printed. This
+	// surface has the one fallback the search tools do not -- the command the caller typed --
+	// so an answer that outgrew its question becomes the real search.
+	if topogrep.HasTextualMatch(res) &&
+		!cfg.WithinOverserve(out, topogrep.RawBytes(res, opt), helper.OverserveSearchFree) {
+		return "", 0, false
+	}
+	if strings.TrimSpace(out) == "" {
+		// Terse mode renders an empty result as nothing at all. Printing a lone newline
+		// would still be a line for `$(...)` to capture.
+		return "", status, true
+	}
+	return strings.TrimRight(out, "\n") + "\n", status, true
+}
+
+// grepRoots turns a search's operands into the paths to walk, plus the line range to keep
+// when a single operand named a resource rather than a file or directory.
+//
+// SEVERAL OPERANDS ARE ONE SEARCH. `grep foo *.go` is what a shell glob produces and what an
+// agent types; walking them together keeps one set of caps and one honest accounting, where
+// running a search per operand would report each cap against a fraction of the answer.
+func grepRoots(mgr *topology.TopologyManager, operands []string,
+	cfg *helper.Config) ([]string, *domain.Location, bool) {
+
+	switch len(operands) {
+	case 0:
+		// Only reached for the tools whose path-less form already means "the tree", and for
+		// `grep -r` with no operand; see shellcmd.parseGrep.
+		return []string{"."}, nil, true
+	case 1:
+		root, loc, ok := grepScope(mgr, operands[0], cfg)
+		if !ok {
+			return nil, nil, false
+		}
+		return []string{root}, loc, true
+	}
+	// More than one. Every operand must be a real path: a resource id among them would need
+	// its own line-range restriction, and there is only one result to restrict.
+	roots := make([]string, 0, len(operands))
+	for _, operand := range operands {
+		if _, err := os.Stat(operand); err != nil {
+			return nil, nil, false
+		}
+		roots = append(roots, operand)
+	}
+	return roots, nil, true
 }
 
 // grepScope turns a search's single operand into a root path, plus the line range to keep when
@@ -410,10 +507,14 @@ func restrictResultToRange(res *topogrep.Result, from, to int) {
 			continue
 		}
 		kept = append(kept, m)
-		files[m.Path] = true
-		counts[m.Path]++
-		if !m.NodeHit && m.ResourceID != "" {
-			resources[m.ResourceID] = true
+		// Files and Counts describe TEXTUAL matches only, the same rule SearchWith applies:
+		// a node row is not a match of the string, and a count has to be a count.
+		if !m.NodeHit {
+			files[m.Path] = true
+			counts[m.Path]++
+			if m.ResourceID != "" {
+				resources[m.ResourceID] = true
+			}
 		}
 	}
 	res.Matches = kept
@@ -421,6 +522,9 @@ func restrictResultToRange(res *topogrep.Result, from, to int) {
 	for p := range files {
 		res.Files = append(res.Files, p)
 	}
+	// Sorted, because a map's iteration order is not one: `grep -l pat some.Resource` would
+	// otherwise list its files in a different order on every run.
+	sort.Strings(res.Files)
 	res.Counts = counts
 	res.Total = len(kept)
 	res.Truncated = false
@@ -442,30 +546,23 @@ func regexpQuote(s string) string {
 
 // rawWindowBytes estimates what the real command would have printed, which is the denominator
 // the over-serve budget is measured against.
-func rawWindowBytes(req shellcmd.Request, operands []string) int {
+//
+// Measured from the RESOLVED ranges rather than re-derived from the operands. An operand that
+// is a resource id cannot be stat'd, so the operand form scored it as zero bytes -- and an
+// answer over the 12KB floor then failed the budget and fell through to the real command,
+// which reports "No such file or directory" about an id.
+func rawWindowBytes(resolved []domain.Location) int {
 	total := 0
-	for _, operand := range operands {
-		abs, err := filepath.Abs(operand)
+	for _, loc := range resolved {
+		info, err := os.Stat(loc.Path)
 		if err != nil {
 			continue
 		}
-		info, statErr := os.Stat(abs)
-		if statErr != nil {
-			continue
-		}
-		lines := countFileLines(abs)
+		lines := countFileLines(loc.Path)
 		if lines == 0 {
 			continue
 		}
-		want := lines
-		switch req.Window.Mode {
-		case shellcmd.Head, shellcmd.Tail:
-			want = req.Window.N
-		case shellcmd.Range:
-			want = req.Window.To - req.Window.From + 1
-		case shellcmd.FromLine:
-			want = lines - req.Window.From + 1
-		}
+		want := loc.EndsAt - loc.StartsAt + 1
 		if want < 1 {
 			want = 1
 		}
@@ -479,24 +576,11 @@ func rawWindowBytes(req shellcmd.Request, operands []string) int {
 
 // withinBudget bounds the answer against what was asked for.
 //
-// The same trade guard_proxy.go makes: past a few multiples of the request, an enriched read is
-// no longer a cheaper read -- it is a way to spend the context window on one `head -1`. Below
-// the floor everything passes, because a small window legitimately expands to its enclosing
-// signature plus a context block, and refusing that would disable the feature for the case it
-// exists to serve.
+// Past a few multiples of the request, an enriched read is no longer a cheaper read -- it is a
+// way to spend the context window on one `head -1`. See helper.OverserveBudget for the bounds
+// and for the other surfaces that measure themselves the same way.
 func withinBudget(answer string, rawBytes int, cfg *helper.Config) bool {
-	factor := cfg.EffectiveTerminalMaxOverserve()
-	if factor <= 0 {
-		return true
-	}
-	budget := rawBytes * factor
-	if budget < proxyMinBudget {
-		budget = proxyMinBudget
-	}
-	if budget > proxyMaxBytes {
-		budget = proxyMaxBytes
-	}
-	return len(answer) <= budget
+	return cfg.WithinOverserve(answer, rawBytes, helper.OverserveReadFree)
 }
 
 // passthrough runs the command the caller actually typed and exits with its status.
@@ -510,6 +594,12 @@ func passthrough(argv []string) {
 		os.Exit(127)
 	}
 	cmd := exec.Command(bin, argv[1:]...)
+	// argv[0] is what a command CALLS ITSELF in its own diagnostics, and a shell passes the
+	// word the caller typed. Leaving exec.LookPath's absolute path there turns
+	// "cat: x: No such file or directory" into "/usr/bin/cat: x: No such file or directory"
+	// -- a different string for anything that reads it, and a puzzle for a model that did
+	// not know a wrapper was in the way.
+	cmd.Args[0] = argv[0]
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if runErr := cmd.Run(); runErr != nil {
 		var exitErr *exec.ExitError

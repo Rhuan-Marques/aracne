@@ -62,8 +62,8 @@ func RunGenerateDescriptions(args []string) {
 	autoYes := fs.Bool("y", false, "Auto-confirm the bare --cli prompt")
 	fs.Parse(expandCLIFlagValue(args))
 
-	manager, reg := InitRegistry(".aracne/topology.db")
-	configPath := helper.ConfigPath(".aracne/topology.db")
+	manager, reg := InitRegistry(ProjectDBPath(DefaultDBRelative))
+	configPath := helper.ConfigPath(manager.DbPath())
 	cfg := helper.EnsureConfig(configPath)
 
 	// Who writes the descriptions is `arac init`'s question now, not this command's.
@@ -743,32 +743,6 @@ func formatDescriptionFailures(failed map[string]string) string {
 	return strings.Join(parts, ", ")
 }
 
-// Writes topology descriptions back to source code files as inline documentation.
-func RunDescriptionApply(args []string) {
-	manager, _ := InitRegistry(".aracne/topology.db")
-
-	topo, err := manager.ReadAll()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-
-	count := 0
-	for _, res := range topo.Resources {
-		if res.Description != "" {
-			count++
-		}
-	}
-	fmt.Printf("Applying %d descriptions to source files...\n", count)
-
-	if err := helper.ApplyDescriptions(topo); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Println("done")
-}
-
 // Clears descriptions for specified or all resource kinds from the topology database.
 func RunClearDescriptions(args []string) {
 	fs := flag.NewFlagSet("descriptions-clear", flag.ExitOnError)
@@ -795,11 +769,15 @@ func RunClearDescriptions(args []string) {
 	}
 
 	if *oversized {
-		count, err := helper.ClearOversizedDescriptions(".aracne/topology.db", targets)
+		count, err := helper.ClearOversizedDescriptions(ProjectDBPath(DefaultDBRelative), targets)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
+		// Clearing a description asks for it to be written again, so the lazy fill's record
+		// of what it has already tried has to go with it -- otherwise the record turns
+		// "regenerate this" into "never try this again". See helper.ClearDescriptionAttempts.
+		_ = helper.ClearDescriptionAttempts(ProjectDBPath(DefaultDBRelative))
 		scope := "all kinds"
 		if len(targets) > 0 {
 			scope = helper.FormatDescribeTargets(targets)
@@ -809,12 +787,15 @@ func RunClearDescriptions(args []string) {
 		return
 	}
 
-	manager, _ := InitRegistry(".aracne/topology.db")
+	manager, _ := InitRegistry(ProjectDBPath(DefaultDBRelative))
 	count, err := manager.ClearDescriptions(targets)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+	// See the --oversized branch above: the attempt record must not outlive the descriptions
+	// it was recorded against.
+	_ = helper.ClearDescriptionAttempts(ProjectDBPath(DefaultDBRelative))
 
 	if len(targets) > 0 {
 		fmt.Printf("Cleared %d description(s) for targets: %s\n", count, helper.FormatDescribeTargets(targets))

@@ -44,6 +44,9 @@ func (s *Server) Serve() error {
 			os.Stdout.Write([]byte{'\n'})
 		}
 	}
+	// A scanner error -- a line over the buffer, a read failure -- used to end Serve, so the
+	// server vanished from under the harness with nothing said. It is reported and the loop
+	// simply ends; the caller prints it.
 	return sc.Err()
 }
 
@@ -56,6 +59,13 @@ func (s *Server) dispatch(req *Request) *Response {
 		return s.handleListTools(req.ID)
 	case "tools/call":
 		return s.handleCallTool(req.ID, req.Params)
+	case "ping":
+		// Part of the base protocol, and clients use it to check the server is alive.
+		// Answering "method not found" to a liveness probe is a fine way to be judged dead.
+		if req.ID == nil {
+			return nil
+		}
+		return &Response{JSONRPC: "2.0", ID: req.ID, Result: struct{}{}}
 	default:
 		if req.ID != nil {
 			return s.errorResponse(req.ID, -32601, fmt.Sprintf("Method not found: %s", req.Method))
@@ -65,7 +75,7 @@ func (s *Server) dispatch(req *Request) *Response {
 }
 
 // Handles the MCP initialize request by returning protocol version "2024-11-05", server capabilities (tools supported), and server info (name and version). Returns nil if the request ID is nil.
-func (s *Server) handleInitialize(id *int) *Response {
+func (s *Server) handleInitialize(id json.RawMessage) *Response {
 	if id == nil {
 		return nil
 	}
@@ -81,7 +91,7 @@ func (s *Server) handleInitialize(id *int) *Response {
 }
 
 // Handles the MCP tools/list request: enumerates all registered tools, builds their JSON Schema parameter definitions, and returns the tool list.
-func (s *Server) handleListTools(id *int) *Response {
+func (s *Server) handleListTools(id json.RawMessage) *Response {
 	if id == nil {
 		return nil
 	}
@@ -118,13 +128,36 @@ func (s *Server) handleListTools(id *int) *Response {
 }
 
 // Handles the MCP tools/call request: looks up the tool by name in the registry, executes it with the provided arguments, and returns the result or an error response.
-func (s *Server) handleCallTool(id *int, params json.RawMessage) *Response {
+// BOTH `params` AND `arguments` MAY BE ABSENT, and neither is an error.
+//
+// A tool whose parameters are all optional -- warnings_list, bug_list,
+// node_list_no_description -- is legally called as `{"name":"warnings_list"}`, with no
+// `arguments` member at all. That left CallToolParams.Arguments nil, and every tool's Run
+// begins with json.Unmarshal(args, &params), which on nil input fails with "unexpected end of
+// JSON input". The call came back as a tool error carrying a JSON parser message that told the
+// model nothing about what it had done wrong.
+//
+// Claude Code sends `"arguments": {}` and never hit it, which is exactly why it survived: the
+// same class as the `*int` request id in protocol.go, a defect that only shows up on the second
+// host. Normalising here rather than in twenty Run methods keeps it fixed for every tool,
+// including ones added later.
+func (s *Server) handleCallTool(id json.RawMessage, params json.RawMessage) *Response {
 	if id == nil {
 		return nil
 	}
 	var call CallToolParams
-	if err := json.Unmarshal(params, &call); err != nil {
-		return s.errorResponse(id, -32602, "Invalid params")
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &call); err != nil {
+			return s.errorResponse(id, -32602, "Invalid params")
+		}
+	}
+	if call.Name == "" {
+		return s.errorResponse(id, -32602, "Invalid params: missing tool name")
+	}
+	// An absent `arguments` is an empty object. An explicit `null` already decodes to the
+	// four bytes `null`, which unmarshals into a struct cleanly, so only absence needs this.
+	if len(call.Arguments) == 0 {
+		call.Arguments = json.RawMessage("{}")
 	}
 
 	t, ok := s.registry.Get(call.Name)
@@ -154,7 +187,7 @@ func (s *Server) handleCallTool(id *int, params json.RawMessage) *Response {
 }
 
 // Writes a JSON-RPC error response to stdout. Constructs the error response from the request ID, error code, and message, then marshals and prints it.
-func (s *Server) writeError(id *int, code int, message string) {
+func (s *Server) writeError(id json.RawMessage, code int, message string) {
 	resp := s.errorResponse(id, code, message)
 	b, _ := json.Marshal(resp)
 	os.Stdout.Write(b)
@@ -162,7 +195,10 @@ func (s *Server) writeError(id *int, code int, message string) {
 }
 
 // Constructs a JSON-RPC 2.0 error response with the given request ID, error code, and message. Returns a Response pointer containing the error payload.
-func (s *Server) errorResponse(id *int, code int, message string) *Response {
+func (s *Server) errorResponse(id json.RawMessage, code int, message string) *Response {
+	if id == nil {
+		id = json.RawMessage("null")
+	}
 	return &Response{
 		JSONRPC: "2.0",
 		ID:      id,

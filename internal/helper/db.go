@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -51,18 +52,7 @@ func WriteDb(topo *domain.Topology, path string) error {
 		if _, err := tx.Exec("INSERT INTO info VALUES ('languages', ?)", string(languagesJSON)); err != nil {
 			return err
 		}
-		// Stamp the id-scheme. This is the ONLY write that may do so: WriteDb regenerates
-		// every ID from the source, so the database provably holds the current grammar.
-		// An incremental write must never stamp — it leaves untouched files' IDs alone, so
-		// claiming the current scheme there would mark a half-legacy database as migrated
-		// and suppress the remap that fixes it. Note the DELETE FROM info above drops any
-		// previous stamp, so this insert is what keeps a rescanned database self-describing.
-		if _, err := tx.Exec("INSERT INTO info VALUES (?, ?)",
-			infoIDSchemeKey, strconv.Itoa(IDSchemeVersion)); err != nil {
-			return err
-		}
-
-		resStmt, err := tx.Prepare("INSERT INTO resources (id, kind, name, language, description, properties_json, starts_at, ends_at, loc_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+		resStmt, err := tx.Prepare("INSERT INTO resources (id, kind, name, language, description, properties_json, starts_at, ends_at, loc_path, exact_hash, norm_hash, norm_lines) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
 		if err != nil {
 			return err
 		}
@@ -99,7 +89,7 @@ func WriteDb(topo *domain.Topology, path string) error {
 				endsAt = res.Location.EndsAt
 				locPath = res.Location.Path
 			}
-			if _, err := resStmt.Exec(id, string(res.Kind), res.Name, res.Language, domain.DescriptionForStorage(res.Kind, res.Description), propsJSON, startsAt, endsAt, locPath); err != nil {
+			if _, err := resStmt.Exec(id, string(res.Kind), res.Name, res.Language, domain.DescriptionForStorage(res.Kind, res.Description), propsJSON, startsAt, endsAt, locPath, res.ExactHash, res.NormHash, res.NormLines); err != nil {
 				return err
 			}
 			for kind, targets := range res.Connections {
@@ -117,31 +107,8 @@ func WriteDb(topo *domain.Topology, path string) error {
 			}
 		}
 
-		// Bounded, and deterministic about WHICH ones survive.
-		//
-		// `info` is a key/value table that also serves as the scan error log, and it was
-		// unbounded: a repo whose JS and TS scanners produce colliding ids wrote one row
-		// per collision. aracne's own self-scan accumulated 23,902 of them, which is why
-		// that database was 7.5 MB of mostly duplicate error text. Nothing reads more than
-		// a handful, so keep a sample and record the true count.
-		pats := make([]string, 0, len(topo.Errors))
-		for pat := range topo.Errors {
-			pats = append(pats, pat)
-		}
-		sort.Strings(pats)
-		for i, pat := range pats {
-			if i >= maxStoredErrors {
-				break
-			}
-			if _, err := tx.Exec("INSERT INTO info VALUES (?, ?)", "error:"+pat, topo.Errors[pat]); err != nil {
-				return err
-			}
-		}
-		if len(pats) > maxStoredErrors {
-			if _, err := tx.Exec("INSERT INTO info VALUES (?, ?)", "error_count",
-				strconv.Itoa(len(pats))); err != nil {
-				return err
-			}
+		if err := writeScanErrors(tx, topo.Errors); err != nil {
+			return err
 		}
 
 		return tx.Commit()
@@ -162,8 +129,14 @@ func createSchema(db *sql.DB) error {
 		properties_json TEXT,
 		starts_at INT NOT NULL DEFAULT 0,
 		ends_at INT NOT NULL DEFAULT 0,
-		loc_path TEXT DEFAULT ''
+		loc_path TEXT DEFAULT '',
+		-- Fingerprints of the resource's own source span; see domain.Resource.ExactHash.
+		-- Indexed because a move is matched by looking a hash up, not by scanning.
+		exact_hash TEXT DEFAULT '',
+		norm_hash TEXT DEFAULT '',
+		norm_lines INT NOT NULL DEFAULT 0
 	);
+	CREATE INDEX IF NOT EXISTS idx_resources_norm_hash ON resources(norm_hash);
 	CREATE INDEX IF NOT EXISTS idx_resources_loc_path ON resources(loc_path);
 	CREATE INDEX IF NOT EXISTS idx_resources_kind ON resources(kind);
 
@@ -199,7 +172,7 @@ func createSchema(db *sql.DB) error {
 
 	-- Maps a resource ID from a PREVIOUS id-scheme to its current one, so an agent (or a
 	-- saved note, or a stale transcript) that still uses an old ID keeps resolving after a
-	-- scheme change. Populated by the id-scheme remap; never by a normal scan.
+	-- scheme change. Populated by FullReScan's identity remap; never by a normal scan.
 	CREATE TABLE IF NOT EXISTS resource_alias (
 		old_id TEXT PRIMARY KEY,
 		new_id TEXT NOT NULL
@@ -216,6 +189,9 @@ func createSchema(db *sql.DB) error {
 	if err := ensureWarningBaselineColumn(db); err != nil {
 		return err
 	}
+	if err := ensureResourceBodyHashColumns(db); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -225,11 +201,10 @@ func createSchema(db *sql.DB) error {
 // v1: the "type" resource kind (structs/classes) was renamed to "struct"; rewrite
 // any rows persisted under the old value.
 //
-// v2: introduces the resource_alias table and stamps the database with the id-scheme it
-// was built under. This step deliberately does NOT rewrite any ID: recomputing IDs needs
-// the scanners and the source tree, neither of which is available here. It only makes the
-// database say which scheme it holds, so the next `arac scan` can notice it is behind and
-// run the remap (see IDSchemeVersion / ReadIDScheme).
+// v2: introduces the resource_alias table, which keeps an ID an agent already knows
+// resolving after the ID grammar changes under it. This step deliberately does NOT rewrite
+// any ID: recomputing IDs needs the scanners and the source tree, neither of which is
+// available here. The table is filled by FullReScan's identity remap -- see remapByIdentity.
 //
 // v3: adds warnings.baseline. It runs HERE rather than only in createSchema because the
 // read path selects the column: ensureSQLiteMigrated fires before any read or write of an
@@ -237,9 +212,31 @@ func createSchema(db *sql.DB) error {
 // was merely read after the upgrade would have failed on "no such column". Existing rows
 // keep an empty baseline, which reads as "raised before this was recorded" and simply never
 // discharges -- the old behaviour rather than a wrong one.
+//
+// v4: adds resources.exact_hash and resources.norm_hash. Here for the same reason as v3 --
+// the read path selects them, and ensureSQLiteMigrated is the only thing that fires before a
+// read of an existing database. Because it runs everywhere, the reader may assume the columns
+// exist and does not need the has-this-column branch the `language` column still carries.
+//
+// DELIBERATELY NOT BACKFILLED. Computing a body hash needs the file, and a migration has no
+// business reading the whole working tree. Existing rows keep an empty hash until the next
+// scan re-stamps their file; an empty hash only makes a match tier unavailable, and can never
+// produce a wrong match.
 func applyMigrations(db *sql.DB) error {
 	var version int
 	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		return err
+	}
+	// The additive column guards run UNGATED, before the version ladder.
+	//
+	// A numbered step that fails partway returns here with user_version already advanced by
+	// the steps before it, and the ladder then skips the unfinished one forever -- every later
+	// read failing on "no such column" with nothing able to repair it. That is not
+	// hypothetical: it is what a database looks like after an interrupted upgrade, or after a
+	// build that shipped half of a step. Re-asserting the columns is idempotent, costs a
+	// PRAGMA on a sync.Once path that runs once per database per process, and turns a
+	// permanently broken database back into a working one.
+	if err := ensureResourceBodyHashColumns(db); err != nil {
 		return err
 	}
 	if version < 1 {
@@ -261,16 +258,6 @@ func applyMigrations(db *sql.DB) error {
 			"CREATE INDEX IF NOT EXISTS idx_alias_new ON resource_alias(new_id)"); err != nil {
 			return err
 		}
-		// An existing database predates the scheme stamp, so by definition it holds
-		// scheme 1. A brand-new database is stamped by the scanner that fills it.
-		var n int
-		if err := db.QueryRow("SELECT COUNT(*) FROM resources").Scan(&n); err == nil && n > 0 {
-			if _, err := db.Exec(
-				"INSERT OR IGNORE INTO info (key, value) VALUES (?, ?)",
-				infoIDSchemeKey, "1"); err != nil {
-				return err
-			}
-		}
 		if _, err := db.Exec(
 			fmt.Sprintf("PRAGMA user_version = %d", 2)); err != nil {
 			return err
@@ -278,6 +265,14 @@ func applyMigrations(db *sql.DB) error {
 	}
 	if version < 3 {
 		if err := ensureWarningBaselineColumn(db); err != nil {
+			return err
+		}
+		if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", 3)); err != nil {
+			return err
+		}
+	}
+	if version < 4 {
+		if err := ensureResourceBodyHashColumns(db); err != nil {
 			return err
 		}
 		if _, err := db.Exec(
@@ -288,71 +283,105 @@ func applyMigrations(db *sql.DB) error {
 	return nil
 }
 
-// maxStoredErrors bounds the scan-error sample kept in `info`. See WriteDb.
+// writeScanErrors writes the scan-error log into `info`, bounded and deterministic about
+// WHICH errors survive.
+//
+// `info` is a key/value table that also serves as the scan error log, and it was unbounded:
+// a repo whose JS and TS scanners produce colliding ids wrote one row per collision. aracne's
+// own self-scan accumulated 23,902 of them, which is why that database was 7.5 MB of mostly
+// duplicate error text. Nothing reads more than a handful, so keep a sorted sample and record
+// the true count.
+//
+// It is a function rather than a block inside WriteDb because WriteIncremental writes the
+// same rows and did NOT cap them: the bloat this exists to stop simply grew back on the
+// incremental path, which is the path a project is on almost all of the time.
+func writeScanErrors(tx *sql.Tx, errs map[string]string) error {
+	if _, err := tx.Exec("DELETE FROM info WHERE key LIKE 'error:%' OR key = 'error_count'"); err != nil {
+		return err
+	}
+	pats := make([]string, 0, len(errs))
+	for pat := range errs {
+		pats = append(pats, pat)
+	}
+	sort.Strings(pats)
+	for i, pat := range pats {
+		if i >= maxStoredErrors {
+			break
+		}
+		if _, err := tx.Exec("INSERT OR REPLACE INTO info VALUES (?, ?)", "error:"+pat, errs[pat]); err != nil {
+			return err
+		}
+	}
+	if len(pats) > maxStoredErrors {
+		if _, err := tx.Exec("INSERT OR REPLACE INTO info VALUES (?, ?)", "error_count",
+			strconv.Itoa(len(pats))); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeTopologyInfo upserts the three rows that describe the graph as a whole.
+//
+// UPSERT, and scoped to those three keys, because `info` is a key/value table with more than
+// one writer: writeScanErrors keeps the capped error sample there, and whatever is added next
+// will be there too. A `DELETE FROM info` on the incremental path took out everything it did
+// not itself re-insert -- which is how the error sample came back uncapped, and how an
+// id-scheme stamp that no longer exists used to be erased. A writer that owns three keys
+// should touch three keys.
+func writeTopologyInfo(tx *sql.Tx, topo *domain.Topology) error {
+	languagesJSON, err := json.Marshal(topo.Languages)
+	if err != nil {
+		return err
+	}
+	for _, row := range [][2]string{
+		{"root", topo.Root},
+		{"language", topo.Language},
+		{"languages", string(languagesJSON)},
+	} {
+		if _, err := tx.Exec(
+			"INSERT INTO info (key, value) VALUES (?, ?) "+
+				"ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+			row[0], row[1]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// maxStoredErrors bounds the scan-error sample kept in `info`. See writeScanErrors.
 const maxStoredErrors = 100
 
 // latestSchemaVersion is the user_version applyMigrations brings a database up to. Bump it
 // in the same commit as a new migration step.
-const latestSchemaVersion = 3
+const latestSchemaVersion = 4
 
-// IDSchemeVersion is the resource-ID grammar this binary produces. Bump it in the same
-// commit as any change to how a scanner builds IDs, so existing databases are detected as
-// stale and remapped instead of silently half-matching.
+// WHY THERE IS NO ID-SCHEME STAMP.
 //
-//	1 — Python/JS/TS module paths rooted at filepath.Base(projectRoot) with "/" separators;
-//	    Rust rooted at the directory basename when no Cargo.toml [package] exists.
-//	2 — Python/JS/TS module paths are repo-relative (the project-directory base name is
-//	    gone); Rust uses the literal "crate" when there is no Cargo [package]. Go and Java
-//	    are unchanged — they were already rooted in something the source states.
-const IDSchemeVersion = 2
+// Resource IDs are minted by the scanners, and their grammar has changed once (Python/JS/TS
+// module paths became repo-relative; Rust took the literal "crate" with no Cargo [package]).
+// A database written before such a change holds IDs the current binary would never generate,
+// so matching by string alone silently loses whatever is attached to them.
+//
+// There used to be an `id_scheme` row in `info` recording which grammar a database held, plus
+// ReadIDScheme/WriteIDScheme to read and write it. NOTHING EVER READ IT: no scan consulted it,
+// and the fix it was meant to trigger -- FullReScan's identity remap -- runs unconditionally
+// anyway, matching resources by path+kind+name+parent then by source hash, carrying
+// descriptions across and writing resource_alias rows so old IDs keep resolving.
+//
+// So it was a row written on every full scan and read by nobody, and it has been removed. What
+// it would have bought, had it been wired up, is an ESCALATION: `arac scan` defaults to an
+// incremental scan, which re-parses only changed files -- so on a scheme-drifted database it
+// re-mints the edited file under the new grammar, leaves every other file under the old one,
+// and drops the cross-file edges between them with no warning. The remap only ever runs on the
+// full path.
+//
+// IF THE ID GRAMMAR EVER CHANGES AGAIN, that is the thing to know: the release has to tell
+// people to run `arac scan --all` once, because an ordinary `arac scan` will not notice and
+// will half-migrate the graph. Re-introducing a stamp is the alternative, and is a bigger
+// change than it looks -- it has to survive the incremental write path as well as the full one.
 
-// infoIDSchemeKey is the `info` row holding the scheme a database was built under.
-const infoIDSchemeKey = "id_scheme"
-
-// ReadIDScheme reports the id-scheme a database was built under, and whether it was
-// stamped at all. An unstamped database with resources predates the stamp and is scheme 1;
-// an empty database reports the current scheme because the next scan will fill it.
-func ReadIDScheme(dbPath string) (scheme int, stamped bool, err error) {
-	err = withSQLiteRead(dbPath, func(db *sql.DB) error {
-		var val string
-		row := db.QueryRow("SELECT value FROM info WHERE key = ?", infoIDSchemeKey)
-		switch scanErr := row.Scan(&val); {
-		case scanErr == sql.ErrNoRows:
-			var n int
-			if e := db.QueryRow("SELECT COUNT(*) FROM resources").Scan(&n); e != nil {
-				return e
-			}
-			scheme, stamped = IDSchemeVersion, false
-			if n > 0 {
-				scheme = 1
-			}
-			return nil
-		case scanErr != nil:
-			return scanErr
-		}
-		stamped = true
-		v, convErr := strconv.Atoi(strings.TrimSpace(val))
-		if convErr != nil {
-			return fmt.Errorf("unreadable %s value %q: %w", infoIDSchemeKey, val, convErr)
-		}
-		scheme = v
-		return nil
-	})
-	return scheme, stamped, err
-}
-
-// WriteIDScheme stamps the database with an id-scheme version.
-func WriteIDScheme(dbPath string, scheme int) error {
-	return withSQLiteWrite(dbPath, func(db *sql.DB) error {
-		_, err := db.Exec(
-			"INSERT INTO info (key, value) VALUES (?, ?) "+
-				"ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-			infoIDSchemeKey, strconv.Itoa(scheme))
-		return err
-	})
-}
-
-// WriteResourceAliases records old-ID -> new-ID mappings from an id-scheme remap.
+// WriteResourceAliases records old-ID -> new-ID mappings from the identity remap.
 // Existing rows for the same old ID are replaced, and aliases that would point at
 // themselves are skipped.
 func WriteResourceAliases(dbPath string, aliases map[string]string) (int64, error) {
@@ -373,6 +402,7 @@ func WriteResourceAliases(dbPath string, aliases map[string]string) (int64, erro
 			return err
 		}
 		defer stmt.Close()
+		count = 0 // reset per attempt; see UpdateDescriptions
 		olds := make([]string, 0, len(aliases))
 		for old := range aliases {
 			olds = append(olds, old)
@@ -414,6 +444,7 @@ func RemapBugNodes(dbPath string, aliases map[string]string) (int64, error) {
 			return err
 		}
 		defer stmt.Close()
+		count = 0 // reset per attempt; see UpdateDescriptions
 		olds := make([]string, 0, len(aliases))
 		for old := range aliases {
 			olds = append(olds, old)
@@ -495,6 +526,53 @@ func ensureWarningBaselineColumn(db *sql.DB) error {
 	}
 	_, err = db.Exec("ALTER TABLE warnings ADD COLUMN baseline TEXT DEFAULT ''")
 	return err
+}
+
+// ensureResourceBodyHashColumns adds resources.exact_hash and resources.norm_hash to a
+// database created before descriptions could follow moved code. Additive and idempotent, like
+// the language and baseline columns before it.
+func ensureResourceBodyHashColumns(db *sql.DB) error {
+	// A migration may meet a database that has no `resources` table at all -- one written by
+	// an older build that only ever populated `warnings`, or a half-initialised file. ALTER
+	// TABLE on a missing table is an error, and an error here aborts the whole migration and
+	// leaves user_version behind, so the next run repeats it forever. createSchema creates the
+	// table with both columns already on it, so there is nothing to do.
+	has, err := tableExists(db, "resources")
+	if err != nil || !has {
+		return err
+	}
+	for _, col := range []string{"exact_hash", "norm_hash"} {
+		has, err := columnExists(db, "resources", col)
+		if err != nil {
+			return err
+		}
+		if has {
+			continue
+		}
+		if _, err := db.Exec("ALTER TABLE resources ADD COLUMN " + col + " TEXT DEFAULT ''"); err != nil {
+			return err
+		}
+	}
+	has, err = columnExists(db, "resources", "norm_lines")
+	if err != nil || has {
+		return err
+	}
+	_, err = db.Exec("ALTER TABLE resources ADD COLUMN norm_lines INT NOT NULL DEFAULT 0")
+	return err
+}
+
+// tableExists reports whether the named table is present.
+func tableExists(db *sql.DB, table string) (bool, error) {
+	var name string
+	err := db.QueryRow(
+		"SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", table).Scan(&name)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // columnExists reports whether table already has the named column.
@@ -628,17 +706,21 @@ func ReadDb(path string) (*domain.Topology, error) {
 		if err != nil {
 			return err
 		}
+		// exact_hash / norm_hash need no such probe: applyMigrations adds them at v4 and runs
+		// before any read, so unlike `language` they are always there by the time we get here.
 		// COALESCE the nullable text columns: `description` and `properties_json` are
 		// declared without NOT NULL, and scanning a NULL into a Go string fails with
 		// "converting NULL to string is unsupported" — which would make a database
 		// written by anything other than our own writers unreadable rather than merely
 		// incomplete.
 		resourceQuery := "SELECT id, kind, name, COALESCE(description, ''), " +
-			"COALESCE(properties_json, ''), starts_at, ends_at, COALESCE(loc_path, '') FROM resources"
+			"COALESCE(properties_json, ''), starts_at, ends_at, COALESCE(loc_path, ''), " +
+			"COALESCE(exact_hash, ''), COALESCE(norm_hash, ''), COALESCE(norm_lines, 0) FROM resources"
 		if hasResourceLanguage {
 			resourceQuery = "SELECT id, kind, name, COALESCE(language, ''), " +
 				"COALESCE(description, ''), COALESCE(properties_json, ''), " +
-				"starts_at, ends_at, COALESCE(loc_path, '') FROM resources"
+				"starts_at, ends_at, COALESCE(loc_path, ''), " +
+				"COALESCE(exact_hash, ''), COALESCE(norm_hash, ''), COALESCE(norm_lines, 0) FROM resources"
 		}
 		resRows, err := db.Query(resourceQuery)
 		if err != nil {
@@ -646,11 +728,13 @@ func ReadDb(path string) (*domain.Topology, error) {
 		}
 		for resRows.Next() {
 			var id, kind, name, language, desc, propsJSON, locPath string
+			var exactHash, normHash string
+			var normLines int
 			var startsAt, endsAt int
 			if hasResourceLanguage {
-				err = resRows.Scan(&id, &kind, &name, &language, &desc, &propsJSON, &startsAt, &endsAt, &locPath)
+				err = resRows.Scan(&id, &kind, &name, &language, &desc, &propsJSON, &startsAt, &endsAt, &locPath, &exactHash, &normHash, &normLines)
 			} else {
-				err = resRows.Scan(&id, &kind, &name, &desc, &propsJSON, &startsAt, &endsAt, &locPath)
+				err = resRows.Scan(&id, &kind, &name, &desc, &propsJSON, &startsAt, &endsAt, &locPath, &exactHash, &normHash, &normLines)
 			}
 			if err != nil {
 				resRows.Close()
@@ -672,6 +756,9 @@ func ReadDb(path string) (*domain.Topology, error) {
 				},
 				Properties:  fromJSONMap(propsJSON),
 				Connections: make(map[string][]string),
+				ExactHash:   exactHash,
+				NormHash:    normHash,
+				NormLines:   normLines,
 			}
 			read.Resources[id] = res
 		}
@@ -811,6 +898,11 @@ func UpdateDescriptions(dbPath string, descriptions map[string]string) (int64, e
 			return err
 		}
 		defer stmt.Close()
+		// Reset per attempt: withSQLiteRetry may call this callback again after a
+		// SQLITE_BUSY, and the failed attempt's transaction rolls back while a counter
+		// declared outside the closure does not -- so a contended write reported more
+		// rows changed than it changed. Same rule as GetCallers and ReadBugs.
+		count = 0
 		ids := make([]string, 0, len(descriptions))
 		for id := range descriptions {
 			ids = append(ids, id)
@@ -858,26 +950,44 @@ func ClearDescriptions(dbPath string, targets []domain.ResourceKind) (int64, err
 }
 
 // Queries the database for all source IDs that call a target resource via a specified connection type.
+//
+// EVERY DATABASE ENTRANCE GOES THROUGH withSQLiteRead / withSQLiteWrite. This one, ReadBugs and
+// UpdateBugState used to call sql.Open directly and so had none of what those wrappers provide:
+// no per-database mutex, no schema migration, no retry on SQLITE_BUSY, and -- because the DSN
+// they carried was written in another driver's parameter names, see openSQLite -- no busy
+// timeout either, so they failed on the first collision instead of waiting for it to clear.
+//
+// The bug pipeline is the workload that makes that reachable: bug-judge and bug-solver fan out
+// as parallel sub-agents calling bug list / acknowledge / dismiss, while the guard's pre-tool
+// scan writes the graph in front of every one of their tool calls.
 func GetCallers(dbPath string, targetID string, connType string) ([]string, error) {
-	db, err := sql.Open("sqlite", dbPath+"?cache=shared&_journal_mode=WAL")
-	if err != nil {
-		return nil, err
-	}
-	defer db.Close()
-
-	rows, err := db.Query("SELECT source_id FROM connections WHERE conn_type = ? AND target_id = ?", connType, targetID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
 	var results []string
-	for rows.Next() {
-		var sourceID string
-		if err := rows.Scan(&sourceID); err != nil {
-			continue
+	err := withSQLiteRead(dbPath, func(db *sql.DB) error {
+		rows, err := db.Query(
+			"SELECT source_id FROM connections WHERE conn_type = ? AND target_id = ?",
+			connType, targetID)
+		if err != nil {
+			return err
 		}
-		results = append(results, sourceID)
+		defer rows.Close()
+
+		// Reset per attempt: withSQLiteRetry may call this callback again after a
+		// SQLITE_BUSY, and appending to the previous attempt's slice would return the
+		// partial first read concatenated with the complete second one.
+		results = nil
+		for rows.Next() {
+			var sourceID string
+			// A scan error is returned, not skipped. `continue` turned a truncated read
+			// into a short list reported as a successful one.
+			if err := rows.Scan(&sourceID); err != nil {
+				return err
+			}
+			results = append(results, sourceID)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
 	}
 	return results, nil
 }
@@ -896,13 +1006,12 @@ func CreateBug(dbPath string, bug domain.KnownBug) error {
 }
 
 // Queries the SQLite database for known bugs, optionally filtered by node ID or bug state.
+//
+// Locked and migrated like every other read; see GetCallers for what calling sql.Open here
+// used to cost. This one also skipped ensureSQLiteMigrated, which made it the single reader
+// that could fail with "no such table: bugs" on a database every other path would have brought
+// up to schema first.
 func ReadBugs(dbPath string, nodeID string, state domain.BugState) ([]domain.KnownBug, error) {
-	db, err := sql.Open("sqlite", dbPath+"?cache=shared&_journal_mode=WAL")
-	if err != nil {
-		return nil, err
-	}
-	defer db.Close()
-
 	q := "SELECT id, node_id, description, state FROM bugs WHERE 1=1"
 	var args []interface{}
 	if nodeID != "" {
@@ -915,42 +1024,54 @@ func ReadBugs(dbPath string, nodeID string, state domain.BugState) ([]domain.Kno
 	}
 	q += " ORDER BY id"
 
-	rows, err := db.Query(q, args...)
+	var bugs []domain.KnownBug
+	err := withSQLiteRead(dbPath, func(db *sql.DB) error {
+		rows, err := db.Query(q, args...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		// Reset per attempt, for the same reason as GetCallers: a retried callback must
+		// not append to what the attempt before it had already collected.
+		bugs = nil
+		for rows.Next() {
+			var b domain.KnownBug
+			var stateStr string
+			if err := rows.Scan(&b.ID, &b.NodeID, &b.Description, &stateStr); err != nil {
+				return err
+			}
+			b.State = domain.BugState(stateStr)
+			bugs = append(bugs, b)
+		}
+		return rows.Err()
+	})
 	if err != nil {
 		return nil, err
-	}
-	defer rows.Close()
-
-	var bugs []domain.KnownBug
-	for rows.Next() {
-		var b domain.KnownBug
-		var stateStr string
-		if err := rows.Scan(&b.ID, &b.NodeID, &b.Description, &stateStr); err != nil {
-			continue
-		}
-		b.State = domain.BugState(stateStr)
-		bugs = append(bugs, b)
 	}
 	return bugs, nil
 }
 
 // Updates a bug's state in the SQLite database by ID.
+//
+// The write that most needed the lock, and the one that had it least: two bug-judge sub-agents
+// acknowledging different bugs in the same fan-out collided on the first attempt and one of
+// them lost its update, reported as SQLITE_BUSY. See GetCallers.
 func UpdateBugState(dbPath string, bugID string, state domain.BugState) error {
-	db, err := sql.Open("sqlite", dbPath+"?cache=shared&_journal_mode=WAL")
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
-	result, err := db.Exec("UPDATE bugs SET state = ? WHERE id = ?", string(state), bugID)
-	if err != nil {
-		return err
-	}
-	rows, _ := result.RowsAffected()
-	if rows == 0 {
-		return fmt.Errorf("bug not found: %s", bugID)
-	}
-	return nil
+	return withSQLiteWrite(dbPath, func(db *sql.DB) error {
+		result, err := db.Exec("UPDATE bugs SET state = ? WHERE id = ?", string(state), bugID)
+		if err != nil {
+			return err
+		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if rows == 0 {
+			return fmt.Errorf("bug not found: %s", bugID)
+		}
+		return nil
+	})
 }
 
 // Deletes a single bug record from the SQLite database by ID.
@@ -1018,7 +1139,7 @@ func CleanupOrphanedBugs(dbPath string, topo *domain.Topology) error {
 	for _, bug := range bugs {
 		if _, ok := topo.Resources[bug.NodeID]; !ok {
 			if err := DeleteBug(dbPath, bug.ID); err != nil {
-				fmt.Printf("Warning: failed to delete orphaned bug %s: %v\n", bug.ID, err)
+				fmt.Fprintf(os.Stderr, "Warning: failed to delete orphaned bug %s: %v\n", bug.ID, err)
 			}
 		}
 	}
@@ -1078,7 +1199,7 @@ func CleanupOrphanedBugsScoped(dbPath string) error {
 	for _, bug := range bugs {
 		if !existing[bug.NodeID] {
 			if derr := DeleteBug(dbPath, bug.ID); derr != nil {
-				fmt.Printf("Warning: failed to delete orphaned bug %s: %v\n", bug.ID, derr)
+				fmt.Fprintf(os.Stderr, "Warning: failed to delete orphaned bug %s: %v\n", bug.ID, derr)
 			}
 		}
 	}
@@ -1143,6 +1264,7 @@ func ClearOversizedDescriptions(dbPath string, targets []domain.ResourceKind) (i
 			return err
 		}
 		defer stmt.Close()
+		n = 0 // reset per attempt; see UpdateDescriptions
 		for _, r := range over {
 			res, err := stmt.Exec(r.id)
 			if err != nil {

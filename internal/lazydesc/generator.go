@@ -130,11 +130,19 @@ const (
 // the APIs want. `llm.<harness>.agents.descriptions-generation-executor.model` is written as a
 // Claude Code sub-agent alias ("haiku", "sonnet"), and those strings have to mean something
 // here too, or the one place a project states its description model would be unusable.
+//
+// EVERY VALUE HERE MUST BE A MODEL ID THAT EXISTS, and two were not: `fable` resolved to
+// "fable-5" (the ids are claude-fable-5 / claude-fable-5-1) and the wizard's own default for
+// the Anthropic branch was "claude-haiku-5" (there is no such model). A bad id does not fail
+// loudly -- generator() drops the error by design, because a fill runs inside a read whose
+// output answers a different question -- so the symptom is descriptions that simply never
+// appear. This table is a snapshot of someone else's release schedule and no test can tell
+// when it goes stale; re-check it when a model generation ships.
 var modelAliases = map[string]struct{ provider, model string }{
 	"haiku":  {providerAnthropic, "claude-haiku-4-5"},
-	"sonnet": {providerAnthropic, "claude-sonnet-4-6"},
-	"opus":   {providerAnthropic, "claude-opus-4-8"},
-	"fable":  {providerAnthropic, "fable-5"},
+	"sonnet": {providerAnthropic, "claude-sonnet-5"},
+	"opus":   {providerAnthropic, "claude-opus-5"},
+	"fable":  {providerAnthropic, "claude-fable-5-1"},
 	"mini":   {providerOpenAI, "gpt-5.4-mini"},
 	"flash":  {providerDeepSeek, "deepseek-v4-flash"},
 }

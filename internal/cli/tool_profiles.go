@@ -55,9 +55,11 @@ var mcpToolConstructors = map[string]func(toolDeps) tools.Tool{
 		return universaltools.NewRead(d.manager, d.cfg, d.nativeReadAvailable, d.scannerReg).
 			WithFiller(d.lazy)
 	},
-	"grep":                     func(d toolDeps) tools.Tool { return tools.NewGrep(d.manager).WithFiller(d.lazy) },
-	"edit":                     func(d toolDeps) tools.Tool { return tools.NewEdit(d.manager, d.scannerReg) },
-	"write":                    func(d toolDeps) tools.Tool { return tools.NewWrite(d.manager, d.scannerReg) },
+	// There is deliberately no grep, edit or write here. All three are retired as MCP tools
+	// (toolspec.retiredMCPTools): a search is intercepted wherever the model types it, and a
+	// mutation goes through the native edit -- which the `arac update-file` hook re-syncs the
+	// topology after -- or through `arac edit` / `arac write`. Keeping unreachable
+	// constructors around let the catalog advertise tools no mode could ever register.
 	"warnings_list":            func(d toolDeps) tools.Tool { return tools.NewWarningsList(d.manager) },
 	"bug_report":               func(d toolDeps) tools.Tool { return tools.NewBugReport(d.manager) },
 	"bug_list":                 func(d toolDeps) tools.Tool { return tools.NewBugList(d.manager) },
@@ -137,10 +139,11 @@ func ValidAgentProfile(cfg *helper.Config, name string) bool {
 func effectiveMCPToolSet(cfg *helper.Config, harness, agentName string) map[string]bool {
 	var names []string
 	if agentName == "all" {
-		// The synthetic profile is the whole universe, so it needs the mode filter applied
-		// explicitly -- it never passes through EffectiveAgent, and OpenCode's single server
-		// runs on exactly this profile.
-		names = cfg.ServableMCPTools(allMCPToolNames())
+		// The synthetic profile is the whole universe, so its filter is applied here -- it
+		// never passes through EffectiveAgent. It is a SUB-AGENT server: OpenCode runs its
+		// generated agents off exactly this profile, and so does the chat MCP server, so it
+		// exists in every mode and takes the sub-agent filter rather than the main agent's.
+		names = cfg.SubAgentMCPTools(allMCPToolNames())
 	} else {
 		names = cfg.EffectiveAgent(harness, agentName).MCPTools
 	}

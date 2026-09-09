@@ -51,7 +51,7 @@ func RunEdit() {
 	// InitRegistry now runs before the write rather than after it. It builds the
 	// topology when none exists; UpdateFile re-reads the edited file straight
 	// afterwards, so the pre-edit snapshot it sees does not survive.
-	manager, reg := InitRegistry(".aracne/topology.db")
+	manager, reg := InitRegistry(ProjectDBPath(DefaultDBRelative))
 	out, err := tools.NewEdit(manager, reg).Run(data)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

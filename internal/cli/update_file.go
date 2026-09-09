@@ -6,6 +6,8 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"github.com/Rhuan-Marques/aracne/internal/topology"
 )
 
 // Re-scans a file and updates the topology, optionally reporting warnings from structural changes.
@@ -19,7 +21,7 @@ func RunUpdateFile(args []string) {
 		os.Exit(1)
 	}
 	path := args[0]
-	dbPath := ".aracne/topology.db"
+	dbPath := ProjectDBPath(DefaultDBRelative)
 	for i := 1; i < len(args); i++ {
 		if args[i] == "--db" && i+1 < len(args) {
 			dbPath = args[i+1]
@@ -32,15 +34,27 @@ func RunUpdateFile(args []string) {
 		fmt.Fprintf(os.Stderr, "Error updating file: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Warning number %d", len(warnings))
-	if len(warnings) > 0 {
-		for _, w := range warnings {
-			fmt.Printf("Warning: [%s] %s (source: %s, target: %s)\n", w.Kind, w.Message, w.SourceID, w.TargetID)
-		}
+	fmt.Printf("Warning number %d\n", len(warnings))
+	if msg := formatDriftWarnings(warnings); msg != "" {
+		fmt.Println(msg)
 	}
 }
 
 // Processes Claude file-edit hooks to update topology and report warnings for modified files.
+//
+// THE DATABASE IS RESOLVED THE WAY THE GUARD RESOLVES IT, and that is not cosmetic. This used
+// to take ProjectDBPath, an upward walk from the process working directory -- which is the one
+// thing a hook cannot depend on, and the reason guardDBPath exists (see its comment for the
+// benchmark run lost to it). Run from anywhere outside the tree, InitRegistry did not bail: it
+// CREATED a `.aracne/` there, printed "No topology found. Scanning project...", and exited 1 --
+// leaving the real topology unsynced and a junk directory behind. A hook with no topology has
+// nothing to do.
+//
+// WARNINGS GO THROUGH THE SHARED LEDGER, not through UpdateFile's return value. Both PostToolUse
+// hooks can now see the same native edit -- this one when the edit-update-db-plugin is installed,
+// the guard's drift check always -- and unreportedWarnings is what makes that safe: whichever
+// runs first reports, the other finds nothing new. Reporting UpdateFile's own list here would
+// have printed the same warnings twice for anyone who opted into the plugin.
 func runClaudeUpdateFileHook(input io.Reader, output io.Writer) {
 	inputJSON, err := io.ReadAll(input)
 	if err != nil || strings.TrimSpace(string(inputJSON)) == "" {
@@ -49,6 +63,9 @@ func runClaudeUpdateFileHook(input io.Reader, output io.Writer) {
 
 	var event struct {
 		ToolInput map[string]interface{} `json:"tool_input"`
+		// Cwd is the SESSION directory Claude Code reports on every hook event, and the
+		// first tier guardDBPath consults.
+		Cwd string `json:"cwd"`
 	}
 	if err := json.Unmarshal(inputJSON, &event); err != nil || event.ToolInput == nil {
 		return
@@ -59,20 +76,39 @@ func runClaudeUpdateFileHook(input io.Reader, output io.Writer) {
 		return
 	}
 
-	manager, reg := InitRegistry(".aracne/topology.db")
+	dbPath := guardDBPath(event.Cwd)
+	if _, err := os.Stat(dbPath); err != nil {
+		return
+	}
+	manager := topology.New()
+	if err := manager.Load(dbPath); err != nil {
+		return
+	}
+	reg := NewScannerRegistry()
+
+	var parts []string
 	for _, path := range paths {
-		warnings, err := manager.UpdateFile(path, reg)
-		if err != nil {
-			fmt.Fprintf(output, "Aracne update-file failed for %s:\n%v\n", path, err)
-			continue
-		}
-		if len(warnings) > 0 {
-			fmt.Fprintf(output, "Aracne warnings for %s:\nWarning number %d", path, len(warnings))
-			for _, w := range warnings {
-				fmt.Fprintf(output, "Warning: [%s] %s (source: %s, target: %s)\n", w.Kind, w.Message, w.SourceID, w.TargetID)
-			}
+		if _, err := manager.UpdateFile(path, reg); err != nil {
+			parts = append(parts, fmt.Sprintf("Aracne update-file failed for %s:\n%v", path, err))
 		}
 	}
+	// Rendered the way the guard renders the same list, so a warning reads identically
+	// whichever path produced the change.
+	if msg := formatDriftWarnings(unreportedWarnings(dbPath)); msg != "" {
+		parts = append(parts, msg)
+	}
+	if len(parts) == 0 {
+		return
+	}
+	// THROUGH THE SAME CHANNEL THE GUARD USES, and that is the whole fix.
+	//
+	// This wrote plain text to stdout. A PostToolUse hook that exits 0 has its stdout treated
+	// as transcript material, not as context -- so the topology warnings raised by a NATIVE
+	// Edit/Write, the one path this hook exists to cover and the one where the model has no
+	// other signal, were formatted, written and dropped. The guard's drift check for shell
+	// writes emits hookSpecificOutput.additionalContext and does reach the model, which is
+	// exactly why the gap was invisible from either side.
+	emitPostToolWarning(output, strings.Join(parts, "\n\n"))
 }
 
 // Extracts and deduplicates file paths from tool input, checking file_path/filePath/path fields and nested edits

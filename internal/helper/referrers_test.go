@@ -379,3 +379,74 @@ func TestResolveReferrerWarnings_ToleratesMissingReferrer(t *testing.T) {
 		t.Fatal("the warning should still be cleared when the referrer is gone")
 	}
 }
+
+// TestRemoveFileResources_KeepsSymbolsThatMovedToAnotherFile is the rename case.
+//
+// IncrementalScan registers added and modified files BEFORE it removes deleted ones, so a
+// symbol whose file was renamed has already been re-registered against the new path by the time
+// the removal runs. Deleting by id alone took it back out: in Go a resource id is
+// `module/package.Symbol` and carries no filename, so `mv pkg/a.go pkg/b.go` collided on every
+// id in the file. The graph kept the new FILE node and lost every declaration in it, and no
+// later incremental scan restored them because the manifest already called b.go current.
+func TestRemoveFileResources_KeepsSymbolsThatMovedToAnotherFile(t *testing.T) {
+	topo := topoWith(
+		// The renamed-away file, still owning both symbols in the pre-update graph.
+		res("pkg/a.go", "file", "", map[string][]string{"has_function": {"pkg.Moved", "pkg.Gone"}}),
+		// Already re-registered against the new file by phase 1/2 of the scan.
+		res("pkg.Moved", "function", "pkg/b.go", nil),
+		// Genuinely deleted along with a.go: nothing re-homed it.
+		res("pkg.Gone", "function", "pkg/a.go", nil),
+		res("pkg/b.go", "file", "", map[string][]string{"has_function": {"pkg.Moved"}}),
+		res("pkg", "package", "", map[string][]string{
+			"has_file":     {"pkg/a.go", "pkg/b.go"},
+			"has_function": {"pkg.Moved", "pkg.Gone"},
+		}),
+	)
+
+	warnings := RemoveFileResources(topo, "pkg/a.go")
+
+	if _, ok := topo.Resources["pkg.Moved"]; !ok {
+		t.Error("a symbol re-registered against another file must survive the removal")
+	}
+	if _, ok := topo.Resources["pkg.Gone"]; ok {
+		t.Error("a symbol that still lives in the removed file must be deleted")
+	}
+	if _, ok := topo.Resources["pkg/a.go"]; ok {
+		t.Error("the removed file node itself must always go")
+	}
+
+	// The ownership edges the new file and the package hold on the survivor are what make it
+	// reachable at all; the strip pass reads the same set, so it has to spare them too.
+	if got := topo.Resources["pkg/b.go"].Connections["has_function"]; len(got) != 1 || got[0] != "pkg.Moved" {
+		t.Errorf("the new file lost its member: has_function = %v", got)
+	}
+	if got := topo.Resources["pkg"].Connections["has_function"]; len(got) != 1 || got[0] != "pkg.Moved" {
+		t.Errorf("the package lost the moved function: has_function = %v", got)
+	}
+	// The stale edge to the file that really is gone is still pruned.
+	if got := topo.Resources["pkg"].Connections["has_file"]; len(got) != 1 || got[0] != "pkg/b.go" {
+		t.Errorf("the package kept a dangling has_file: %v", got)
+	}
+
+	// And the model is not told to go and verify a declaration that never moved.
+	for _, w := range warnings {
+		if w.TargetID == "pkg.Moved" {
+			t.Errorf("warned about a symbol that is still in the graph: %+v", w)
+		}
+	}
+}
+
+// A file node carries an empty Location.Path -- its identity IS its path -- so the ownership
+// test must never be applied to it, or a whole-file removal would remove nothing.
+func TestRemoveFileResources_FileNodeIsNeverSparedByTheOwnershipTest(t *testing.T) {
+	topo := topoWith(
+		res("pkg/a.go", "file", "", map[string][]string{"has_function": {"pkg.Only"}}),
+		res("pkg.Only", "function", "pkg/a.go", nil),
+	)
+
+	RemoveFileResources(topo, "pkg/a.go")
+
+	if len(topo.Resources) != 0 {
+		t.Errorf("whole-file removal left %d resource(s): %v", len(topo.Resources), topo.Resources)
+	}
+}

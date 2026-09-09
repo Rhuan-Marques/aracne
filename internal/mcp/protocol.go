@@ -3,19 +3,28 @@ package mcp
 import "encoding/json"
 
 // Represents an incoming MCP JSON-RPC request with method name, optional ID, and optional parameters.
+//
+// The ID IS RAW JSON and is echoed back verbatim, which is the only handling JSON-RPC 2.0
+// actually requires of a server. It used to be a *int: a client sending the equally legal
+// `"id": "1"` failed to unmarshal, so the WHOLE request came back as a parse error with a null
+// id the client could not correlate. Claude Code happens to send integers, which is why that
+// never surfaced -- and is exactly why it would have surfaced on the next host.
 type Request struct {
 	JSONRPC string          `json:"jsonrpc"`
-	ID      *int            `json:"id,omitempty"`
+	ID      json.RawMessage `json:"id,omitempty"`
 	Method  string          `json:"method"`
 	Params  json.RawMessage `json:"params,omitempty"`
 }
 
 // Represents a JSON-RPC 2.0 response with fields for protocol version (JSONRPC), request ID, result payload, and error details. Used for MCP protocol communication.
+//
+// ID has no omitempty: the spec asks for `"id": null` on an error raised before the id could
+// be read, and omitting the member entirely is not the same message.
 type Response struct {
-	JSONRPC string      `json:"jsonrpc"`
-	ID      *int        `json:"id,omitempty"`
-	Result  interface{} `json:"result,omitempty"`
-	Error   *RPCError   `json:"error,omitempty"`
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id"`
+	Result  interface{}     `json:"result,omitempty"`
+	Error   *RPCError       `json:"error,omitempty"`
 }
 
 // JSON-RPC error object with numeric code and message string for MCP error responses.

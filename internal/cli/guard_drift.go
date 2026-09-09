@@ -112,9 +112,29 @@ func preToolScan(dbPath string, cfg *helper.Config) {
 func driftCheck(dbPath string) string {
 	// The scan still runs: it is what makes the topology describe the file the command just
 	// wrote. Its RETURN value is deliberately ignored.
-	runGuardScan(dbPath, func(mgr *topology.TopologyManager, reg *scanner.Registry) ([]domain.TopologyWarning, error) {
-		return mgr.IncrementalScan(".", reg)
-	})
+	//
+	// ROOTED AT THE PROJECT, NOT AT THE PROCESS'S WORKING DIRECTORY. This passed a literal
+	// "." while RunPreToolScan, doing the same job on the way in, reads the stored topo.Root.
+	// The guard is a hook process, and guardDBPath exists precisely because its cwd is not
+	// dependable -- it resolves the database from the hook event's cwd, from
+	// $CLAUDE_PROJECT_DIR, or by walking upward. So "." was routinely a subdirectory, where
+	// applyPathVisibility builds the ignore matcher against the wrong base, DetectAll sees
+	// only the languages below that directory, and a directory with none at all makes
+	// IncrementalScan return "no language scanner detected" -- which runGuardScan swallows,
+	// leaving the backstop silently doing nothing the moment the model ran `cd`.
+	// SKIPPED WHEN NOTHING ON DISK MOVED. The PreToolUse scan for this same call already
+	// re-indexed whatever had drifted, and mayHaveWrittenSource is true for every command the
+	// classifier does not recognize -- `ls`, `go build`, `npm test`, `git status`, `make`,
+	// which is most of what an agent types. Those paid for a second full manifest walk to
+	// discover the tree was unchanged. IndexHealth is the same primitive `arac check-updates`
+	// uses and answers that in one pass. The REPORT below still runs either way: it reads the
+	// table, not this scan, which is the whole point of the ledger (see guard_warnstate.go).
+	root := ProjectRootFor(dbPath)
+	if indexHasDrifted(dbPath, root) {
+		runGuardScan(dbPath, func(mgr *topology.TopologyManager, reg *scanner.Registry) ([]domain.TopologyWarning, error) {
+			return mgr.IncrementalScan(root, reg)
+		})
+	}
 	// Report by what is new in the TABLE rather than by what this scan produced. An
 	// IncrementalScan only emits warnings for files IT finds drifted, so anything that
 	// re-indexed the change first -- `arac scanner run`, the pre-tool scan, an `arac scan` in
@@ -129,6 +149,36 @@ func driftCheck(dbPath string) string {
 	return formatDriftWarnings(fresh)
 }
 
+// indexHasDrifted reports whether any file on disk differs from what the manifest recorded.
+//
+// Fails toward SCANNING: an unreadable database, an unusable root or any error at all returns
+// true, so the only thing this can cost is the scan that used to run unconditionally. Bounded
+// and panic-proof for the same reason as everything else on this path.
+func indexHasDrifted(dbPath, root string) bool {
+	type result struct{ drifted bool }
+	done := make(chan result, 1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				done <- result{true}
+			}
+		}()
+		mgr := topology.New()
+		if err := mgr.Load(dbPath); err != nil {
+			done <- result{true}
+			return
+		}
+		health, err := mgr.IndexHealth(root)
+		done <- result{err != nil || health.Stale()}
+	}()
+	select {
+	case r := <-done:
+		return r.drifted
+	case <-time.After(guardScanTimeout):
+		return true
+	}
+}
+
 // formatDriftWarnings renders the re-scan's warnings the same way edit/write already render
 // theirs, so a warning reads identically whichever path produced the change.
 func formatDriftWarnings(warnings []domain.TopologyWarning) string {
@@ -136,7 +186,15 @@ func formatDriftWarnings(warnings []domain.TopologyWarning) string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("Topology re-synced after a shell command wrote to the project.\n")
+	// DELIBERATELY SAYS NOTHING ABOUT THE CAUSE. This used to open "Topology re-synced after a
+	// shell command wrote to the project", which is a claim the renderer is in no position to
+	// make: the warnings come from unreportedWarnings, which reports what is NEW IN THE TABLE
+	// however it got there -- a native edit, the pre-tool scan, `arac scanner run`, an
+	// `arac scan` in another terminal. Measured on a real fixture, the line arrived attached to
+	// an `ls` that had written nothing, sending the model looking for a shell write that never
+	// happened. What the model can act on is the warning; the sentence above it only has to
+	// not be false.
+	b.WriteString("Topology re-synced.\n")
 	b.WriteString("Topology warnings (functions that may need manual review):\n")
 	for _, w := range warnings {
 		fmt.Fprintf(&b, "  - [%s] %s (source: %s, target: %s)\n", w.Kind, w.Message, w.SourceID, w.TargetID)

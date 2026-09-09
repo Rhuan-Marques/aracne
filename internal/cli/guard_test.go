@@ -117,7 +117,12 @@ func TestDecideGuard(t *testing.T) {
 		{"bash cat blocked via read", "Bash", bash("cat f"), set("read"), true, true, "blocked_tools: read"},
 		{"whole bash blocked", "Bash", bash("npm test"), set("bash"), true, true, "blocked_tools: bash"},
 		{"bash unblocked", "Bash", bash("npm test"), set(), true, false, ""},
-		{"multiedit ignored", "MultiEdit", nil, set("edit", "read", "grep", "write", "bash"), true, false, ""},
+		// MultiEdit is an edit, and blocking `edit` has to reach it. It used to be absent
+		// from both the guard's matcher and toolspec's native map, so a project that blocked
+		// edits still had its MultiEdit calls waved through.
+		{"multiedit denied as edit", "MultiEdit", nil, set("edit"), true, true, "blocked_tools: edit"},
+		{"multiedit allowed when edit is not blocked", "MultiEdit", nil, set("read"), true, false, ""},
+		{"notebookedit denied as edit", "NotebookEdit", nil, set("edit"), true, true, "blocked_tools: edit"},
 		{"glob ignored", "Glob", nil, set("read"), true, false, ""},
 		{"piped tail exempt", "Bash", bash("cmd | tail"), set("read"), true, false, ""},
 		{"piped tail strict", "Bash", bash("cmd | tail"), set("read"), false, true, "blocked_tools: read"},
@@ -286,6 +291,25 @@ func TestRunClaudeGuardHook_FailsOpenOnBadInput(t *testing.T) {
 		runClaudeGuardHook(strings.NewReader(in), &out)
 		if out.Len() != 0 {
 			t.Fatalf("input %q should produce no output, got: %q", in, out.String())
+		}
+	}
+}
+
+// TestGuardHookMatcherCoversNativeTools pins the guard's hook matcher to toolspec's native
+// tool map. A name in one and not the other is silent: a call the hook never sees, or a call
+// it sees and cannot classify. They were typed separately once, and MultiEdit fell through
+// the gap.
+func TestGuardHookMatcherCoversNativeTools(t *testing.T) {
+	got := strings.Split(guardHookMatcher, "|")
+	if len(got) != len(toolspec.NativeToolNames()) {
+		t.Fatalf("guardHookMatcher = %q, want one alternative per toolspec.NativeToolNames()", guardHookMatcher)
+	}
+	for _, name := range toolspec.NativeToolNames() {
+		if !strings.Contains(guardHookMatcher, name) {
+			t.Fatalf("guardHookMatcher = %q, missing native tool %q", guardHookMatcher, name)
+		}
+		if _, ok := toolspec.NativeToolKey(name); !ok {
+			t.Fatalf("toolspec.NativeToolNames() returned %q, which NativeToolKey does not know", name)
 		}
 	}
 }

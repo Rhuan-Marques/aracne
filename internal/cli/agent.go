@@ -17,13 +17,14 @@ import (
 // harnesses that do ship, and it is the one surface needing a provider key of its own -- but
 // it stays dispatchable so turning the flag on is the only step required.
 func RunAgent(args []string) {
-	if !helper.LoadConfig(helper.ConfigPath(".aracne/topology.db")).AgentEnabled() {
+	dbPath := ProjectDBPath(DefaultDBRelative)
+	if !helper.LoadConfig(helper.ConfigPath(dbPath)).AgentEnabled() {
 		fmt.Fprintln(os.Stderr, "arac agent is not enabled for this project.")
 		fmt.Fprintln(os.Stderr, `Set {"features": {"agent": true}} in .aracne/config.json to turn it on.`)
 		os.Exit(1)
 	}
 
-	manager, reg := InitRegistry(".aracne/topology.db")
+	manager, reg := InitRegistry(dbPath)
 
 	apiKey := os.Getenv("DEEPSEEK_API_KEY")
 	if apiKey == "" {
@@ -32,7 +33,7 @@ func RunAgent(args []string) {
 	}
 
 	provider := providers.NewDeepSeek()
-	cfg := helper.EnsureConfig(helper.ConfigPath(".aracne/topology.db"))
+	cfg := helper.EnsureConfig(helper.ConfigPath(dbPath))
 	toolReg := BuildToolRegistry(manager, reg, cfg, "claude_code", "main")
 
 	a := agent.New(provider, toolReg, cfg, TopologyLanguagesFor(manager))

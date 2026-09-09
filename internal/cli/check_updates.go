@@ -20,7 +20,7 @@ import (
 // The diff itself is TopologyManager.IndexHealth, the same primitive the read tool blames a
 // miss on and the watch loop acts on, so the three cannot drift apart.
 func RunCheckUpdates(args []string) {
-	dbPath := ".aracne/topology.db"
+	dbPath := ProjectDBPath(DefaultDBRelative)
 	root := ""
 	asJSON := false
 	for i := 0; i < len(args); i++ {

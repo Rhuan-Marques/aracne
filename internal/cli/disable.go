@@ -1,11 +1,14 @@
 package cli
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/Rhuan-Marques/aracne/internal/helper"
 )
 
 // Disables Claude Code and/or OpenCode integrations either globally or per-project.
@@ -61,19 +64,62 @@ func disableOpenCode(global bool, autoYes bool) {
 		}
 	}
 
-	permission := map[string]interface{}{
-		"read":  "allow",
-		"edit":  "allow",
-		"bash":  "allow",
-		"write": "allow",
-		"grep":  "allow",
+	// Only the keys aracne wrote, and only back to their un-gated value.
+	//
+	// This used to assign a fresh five-key allow-everything map over `config["permission"]`,
+	// which deleted every key the user had set: a `"webfetch": "deny"` vanished and a
+	// structured `"bash": {"*": "allow", "rm *": "deny"}` collapsed to a blanket "allow".
+	// Disabling a code-navigation tool must not re-enable things the operator turned off.
+	// `write` and `grep` are not written at all -- setup deletes `write` and never writes
+	// `grep`, so disable was inventing keys as well as destroying them.
+	if permissionMap, ok := config["permission"].(map[string]interface{}); ok {
+		for _, key := range []string{"read", "edit", "bash"} {
+			// Only a value aracne could have written is un-gated, and only when it is
+			// actually gating something. A scalar "deny" is aracne's; anything else --
+			// a structured policy the operator wrote, an "ask" -- is theirs and stays.
+			// Writing "allow" over it would be the same destruction in a smaller box.
+			if permissionMap[key] == "deny" {
+				permissionMap[key] = "allow"
+				changed = true
+			}
+		}
+		if bash, isMap := permissionMap["bash"].(map[string]interface{}); isMap {
+			// The glob-map form: drop aracne's own deny patterns and leave every other
+			// rule where it is. A map holding nothing but "*": "allow" afterwards was
+			// entirely aracne's, so it collapses back to the scalar.
+			for _, pattern := range append(append([]string{}, openCodeReadDenyPatterns...),
+				openCodeGrepDenyPatterns...) {
+				if bash[pattern] == "deny" {
+					delete(bash, pattern)
+					changed = true
+				}
+			}
+			if len(bash) == 1 && bash["*"] == "allow" {
+				permissionMap["bash"] = "allow"
+			}
+		}
+		for key := range permissionMap {
+			if key == "aracne_*" || strings.HasPrefix(key, "aracne_") {
+				delete(permissionMap, key)
+				changed = true
+			}
+		}
+		if len(permissionMap) == 0 {
+			delete(config, "permission")
+		} else {
+			config["permission"] = permissionMap
+		}
 	}
-	config["permission"] = permission
-	changed = true
 
 	if changed {
-		writeJSONConfig(configPath, config)
-		fmt.Printf("[OpenCode] Config updated at %s\n", configPath)
+		if !confirmDisable(configPath, "OpenCode", autoYes) {
+			fmt.Printf("[OpenCode] Skipping %s\n", configPath)
+		} else if removeIfOnlyAracneWrote(configPath, config, opencodeAracneOnlyKeys) {
+			fmt.Printf("[OpenCode] Removed %s (nothing left but the keys aracne added)\n", configPath)
+		} else {
+			writeJSONConfig(configPath, config)
+			fmt.Printf("[OpenCode] Config updated at %s\n", configPath)
+		}
 	}
 
 	removeFiles(filepath.Join(configDir, "commands"), []string{
@@ -129,8 +175,12 @@ func disableClaudeCode(global bool, autoYes bool) {
 	}
 
 	if changed {
-		writeJSONConfig(mcpConfigPath, config)
-		fmt.Printf("[Claude Code] Config updated at %s\n", mcpConfigPath)
+		if !confirmDisable(mcpConfigPath, "Claude Code", autoYes) {
+			fmt.Printf("[Claude Code] Skipping %s\n", mcpConfigPath)
+		} else {
+			writeJSONConfig(mcpConfigPath, config)
+			fmt.Printf("[Claude Code] Config updated at %s\n", mcpConfigPath)
+		}
 	}
 
 	removeFiles(commandsDir, []string{
@@ -159,10 +209,107 @@ func disableClaudeCode(global bool, autoYes bool) {
 
 	settingsPath := filepath.Join(filepath.Dir(commandsDir), "settings.json")
 	removeAracneHookFromSettings(settingsPath)
+	// The hooks are not the only thing setup wrote into settings.json. Leaving the
+	// `mcp__aracne__*` allow rules behind is the visible residue of an uninstall that
+	// claims to be complete, and upsertAracneAllowRules already knows how to strip them.
+	removeAracnePermissionsFromSettings(settingsPath)
+	// And a settings.json that now holds `{}` is residue too: aracne created that file, and
+	// nothing of anyone else's is in it. A file with any user content left is untouched.
+	if removeIfOnlyAracneWrote(settingsPath, readJSONConfig(settingsPath), nil) {
+		fmt.Printf("[Claude Code] Removed %s (nothing left but what aracne added)\n", settingsPath)
+	}
 
 	removeAracneIntegrationSection(claudeMdPath, "Claude Code CLAUDE.md")
 
 	fmt.Println("[Claude Code] Aracne integration disabled. Restart Claude Code to apply changes.")
+}
+
+// opencodeAracneOnlyKeys is the permission block `arac setup` writes into a project that had
+// none: the three native gates, un-gated back to "allow" by the time disable gets here.
+var opencodeAracneOnlyKeys = map[string]interface{}{
+	"read": "allow", "edit": "allow", "bash": "allow",
+}
+
+// removeIfOnlyAracneWrote deletes a harness config file that aracne created and that now holds
+// nothing but the keys aracne itself put there, reporting whether it did.
+//
+// "Only un-gate, never destroy" is the right rule for a file that existed BEFORE setup ran --
+// disabling a code-navigation tool must not re-enable things the operator turned off. It is not
+// the right rule for a file setup created from nothing: `arac disable` left behind a
+// `.claude/settings.json` containing `{}` and an `.opencode/opencode.json` containing three
+// permission keys nobody had asked for, as the visible residue of an uninstall that claims to
+// be complete.
+//
+// Deliberately conservative: one unrecognized key, one different value, anything at all that is
+// not aracne's own leaves the file exactly where it is.
+func removeIfOnlyAracneWrote(path string, config map[string]interface{}, aracneOnly map[string]interface{}) bool {
+	switch len(config) {
+	case 0:
+		// Nothing left at all -- e.g. a settings.json whose only content was aracne's hooks.
+	case 1:
+		perms, ok := config["permission"].(map[string]interface{})
+		if !ok || len(perms) != len(aracneOnly) {
+			return false
+		}
+		for k, want := range aracneOnly {
+			if perms[k] != want {
+				return false
+			}
+		}
+	default:
+		return false
+	}
+	if err := os.Remove(path); err != nil {
+		return false
+	}
+	return true
+}
+
+// removeAracnePermissionsFromSettings drops the `mcp__aracne__*` pre-approvals setup wrote,
+// leaving every user-defined rule where it is.
+func removeAracnePermissionsFromSettings(settingsPath string) {
+	config := readJSONConfig(settingsPath)
+	permissions, ok := config["permissions"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	allow, _ := permissions["allow"].([]interface{})
+	kept := upsertAracneAllowRules(allow, nil)
+	if len(kept) == len(allow) {
+		return
+	}
+	if len(kept) == 0 {
+		delete(permissions, "allow")
+	} else {
+		permissions["allow"] = kept
+	}
+	if len(permissions) == 0 {
+		delete(config, "permissions")
+	} else {
+		config["permissions"] = permissions
+	}
+	writeJSONConfig(settingsPath, config)
+	fmt.Printf("[Claude Code] Removed aracne MCP tool permissions from settings\n")
+}
+
+// confirmDisable asks before rewriting a harness config file, and reports whether to proceed.
+//
+// It exists so `-y` means something: both disable paths took the flag and ignored it, so the
+// command rewrote configs unprompted while advertising a switch that suppressed a prompt it
+// did not have. The question is only asked where someone can answer it -- an unattended run
+// (a CI step, a Makefile, a script) proceeds exactly as it did before, so nothing that worked
+// yesterday now hangs waiting on stdin.
+func confirmDisable(path, label string, autoYes bool) bool {
+	if autoYes || !stdinIsTerminal() {
+		return true
+	}
+	fmt.Printf("[%s] Remove the aracne entries from %s? [y/N] ", label, path)
+	answer, _ := bufio.NewReader(promptReader).ReadString('\n')
+	switch strings.TrimSpace(strings.ToLower(answer)) {
+	case "y", "yes":
+		return true
+	}
+	return false
 }
 
 // Removes multiple files by name from a directory.
@@ -245,19 +392,50 @@ func removeAracneHookEntries(hooks map[string]interface{}, event string) bool {
 	return true
 }
 
-// isAracneHookEntry reports whether a hook entry was installed by aracne,
-// identified by an `arac` reference in any of its hook commands.
+// isAracneHookEntry reports whether a hook entry is one `arac setup` installed, identified by
+// the SCRIPT NAME it wrote rather than by a substring of it.
+//
+// The test used to be `strings.Contains(cmd, "arac")`, which matched any user hook whose
+// command happened to contain those four letters anywhere -- `characterize.sh`, `barracuda-lint`,
+// a path under `~/aracnid/` -- and `arac disable` then deleted it from a settings file aracne
+// does not own, with no backup and no diff. `arac disable`'s whole promise is that it removes
+// only what setup added.
+//
+// Two shapes are aracne's, and both have to keep being removed:
+//
+//   - the script hooks native_hooks.go writes today, `arac-guard.*` and `arac-update-file.*`,
+//     recognised through that file's own predicates so the writer and the remover cannot name
+//     different things;
+//   - a bare `arac <subcommand>` command, which earlier versions installed directly. `arac
+//     disable` has to clean up after an older binary for the same reason setup still matches
+//     AracIntegrationLegacyStart.
+//
+// The second is matched on the COMMAND WORD -- the first token, base-named, `.exe` stripped --
+// not on a substring, which is what keeps `characterize.sh`, `barracuda-lint` and
+// `~/aracnid/run.sh` out of it.
 func isAracneHookEntry(entry interface{}) bool {
+	if isGuardHookEntry(entry) || isEditSyncHookEntry(entry) {
+		return true
+	}
+	return hookEntryCommandWordIs(entry, "arac")
+}
+
+// hookEntryCommandWordIs reports whether any of a hook entry's commands INVOKES the named
+// binary, as opposed to merely mentioning it somewhere in its text.
+func hookEntryCommandWordIs(entry interface{}, binary string) bool {
 	entryMap, ok := entry.(map[string]interface{})
 	if !ok {
 		return false
 	}
 	hooksList, _ := entryMap["hooks"].([]interface{})
 	for _, h := range hooksList {
-		if hMap, ok := h.(map[string]interface{}); ok {
-			if cmd, _ := hMap["command"].(string); strings.Contains(cmd, "arac") {
-				return true
-			}
+		hMap, ok := h.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		cmd, _ := hMap["command"].(string)
+		if baseName(strings.ToLower(hookCommandWord(cmd))) == binary {
+			return true
 		}
 	}
 	return false
@@ -281,7 +459,7 @@ func removeAracneIntegrationSection(path, label string) {
 		fmt.Printf("%s already clean at %s\n", label, path)
 		return
 	}
-	if err := os.WriteFile(path, []byte(updated), 0644); err != nil {
+	if err := helper.AtomicWriteFile(path, []byte(updated), 0644); err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing %s: %v\n", path, err)
 		return
 	}
@@ -292,23 +470,12 @@ func removeAracneIntegrationSection(path, label string) {
 func stripAracneIntegrationSegment(content string) string {
 	lineEnding := markdownLineEnding(content)
 
-	start := findAracIntegrationStart(content)
-	if start < 0 {
+	// The SAME bounds `arac setup` replaces, including its fallback for a block whose closing
+	// line the reader edited away. Asking a different question here is what made
+	// `arac disable` report "already clean" and leave the whole contract behind.
+	start, endAfter, ok := aracIntegrationBounds(content)
+	if !ok {
 		return content
-	}
-
-	end, endMarker := findAracIntegrationEnd(content, start)
-	if end < 0 {
-		return content
-	}
-
-	endAfter := end + len(endMarker)
-	if endAfter < len(content) {
-		if strings.HasPrefix(content[endAfter:], "\r\n") {
-			endAfter += 2
-		} else if strings.HasPrefix(content[endAfter:], "\n") {
-			endAfter++
-		}
 	}
 
 	for endAfter < len(content) {

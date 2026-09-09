@@ -2,19 +2,28 @@
 
 # Aracne
 
-This repository supports Aracne: every function, type, interface and variable is indexed, with a description and unique id you can use to read it.
+`.aracne/topology.db` holds a pre-analyzed graph of this repo: every function, type, interface and variable, where it is declared, a one-line description, and what it references.
 
-`arac read <id> <id> ...` returns declarations with their source, their imports and additional context, several in one call. Very useful for exploring and navigating. Prefer it over reading whole files or line ranges.
+## How it reaches you
 
-```
-arac read internal/cli.RunGuard app.Flask.register_blueprint
-```
+Aracne's capabilities arrive as MCP tools; each tool's own description says how to call it. **Prefer a symbol over a file:** reading a declaration returns its source, its imports, and a `# CONTEXT:` list of the neighbours it touches with their descriptions -- usually the answer, for a fraction of a file's tokens.
 
-Edits keep the graph current automatically; act on any topology warning that comes back.
+`grep` is answered from the topology however you run it, and additionally searches node names and stored descriptions -- so a plain-English query finds code that never says the word.
 
-Let descriptions guide you: only read files and resources you need to understand fully -- most times the descriptions are enough.
+## Other
 
-Parallelise multiple reads and edits in a single command when possible.
+- Your edits keep the graph current automatically; act on any topology warning that comes back.
+
+## Behavioral Rules
+
+1. **Be concise** -- report what you found and what you changed, not how you did it.
+2. **Trust the topology** -- it is the source of truth and re-syncs after every edit. Never parse
+   code by hand, and never ask for a re-scan.
+3. **Do not guess** -- report an empty result or an error as what it is; never invent code or
+   relationships.
+4. **Do not re-read** -- if it is already in your context, use it.
+
+Good Luck in your task.
 
 Aracne is a static-analysis engine that builds a **topology** of a codebase and serves
 code navigation from it. The binary is `arac`.

@@ -10,9 +10,18 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/Rhuan-Marques/aracne/internal/llm"
 )
+
+// anthropicHTTP is the client every request goes through.
+//
+// http.DefaultClient has no timeout at all, and Chat passes context.Background() -- so a
+// stalled connection stalled the caller forever, with nothing to cancel it. The budget is
+// generous because a long completion with a thinking budget legitimately takes minutes; it is
+// a backstop against a dead socket, not a latency target.
+var anthropicHTTP = &http.Client{Timeout: 10 * time.Minute}
 
 // Anthropic LLM provider with API key, model, base URL, and thinking budget configuration.
 type Anthropic struct {
@@ -55,6 +64,8 @@ type anthropicMessage struct {
 type anthropicContentBlock struct {
 	Type      string `json:"type"`
 	Text      string `json:"text,omitempty"`
+	Thinking  string `json:"thinking,omitempty"`
+	Signature string `json:"signature,omitempty"`
 	ID        string `json:"id,omitempty"`
 	Name      string `json:"name,omitempty"`
 	Input     any    `json:"input,omitempty"`
@@ -145,7 +156,7 @@ func (a *Anthropic) StreamChatContext(ctx context.Context, messages []llm.Messag
 	req.Header.Set("x-api-key", a.apiKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := anthropicHTTP.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("do request: %w", err)
 	}
@@ -161,6 +172,10 @@ func (a *Anthropic) StreamChatContext(ctx context.Context, messages []llm.Messag
 
 	result := &llm.ChatResponse{}
 	toolCalls := map[int]*llm.ToolCall{}
+	// Thinking blocks are accumulated per content-block index, exactly as tool calls are:
+	// their text arrives as thinking_delta and their signature as signature_delta, and both
+	// have to be carried back on the next request or the API rejects the conversation.
+	thinking := map[int]*llm.ThinkingBlock{}
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
@@ -179,6 +194,9 @@ func (a *Anthropic) StreamChatContext(ctx context.Context, messages []llm.Messag
 		}
 		switch event.Type {
 		case "content_block_start":
+			if event.ContentBlock.Type == "thinking" || event.ContentBlock.Type == "redacted_thinking" {
+				thinking[event.Index] = &llm.ThinkingBlock{}
+			}
 			if event.ContentBlock.Type == "tool_use" {
 				call := &llm.ToolCall{ID: event.ContentBlock.ID, Type: "function"}
 				call.Function.Name = event.ContentBlock.Name
@@ -201,9 +219,16 @@ func (a *Anthropic) StreamChatContext(ctx context.Context, messages []llm.Messag
 			case "thinking_delta":
 				if event.Delta.Thinking != "" {
 					result.Reasoning += event.Delta.Thinking
+					if block := thinking[event.Index]; block != nil {
+						block.Thinking += event.Delta.Thinking
+					}
 					if emit != nil {
 						emit(llm.StreamEvent{Reasoning: event.Delta.Thinking})
 					}
+				}
+			case "signature_delta":
+				if block := thinking[event.Index]; block != nil {
+					block.Signature += event.Delta.Signature
 				}
 			case "input_json_delta":
 				if call := toolCalls[event.Index]; call != nil {
@@ -214,6 +239,15 @@ func (a *Anthropic) StreamChatContext(ctx context.Context, messages []llm.Messag
 			if call := toolCalls[event.Index]; call != nil {
 				result.ToolCalls = append(result.ToolCalls, *call)
 				delete(toolCalls, event.Index)
+			}
+			// A block with no signature cannot be re-sent, so it is not kept: an
+			// unsignable block in the history is a rejected request, where its absence is
+			// merely a shorter one.
+			if block := thinking[event.Index]; block != nil {
+				if block.Signature != "" {
+					result.Thinking = append(result.Thinking, *block)
+				}
+				delete(thinking, event.Index)
 			}
 		}
 	}
@@ -238,6 +272,7 @@ type anthropicStreamEvent struct {
 		Type        string `json:"type"`
 		Text        string `json:"text"`
 		Thinking    string `json:"thinking"`
+		Signature   string `json:"signature"`
 		PartialJSON string `json:"partial_json"`
 	} `json:"delta"`
 	Error struct {
@@ -266,7 +301,14 @@ func toAnthropicMessages(messages []llm.Message) (string, []anthropicMessage) {
 		if role != "assistant" {
 			role = "user"
 		}
-		blocks := make([]anthropicContentBlock, 0, len(msg.ToolCalls)+1)
+		blocks := make([]anthropicContentBlock, 0, len(msg.ToolCalls)+len(msg.Thinking)+1)
+		// Thinking blocks come FIRST, which is where the API puts them and where it expects
+		// them back. Sending an assistant turn without them, while extended thinking is on,
+		// is rejected -- which is what happened on the turn after every tool call.
+		for _, block := range msg.Thinking {
+			blocks = append(blocks, anthropicContentBlock{
+				Type: "thinking", Thinking: block.Thinking, Signature: block.Signature})
+		}
 		if msg.Content != "" {
 			blocks = append(blocks, anthropicContentBlock{Type: "text", Text: msg.Content})
 		}
@@ -278,7 +320,10 @@ func toAnthropicMessages(messages []llm.Message) (string, []anthropicMessage) {
 			blocks = append(blocks, anthropicContentBlock{Type: "tool_use", ID: tc.ID, Name: tc.Function.Name, Input: input})
 		}
 		if len(blocks) == 0 {
-			blocks = append(blocks, anthropicContentBlock{Type: "text", Text: ""})
+			// An empty text block is rejected ("text content blocks must be non-empty"), and
+			// a message with nothing in it says nothing -- so it is dropped rather than sent
+			// as a placeholder that fails the whole request.
+			continue
 		}
 		out = append(out, anthropicMessage{Role: role, Content: blocks})
 	}
