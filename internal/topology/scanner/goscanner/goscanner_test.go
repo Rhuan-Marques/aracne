@@ -1617,3 +1617,219 @@ func Report() string {
 		t.Errorf("extvar resolution must not emit uses_package, got %v", got)
 	}
 }
+
+// --- selectorCalleeID: a value bound from a METHOD call ---------------------------------
+//
+// `mgr, err := s.manager()` is the shape the resolver could not type. Its selector branch
+// resolved an imported PACKAGE only, so mgr stayed untyped and every mgr.Method() after it
+// resolved to nothing -- no calls edge, therefore no caller for getCallers, therefore no
+// signature_changed warning for anything reached that way. The two tests below pin the
+// binding; TestSignatureChangedFindsCallerThroughMethodReturnedValue pins the consequence.
+
+// methodReturnTopology builds a package with Server.manager() (*Manager, error) and
+// Manager.Profiles(), the minimum shape needed to bind a method's return value.
+func methodReturnTopology(t *testing.T, pkgPath golang.PackagePath) (*golang.GolangTopology, golang.StructID, golang.FunctionID, golang.FunctionID) {
+	t.Helper()
+	gt := buildTestTopology(t, string(pkgPath), string(pkgPath))
+
+	serverID := golang.StructID(string(pkgPath) + ".Server")
+	managerID := golang.StructID(string(pkgPath) + ".Manager")
+	factoryID := golang.FunctionID(string(pkgPath) + ".(Server).manager")
+	profilesID := golang.FunctionID(string(pkgPath) + ".(Manager).Profiles")
+
+	gt.Structs[serverID] = golang.GolangStruct{
+		ID:          "Server",
+		Name:        "Server",
+		Connections: map[golang.ConnectionKind][]string{golang.ConnHasMethod: {string(factoryID)}},
+	}
+	gt.Structs[serverID] = golang.GolangStruct{
+		ID:          serverID,
+		Name:        "Server",
+		Connections: map[golang.ConnectionKind][]string{golang.ConnHasMethod: {string(factoryID)}},
+	}
+	gt.Structs[managerID] = golang.GolangStruct{
+		ID:          managerID,
+		Name:        "Manager",
+		Connections: map[golang.ConnectionKind][]string{golang.ConnHasMethod: {string(profilesID)}},
+	}
+	gt.Functions[factoryID] = golang.GolangFunction{
+		ID:   factoryID,
+		Name: "manager",
+		Output: []golang.VariableDefinition{
+			{Typing: "*Manager", TypingID: string(managerID)},
+			{Typing: "error"},
+		},
+	}
+	gt.Functions[profilesID] = golang.GolangFunction{ID: profilesID, Name: "Profiles"}
+	return gt, serverID, factoryID, profilesID
+}
+
+// `mgr, err := s.manager()` then `mgr.Profiles()`: the multi-value form, and the one the
+// defect was found on.
+func TestAnalyzeFunctionBody_multiValueReceiverMethodReturnBindsType(t *testing.T) {
+	pkgPath := golang.PackagePath("example.com/test")
+	body := parseGoExpr(t, `
+		mgr, err := s.manager()
+		_ = err
+		mgr.Profiles()
+	`).(*ast.BlockStmt)
+
+	pr := &ParseResult{PkgPath: pkgPath, ModulePath: string(pkgPath), ImportMap: map[string]string{}}
+	gt, serverID, factoryID, profilesID := methodReturnTopology(t, pkgPath)
+
+	conns := analyzeFunctionBody(body, pr, gt, nil, "s", &serverID, golang.FunctionID(string(pkgPath)+".(Server).Handle"), nil)
+
+	calls := conns[golang.ConnCalls]
+	if !containsString(calls, string(factoryID)) {
+		t.Errorf("expected a calls edge to the factory %q, got %v", factoryID, calls)
+	}
+	if !containsString(calls, string(profilesID)) {
+		t.Errorf("expected a calls edge to %q -- the method reached through the returned value, got %v", profilesID, calls)
+	}
+}
+
+// `mgr := s.manager()` then `mgr.Profiles()`: the single-value form had the identical gap, in
+// resolveCallExprAssign rather than resolveMultiValueCallAssign.
+func TestAnalyzeFunctionBody_singleValueReceiverMethodReturnBindsType(t *testing.T) {
+	pkgPath := golang.PackagePath("example.com/test")
+	body := parseGoExpr(t, `
+		mgr := s.manager()
+		mgr.Profiles()
+	`).(*ast.BlockStmt)
+
+	pr := &ParseResult{PkgPath: pkgPath, ModulePath: string(pkgPath), ImportMap: map[string]string{}}
+	gt, serverID, _, profilesID := methodReturnTopology(t, pkgPath)
+
+	conns := analyzeFunctionBody(body, pr, gt, nil, "s", &serverID, golang.FunctionID(string(pkgPath)+".(Server).Handle"), nil)
+
+	if calls := conns[golang.ConnCalls]; !containsString(calls, string(profilesID)) {
+		t.Errorf("expected a calls edge to %q, got %v", profilesID, calls)
+	}
+}
+
+// A METHOD EXPRESSION base -- `x := Dog.Clone(d)` -- resolves against a struct TYPE in this
+// package, the last branch selectorCalleeID mirrors from resolveQualifiedCall.
+func TestAnalyzeFunctionBody_methodExpressionReturnBindsType(t *testing.T) {
+	pkgPath := golang.PackagePath("example.com/test")
+	body := parseGoExpr(t, `
+		x := Dog.Clone(d)
+		x.Speak()
+	`).(*ast.BlockStmt)
+
+	pr := &ParseResult{PkgPath: pkgPath, ModulePath: string(pkgPath), ImportMap: map[string]string{}}
+	gt := buildTestTopology(t, string(pkgPath), string(pkgPath))
+
+	dogID := golang.StructID(string(pkgPath) + ".Dog")
+	cloneID := golang.FunctionID(string(pkgPath) + ".(Dog).Clone")
+	speakID := golang.FunctionID(string(pkgPath) + ".(Dog).Speak")
+	gt.Structs[dogID] = golang.GolangStruct{
+		ID:   dogID,
+		Name: "Dog",
+		Connections: map[golang.ConnectionKind][]string{
+			golang.ConnHasMethod: {string(cloneID), string(speakID)},
+		},
+	}
+	gt.Functions[cloneID] = golang.GolangFunction{
+		ID:     cloneID,
+		Name:   "Clone",
+		Output: []golang.VariableDefinition{{Typing: "*Dog", TypingID: string(dogID)}},
+	}
+	gt.Functions[speakID] = golang.GolangFunction{ID: speakID, Name: "Speak"}
+
+	conns := analyzeFunctionBody(body, pr, gt, nil, "", nil, golang.FunctionID(string(pkgPath)+".caller"), nil)
+
+	if calls := conns[golang.ConnCalls]; !containsString(calls, string(speakID)) {
+		t.Errorf("expected a calls edge to %q, got %v", speakID, calls)
+	}
+}
+
+// AN INTERFACE-TYPED BASE MUST BIND NOTHING, and must not fall through to a struct that merely
+// shares the variable's name.
+//
+// This is the branch that would misfire silently. `Repo` here is an interface-typed parameter
+// AND the name of a struct in the same package; without the varIfaceMap check in
+// selectorCalleeID, `x := Repo.Get()` would resolve against the STRUCT's Get, bind x to the
+// wrong type, and emit a calls edge to a method the code never reaches. resolveQualifiedCall
+// refuses to fan an interface out to its implementers for cold/incremental agreement, and the
+// type map has to refuse for the same reason.
+func TestAnalyzeFunctionBody_interfaceBaseDoesNotBindSameNamedStruct(t *testing.T) {
+	pkgPath := golang.PackagePath("example.com/test")
+	body := parseGoExpr(t, `
+		x := Repo.Get()
+		x.Do()
+	`).(*ast.BlockStmt)
+
+	pr := &ParseResult{PkgPath: pkgPath, ModulePath: string(pkgPath), ImportMap: map[string]string{}}
+	gt := buildTestTopology(t, string(pkgPath), string(pkgPath))
+
+	ifaceID := golang.InterfaceID(string(pkgPath) + ".RepoIface")
+	structID := golang.StructID(string(pkgPath) + ".Repo")
+	thingID := golang.StructID(string(pkgPath) + ".Thing")
+	structGetID := golang.FunctionID(string(pkgPath) + ".(Repo).Get")
+	doID := golang.FunctionID(string(pkgPath) + ".(Thing).Do")
+
+	gt.Interfaces[ifaceID] = golang.GolangInterface{
+		ID:      ifaceID,
+		Name:    "RepoIface",
+		Methods: []golang.FunctionDefinition{{Name: "Get"}},
+	}
+	gt.Structs[structID] = golang.GolangStruct{
+		ID:          structID,
+		Name:        "Repo",
+		Connections: map[golang.ConnectionKind][]string{golang.ConnHasMethod: {string(structGetID)}},
+	}
+	gt.Structs[thingID] = golang.GolangStruct{
+		ID:          thingID,
+		Name:        "Thing",
+		Connections: map[golang.ConnectionKind][]string{golang.ConnHasMethod: {string(doID)}},
+	}
+	gt.Functions[structGetID] = golang.GolangFunction{
+		ID:     structGetID,
+		Name:   "Get",
+		Output: []golang.VariableDefinition{{Typing: "*Thing", TypingID: string(thingID)}},
+	}
+	gt.Functions[doID] = golang.GolangFunction{ID: doID, Name: "Do"}
+
+	// Repo is the INTERFACE-typed parameter; the struct of the same name is the trap.
+	funcInput := []golang.VariableDefinition{{Name: "Repo", Typing: "RepoIface", TypingID: string(ifaceID)}}
+
+	conns := analyzeFunctionBody(body, pr, gt, funcInput, "", nil, golang.FunctionID(string(pkgPath)+".caller"), nil)
+
+	if calls := conns[golang.ConnCalls]; containsString(calls, string(doID)) {
+		t.Errorf("an interface-typed base must not resolve through a same-named struct: got calls %v", calls)
+	}
+	if calls := conns[golang.ConnCalls]; containsString(calls, string(structGetID)) {
+		t.Errorf("an interface call must stay a uses_interface edge, not a call to the struct method: got %v", calls)
+	}
+	if uses := conns[golang.ConnUsesIface]; !containsString(uses, string(ifaceID)) {
+		t.Errorf("expected the interface usage to still be recorded, got %v", uses)
+	}
+}
+
+// A CHAINED call base -- `s.first().second()` -- is not a name the analyzer can type. It must
+// bind nothing rather than guess, and must not panic reaching for an Ident that is not there.
+func TestAnalyzeFunctionBody_chainedCallBaseBindsNothing(t *testing.T) {
+	pkgPath := golang.PackagePath("example.com/test")
+	body := parseGoExpr(t, `
+		x := s.manager().Profiles()
+		x.Do()
+	`).(*ast.BlockStmt)
+
+	pr := &ParseResult{PkgPath: pkgPath, ModulePath: string(pkgPath), ImportMap: map[string]string{}}
+	gt, serverID, _, _ := methodReturnTopology(t, pkgPath)
+
+	thingID := golang.StructID(string(pkgPath) + ".Thing")
+	doID := golang.FunctionID(string(pkgPath) + ".(Thing).Do")
+	gt.Structs[thingID] = golang.GolangStruct{
+		ID:          thingID,
+		Name:        "Thing",
+		Connections: map[golang.ConnectionKind][]string{golang.ConnHasMethod: {string(doID)}},
+	}
+	gt.Functions[doID] = golang.GolangFunction{ID: doID, Name: "Do"}
+
+	conns := analyzeFunctionBody(body, pr, gt, nil, "s", &serverID, golang.FunctionID(string(pkgPath)+".(Server).Handle"), nil)
+
+	if calls := conns[golang.ConnCalls]; containsString(calls, string(doID)) {
+		t.Errorf("a chained call base must bind nothing, got calls %v", calls)
+	}
+}

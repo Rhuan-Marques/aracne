@@ -1,44 +1,3 @@
-# The four modes against one control, on identical tool surfaces.
-#
-# WHY THIS CONFIG EXISTS. `mode` collapsed what used to be `integration.mode` (terminal/mcp/both)
-# × `identification_mode` (id/line_range) × five `terminal` booleans. That cross-product was never
-# measurable: the arms differed in several things at once, and some combinations were incoherent
-# (mcp + line_range printed `path:start-end` in every grep header while the only reader in the
-# project was an MCP `read` that takes ids and has no line-range argument). Four named products
-# are four things a paired run can actually compare.
-#
-# WHAT EACH ARM IS. The four aracne configs are byte-identical apart from `mode` (plus
-# `mcp_tools` on the one arm that has tools), so a difference between two of them is the mode and
-# nothing else:
-#
-#   mcp           one MCP `read`; shell reads run as themselves; shell grep intercepted
-#   cli           no tools; the contract points at `arac read <id>`; reads run as themselves
-#   intercept_id  cat/head/tail/sed -n answered from the topology, addressed by resource ID
-#   intercept_line_ranges  the same, addressed by `path:start-end`
-#
-# EQUAL SURFACES, AND WHY IT MATTERS. Every prior comparison was decided by the arms' tool lists
-# rather than by aracne: batched-20260901a's -45% was an aracne arm on `--tools Bash` (5,427
-# prefix tokens) against an imported control carrying all 27 built-ins (16,851), and
-# ab-prefer-ids-20260902a's -21% was the same error smaller -- the control kept Read/Edit/Write/
-# Grep (2,468 tok/turn) and called them ZERO times in 462 Bash calls. Corrected to an equal
-# surface that run was 0.961x: break-even.
-#
-# So every arm here gets exactly [Bash, Glob], including `mcp` -- whose MCP tools arrive through
-# its own server, not through this list -- and the control is RE-MEASURED rather than imported.
-# No `baseline_from`: a control measured under a different prefix is the precise mistake above.
-#
-# THE QUESTION EACH PAIR ANSWERS.
-#   cli          vs baseline       is a topology read worth reaching for at all, when nothing
-#                                  forces it? (the default mode, and the honest floor)
-#   intercept_id vs cli           does answering the command the model already typed beat
-#                                  offering a subcommand it has to choose?
-#   intercept_line_ranges vs intercept_id  the addressing question, isolated. Over
-#                                  ab-prefer-ids-20260902a the model used a resource ID as a
-#                                  command operand 0 times in 408 shell commands and addressed
-#                                  code as file+line in all 408 -- so this pair is the one the
-#                                  evidence already points at, and the one worth confirming.
-#   mcp          vs cli           does a tool schema buy anything a contract sentence does not?
-
 samples: 8
 oversample: 4
 max_per_repo: 1
@@ -62,8 +21,6 @@ ni_margin: 0.10
 isolate_operator_config: true
 deny_answer_key: true
 
-# `TodoWrite` does not exist in Claude Code 2.1.258 -- naming it is a silent no-op, which is why
-# earlier runs asked for three tools and were offered two.
 arm_builtin_tools:
   baseline:     [Bash, Glob]
   mcp:          [Bash, Glob]

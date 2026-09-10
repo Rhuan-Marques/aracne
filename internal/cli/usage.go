@@ -23,6 +23,13 @@ func PrintUsageTo(w io.Writer) {
 	cfg := helper.LoadConfig(helper.ConfigPath(ProjectDBPath(DefaultDBRelative)))
 	text := gateBugUsage(usageText, cfg.BugManagementEnabled())
 	text = gateAgentUsage(text, cfg.AgentEnabled())
+	// RENDERED FROM THE DEFAULT, not restated beside it. The banner claimed
+	// `function,method,struct,interface,file` while DefaultDescribeTargets has never included
+	// `file`, so anyone copying the documented default silently widened the sweep to every file
+	// node. docs/architecture.md calls this banner "the full list and the authority"; deriving
+	// the value is what makes that true of it.
+	text = strings.ReplaceAll(text, describeTargetsToken,
+		helper.FormatDescribeTargets(helper.DefaultDescribeTargets()))
 	fmt.Fprintln(w, gateVizUsage(text, vizBuilt))
 }
 
@@ -107,6 +114,9 @@ func gateBugUsage(text string, bugManagement bool) string {
 	return strings.Join(kept, "\n")
 }
 
+// describeTargetsToken is replaced with the real default at print time. See PrintUsageTo.
+const describeTargetsToken = "{{describe_targets}}"
+
 const usageText = `arac - Go/Python/JavaScript/TypeScript/Rust/Java project topology analyzer
 
 Usage:
@@ -169,12 +179,14 @@ Flags for "descriptions generate":
   (Who writes the descriptions is asked by "arac init" and read from .aracne/config.json
    here. An unconfigured project is told to run it, and given the keys to write by hand;
    the sweep itself asks nothing. --cli answers for one run without saving.)
-  --targets <kinds>       Comma-separated resource kinds overriding config descriptions.kinds (default: function,method,struct,interface,file)
+  --targets <kinds>       Comma-separated resource kinds overriding config descriptions.kinds (default: {{describe_targets}})
   --batch-size <n>        Maximum resources assigned to each description executor (default 5)
   --parallel <n>          Maximum description executors to run concurrently (default 4)
   --max-retries <n>       Maximum executor attempts per resource (default 3)
   --progress <mode>       Progress bar: auto (on a terminal when there is anything to
                           describe), always, or never (default auto)
+  --include-not-visible   Include resources read.context_filter would not render as a normal
+                          line (small functions / external vars set full or hidden)
   --regen_oversized       Rewrite existing descriptions that overrun their kind's character
                           budget (function/method 120, type 100, variable 80) instead of
                           describing undocumented resources

@@ -190,6 +190,31 @@ type Options struct {
 	// shell caller pipes stdout into `$(...)`, and prose there becomes a filename, a count
 	// or a match -- so for the intercepted shell, saying nothing is the only honest answer.
 	Terse bool
+	// Plain returns the rows a real grep would have printed and nothing else: textual matches
+	// only, in path and line order, with no resource header, no node row, no trailer and NO
+	// HEAD LIMIT.
+	//
+	// It is what an intercepted search must render when a PIPELINE reads it rather than a
+	// model. Everything Plain switches off is an addition addressed to a reader, and each one
+	// changes what a downstream stage computes:
+	//
+	//   - the cap turns 281 matches into 200 and says so on a line the next stage filters out
+	//     or `head` discards, so the pipeline silently loses a third of its answer;
+	//   - the `#` header and the node rows are lines the real command never emitted, so they
+	//     are counted by a counter and consume a capper's budget;
+	//   - the tiered ranking reorders the matches, so `| head -N` keeps a different N.
+	//
+	// The caller that sets it is `arac cmd --piped`, which the guard splices only for a segment
+	// whose every consumer keeps whole lines in order -- and that promise is only true of rows
+	// the real command would have printed. See cli.serveGrep.
+	//
+	// What it delivers is the same SET of rows, each byte-identical, in path and line order.
+	// Not the same sequence: `grep -r` walks in readdir order, which it does not define and
+	// which differs between filesystems, while this walk is lexical. A counter, a line filter
+	// and anything reading a row's fields therefore agree exactly; a `| head -N` gets N real
+	// matches in a deterministic order rather than the N the local filesystem happened to
+	// enumerate first.
+	Plain bool
 	// Ignore applies the project's scan.ignore rules. Build it with
 	// domain.BuildIgnoreMatcher(root, cfg.Scan.Ignore); nil disables the check.
 	Ignore *domain.IgnoreMatcher
@@ -349,6 +374,12 @@ func SearchWith(opt Options, topo *domain.Topology) (*Result, error) {
 		return all[i].Line < all[j].Line
 	})
 
+	if opt.Plain {
+		// A node row exists because a NAME or a stored DESCRIPTION matched, so the real command
+		// never printed it. Dropped here rather than at render time so Total, Counts and Files
+		// describe the same rows the caller receives.
+		all = dropNodeHits(all)
+	}
 	all, out.TitleWithheld, out.DescriptionWithheld = capNodeHits(all, out.Limit)
 
 	// Accounting sits AFTER the node-hit budget, so Files and Counts describe rows the
@@ -472,6 +503,19 @@ func matchesIDTail(re *regexp.Regexp, id string) bool {
 	return false
 }
 
+// dropNodeHits removes every row a node earned on its title or its description, leaving the
+// textual matches a plain grep would have found. See Options.Plain.
+func dropNodeHits(matches []Match) []Match {
+	kept := matches[:0]
+	for _, m := range matches {
+		if m.NodeHit {
+			continue
+		}
+		kept = append(kept, m)
+	}
+	return kept
+}
+
 // capNodeHits bounds the rows that exist only because a node's title or description
 // matched, per tier, and reports how many it dropped. See NodeHitBudget for why.
 func capNodeHits(matches []Match, limit int) ([]Match, int, int) {
@@ -508,6 +552,10 @@ func nodeHitBudget(limit int) int {
 
 func effectiveLimit(opt Options) int {
 	switch {
+	// A cap the reader can act on is a feature; a cap a PIPELINE cannot see is data loss it
+	// has no way to notice. See Options.Plain.
+	case opt.Plain:
+		return 0
 	case opt.Mode != OutputContent:
 		return 0 // file lists and counts are already one line per file
 	case opt.HeadLimit < 0:
@@ -556,8 +604,9 @@ func FormatResult(res *Result, opt Options) string {
 	}
 	// Annotate only when the result set is small enough to triage by reading the
 	// descriptions AND the headers stay a small fraction of the content they describe;
-	// otherwise degrade to plain grep, which is what a broad sweep wanted anyway.
-	annotate := res.DistinctResources > 0 && res.DistinctResources <= AnnotateLimit &&
+	// otherwise degrade to plain grep, which is what a broad sweep wanted anyway. Never under
+	// Plain, where every added line is a line the pipeline counts.
+	annotate := !opt.Plain && res.DistinctResources > 0 && res.DistinctResources <= AnnotateLimit &&
 		annotationFits(res.Matches)
 
 	// Context is read in FILE order or it is not read at all: a `-B2` window printed above a
@@ -565,7 +614,7 @@ func FormatResult(res *Result, opt Options) string {
 	// The tiered ranking has already done its job by this point -- it decided WHICH matches
 	// survived the head limit -- so re-ordering what is left costs the ranking nothing.
 	rows := res.Matches
-	if opt.Before > 0 || opt.After > 0 {
+	if opt.Before > 0 || opt.After > 0 || opt.Plain {
 		rows = append([]Match(nil), rows...)
 		sort.Slice(rows, func(i, j int) bool {
 			if rows[i].Path != rows[j].Path {
@@ -668,6 +717,11 @@ func FormatResult(res *Result, opt Options) string {
 		fmt.Fprintf(&b, "Binary file %s matches", path)
 	}
 
+	// The three trailers are prose for a reader. Under Plain there is no reader, and a
+	// sentence appended to a pipeline is one more line for it to count, filter or keep.
+	if opt.Plain {
+		return b.String()
+	}
 	if !annotate && res.DistinctResources > AnnotateLimit {
 		fmt.Fprintf(&b, "\n… %d distinct resources matched, so topology annotation is "+
 			"omitted. %s", res.DistinctResources, narrowAdvice(opt))
@@ -879,6 +933,25 @@ func walkOneRoot(root string, opt Options, exts map[string]bool, visit func(path
 	})
 }
 
+// echoRoot reports whether a result row should carry the `./` a real grep echoes.
+//
+// grep prints back the operand it walked, so `grep -rn x .` reports `./pkg/f.go` while
+// `grep -rn x pkg` reports `pkg/f.go`. filepath.Join swallows a leading `./` during the walk,
+// so it has to be put back -- and only on the surface that stands in for the real command.
+// `arac grep` and the MCP tool address rows by path and line unconditionally and are not
+// imitating anything, so their spelling is left alone.
+func echoRoot(opt Options) bool {
+	if !opt.Terse {
+		return false
+	}
+	for _, root := range searchRoots(opt) {
+		if root == "." || strings.HasPrefix(root, "./") {
+			return true
+		}
+	}
+	return false
+}
+
 // prunedDirs are the directories no search descends into: version-control metadata,
 // aracne's own store, and the dependency and build trees whose size is the reason nobody
 // greps them on purpose.
@@ -1042,7 +1115,7 @@ func looksBinary(f *os.File) bool {
 // table) silently erased every hit in that file -- a search that looked successful and
 // simply lied.
 func searchFile(path string, re *regexp.Regexp, index map[string][]resourceLocation, tiers map[string]MatchSource, opt Options) (fileResult, error) {
-	out := fileResult{display: displayPath(path)}
+	out := fileResult{display: displayPath(path, echoRoot(opt))}
 	f, err := os.Open(path)
 	if err != nil {
 		return out, nil
@@ -1311,9 +1384,13 @@ func canonicalPath(path string) string {
 	return path
 }
 
-func displayPath(path string) string {
+func displayPath(path string, dotPrefix bool) string {
+	out := filepath.ToSlash(path)
 	if rel, err := filepath.Rel(".", path); err == nil && !strings.HasPrefix(rel, "..") {
-		return filepath.ToSlash(rel)
+		out = filepath.ToSlash(rel)
 	}
-	return filepath.ToSlash(path)
+	if dotPrefix && !filepath.IsAbs(out) && !strings.HasPrefix(out, "./") {
+		out = "./" + out
+	}
+	return out
 }

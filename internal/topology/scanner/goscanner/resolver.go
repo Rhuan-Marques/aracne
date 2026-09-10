@@ -810,6 +810,50 @@ func (ba *bodyAnalyzer) resolveCompositeLitAssign(name string, lit *ast.Composit
 	}
 }
 
+// selectorCalleeID resolves the function that `x.Sel(...)` targets, for an assignment that
+// needs the callee's declared return type. It reports "" when the base is a shape this
+// analyzer cannot type. The CALL's own edges are not its business: resolveCallExpr walks the
+// same node separately and records those.
+//
+// IT MIRRORS resolveQualifiedCall, BRANCH FOR BRANCH -- imported package, then a struct-typed
+// variable (which includes the enclosing method's receiver, seeded into varTypeMap by
+// newBodyAnalyzer), then a struct TYPE name in this package for a method expression. That is
+// the whole point of extracting it: two different rules for what `x.Sel` means would let an
+// assignment bind a type that disagrees with the call edge recorded for the very same
+// expression. The order matters as much as the branches -- a local shadowing a package-level
+// type name must resolve as the local, exactly as it does there.
+//
+// AN INTERFACE-TYPED BASE RESOLVES TO NOTHING, deliberately. resolveQualifiedCall records only
+// a uses_interface edge for one and refuses to fan out to ImplementedBy, because those edges
+// are empty during a cold scan's body analysis and populated on the incremental path -- read
+// them and the two scans stop agreeing. An interface has no single callee whose return type
+// could be read, so picking an implementer here would smuggle that same divergence back in
+// through the type map. Falling through to the package-struct branch would be worse still: it
+// would resolve `s.Get()` against a STRUCT that merely shares the interface variable's name.
+//
+// Anything else -- a chained `a.B().C()`, an index expression, a call through a func-typed
+// field -- returns false and leaves the name untyped, which is what happened to every one of
+// these shapes before.
+func (ba *bodyAnalyzer) selectorCalleeID(sel *ast.SelectorExpr) (golang.FunctionID, bool) {
+	x, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return "", false
+	}
+	if impPath, ok := ba.pr.ImportMap[x.Name]; ok {
+		// A candidate id: the caller verifies it against gt.Functions, as every branch here
+		// is verified downstream.
+		return golang.FunctionID(impPath + "." + sel.Sel.Name), true
+	}
+	if structID, ok := ba.varTypeMap[x.Name]; ok {
+		return ba.structMethodID(structID, sel.Sel.Name)
+	}
+	if _, ok := ba.varIfaceMap[x.Name]; ok {
+		return "", false
+	}
+	// A method EXPRESSION on a type declared in this package: Dog.Sound(d).
+	return ba.structMethodID(golang.StructID(string(ba.pr.PkgPath)+"."+x.Name), sel.Sel.Name)
+}
+
 // Infers the type of a variable assigned from a function call by looking up the function's return type.
 func (ba *bodyAnalyzer) resolveCallExprAssign(name string, call *ast.CallExpr) {
 	fun := call.Fun
@@ -825,11 +869,11 @@ func (ba *bodyAnalyzer) resolveCallExprAssign(name string, call *ast.CallExpr) {
 		}
 		funcID = golang.FunctionID(string(ba.pr.PkgPath) + "." + fn.Name)
 	case *ast.SelectorExpr:
-		if x, ok := fn.X.(*ast.Ident); ok {
-			if impPath, ok := ba.pr.ImportMap[x.Name]; ok {
-				funcID = golang.FunctionID(impPath + "." + fn.Sel.Name)
-			}
+		id, ok := ba.selectorCalleeID(fn)
+		if !ok {
+			return
 		}
+		funcID = id
 	default:
 		return
 	}
@@ -851,6 +895,13 @@ func (ba *bodyAnalyzer) resolveCallExprAssign(name string, call *ast.CallExpr) {
 // resolveMultiValueCallAssign handles `a, b := f()` where one call feeds several
 // LHS names; it maps each name to the struct/interface type of the corresponding
 // return value so later method calls on those names resolve.
+//
+// `mgr, err := s.chatManager()` is the shape that made this matter. The selector branch used
+// to resolve an imported PACKAGE only, so a value returned by a METHOD -- the overwhelmingly
+// common `x, err := recv.Thing()` -- left x untyped, and every x.Method() after it resolved to
+// nothing. No calls edge meant no caller for getCallers to find, which meant a signature
+// change to Thing's callee raised no signature_changed warning at all: a function whose only
+// callers reach it this way was invisible to the whole warning path. See selectorCalleeID.
 func (ba *bodyAnalyzer) resolveMultiValueCallAssign(lhs []ast.Expr, call *ast.CallExpr) {
 	for _, l := range lhs {
 		if ident, ok := l.(*ast.Ident); ok && ident.Name != "_" {
@@ -868,11 +919,11 @@ func (ba *bodyAnalyzer) resolveMultiValueCallAssign(lhs []ast.Expr, call *ast.Ca
 	case *ast.Ident:
 		funcID = golang.FunctionID(string(ba.pr.PkgPath) + "." + fn.Name)
 	case *ast.SelectorExpr:
-		if x, ok := fn.X.(*ast.Ident); ok {
-			if impPath, ok := ba.pr.ImportMap[x.Name]; ok {
-				funcID = golang.FunctionID(impPath + "." + fn.Sel.Name)
-			}
+		id, ok := ba.selectorCalleeID(fn)
+		if !ok {
+			return
 		}
+		funcID = id
 	default:
 		return
 	}

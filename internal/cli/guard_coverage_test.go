@@ -1,6 +1,10 @@
 package cli
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 // The compact-blocked-20260830c benchmark run left behind a precise record of what the guard
 // did and did not catch: replaying all 215 Bash calls from its transcripts reproduced the
@@ -128,15 +132,30 @@ func TestDriftCheckFiresOnWritesAndOnTheUnrecognized(t *testing.T) {
 // with more than one plausible target falls back to the ordinary one-line pointer, which costs
 // the model exactly what it costs today.
 func TestProxyOnlyClaimsUnambiguousSingleFileReads(t *testing.T) {
+	// A real tree, because the operand is now resolved against the PROJECT ROOT rather than
+	// taken as typed -- the hook's own working directory is not the agent's, so an unresolved
+	// relative path is not a target. See soleReadTarget.
+	root := t.TempDir()
+	for _, rel := range []string{"src/main.go", "pkg/app/server.go", "a.go", "b.go"} {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("package main\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	abs := func(rel string) string { return filepath.Join(root, filepath.FromSlash(rel)) }
+
 	cases := []struct {
 		name string
 		cmd  string
 		want string
 	}{
-		{"plain cat", `cat src/main.go`, "src/main.go"},
-		{"sed window", `sed -n 1,20p src/main.go`, "src/main.go"},
-		{"head with flags", `head -40 pkg/app/server.go`, "pkg/app/server.go"},
-		{"quoted path", `cat "src/main.go"`, "src/main.go"},
+		{"plain cat", `cat src/main.go`, abs("src/main.go")},
+		{"sed window", `sed -n 1,20p src/main.go`, abs("src/main.go")},
+		{"head with flags", `head -40 pkg/app/server.go`, abs("pkg/app/server.go")},
+		{"quoted path", `cat "src/main.go"`, abs("src/main.go")},
 
 		{"two files is ambiguous", `cat a.go b.go`, ""},
 		{"a glob is ambiguous", `cat src/*.go`, ""},
@@ -145,12 +164,49 @@ func TestProxyOnlyClaimsUnambiguousSingleFileReads(t *testing.T) {
 		{"no operand at all", `cat`, ""},
 		{"a write is never proxied", `sed -i s/a/b/ src/main.go`, ""},
 		{"a grep is not a read", `grep -n needle src/main.go`, ""},
+		// The reason the resolution moved: the hook runs in the session directory while the
+		// agent's shell may be anywhere, so a name that is not a file under the root is not a
+		// file this process may answer about.
+		{"a path that is not in the project", `cat nowhere/absent.go`, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := soleReadTarget(tc.cmd).path; got != tc.want {
+			if got := soleReadTarget(tc.cmd, root).path; got != tc.want {
 				t.Errorf("soleReadTarget(%q) = %q, want %q", tc.cmd, got, tc.want)
 			}
 		})
+	}
+}
+
+// THE PROXY ANSWERS ABOUT THE FILE THE AGENT MEANT, OR ABOUT NOTHING.
+//
+// A hook runs in the session directory; the agent's Bash shell has a working directory of its
+// own that persists across calls and that the hook cannot see. Resolving the operand as typed
+// meant `cat util.go` from a subdirectory was answered with a DIFFERENT util.go at the
+// repository root -- real content, no path named in the message, nothing for the model to
+// notice. Resolution against the project root cannot invent that: either the name is a file
+// under the root, or there is no proxy.
+func TestProxyDoesNotAnswerWithASameNamedFileElsewhere(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "util.go"), []byte("package root\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(root, "pkg", "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "util.go"), []byte("package sub\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// The agent typed `cat util.go` with its shell in pkg/sub. Root-relative, that names the
+	// root file; the point is that it can never name anything else.
+	if got := soleReadTarget("cat util.go", root).path; got != filepath.Join(root, "util.go") {
+		t.Fatalf("soleReadTarget resolved to %q, want the root-relative file", got)
+	}
+	// And a root that cannot be determined at all proxies nothing rather than falling back to
+	// the process working directory.
+	if got := soleReadTarget("cat util.go", "").path; got != "" {
+		t.Errorf("soleReadTarget with no project root = %q, want no target", got)
 	}
 }

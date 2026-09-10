@@ -618,7 +618,7 @@ func (r *Read) healStale(se *topology.StaleIndexError, id string, match func(dom
 // and a benchmark measuring its fixtures. Computed only when something already failed, so the
 // tree walk never lands on the happy path.
 func (r *Read) indexHealthNote() string {
-	health, err := r.mgr.IndexHealth("")
+	health, err := r.mgr.IndexHealth("", r.reg)
 	if err != nil || !health.Stale() {
 		return ""
 	}

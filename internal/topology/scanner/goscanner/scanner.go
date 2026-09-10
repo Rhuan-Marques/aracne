@@ -474,11 +474,19 @@ func (s *GoScanner) applyFileUpdate(gt *golang.GolangTopology, pr *ParseResult, 
 			if fi.Function.ID == fid {
 				found = true
 				if !signaturesEqualFn(oldFunc, fi.Function) {
+					// EVERY caller, including one declared in the file this update re-parsed.
+					//
+					// The removal loop below skips those deliberately: a symbol that is GONE
+					// leaves a dangling reference the re-parse itself sees, and reports as
+					// use_missing_node against the same caller. Nothing of the sort happens to a
+					// signature change -- the callee still resolves, so the re-parse has nothing
+					// to complain about -- and skipping the caller here left the single most
+					// common breaking edit reporting nothing at all: widen a helper's parameter
+					// list and `go build` fails while `arac warnings list` says "No warnings
+					// found". settleSignatureWarnings retires the warning as soon as the call
+					// site fits again, so a caller fixed in the same edit costs nothing.
 					callers := passes.getCallers(gt, string(fid), string(golang.ConnCalls))
 					for _, callerID := range callers {
-						if _, isOld := oldFunctions[golang.FunctionID(callerID)]; isOld {
-							continue
-						}
 						warnID := callerID + "@" + string(domain.WarnSignatureChanged) + "@" + string(fid)
 						warning := domain.TopologyWarning{
 							ID:       warnID,

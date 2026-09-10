@@ -30,6 +30,30 @@ func RunScan(args []string) {
 	progressFlag := fs.String("progress", "auto", "Scan progress bar: auto (on a terminal above 15 files), always, or never")
 	fs.Parse(args)
 
+	explicitFlags := make(map[string]bool)
+	fs.Visit(func(f *flag.Flag) {
+		explicitFlags[f.Name] = true
+	})
+
+	// A BARE `arac scan` SCANS THE PROJECT IT IS RUN INSIDE, not the directory it is run from.
+	//
+	// This was the last verb resolving the default database literally, and ProjectDBPath's own
+	// comment describes what that costs: run from a subdirectory it built a SECOND, partial
+	// topology under `<subdir>/.aracne/` beside a fresh default config -- so the project's mode
+	// was silently replaced by `cli` for that subtree, `arac cmd`'s upward walk found the nested
+	// database first, and interception stopped. `arac init` refuses the same situation with a
+	// pointer; this created it without a word, and created the config even when the scan then
+	// failed.
+	//
+	// Only a BARE `arac scan` walks up. Naming either flag is the caller saying where, and
+	// `arac scan -root .` is exactly how someone deliberately sets a subdirectory up as its own
+	// project -- which is what `arac init`'s refusal tells them to type, so it has to keep
+	// meaning that rather than merging a subtree into the parent's graph.
+	if !explicitFlags["output"] && !explicitFlags["root"] {
+		*output = ProjectDBPath(*output)
+		*root = ProjectRootFor(*output)
+	}
+
 	manager := topology.New()
 	manager.Load(*output)
 	os.MkdirAll(filepath.Dir(*output), 0755)
@@ -44,11 +68,6 @@ func RunScan(args []string) {
 	// re-installs them, so this is idempotent.
 	domain.SetActivePathVisibility(domain.BuildPathVisibility(*root, cfg.Paths))
 	domain.SetActiveIgnore(domain.BuildIgnoreMatcher(*root, cfg.Scan.Ignore))
-
-	explicitFlags := make(map[string]bool)
-	fs.Visit(func(f *flag.Flag) {
-		explicitFlags[f.Name] = true
-	})
 
 	var beforeWarnings map[string]domain.TopologyWarning
 	if *debug {

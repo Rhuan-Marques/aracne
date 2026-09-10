@@ -1,0 +1,1572 @@
+<title>Aracne Harness Defect Register</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Serif:wght@500;600;700&display=swap">
+
+<style>
+:root{
+  --paper:#f3f6f7;
+  --surface:#ffffff;
+  --surface-2:#e9eef1;
+  --ink:#131a1e;
+  --ink-2:#3b464d;
+  --muted:#66737b;
+  --rule:#d7e0e5;
+  --rule-strong:#b4c1c9;
+  --accent:#22455f;
+  --accent-ink:#12293a;
+  --accent-soft:#e2ebf1;
+  --code-bg:#eef2f4;
+  --code-ink:#1d2a31;
+  --sev-crit:#9c2318;
+  --sev-crit-bg:#f6e4e2;
+  --sev-high:#a5620d;
+  --sev-high-bg:#f8ecd9;
+  --sev-med:#2c6774;
+  --sev-med-bg:#dceef1;
+  --sev-low:#63707a;
+  --sev-low-bg:#e6eaed;
+  --ok:#2c6a4a;
+  --shadow:0 1px 2px rgba(19,26,30,.06), 0 8px 24px -18px rgba(19,26,30,.35);
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#0e1418;
+    --surface:#151d22;
+    --surface-2:#1d272d;
+    --ink:#e4ecf0;
+    --ink-2:#b2c0c8;
+    --muted:#8695a0;
+    --rule:#26333a;
+    --rule-strong:#3a4a53;
+    --accent:#8fb6d2;
+    --accent-ink:#c6dcec;
+    --accent-soft:#1a2831;
+    --code-bg:#101a1f;
+    --code-ink:#cfdde4;
+    --sev-crit:#e88b7f;
+    --sev-crit-bg:#2e1a17;
+    --sev-high:#e0ac63;
+    --sev-high-bg:#2c2113;
+    --sev-med:#7ec3d1;
+    --sev-med-bg:#132a2f;
+    --sev-low:#94a2ac;
+    --sev-low-bg:#1c252a;
+    --ok:#79c39c;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -20px rgba(0,0,0,.9);
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#0e1418;
+  --surface:#151d22;
+  --surface-2:#1d272d;
+  --ink:#e4ecf0;
+  --ink-2:#b2c0c8;
+  --muted:#8695a0;
+  --rule:#26333a;
+  --rule-strong:#3a4a53;
+  --accent:#8fb6d2;
+  --accent-ink:#c6dcec;
+  --accent-soft:#1a2831;
+  --code-bg:#101a1f;
+  --code-ink:#cfdde4;
+  --sev-crit:#e88b7f;
+  --sev-crit-bg:#2e1a17;
+  --sev-high:#e0ac63;
+  --sev-high-bg:#2c2113;
+  --sev-med:#7ec3d1;
+  --sev-med-bg:#132a2f;
+  --sev-low:#94a2ac;
+  --sev-low-bg:#1c252a;
+  --ok:#79c39c;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -20px rgba(0,0,0,.9);
+  color-scheme:dark;
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0;
+  background:var(--paper);
+  color:var(--ink);
+  font-family:"IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  font-size:16px;
+  line-height:1.62;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{
+  max-width:60rem;
+  margin:0 auto;
+  padding-inline:24px;
+  padding-block:0 96px;
+}
+@media (max-width:640px){ .wrap{padding-inline:16px} }
+
+code,kbd,pre,.mono{font-family:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace}
+code{
+  font-size:.87em;
+  background:var(--code-bg);
+  color:var(--code-ink);
+  padding:.1em .34em;
+  border-radius:3px;
+  word-break:break-word;
+}
+pre{
+  margin:0;
+  background:var(--code-bg);
+  color:var(--code-ink);
+  border:1px solid var(--rule);
+  border-radius:4px;
+  padding:14px 16px;
+  font-size:13px;
+  line-height:1.58;
+  overflow-x:auto;
+}
+pre code{background:none;padding:0;font-size:inherit}
+a{color:var(--accent);text-decoration-thickness:1px;text-underline-offset:2px}
+a:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
+
+/* ---------- masthead ---------- */
+header.masthead{
+  border-bottom:1px solid var(--rule-strong);
+  padding-block:56px 28px;
+  margin-bottom:40px;
+}
+.eyebrow{
+  font-family:"IBM Plex Mono",monospace;
+  font-size:11px;
+  letter-spacing:.16em;
+  text-transform:uppercase;
+  color:var(--muted);
+  margin:0 0 14px;
+}
+h1{
+  font-family:"IBM Plex Serif",Georgia,serif;
+  font-weight:600;
+  font-size:clamp(2rem,5.2vw,3rem);
+  line-height:1.1;
+  letter-spacing:-.015em;
+  margin:0 0 14px;
+  text-wrap:balance;
+}
+.standfirst{
+  font-size:1.06rem;
+  color:var(--ink-2);
+  margin:0 0 26px;
+  max-width:56ch;
+}
+.runmeta{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(160px,1fr));
+  gap:2px 24px;
+  font-family:"IBM Plex Mono",monospace;
+  font-size:12px;
+  color:var(--muted);
+  border-top:1px solid var(--rule);
+  padding-top:16px;
+}
+.runmeta div span{color:var(--ink-2)}
+
+/* ---------- section furniture ---------- */
+h2{
+  font-family:"IBM Plex Serif",Georgia,serif;
+  font-weight:600;
+  font-size:1.5rem;
+  letter-spacing:-.01em;
+  margin:56px 0 16px;
+  padding-bottom:8px;
+  border-bottom:1px solid var(--rule);
+  text-wrap:balance;
+}
+h2:first-of-type{margin-top:0}
+p{margin:0 0 1em;max-width:70ch}
+.lede{color:var(--ink-2)}
+
+/* ---------- tally ---------- */
+.tally{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(120px,1fr));
+  gap:12px;
+  margin:0 0 28px;
+}
+.tally div{
+  background:var(--surface);
+  border:1px solid var(--rule);
+  border-top:3px solid var(--tone,var(--rule-strong));
+  border-radius:3px;
+  padding:12px 14px;
+}
+.tally .n{
+  display:block;
+  font-family:"IBM Plex Serif",Georgia,serif;
+  font-size:1.9rem;
+  font-weight:600;
+  line-height:1;
+  font-variant-numeric:tabular-nums;
+  color:var(--tone,var(--ink));
+}
+.tally .l{
+  display:block;
+  font-family:"IBM Plex Mono",monospace;
+  font-size:11px;
+  letter-spacing:.1em;
+  text-transform:uppercase;
+  color:var(--muted);
+  margin-top:6px;
+}
+
+/* ---------- filter ---------- */
+.filterbar{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap:8px;
+  margin:0 0 22px;
+  padding:12px 14px;
+  background:var(--surface);
+  border:1px solid var(--rule);
+  border-radius:3px;
+}
+.filterbar .cap{
+  font-family:"IBM Plex Mono",monospace;
+  font-size:11px;
+  letter-spacing:.12em;
+  text-transform:uppercase;
+  color:var(--muted);
+  margin-right:4px;
+}
+.filterbar button{
+  font:inherit;
+  font-size:13px;
+  font-weight:500;
+  cursor:pointer;
+  background:var(--surface-2);
+  color:var(--ink-2);
+  border:1px solid var(--rule);
+  border-radius:100px;
+  padding:3px 13px;
+  transition:background .12s ease,color .12s ease,border-color .12s ease;
+}
+.filterbar button:hover{border-color:var(--rule-strong)}
+.filterbar button[aria-pressed="true"]{
+  background:var(--accent);
+  border-color:var(--accent);
+  color:var(--paper);
+}
+
+/* ---------- index ---------- */
+.indexwrap{overflow-x:auto;border:1px solid var(--rule);border-radius:3px;background:var(--surface)}
+table.index{border-collapse:collapse;width:100%;min-width:38rem;font-size:14px}
+table.index th{
+  text-align:left;
+  font-family:"IBM Plex Mono",monospace;
+  font-size:10.5px;
+  letter-spacing:.12em;
+  text-transform:uppercase;
+  color:var(--muted);
+  font-weight:500;
+  padding:10px 14px;
+  border-bottom:1px solid var(--rule-strong);
+  background:var(--surface-2);
+  white-space:nowrap;
+}
+table.index td{padding:9px 14px;border-bottom:1px solid var(--rule);vertical-align:top}
+table.index tr:last-child td{border-bottom:0}
+table.index td.id{font-family:"IBM Plex Mono",monospace;font-size:12.5px;color:var(--muted);white-space:nowrap}
+table.index td.area{color:var(--muted);font-size:13px;white-space:nowrap}
+table.index a{color:var(--ink);text-decoration:none}
+table.index a:hover{color:var(--accent);text-decoration:underline}
+
+/* ---------- severity chip ---------- */
+.sev{
+  display:inline-block;
+  font-family:"IBM Plex Mono",monospace;
+  font-size:10.5px;
+  font-weight:600;
+  letter-spacing:.1em;
+  text-transform:uppercase;
+  padding:2px 8px;
+  border-radius:2px;
+  white-space:nowrap;
+}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+
+/* ---------- finding plate ---------- */
+.finding{
+  background:var(--surface);
+  border:1px solid var(--rule);
+  border-left:4px solid var(--tone);
+  border-radius:3px;
+  padding:22px 24px 6px;
+  margin:0 0 20px;
+  box-shadow:var(--shadow);
+  scroll-margin-top:20px;
+}
+@media (max-width:640px){ .finding{padding:18px 16px 4px} }
+.finding[data-tone="critical"]{--tone:var(--sev-crit)}
+.finding[data-tone="high"]{--tone:var(--sev-high)}
+.finding[data-tone="medium"]{--tone:var(--sev-med)}
+.finding[data-tone="low"]{--tone:var(--sev-low)}
+.finding.hidden{display:none}
+
+.fhead{display:flex;flex-wrap:wrap;align-items:baseline;gap:10px;margin-bottom:6px}
+.fid{font-family:"IBM Plex Mono",monospace;font-size:13px;font-weight:600;color:var(--tone)}
+.fstate{
+  font-family:"IBM Plex Mono",monospace;
+  font-size:10.5px;
+  letter-spacing:.08em;
+  text-transform:uppercase;
+  color:var(--muted);
+  border:1px solid var(--rule-strong);
+  border-radius:2px;
+  padding:1px 7px;
+}
+.fstate.repro{color:var(--ok);border-color:var(--ok)}
+h3{
+  font-family:"IBM Plex Serif",Georgia,serif;
+  font-weight:600;
+  font-size:1.24rem;
+  line-height:1.3;
+  letter-spacing:-.005em;
+  margin:2px 0 12px;
+  width:100%;
+  text-wrap:balance;
+}
+.floc{
+  font-family:"IBM Plex Mono",monospace;
+  font-size:12px;
+  color:var(--muted);
+  margin:0 0 16px;
+  padding-bottom:14px;
+  border-bottom:1px dashed var(--rule);
+  word-break:break-word;
+}
+.floc b{color:var(--ink-2);font-weight:500}
+
+.block{margin:0 0 16px}
+.blabel{
+  font-family:"IBM Plex Mono",monospace;
+  font-size:10.5px;
+  letter-spacing:.14em;
+  text-transform:uppercase;
+  color:var(--muted);
+  margin:0 0 5px;
+}
+.block p{margin:0 0 .7em}
+.block p:last-child{margin-bottom:0}
+.block ul{margin:0;padding-left:1.15em}
+.block li{margin-bottom:.35em}
+.block li:last-child{margin-bottom:0}
+.block ul p{margin:0}
+
+.fix{
+  background:var(--accent-soft);
+  border-radius:3px;
+  padding:14px 16px;
+  margin:0 -4px 18px;
+}
+.fix .blabel{color:var(--accent);}
+
+hr.thread{
+  border:0;
+  border-top:1px solid var(--rule);
+  margin:52px 0;
+}
+
+/* ---------- checked-and-sound ---------- */
+ul.sound{list-style:none;padding:0;margin:0}
+ul.sound li{
+  padding:8px 0 8px 26px;
+  border-bottom:1px solid var(--rule);
+  position:relative;
+  color:var(--ink-2);
+  font-size:15px;
+}
+ul.sound li:last-child{border-bottom:0}
+ul.sound li::before{
+  content:"✓";
+  position:absolute;
+  left:0;
+  top:8px;
+  color:var(--ok);
+  font-weight:600;
+}
+ul.sound b{color:var(--ink);font-weight:600}
+
+footer{
+  margin-top:64px;
+  padding-top:20px;
+  border-top:1px solid var(--rule-strong);
+  font-family:"IBM Plex Mono",monospace;
+  font-size:12px;
+  color:var(--muted);
+}
+
+@media (prefers-reduced-motion:reduce){
+  *{transition:none!important;animation:none!important}
+}
+</style>
+
+<div class="wrap">
+
+<header class="masthead">
+  <p class="eyebrow">Static + dynamic audit · harness integration surface</p>
+  <h1>Aracne Harness Defect Register</h1>
+  <p class="standfirst">Twenty-one defects in the code paths that carry aracne into Claude Code and OpenCode — the guard hook, the shell classifier, <code>arac cmd</code>, the generated integration files, and the index-health primitive they all consult.</p>
+  <div class="runmeta">
+    <div>repo <span>github.com/Rhuan-Marques/aracne</span></div>
+    <div>branch <span>chore/debloat @ a882cd3</span></div>
+    <div>date <span>2026-09-10</span></div>
+    <div>build <span>go build ./... — clean</span></div>
+    <div>suite <span>go test ./... — all pass</span></div>
+    <div>method <span>read + reproduced against a live binary</span></div>
+  </div>
+</header>
+
+<h2>What this is</h2>
+
+<p class="lede">Every entry below was reached by reading the code and then reproducing the behaviour with a freshly built <code>arac</code> against purpose-built fixtures (a single-language Go project, a Go+Python project, a 25,000-file project) and, where it was safe to do so, against this repository itself. Nothing here is inferred from a comment; where a comment and the code disagree, the finding says which one is wrong.</p>
+
+<p>The bar for inclusion was: <em>this is not a design decision, and I can show it.</em> Behaviour that is deliberate and documented — the tiered grep ranking, the elision markers, passthrough for unmodelled flags, the <code>terminal.max_overserve</code> ceiling as a concept — is not listed as a defect even where it surprises. Twenty of the twenty-one carry a reproduction transcript; the one that does not (F18) is a timing race whose mechanism is unambiguous in the code but which I could not land in a controlled test, and it says so.</p>
+
+<p>The whole test suite passes, including <code>-tags minimal</code>. None of these are caught by it. Five <em>are</em> asserted by the dormant <code>-tags audit</code> suite, which does not compile in two packages and is not run by <code>make test</code> — noted per finding.</p>
+
+<div class="tally">
+  <div style="--tone:var(--sev-crit)"><span class="n">2</span><span class="l">Critical</span></div>
+  <div style="--tone:var(--sev-high)"><span class="n">4</span><span class="l">High</span></div>
+  <div style="--tone:var(--sev-med)"><span class="n">6</span><span class="l">Medium</span></div>
+  <div style="--tone:var(--sev-low)"><span class="n">9</span><span class="l">Low</span></div>
+</div>
+
+<div class="filterbar">
+  <span class="cap">Show</span>
+  <button type="button" data-filter="all" aria-pressed="true">All 21</button>
+  <button type="button" data-filter="critical" aria-pressed="false">Critical</button>
+  <button type="button" data-filter="high" aria-pressed="false">High</button>
+  <button type="button" data-filter="medium" aria-pressed="false">Medium</button>
+  <button type="button" data-filter="low" aria-pressed="false">Low</button>
+</div>
+
+<div class="indexwrap">
+<table class="index">
+  <thead>
+    <tr><th>ID</th><th>Sev</th><th>Defect</th><th>Area</th></tr>
+  </thead>
+  <tbody>
+    <tr><td class="id">F01</td><td><span class="sev sev-critical">Critical</span></td><td><a href="#F01">Multi-language repos report as permanently stale, forever</a></td><td class="area">index health</td></tr>
+    <tr><td class="id">F02</td><td><span class="sev sev-critical">Critical</span></td><td><a href="#F02">`arac setup` silently deletes a project's own `# Aracne` section</a></td><td class="area">setup</td></tr>
+    <tr><td class="id">F03</td><td><span class="sev sev-high">High</span></td><td><a href="#F03">OpenCode installs no post-tool hook, so no warning ever reaches the model</a></td><td class="area">opencode</td></tr>
+    <tr><td class="id">F04</td><td><span class="sev sev-high">High</span></td><td><a href="#F04">A read with `2&gt;/dev/null` is classified as an edit</a></td><td class="area">guard</td></tr>
+    <tr><td class="id">F05</td><td><span class="sev sev-high">High</span></td><td><a href="#F05">An over-budget resource ID falls through to `cat`, which says it does not exist</a></td><td class="area">arac cmd</td></tr>
+    <tr><td class="id">F06</td><td><span class="sev sev-high">High</span></td><td><a href="#F06">Intercepted searches silently drop matches a real grep finds</a></td><td class="area">topogrep</td></tr>
+    <tr><td class="id">F07</td><td><span class="sev sev-medium">Medium</span></td><td><a href="#F07">`blocked_tools: ["grep"]` in `cli` mode: the two harnesses disagree</a></td><td class="area">setup</td></tr>
+    <tr><td class="id">F08</td><td><span class="sev sev-medium">Medium</span></td><td><a href="#F08">Three config enums have validation that can never fire</a></td><td class="area">config</td></tr>
+    <tr><td class="id">F09</td><td><span class="sev sev-medium">Medium</span></td><td><a href="#F09">`cat f.go` returns less than `head -40 f.go` on the same 38-line file</a></td><td class="area">read</td></tr>
+    <tr><td class="id">F10</td><td><span class="sev sev-medium">Medium</span></td><td><a href="#F10">One lazy-description timeout permanently abandons the whole batch</a></td><td class="area">lazydesc</td></tr>
+    <tr><td class="id">F11</td><td><span class="sev sev-medium">Medium</span></td><td><a href="#F11">The `intercept_id` contract promises candidates a mistyped ID never gets</a></td><td class="area">contract</td></tr>
+    <tr><td class="id">F12</td><td><span class="sev sev-medium">Medium</span></td><td><a href="#F12">`arac grep` is weaker than the grep the guard advertises it against</a></td><td class="area">cli</td></tr>
+    <tr><td class="id">F13</td><td><span class="sev sev-low">Low</span></td><td><a href="#F13">A resource-scoped search prints context lines outside the resource</a></td><td class="area">arac cmd</td></tr>
+    <tr><td class="id">F14</td><td><span class="sev sev-low">Low</span></td><td><a href="#F14">`git -C &lt;dir&gt; &lt;subcommand&gt;` — the `-C` value is read as the subcommand</a></td><td class="area">toolspec</td></tr>
+    <tr><td class="id">F15</td><td><span class="sev sev-low">Low</span></td><td><a href="#F15">A `..`-prefixed directory defeats the in-root test in three renderers</a></td><td class="area">rendering</td></tr>
+    <tr><td class="id">F16</td><td><span class="sev sev-low">Low</span></td><td><a href="#F16">`breToRE2` reads a second leading `^` as an anchor rather than a literal</a></td><td class="area">shellcmd</td></tr>
+    <tr><td class="id">F17</td><td><span class="sev sev-low">Low</span></td><td><a href="#F17">The edit-sync hook matcher omits `NotebookEdit`; the guard's does not</a></td><td class="area">setup</td></tr>
+    <tr><td class="id">F18</td><td><span class="sev sev-low">Low</span></td><td><a href="#F18">The manifest stamps a post-scan mtime, so a mid-scan write is lost</a></td><td class="area">manifest</td></tr>
+    <tr><td class="id">F19</td><td><span class="sev sev-low">Low</span></td><td><a href="#F19">`hasSourceExtension` truncates a Windows path at the drive letter</a></td><td class="area">toolspec</td></tr>
+    <tr><td class="id">F20</td><td><span class="sev sev-low">Low</span></td><td><a href="#F20">`arac disable` leaves a zero-byte CLAUDE.md and empty `.opencode` dirs</a></td><td class="area">disable</td></tr>
+    <tr><td class="id">F21</td><td><span class="sev sev-low">Low</span></td><td><a href="#F21">A relative operand is resolved against the root, not the agent's shell</a></td><td class="area">guard</td></tr>
+  </tbody>
+</table>
+</div>
+
+<hr class="thread">
+
+<h2>Findings</h2>
+
+<!-- ============================= F01 ============================= -->
+<article class="finding" id="F01" data-tone="critical" data-sev="critical">
+  <div class="fhead">
+    <span class="fid">F01</span>
+    <span class="sev sev-critical">Critical</span>
+    <span class="fstate repro">Reproduced</span>
+    <h3>Every multi-language repository reports as permanently stale, and no scan can clear it</h3>
+  </div>
+  <p class="floc"><b>internal/topology/indexhealth.go:35</b> <code>detectedLanguages</code> · <b>internal/helper/manifest.go:236</b> <code>IsSourceFile</code></p>
+
+  <div class="block">
+    <p class="blabel">Trigger</p>
+    <p>Any project whose topology holds more than one language — i.e. <code>info.language == "multi"</code> — that also contains Go test files (<code>*_test.go</code>) or Python test files (<code>test_*.py</code>). Aracne's own repository is in this state right now.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Mechanism</p>
+    <p><code>detectedLanguages</code> unions the stored <code>topo.Languages</code>, the stored <code>topo.Language</code>, and <code>Registry.DetectAll</code>. For a multi-language project <code>topo.Language</code> is the aggregate sentinel <code>"multi"</code>, which is not a scanner name. <code>IndexHealth</code> then calls <code>DiffScanFiles(root, "multi", …)</code>, and <code>IsSourceFile</code> has no <code>case "multi"</code> — it falls into <code>default:</code>, which accepts any <code>.go</code> or <code>.py</code> file <em>without</em> the per-language test-file exclusions that the real <code>case "go"</code> and <code>case "python"</code> arms apply.</p>
+    <p>The scanners never index those files, so they are never stamped into the manifest, so the diff reports them as <code>added</code> on every single run, forever. The watch loop (<code>cli/scanner.go</code>) and <code>IncrementalScan</code> both enumerate through <code>Registry.DetectAll</code> and use real scanner names, so they are unaffected — which is exactly why the two disagree permanently.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Effect</p>
+    <ul>
+      <li><code>arac check-updates</code> always exits 1 and prints “The topology is STALE for these files. Run <code>arac scan</code> to re-index” — advice that can never work. On this repository: 192 phantom files.</li>
+      <li><code>Read.indexHealthNote</code> (<code>universaltools/read.go:621</code>) appends “NOTE: the index is STALE — 192 file(s) out of sync” to <em>every</em> unresolved read. A model that mistypes an ID is told the database is broken. This makes the one signal that distinguishes “wrong ID” from “not indexed” permanently useless.</li>
+      <li><code>driftCheck</code> gates its scan on <code>indexHasDrifted</code>, which returns <code>health.Stale()</code>. It is permanently true, so the guard runs a full <code>IncrementalScan</code> (a whole-tree manifest walk) after <em>every unclassified Bash command</em> — <code>ls</code>, <code>go build</code>, <code>npm test</code>, <code>git status</code>. That is precisely the cost the comment at <code>guard_drift.go:156</code> says the probe was added to avoid.</li>
+    </ul>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Reproduction</p>
+<pre><code># a two-language fixture: main.go + main_test.go + mod.py + test_mod.py
+$ arac scan &amp;&amp; arac check-updates
+2 file(s) not up to date:
+  Added (2):
+    + main_test.go
+    + test_mod.py
+The topology is STALE for these files. Run `arac scan` to re-index.
+$ arac scan &amp;&amp; arac check-updates      # identical output, forever
+$ arac read NoSuchThing
+# UNRESOLVED:
+- NoSuchThing: resource "NoSuchThing" not found in topology
+NOTE: the index is STALE — 2 file(s) out of sync (2 new) …
+
+# the single-language control is clean:
+$ cd ../go-only &amp;&amp; arac check-updates
+All files are up to date.
+
+# and on this repository:
+$ arac check-updates | head -1
+192 file(s) not up to date:</code></pre>
+  </div>
+
+  <div class="fix">
+    <p class="blabel">Fix</p>
+    <p>Two independent guards, both cheap:</p>
+    <ol style="margin:0;padding-left:1.2em">
+      <li>In <code>detectedLanguages</code>, do not add the aggregate sentinel. <code>add(topo.Language)</code> exists for the single-language case where <code>Languages</code> is empty; gate it — <code>if len(topo.Languages) == 0 { add(topo.Language) }</code> — or skip the literal <code>"multi"</code> explicitly. That alone fixes all three symptoms.</li>
+      <li>Harden <code>IsSourceFile</code>'s <code>default:</code> branch so an unrecognised language name still applies the per-language test exclusions it composes: <code>!strings.HasSuffix(name, "_test.go")</code> for <code>.go</code>, <code>!strings.HasPrefix(name, "test_")</code> for <code>.py</code>. The JS/TS/Rust/Java arms already delegate to helpers that carry their own exclusions, so only these two are missing.</li>
+    </ol>
+    <p style="margin-top:.7em">Regression test: scan a Go+Python fixture with test files in both, assert <code>IndexHealth.Stale()</code> is false immediately after a scan. <code>internal/topology/indexhealth_test.go</code> exists and is untracked — this is the case it is missing.</p>
+  </div>
+</article>
+
+<!-- ============================= F02 ============================= -->
+<article class="finding" id="F02" data-tone="critical" data-sev="critical">
+  <div class="fhead">
+    <span class="fid">F02</span>
+    <span class="sev sev-critical">Critical</span>
+    <span class="fstate repro">Reproduced</span>
+    <h3>`arac setup` silently deletes a project's own “# Aracne” section</h3>
+  </div>
+  <p class="floc"><b>internal/cli/setup.go:747</b> <code>findAracIntegrationStart</code> · <b>:764</b> <code>aracIntegrationBounds</code> · <b>:784</b> <code>writeMarkdownIntegrationFile</code></p>
+
+  <div class="block">
+    <p class="blabel">Trigger</p>
+    <p>A <code>CLAUDE.md</code> or <code>AGENTS.md</code> that already contains a top-level heading whose text is exactly <code># Aracne</code> — the obvious heading for a team documenting its own aracne conventions — anywhere above the generated block, or with no generated block at all.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Mechanism</p>
+    <p><code>findAracIntegrationStart</code> takes the <em>first</em> line in the document equal to <code># Aracne</code>. <code>findAracIntegrationEnd</code> then searches forward from there for a closing marker; when the user's section has none, <code>aracIntegrationBounds</code> falls back to <code>nextTopLevelHeading</code>. Everything between the user's heading and the next <code>#</code> heading — or, when a real aracne block follows, everything up to <em>its</em> closing line — is replaced wholesale. <code>writeMarkdownIntegrationFile</code> never prompts and writes atomically, so the only trace is in git.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Effect</p>
+    <p>Silent, unrecoverable-outside-VCS loss of hand-written agent instructions in the one file a team is most likely to have hand-written agent instructions in. It compounds: the file is rewritten on every <code>arac setup</code>, and <code>arac init</code> calls <code>runSetup</code> itself.</p>
+    <p>The risk is not hypothetical for this project. Aracne's own <code>CLAUDE.md</code> devotes a section to explaining the injected block; a single line spelled <code># Aracne</code> in that prose would be eaten by the next <code>arac setup</code>.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Reproduction</p>
+<pre><code>$ cat CLAUDE.md
+# My Project
+
+Some notes.
+
+# Aracne
+
+We use aracne here. See docs/aracne.md for our house rules.
+IMPORTANT: never run `arac scan --hard`.
+
+# Build
+
+Run `make build`.
+
+$ arac setup -y --claude
+Claude Code CLAUDE.md updated at CLAUDE.md
+
+$ grep -c "house rules" CLAUDE.md
+0        # both sentences gone; the generated contract sits in their place</code></pre>
+    <p style="margin-top:.7em">Content <em>after</em> a well-formed block, and re-runs over a block aracne itself wrote, are correctly preserved — I verified both. The failure is specific to a foreign <code># Aracne</code> heading.</p>
+  </div>
+
+  <div class="fix">
+    <p class="blabel">Fix</p>
+    <p>The block needs an identity the parser can verify, not just an opening heading it can find. Three options, in increasing order of robustness:</p>
+    <ul>
+      <li><b>Minimal.</b> Require the heading to be <em>followed</em> by the contract's own first line (<code>`.aracne/topology.db` holds a pre-analyzed graph…</code> / the <code>cli</code> variant) before treating it as aracne's. Costs nothing in the prompt and rejects a foreign heading immediately.</li>
+      <li><b>Better.</b> Only accept the fallback-to-<code>nextTopLevelHeading</code> path when an aracne-authored block was previously recorded — persist the block's hash in <code>.aracne/</code> at write time and refuse to replace anything that does not match.</li>
+      <li><b>Belt.</b> When bounds are resolved by fallback rather than by a closing marker, print what will be removed and require <code>-y</code> to proceed. <code>writeMarkdownIntegrationFile</code>'s no-prompt rule is right for a file aracne owns; this file it does not own.</li>
+    </ul>
+    <p style="margin-top:.7em">The argument in the code for not using an HTML comment delimiter (it would be noise the model can see but not use) is sound and none of these options reintroduce one.</p>
+  </div>
+</article>
+
+<!-- ============================= F03 ============================= -->
+<article class="finding" id="F03" data-tone="high" data-sev="high">
+  <div class="fhead">
+    <span class="fid">F03</span>
+    <span class="sev sev-high">High</span>
+    <span class="fstate repro">Reproduced</span>
+    <h3>OpenCode installs no post-tool hook, so a topology warning never reaches the model</h3>
+  </div>
+  <p class="floc"><b>internal/cli/setup.go:149-153</b> <code>initOpenCode</code> · <b>internal/cli/native_hooks.go:449</b> <code>writeOpenCodePreToolScanPlugin</code> · <b>internal/cli/plugins.go:48</b> <code>writeOpenCodePlugins</code></p>
+
+  <div class="block">
+    <p class="blabel">Trigger</p>
+    <p>Any OpenCode project with a default config, in any mode. <code>llm.opencode.main_agent.plugins</code> is empty in <code>DefaultConfig()</code>, and <code>arac init</code> never asks about it.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Mechanism</p>
+    <p><code>arac setup</code> installs exactly one plugin unconditionally for OpenCode: <code>arac-pre-tool-scan.js</code>, which registers only <code>tool.execute.before</code>. The <code>tool.execute.after</code> handler lives in <code>arac-native-edit-sync.js</code>, which is written only when the agent lists <code>edit-update-db-plugin</code> in <code>plugins</code> — and no shipped path sets that. The Claude Code side has no equivalent gap: its guard hook is registered for both <code>PreToolUse</code> and <code>PostToolUse</code>, and <code>driftCheck</code> hangs off the latter.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Effect</p>
+    <p>The generated <code>AGENTS.md</code> ends with “Edits keep the graph current automatically; act on any topology warning that comes back.” On OpenCode nothing ever comes back. Concretely, on a default install:</p>
+    <ul>
+      <li>A native edit that breaks eleven callers produces zero visible warnings.</li>
+      <li>A shell write that breaks a caller produces zero visible warnings.</li>
+      <li>The drift backstop for unclassified commands — the whole reason <code>driftCheckApplies</code> exists — never runs.</li>
+      <li>Outside <code>mcp</code> mode the main agent has no <code>warnings_list</code> tool either, so the only surviving route is a human typing <code>arac warnings list</code>.</li>
+    </ul>
+    <p>Warnings are the one capability <code>docs/architecture.md §9</code> describes as having no substitute. On one of the two shipped harnesses the channel is dead by default.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Reproduction</p>
+<pre><code>$ arac setup -y            # default config, mode: cli
+[OpenCode] Config written to .opencode/opencode.json
+OpenCode pre-tool scan plugin written to .opencode/plugins/arac-pre-tool-scan.js
+
+$ ls .opencode/plugins/
+arac-pre-tool-scan.js
+
+$ grep -c "tool.execute.after" .opencode/plugins/*.js
+0
+
+$ grep "topology warning" AGENTS.md
+Edits keep the graph current automatically; act on any topology warning that comes back.</code></pre>
+  </div>
+
+  <div class="fix">
+    <p class="blabel">Fix</p>
+    <p>Add a <code>tool.execute.after</code> handler to <code>arac-pre-tool-scan.js</code> — the plugin that is already installed unconditionally — mirroring what the Claude guard's PostToolUse arm does. It needs a CLI entry point that does the same job without a hook event; <code>arac guard --rewrite</code> and <code>--pre-scan</code> already set the precedent, so add <code>arac guard --post-tool &lt;tool&gt;</code> (or reuse <code>--drift</code>) that runs <code>driftCheckApplies</code>-equivalent logic and prints the ledger delta from <code>unreportedWarnings</code>. The plugin appends whatever comes back to <code>output.output</code>, exactly as <code>arac-native-edit-sync.js</code> already does for its own messages.</p>
+    <p>Doing it in the always-installed plugin rather than promoting the edit-sync one is the right split: the edit-sync plugin is an optimisation (it syncs inline), while the warning report must not be optional. Both already go through <code>guard-reported-warnings.json</code>, so whichever runs first reports and the other adds nothing.</p>
+    <p>Separately: either make <code>edit-update-db-plugin</code> reachable (ask in <code>arac init</code>, or default it on) or drop it — a plugin flag no shipped path can set is dead configuration surface, and <code>guard.go:339</code> already documents the fallout.</p>
+  </div>
+</article>
+
+<!-- ============================= F04 ============================= -->
+<article class="finding" id="F04" data-tone="high" data-sev="high">
+  <div class="fhead">
+    <span class="fid">F04</span>
+    <span class="sev sev-high">High</span>
+    <span class="fstate repro">Reproduced</span>
+    <h3>A read with a stderr redirect is classified as an edit — and refused as one</h3>
+  </div>
+  <p class="floc"><b>internal/cli/guard.go:729-734</b> (the <code>'&gt;'</code> arm of <code>splitCommandSegments</code>) · <b>internal/toolspec/toolspec.go:382</b> <code>ShellCommandKeyForArgs</code> · <b>internal/cli/guard_intercept.go:113</b></p>
+
+  <div class="block">
+    <p class="blabel">Trigger</p>
+    <p>Any <code>sed -n</code> or <code>awk</code> read carrying a stderr redirect — <code>2&gt;/dev/null</code>, <code>2&gt;err.log</code> — which is a completely ordinary thing for an agent to write. Denial requires <code>blocked_tools</code> to contain <code>edit</code> in <code>mcp</code> or <code>cli</code> mode; the interception and scan effects apply in every mode with no configuration at all.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Mechanism</p>
+    <p>The scanner's <code>'&gt;'</code> arm sets <code>curRedirect = true</code> for any <code>&gt;</code> that is not followed by <code>&amp;</code>. It has no notion of a file-descriptor prefix, so <code>2&gt;</code> — which redirects <em>stderr</em> — sets the same flag as <code>&gt;</code>, which redirects stdout. <code>redirectsOut</code> then feeds two places that both read it as “this command writes a file”:</p>
+    <ul>
+      <li><code>ShellCommandKeyForArgs</code>: <code>case streamEditors[name]: if redirectsOut || streamEditorMutates(…) { return "edit", true }</code>.</li>
+      <li><code>interceptableSegment</code>: <code>if seg.pipedInto || seg.redirectsOut { return … false }</code>.</li>
+    </ul>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Effect</p>
+    <ul>
+      <li>A pure read is <em>denied</em> under <code>blocked_tools: ["edit"]</code>, with guidance telling the model to pipe JSON into <code>arac edit</code> to “apply several replacements”. That is a confidently wrong refusal of the exact kind the guard's own doc comments say the design exists to prevent.</li>
+      <li>Interception is refused for every command carrying <code>2&gt;/dev/null</code>, reads and searches alike — so a very common idiom quietly opts out of the whole product.</li>
+      <li><code>mayHaveWrittenSource</code> sees <code>edit</code> and runs a post-tool incremental scan after a command that wrote nothing.</li>
+    </ul>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Reproduction</p>
+<pre><code># mode: cli, blocked_tools: ["edit","write"]
+
+$ echo '{"hook_event_name":"PreToolUse","tool_name":"Bash",
+         "tool_input":{"command":"sed -n 1,5p main.go"},"cwd":"…"}' | arac guard --claude-hook
+                                        # (silence — correctly allowed)
+
+$ echo '{"hook_event_name":"PreToolUse","tool_name":"Bash",
+         "tool_input":{"command":"sed -n 1,5p main.go 2>/dev/null"},"cwd":"…"}' | arac guard --claude-hook
+{"hookSpecificOutput":{"permissionDecision":"deny","permissionDecisionReason":
+ "Blocked by aracne config (blocked_tools: edit). aracne: `echo '{\"edits\":[…]}' | arac edit`
+  applies several replacements in ONE call…"}}
+
+# same for awk; and interception is refused outright in every mode:
+$ arac guard --rewrite "grep -rn needle . 2>/dev/null"
+{}
+$ arac guard --rewrite "grep -rn needle ."
+{"command":"…/arac cmd -- grep -rn needle ."}</code></pre>
+  </div>
+
+  <div class="fix">
+    <p class="blabel">Fix</p>
+    <p>Teach the scanner the descriptor prefix. In the <code>'&gt;'</code> arm, only set <code>curRedirect</code> when the redirect targets stdout: it does <em>not</em> when the immediately preceding non-space rune of the current token is a digit other than <code>1</code>. Concretely, look back over the accumulated token for a trailing <code>[0-9]</code>; if present and not <code>1</code>, this is a non-stdout redirect and the flag stays clear. <code>&amp;&gt;</code> (both streams) should still set it, and <code>2&gt;&amp;1</code> is already excluded by the existing <code>&amp;</code> check.</p>
+    <p>The look-back must be at the raw runes rather than the accumulated segment text, for the same reason <code>isRedirectAmpersand</code> (guard.go:742) already does it that way — quote characters have been dropped by then.</p>
+    <p>Table-test it beside the existing redirect cases: <code>sed -n '1,5p' f 2&gt;/dev/null</code> → read; <code>sed -n '1,5p' f &gt; out</code> → edit; <code>sed -n '1,5p' f &amp;&gt; out</code> → edit; <code>sed -n '1,5p' f 2&gt;&amp;1</code> → read.</p>
+  </div>
+</article>
+
+<!-- ============================= F05 ============================= -->
+<article class="finding" id="F05" data-tone="high" data-sev="high">
+  <div class="fhead">
+    <span class="fid">F05</span>
+    <span class="sev sev-high">High</span>
+    <span class="fstate repro">Reproduced</span>
+    <h3>An over-budget resource-ID read falls through to `cat`, which reports that the ID does not exist</h3>
+  </div>
+  <p class="floc"><b>internal/cli/cmd.go:213</b> <code>serveRead</code> · <b>:597</b> <code>passthrough</code> · <b>internal/helper/overserve.go:24</b> <code>OverserveMaxBytes</code></p>
+
+  <div class="block">
+    <p class="blabel">Trigger</p>
+    <p><code>intercept_id</code> or <code>intercept_line_ranges</code> mode; a <code>cat</code>/<code>head</code>/<code>tail</code>/<code>sed -n</code> whose operand is a <em>resource ID</em> (not a path) that renders to more than 32 KB. <code>OverserveMaxBytes</code> is an absolute ceiling applied after the ratio, so it is reachable however generous <code>terminal.max_overserve</code> is.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Mechanism</p>
+    <p><code>serveRead</code> returns <code>ok=false</code> when the answer exceeds the budget, and <code>RunCmd</code> answers <code>ok=false</code> by running the command the caller typed. For a path that is exactly right. For an ID the shell then runs <code>cat &lt;id&gt;</code> and prints <em>“No such file or directory.”</em></p>
+    <p>The doc comment on <code>rawWindowBytes</code> (cmd.go:557) names this outcome as the bug it was written to fix — and it did fix the <em>denominator</em> (a resource ID used to score as zero bytes). The absolute cap re-opens the same door on the numerator side, and nothing downstream distinguishes “over budget” from “not a file”.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Effect</p>
+    <p>The <code>intercept_id</code> contract teaches <code>cat &lt;resource-id&gt;</code> in a fenced example. For any declaration large enough to matter — the ones a model most wants to read whole — that command answers with a false claim that the ID does not exist. The recovery a model picks from “No such file or directory” is “I got the ID wrong”, which is an exploration turn spent on nothing.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Reproduction</p>
+<pre><code># a single 124-line function whose source is 58 KB, mode: intercept_id
+$ arac cmd -- cat 'example.com/demo.Wide'; echo "exit=$?"
+cat: example.com/demo.Wide: No such file or directory
+exit=1
+
+$ arac read 'example.com/demo.Wide' | head -2
+```wide.go
+func Wide() {           # the same ID resolves perfectly well</code></pre>
+    <p style="margin-top:.7em">Also asserted by the dormant <code>TestAudit_OverBudgetResourceIDIsRefusedNotPassedThrough</code> (<code>internal/cli/audit_test.go</code>, <code>-tags audit</code>), which currently fails.</p>
+  </div>
+
+  <div class="fix">
+    <p class="blabel">Fix</p>
+    <p>Make “over budget” a different answer from “nothing to add”, and only for an operand the shell cannot serve. <code>serveCommand</code> already has the right channel: the third return, <code>refusal</code>, which <code>RunCmd</code> prints to stderr and exits 1 on rather than passing through — added for exactly this class of operand (the <code>read.kinds</code> refusal).</p>
+    <p>In <code>serveRead</code>, thread through whether any operand resolved as an ID rather than a path (<code>resolveReadOperand</code> already knows). When the budget check fails:</p>
+    <ul>
+      <li>all operands were paths → return <code>ok=false</code> as today; the real command is a correct answer;</li>
+      <li>any operand was an ID → return a <code>refusal</code> naming the size and the cheaper move, e.g. <em>“<code>example.com/demo.Wide</code> renders to 58 KB, over the 32 KB ceiling; read a range of it (<code>sed -n '3,127p' wide.go</code>) or raise <code>terminal.max_overserve</code>.”</em></li>
+    </ul>
+    <p>An alternative worth considering alongside it: for an ID over budget, fall back to the <em>skeleton</em> rendering rather than refusing — it is the same declaration, abridged, and already exists (<code>skeletonBody</code>).</p>
+  </div>
+</article>
+
+<!-- ============================= F06 ============================= -->
+<article class="finding" id="F06" data-tone="high" data-sev="high">
+  <div class="fhead">
+    <span class="fid">F06</span>
+    <span class="sev sev-high">High</span>
+    <span class="fstate repro">Reproduced</span>
+    <h3>Intercepted searches silently drop matches a real grep finds — including in `--piped` mode</h3>
+  </div>
+  <p class="floc"><b>internal/topogrep/grep.go:963</b> <code>prunedDirs</code> · <b>:1003</b> <code>wantFile</code> · <b>Options.Plain</b> doc, <b>grep.go:196-216</b></p>
+
+  <div class="block">
+    <p class="blabel">Trigger</p>
+    <p>Any search whose matches live under <code>node_modules</code>, <code>vendor</code>, <code>.venv</code>, <code>venv</code>, <code>.tox</code>, <code>.next</code>, <code>.nuxt</code>, <code>.gradle</code>, <code>.terraform</code>, the various caches — or under any <code>scan.ignore</code> glob. Searches are intercepted in <strong>every</strong> mode, so this needs no configuration.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Mechanism</p>
+    <p><code>walkOneRoot</code> prunes <code>prunedDirs</code> and applies <code>opt.Ignore</code>, and <code>serveGrep</code> builds that matcher from <code>scan.ignore</code>. Neither is disabled under <code>Plain</code>. For the enriched surface that is a defensible editorial choice; for <code>Plain</code> it directly contradicts the invariant <code>Options.Plain</code>'s own documentation states — “What it delivers is the same SET of rows, each byte-identical, in path and line order.”</p>
+    <p><code>Plain</code> is what the guard splices in when a search feeds a pipeline whose every stage preserves lines. The whole safety argument for that splice is that the rows are the ones the real command would have printed.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Effect</p>
+    <ul>
+      <li><code>grep -rn X . | grep -v test | head -30</code> is rewritten and returns a strictly smaller set than the real pipeline, with nothing to mark the substitution. This is the same failure class as the <code>| wc -l</code> case <code>ConsumerPreservesLines</code> was written to refuse, arriving through the filter it lets through.</li>
+      <li>On the enriched surface a model searching a JS repo for an imported symbol gets zero hits from <code>node_modules</code> and may reasonably conclude the dependency is unused; same for a Go repo with a <code>vendor/</code> tree.</li>
+      <li>No trailer says anything was skipped. The truncation trailer exists and is well-designed; this omission has no counterpart.</li>
+    </ul>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Reproduction</p>
+<pre><code>$ /usr/bin/grep -rn needle .
+./node_modules/dep.js:1:const needle = 1;
+./vendorlike/x.txt:1:needle
+
+$ arac cmd --piped -- grep -rn needle .
+./vendorlike/x.txt:1:needle          # the node_modules hit is gone, exit 0
+
+$ arac guard --rewrite 'grep -rn needle . | grep -v x | head -3'
+{"command":"…/arac cmd --piped -- grep -rn needle . | grep -v x | head -3"}</code></pre>
+  </div>
+
+  <div class="fix">
+    <p class="blabel">Fix</p>
+    <p>Split the two cases, because they want opposite answers:</p>
+    <ul>
+      <li><b><code>Plain</code>:</b> honour the promise. Skip <code>prunedDirs</code> and <code>opt.Ignore</code> entirely when <code>opt.Plain</code> is set — a pipeline reading the output has no way to notice an omission, and the rows must be the real command's rows. That is the same reasoning <code>effectiveLimit</code> already applies to the head limit under <code>Plain</code> (grep.go:857).</li>
+      <li><b>Enriched:</b> keep the pruning, but say so. When the walk skipped a directory that <em>would</em> have been searched, append one line to the trailer: <em>“… skipped node_modules, vendor (aracne never searches these; <code>--no-ignore</code> or a path operand reaches them).”</em> A directory named outright as an operand is already exempt — <code>walkOneRoot</code> searches a named file whatever the filters say — so the escape hatch exists; the model just cannot see it.</li>
+    </ul>
+    <p>If skipping the prune list under <code>Plain</code> is judged too expensive on a large <code>node_modules</code>, the honest alternative is to refuse the splice entirely when the walk would prune anything under the requested roots, and let the real command run.</p>
+  </div>
+</article>
+
+<!-- ============================= F07 ============================= -->
+<article class="finding" id="F07" data-tone="medium" data-sev="medium">
+  <div class="fhead">
+    <span class="fid">F07</span>
+    <span class="sev sev-medium">Medium</span>
+    <span class="fstate repro">Reproduced</span>
+    <h3>`blocked_tools: ["grep"]` in `cli` mode: OpenCode refuses what Claude Code answers</h3>
+  </div>
+  <p class="floc"><b>internal/cli/setup.go:105-111</b> <code>initOpenCode</code> · compare <b>internal/cli/guard.go:509</b> <code>loadGuardConfig</code> · <b>internal/helper/config.go:1354</b> <code>BlockableInMode</code></p>
+
+  <div class="block">
+    <p class="blabel">Trigger</p>
+    <p><code>mode: "cli"</code> (the default) with <code>grep</code> in <code>blocked_tools</code> — which <code>BlockableInMode</code>'s own doc calls “a reasonable thing to write when moving a project between modes”.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Mechanism</p>
+    <p><code>initOpenCode</code> gates the blocked set on <code>cfg.GuardBlocksNativeReads()</code> but then takes the operator's list <em>raw</em>: <code>blocked = toolNameSet(mainEff.BlockedTools)</code>. The Claude Code guard takes the same list through <code>cfg.BlockableInMode(...)</code>, which drops <code>grep</code> outside <code>mcp</code> mode — because search is intercepted in every mode and refusing it would deny a command aracne was one step from answering.</p>
+    <p>So the OpenCode permission block enforces a policy the guard is explicitly written not to enforce. The comment immediately above the offending line says: <em>“Denying a native read here in a mode whose guard would never deny it is how the two enforcement paths drift apart.”</em></p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Effect</p>
+    <p>The same project behaves differently on the two harnesses, and the documentation of it is wrong on both. <code>contractGuardNote</code> correctly applies <code>BlockableInMode</code>, so the generated <code>AGENTS.md</code> says nothing about a grep restriction that OpenCode will actually apply — the model is refused with no explanation, which is the exact failure that note exists to prevent.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Reproduction</p>
+<pre><code># .aracne/config.json: mode "cli", blocked_tools ["grep"] on both harnesses
+$ arac setup -y
+
+$ jq .permission .opencode/opencode.json
+{ "read": "allow", "edit": "allow",
+  "bash": { "*": "allow", "grep *": "deny", "rg *": "deny" },
+  "aracne_*": "deny" }
+
+$ arac guard --rewrite 'grep -rn needle .'
+{"command":"…/arac cmd -- grep -rn needle ."}     # Claude Code answers it
+
+$ grep -i "tool guard" AGENTS.md
+                                                  # nothing: the contract says no restriction exists</code></pre>
+  </div>
+
+  <div class="fix">
+    <p class="blabel">Fix</p>
+    <p>One line. In <code>initOpenCode</code>, replace</p>
+<pre><code>blocked = toolNameSet(mainEff.BlockedTools)</code></pre>
+    <p style="margin-top:.7em">with</p>
+<pre><code>blocked = cfg.BlockableInMode(toolNameSet(mainEff.BlockedTools))</code></pre>
+    <p style="margin-top:.7em">and drop the surrounding <code>if cfg.GuardBlocksNativeReads()</code>, which <code>BlockableInMode</code> already performs (it returns an empty map when the mode may not block). That leaves exactly one definition of “what may this mode refuse”, which is what <code>BlockableInMode</code>'s doc claims it is.</p>
+    <p>Then pin it: a test that, for each of the four modes × each blockable tool, asserts the OpenCode permission map and the Claude guard's <code>loadGuardConfig</code> agree. <code>internal/cli/guard_opencode_test.go</code> is untracked and is the natural home.</p>
+  </div>
+</article>
+
+<!-- ============================= F08 ============================= -->
+<article class="finding" id="F08" data-tone="medium" data-sev="medium">
+  <div class="fhead">
+    <span class="fid">F08</span>
+    <span class="sev sev-medium">Medium</span>
+    <span class="fstate repro">Reproduced</span>
+    <h3>Three config enums have validation that can never fire</h3>
+  </div>
+  <p class="floc"><b>internal/helper/config.go:1432</b> <code>normalizeConfig</code> · <b>:744</b> <code>Validate</code> · <b>:1261/:1281</b> <code>EffectiveMode</code> / <code>EffectiveContractVerbosity</code></p>
+
+  <div class="block">
+    <p class="blabel">Trigger</p>
+    <p>A typo in <code>mode</code>, <code>contract_verbosity</code>, or <code>read.context_filter</code>.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Mechanism</p>
+    <p><code>LoadConfigRead</code> calls <code>normalizeConfig</code>, which stamps the <em>coerced</em> value back onto the struct: <code>c.Mode = c.EffectiveMode()</code>, and the same for <code>ContractVerbosity</code> and the context filter. Every <code>Validate()</code> call site loads through that path, so by the time the switch runs, the unknown value has already become a known one. <code>EffectiveMode</code>'s doc comment promises the opposite: <em>“Validate() is where a typo is reported, loudly and once.”</em></p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Effect</p>
+    <p><code>"mode": "intercept_lineranges"</code> (a plausible misspelling of <code>intercept_line_ranges</code>) silently resolves to <code>cli</code>. The project loses read interception entirely, the generated contract stops promising it, and the config file on disk still says <code>intercept_lineranges</code> — so the operator reads the file, sees what they intended, and has no way to reconcile it with the behaviour. <code>announceMode</code> prints “Mode: cli”, which is the only hint, and it does not read as an error.</p>
+    <p>The neighbouring validations — <code>read.kinds</code>, <code>scan.pre_tool</code>, <code>mcp_tools</code>, <code>blocked_tools</code> — all work correctly; these three are the ones normalisation reaches first.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Reproduction</p>
+<pre><code>$ echo '{"mode":"intercept_lineranges"}' > .aracne/config.json
+$ arac setup -y | head -1
+Mode: cli — no MCP tools; the contract points at `arac read <id>` for symbols.
+$ jq -r .mode .aracne/config.json
+intercept_lineranges
+
+$ echo '{"contract_verbosity":"hgih"}'      > .aracne/config.json && arac setup -y   # accepted
+$ echo '{"read":{"context_filter":"ful"}}'  > .aracne/config.json && arac setup -y   # accepted
+$ echo '{"read":{"kinds":["fnction"]}}'     > .aracne/config.json && arac setup -y
+Invalid .aracne/config.json: read.kinds: unknown read.kinds value(s): fnction     # this one works</code></pre>
+  </div>
+
+  <div class="fix">
+    <p class="blabel">Fix</p>
+    <p>Validate the raw text, not the normalised struct. Keep the raw value alongside the resolved one — the cleanest shape is for <code>LoadConfigRead</code> to run validation on the decoded struct <em>before</em> calling <code>normalizeConfig</code>, and to carry the result. Since <code>Validate()</code> is a method callers invoke separately, the minimal change is:</p>
+    <ul>
+      <li>have <code>normalizeConfig</code> record the pre-coercion spellings on unexported fields (<code>rawMode</code>, <code>rawVerbosity</code>, <code>rawContextFilter</code>);</li>
+      <li>have <code>Validate()</code> switch on those when set, falling back to the public field for a hand-constructed <code>Config</code>.</li>
+    </ul>
+    <p>The fail-soft behaviour of <code>EffectiveMode</code> should stay exactly as it is — a config aracne cannot read must never leave a project with no surface. The point is that the surface that <em>can</em> report it should.</p>
+    <p>Also worth a line in <code>announceMode</code>: when the raw value differs from the resolved one, print <em>“(mode "intercept_lineranges" is not recognised; using cli)”</em>. Even after the validation fix, that is the message someone running <code>arac setup</code> in a script will actually see.</p>
+  </div>
+</article>
+
+<!-- ============================= F09 ============================= -->
+<article class="finding" id="F09" data-tone="medium" data-sev="medium">
+  <div class="fhead">
+    <span class="fid">F09</span>
+    <span class="sev sev-medium">Medium</span>
+    <span class="fstate repro">Reproduced</span>
+    <h3>`cat f.go` returns less than `head -40 f.go` on the same 38-line file</h3>
+  </div>
+  <p class="floc"><b>internal/cli/cmd.go:230</b> <code>renderReadOperand</code> · <b>internal/helper/config.go:584</b> <code>EffectiveFileMode</code> · contract text at <b>internal/prompts/contract.go:150</b></p>
+
+  <div class="block">
+    <p class="blabel">Trigger</p>
+    <p>Either intercepting mode (where <code>read.file_mode</code> defaults to <code>skeleton</code>), a file holding a declaration longer than <code>read.skeleton_threshold</code> (12 lines), and a <code>cat</code> with no window.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Mechanism</p>
+    <p><code>renderReadOperand</code> branches on the window: <code>WholeFile</code> goes through <code>ReadIDs</code>, which applies <code>read.file_mode</code>; every other window goes through <code>ReadSlice</code>, which does not. So the abridgement is a property of <em>how the model spelled the request</em>, not of the bytes requested. <code>head -40</code> and <code>sed -n '1,1000p'</code> on a 38-line file are the same request as <code>cat</code>, and return more.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Effect</p>
+    <p>The intercepting contract says: <em>“Read files the way you normally would — <code>cat</code>, <code>head -40</code>, <code>sed -n '80,120p'</code>. … the answer comes back enriched: the lines you asked for …”</em>. For <code>cat</code> it is not the lines asked for; it is fewer. A model that notices will learn to type <code>head -9999</code> instead of <code>cat</code> — a worse habit than the one skeleton mode exists to discourage — and one that has already been observed to be the model's instinct for windowed reading.</p>
+    <p>The elision marker is unambiguous and names the range, so nothing is silently wrong; the defect is the inconsistency and the contract sentence that does not survive it.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Reproduction</p>
+<pre><code># big.go: 38 lines, one 32-line func Big() and one small func Small()
+$ wc -l big.go
+38 big.go
+
+$ arac cmd -- cat big.go
+```big.go
+package main
+
+// Big does a lot.
+func Big() {
+⋯ +31 lines — whole declaration at big.go:4-35 ⋯
+
+// Small is small.
+func Small() int { return 1 }
+```
+
+$ arac cmd -- head -40 big.go | wc -l
+40                                  # 38 lines + 2 fence lines: the whole file
+$ arac cmd -- sed -n '1,1000p' big.go | wc -l
+40</code></pre>
+  </div>
+
+  <div class="fix">
+    <p class="blabel">Fix</p>
+    <p>Pick one and make it true of both spellings. My recommendation is to apply <code>file_mode</code> by <em>coverage</em> rather than by syntax: in <code>serveRead</code>, treat a window that resolves to the whole file (<code>from == 1 &amp;&amp; to == totalLines</code>) as a whole-file read and route it through the same <code>ReadIDs</code> path <code>cat</code> takes. That closes the <code>head -9999</code> escape hatch and makes the rule statable in one sentence.</p>
+    <p>Then reword the contract's <code>interceptHowItReaches</code>, which currently over-promises. Something like: <em>“a whole-file read comes back as a skeleton — each declaration's signature, with long bodies elided and their exact ranges named; ask for a range to get it in full.”</em> That is one extra clause, it is true, and it teaches the recovery move in the same breath.</p>
+    <p>If you would rather keep <code>head -N</code> literal, the alternative is to make <code>cat</code> literal too and let <code>file_mode: skeleton</code> govern only <code>arac read &lt;file&gt;</code> and the MCP tool. That is a bigger behavioural change and gives up the main reason skeleton mode exists on the terminal surface, so I would not.</p>
+  </div>
+</article>
+
+<!-- ============================= F10 ============================= -->
+<article class="finding" id="F10" data-tone="medium" data-sev="medium">
+  <div class="fhead">
+    <span class="fid">F10</span>
+    <span class="sev sev-medium">Medium</span>
+    <span class="fstate">Confirmed from code</span>
+    <h3>One lazy-description timeout permanently abandons the whole batch</h3>
+  </div>
+  <p class="floc"><b>internal/lazydesc/filler.go:157</b> <code>fill</code> · <b>:236</b> <code>run</code> (the <code>ctx.Done()</code> arm) · <b>:210</b> <code>recordAttempts</code></p>
+
+  <div class="block">
+    <p class="blabel">Trigger</p>
+    <p><code>descriptions.lazy</code> on (the default), a provider configured, a cold repository, and a fill that exceeds <code>descriptions.lazy.timeout_seconds</code> (8s by default) — which is precisely the situation on the first reads after installation, when the filler has the most to do and the provider is slowest.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Mechanism</p>
+    <p><code>fill</code> calls <code>recordAttempts(pending)</code> for the whole claimed set regardless of outcome, and <code>run</code>'s deadline arm returns whatever happened to be buffered while leaving the outstanding batches to finish into a channel nobody reads. So targets whose batch was still in flight are:</p>
+    <ul>
+      <li>recorded in the persisted attempt ledger with their current fingerprint, and</li>
+      <li>discarded even if their descriptions arrive a moment later.</li>
+    </ul>
+    <p>The ledger only expires on a fingerprint change, so those nodes stay undescribed until their source is edited. The comment justifying the record — “a resource the model declines to describe would otherwise be re-planned by every read” — is about a <em>refusal</em>, which is durable. A timeout is transient and is being treated as durable.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Effect</p>
+    <p>The first slow read on a cold repository burns up to <code>max_nodes</code> (40) nodes permanently. Since every intercepted <code>cat</code> and <code>grep</code> is a fresh process, the in-process ledger is not what saves them — the persisted one is what condemns them. The stated behaviour (“Reads are slower on a cold repo and converge on the old speed as it warms up”) becomes “reads stay fast and the repo never warms up”. <code>arac descriptions generate</code> still works, so it is recoverable, but nothing tells the operator to run it.</p>
+  </div>
+
+  <div class="fix">
+    <p class="blabel">Fix</p>
+    <p>Record only what was actually attempted to completion. <code>run</code> already knows which batches returned; have it report the set of targets whose batch completed (successfully or with a provider error) and pass <em>that</em> to <code>recordAttempts</code> instead of the whole <code>pending</code> slice. Targets abandoned at the deadline stay unattempted and get another chance on the next read.</p>
+    <p>Two smaller companions:</p>
+    <ul>
+      <li>Release the in-process claim for abandoned targets too, so a second read in the same long-lived <code>arac serve</code> can retry them.</li>
+      <li>Keep the results that <em>do</em> arrive after the deadline: the worker goroutines already write into a buffered channel, so a <code>write()</code> on a late drain costs nothing and the descriptions were paid for.</li>
+    </ul>
+  </div>
+</article>
+
+<!-- ============================= F11 ============================= -->
+<article class="finding" id="F11" data-tone="medium" data-sev="medium">
+  <div class="fhead">
+    <span class="fid">F11</span>
+    <span class="sev sev-medium">Medium</span>
+    <span class="fstate repro">Reproduced</span>
+    <h3>The `intercept_id` contract promises “the nearest candidates”; a mistyped ID gets “No such file or directory”</h3>
+  </div>
+  <p class="floc"><b>internal/prompts/contract.go:165</b> <code>interceptResourceIDs</code> · <b>internal/cli/cmd.go:303</b> <code>resolveReadOperand</code> · <b>:180</b> <code>serveRead</code></p>
+
+  <div class="block">
+    <p class="blabel">Trigger</p>
+    <p><code>intercept_id</code> mode; a shell read whose operand is a near-miss resource ID.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Mechanism</p>
+    <p>The contract says, of shell reads taking IDs: <em>“A unique trailing part is enough (<code>Flask.register_blueprint</code>), and a miss returns the nearest candidates rather than an error.”</em> That is true of <code>arac read</code> and the MCP tool, which surface <code>idresolve</code>'s ranked candidate list. It is not true of the intercepted shell read: <code>resolveReadOperand</code> discards both the error and the note from <code>BodyBounds</code> and returns <code>ok=false</code>, <code>serveRead</code> returns <code>false</code>, and <code>RunCmd</code> passes through to the real <code>cat</code>.</p>
+    <p>The passthrough itself is deliberate and correctly reasoned — “there is no policy in a typo”, and an operand that resolves to nothing may simply be a path aracne does not index. The defect is that the contract claims a capability this surface does not have.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Effect</p>
+    <p>In the mode whose entire premise is that resource IDs are worth the vocabulary cost, the recovery path the contract sells for a mistyped ID does not exist. The model gets a filesystem error about a symbol, which points it at the wrong recovery.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Reproduction</p>
+<pre><code>$ arac read RunGuardd
+# UNRESOLVED:
+- RunGuardd: resource "RunGuardd" not found in topology. Did you mean one of these? Pass the full ID:
+- github.com/Rhuan-Marques/aracne/internal/cli.RunGuard (function)
+
+$ arac cmd -- cat RunGuardd
+cat: RunGuardd: No such file or directory</code></pre>
+  </div>
+
+  <div class="fix">
+    <p class="blabel">Fix</p>
+    <p>Serve the candidates where they are cheap and safe to serve: when the operand is <em>not</em> a path on disk (so passing through can only produce a filesystem error about a symbol) <em>and</em> the resolver produced ranked candidates, return them as a <code>refusal</code> — the channel <code>serveCommand</code> already has, which exits non-zero on stderr. An operand that resolves to nothing at all and has no candidates keeps today's passthrough, which is right.</p>
+    <p><code>resolveReadTargetWith</code> already returns the candidate note; <code>BodyBounds</code> currently drops it (<code>target, _, rerr := …</code>). Widening that signature is the whole change.</p>
+    <p>If you would rather not touch the read path, the alternative is to delete the clause from <code>interceptResourceIDs</code>. That is a real loss — the forgiving resolver is one of the reasons IDs are usable — but a contract that names a capability the surface does not have is the failure <code>contract.go</code>'s header says the file exists to prevent.</p>
+  </div>
+</article>
+
+<!-- ============================= F12 ============================= -->
+<article class="finding" id="F12" data-tone="medium" data-sev="medium">
+  <div class="fhead">
+    <span class="fid">F12</span>
+    <span class="sev sev-medium">Medium</span>
+    <span class="fstate repro">Reproduced</span>
+    <h3>`arac grep` is materially weaker than the grep the guard advertises it against</h3>
+  </div>
+  <p class="floc"><b>internal/cli/grep.go:38</b> <code>RunGrep</code> · compare <b>internal/cli/cmd.go:456</b> <code>grepRoots</code> / <b>:481</b> <code>grepScope</code></p>
+
+  <div class="block">
+    <p class="blabel">Trigger</p>
+    <p>Any use of <code>arac grep</code> with more than one path operand, or with a resource ID.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Mechanism</p>
+    <p><code>RunGrep</code> reads <code>fs.Arg(0)</code> as the pattern and <code>fs.Arg(1)</code> as <em>the</em> path, then hands a single <code>Root</code> to topogrep. Operands past the second are read and discarded. There is no resource-ID resolution: <code>topogrep.SearchWith</code> stats the root and errors out. <code>arac cmd -- grep</code> handles both — <code>grepRoots</code> takes a list, and <code>grepScope</code> resolves an ID to a file plus a line-range restriction.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Effect</p>
+    <p><code>arac grep</code> is the surface the guard's PostToolUse nudge names in <em>every</em> mode (<code>sharedShellWarnings["grep"]</code>) and the one <code>docs/modes.md</code> lists as always available. A model that follows that pointer gets:</p>
+    <ul>
+      <li>silently fewer results for <code>arac grep pat a.go b.go</code> — the shell-glob shape agents write constantly;</li>
+      <li><code>Error: stat path: stat pkg.Thing: no such file or directory</code> for a resource ID, a raw internal error leaking through as user-facing text;</li>
+      <li>no <code>-F</code>, <code>-w</code>, <code>-x</code>, <code>-m</code>, <code>--exclude</code>, <code>--exclude-dir</code>, all of which the intercepted shell form supports.</li>
+    </ul>
+    <p>Silently dropping an operand is the worse half: the exit status is 0 and the output looks complete.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Reproduction</p>
+<pre><code>$ /usr/bin/grep -n alpha pkg/a.txt pkg/b.txt
+pkg/a.txt:1:alpha
+pkg/a.txt:3:alpha
+pkg/a.txt:5:alpha
+pkg/b.txt:1:alpha
+
+$ arac grep alpha pkg/a.txt pkg/b.txt ; echo "exit=$?"
+pkg/a.txt:1:alpha
+pkg/a.txt:3:alpha
+pkg/a.txt:5:alpha
+exit=0                                  # b.txt silently dropped
+
+$ arac cmd -- grep -n alpha pkg/a.txt pkg/b.txt
+…all four rows…
+
+$ arac grep Sprintf 'example.com/demo.(Greeter).Hello'
+Error: stat path: stat example.com/demo.(Greeter).Hello: no such file or directory</code></pre>
+  </div>
+
+  <div class="fix">
+    <p class="blabel">Fix</p>
+    <p>Route <code>RunGrep</code> through the same two helpers <code>serveGrep</code> uses. They already exist, are already tested, and already do exactly this job:</p>
+<pre><code>roots, restrict, ok := grepRoots(manager, fs.Args()[1:], cfg)   // instead of Root: fs.Arg(1)
+…
+if restrict != nil { restrictResultToRange(res, restrict.StartsAt, restrict.EndsAt) }</code></pre>
+    <p style="margin-top:.7em">They currently live in <code>internal/cli/cmd.go</code>, which is the same package, so this is a call-site change rather than a move. That also fixes the leaked <code>stat path:</code> error, since <code>grepScope</code> returns a clean <code>ok=false</code> for an operand it cannot place.</p>
+    <p>Add flags for the knobs the shell form already models — <code>-F</code>, <code>-w</code>, <code>-x</code>, <code>-m</code>, <code>--exclude</code>, <code>--exclude-dir</code> — or, cheaper and arguably better, make <code>arac grep</code> a thin front end that builds a <code>shellcmd.GrepRequest</code> from its own argv and calls <code>serveGrep</code>. One parser for the search surface is the same argument <code>internal/shellcmd</code>'s package doc makes for the guard and <code>arac cmd</code>.</p>
+  </div>
+</article>
+
+<!-- ============================= F13 ============================= -->
+<article class="finding" id="F13" data-tone="low" data-sev="low">
+  <div class="fhead">
+    <span class="fid">F13</span>
+    <span class="sev sev-low">Low</span>
+    <span class="fstate repro">Reproduced</span>
+    <h3>A resource-scoped search prints context lines from outside the resource</h3>
+  </div>
+  <p class="floc"><b>internal/cli/cmd.go:530</b> <code>restrictResultToRange</code> · <b>internal/topogrep/grep.go:672</b> <code>FormatResult</code></p>
+
+  <div class="block">
+    <p class="blabel">Trigger</p>
+    <p>An intercepted <code>grep -A/-B/-C &lt;pattern&gt; &lt;resource-id&gt;</code>.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Mechanism</p>
+    <p><code>restrictResultToRange</code> filters <code>res.Matches</code> by line and recomputes <code>Files</code>, <code>Counts</code>, <code>Total</code> and <code>DistinctResources</code>, but leaves <code>res.Context</code> — a <code>path → line → text</code> map — untouched. <code>FormatResult</code> reads context by absolute line number, so a <code>-B</code> window still emits lines above the declaration the search was scoped to.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Effect</p>
+    <p>“Search inside one resource”, which the <code>intercept_id</code> contract shows as a worked example, returns lines that are not in the resource. Small in bytes, but it is the one shape whose whole value is that the boundary is exact.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Reproduction</p>
+<pre><code># Hello spans main.go:11-13
+$ arac cmd -- grep -B3 -n Sprintf 'example.com/demo.(Greeter).Hello'
+# example.com/demo.(Greeter).Hello — Hello returns a greeting.
+9-
+10-// Hello returns a greeting.
+11-func (g Greeter) Hello() string {
+12:	return fmt.Sprintf("hello %s", g.Name)
+          ↑ lines 9 and 10 are outside the resource</code></pre>
+    <p style="margin-top:.7em">Also asserted by the dormant <code>TestAudit_RangeRestrictionAlsoDropsOutOfRangeContext</code>, which currently fails.</p>
+  </div>
+
+  <div class="fix">
+    <p class="blabel">Fix</p>
+    <p>Prune the map in the same pass:</p>
+<pre><code>for path, lines := range res.Context {
+    for line := range lines {
+        if line &lt; from || line &gt; to { delete(lines, line) }
+    }
+    if len(lines) == 0 { delete(res.Context, path) }
+}</code></pre>
+    <p style="margin-top:.7em">Everything else <code>restrictResultToRange</code> recomputes is already handled; this is the one field it walked past.</p>
+  </div>
+</article>
+
+<!-- ============================= F14 ============================= -->
+<article class="finding" id="F14" data-tone="low" data-sev="low">
+  <div class="fhead">
+    <span class="fid">F14</span>
+    <span class="sev sev-low">Low</span>
+    <span class="fstate repro">Reproduced</span>
+    <h3>`git -C &lt;dir&gt; &lt;subcommand&gt;` — the `-C` value is read as the subcommand</h3>
+  </div>
+  <p class="floc"><b>internal/toolspec/toolspec.go:409</b> <code>gitSubcommandKey</code></p>
+
+  <div class="block">
+    <p class="blabel">Trigger</p>
+    <p>Any <code>git</code> invocation with a global option that takes a value before the subcommand: <code>-C &lt;dir&gt;</code>, <code>-c &lt;k=v&gt;</code>, <code>--git-dir &lt;p&gt;</code>, <code>--work-tree &lt;p&gt;</code>.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Mechanism</p>
+    <p><code>gitSubcommandKey</code> takes the first argument not starting with <code>-</code> as the subcommand. For <code>git -C /repo apply p.patch</code> that is <code>/repo</code>, which matches no case, so the command classifies as unknown.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Effect</p>
+    <p>Bounded, because unclassified commands fall into <code>mayHaveWrittenSource</code>'s “might have written source” arm and still trigger the drift backstop. What is lost is the precise classification: <code>git -C x apply</code> is not refused under <code>blocked_tools: ["edit"]</code>, and <code>git -C x show HEAD:src/main.go</code> is not recognised as a read. Both are bypasses of an opt-in policy rather than wrong answers.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Reproduction</p>
+<pre><code>ShellCommandKeyForArgs("git", ["-C","/repo","apply","p.patch"])
+  = ("", false)     want ("edit", true)
+ShellCommandKeyForArgs("git", ["-C","/repo","show","HEAD:src/main.go"])
+  = ("", false)     want ("read", true)</code></pre>
+    <p style="margin-top:.7em">Asserted by the dormant <code>TestAudit_GitGlobalOptionsDoNotHideTheSubcommand</code>, which currently fails on all three sub-cases.</p>
+  </div>
+
+  <div class="fix">
+    <p class="blabel">Fix</p>
+    <p>Skip the value of the value-taking global options while scanning for the subcommand:</p>
+<pre><code>valueTakingGlobals := map[string]bool{"-C":true, "-c":true,
+    "--git-dir":true, "--work-tree":true, "--namespace":true, "--exec-path":true}
+for i := 0; i &lt; len(args); i++ {
+    a := args[i]
+    if valueTakingGlobals[a] { i++; continue }
+    if strings.HasPrefix(a, "-") { continue }   // --flag=value and bare flags
+    sub = strings.ToLower(a); break
+}</code></pre>
+    <p style="margin-top:.7em">The <code>--flag=value</code> forms need no special case: they start with <code>-</code> and carry their value inside the token.</p>
+  </div>
+</article>
+
+<!-- ============================= F15 ============================= -->
+<article class="finding" id="F15" data-tone="low" data-sev="low">
+  <div class="fhead">
+    <span class="fid">F15</span>
+    <span class="sev sev-low">Low</span>
+    <span class="fstate repro">Reproduced</span>
+    <h3>A `..`-prefixed directory defeats the “inside the root” test in three renderers</h3>
+  </div>
+  <p class="floc"><b>internal/cli/cmd.go:516</b> <code>displayRoot</code> · <b>internal/topogrep/grep.go:1387</b> <code>displayPath</code> · <b>internal/llm/languages/universaltools/read.go:914</b> <code>displayPath</code> · <b>internal/cli/check_updates.go:95</b> <code>relativize</code></p>
+
+  <div class="block">
+    <p class="blabel">Trigger</p>
+    <p>A repository containing a directory whose name begins with <code>..</code>. This is not contrived: <code>..data</code> is what Kubernetes ConfigMap and Secret volume mounts are named, and it shows up in checked-in fixture trees.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Mechanism</p>
+    <p>All four compute <code>filepath.Rel(root, path)</code> and then test <code>strings.HasPrefix(rel, "..")</code> to decide the path escaped the root. <code>..data/app.go</code> matches, so a path that is plainly <em>inside</em> the root is treated as outside. <code>guard_scope.isUnder</code> (guard_scope.go:52) gets the same test right — it compares against <code>".."</code> exactly and <code>".." + Separator</code>.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Effect</p>
+    <p>Cosmetic but repeated: the full absolute path is echoed into every matching grep row, every read group header and every <code>check-updates</code> line for files under such a directory. On a wide search that is real context spend.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Reproduction</p>
+<pre><code>displayPath(root="/srv/project", "/srv/project/..data/app.go")
+  = "/srv/project/..data/app.go"    want "..data/app.go"</code></pre>
+    <p style="margin-top:.7em">Asserted by the dormant <code>TestAudit_DisplayRootHandlesADotDotPrefixedDirectory</code> and <code>TestAudit_DisplayPathHandlesADotDotPrefixedDirectory</code>, both currently failing.</p>
+  </div>
+
+  <div class="fix">
+    <p class="blabel">Fix</p>
+    <p>Export the correct predicate once and call it from all four. <code>isUnder</code> already exists in <code>internal/cli/guard_scope.go</code>; the same three-line body belongs in a shared place (<code>internal/helper</code> is the natural home, since <code>topogrep</code> and <code>universaltools</code> both already import it) and the four call sites become <code>if rel, err := filepath.Rel(...); err == nil &amp;&amp; helper.IsRelativeInside(rel)</code>. Then delete the local copy in <code>guard_scope.go</code> so there is one definition rather than one correct and four wrong.</p>
+  </div>
+</article>
+
+<!-- ============================= F16 ============================= -->
+<article class="finding" id="F16" data-tone="low" data-sev="low">
+  <div class="fhead">
+    <span class="fid">F16</span>
+    <span class="sev sev-low">Low</span>
+    <span class="fstate repro">Reproduced</span>
+    <h3>`breToRE2` reads a second leading `^` as an anchor rather than a literal</h3>
+  </div>
+  <p class="floc"><b>internal/shellcmd/shellcmd.go:1036-1060</b> <code>breToRE2</code> (the <code>'^'</code> arm)</p>
+
+  <div class="block">
+    <p class="blabel">Trigger</p>
+    <p>A POSIX-BRE <code>grep</code> (no <code>-E</code>/<code>-F</code>) whose pattern begins with two carets, or with a caret immediately after <code>\(</code> or <code>\|</code> followed by another caret.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Mechanism</p>
+    <p>The <code>'^'</code> arm deliberately leaves <code>leading</code> true, because a caret does not give a following <code>*</code> something to repeat. That is correct for <code>*</code> and wrong for a second <code>^</code>: in BRE only the <em>first</em> caret anchors, and any later one is an ordinary character. <code>^^foo</code> therefore becomes RE2 <code>^^foo</code> — two anchors, which matches lines starting with <code>foo</code> — where the real grep matches lines starting with a literal caret.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Effect</p>
+    <p>A confident wrong answer to a rare pattern: the intercepted search returns matches the real command does not. Exotic, but this function's entire premise is that it must not translate a pattern it cannot vouch for.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Reproduction</p>
+<pre><code>breToRE2("^^foo") = "^^foo"       want "^\\^foo"</code></pre>
+    <p style="margin-top:.7em">Asserted by the dormant <code>TestAudit_BREInteriorCaretIsLiteral</code>, currently failing.</p>
+  </div>
+
+  <div class="fix">
+    <p class="blabel">Fix</p>
+    <p>Track “may still anchor” separately from “nothing to repeat”. Add a second flag — <code>anchorable</code>, set true at the start of the pattern and just past <code>\(</code> / <code>\|</code>, and cleared by <em>any</em> emitted character including a caret — and have the <code>'^'</code> arm test that instead of <code>leading</code>. <code>leading</code> keeps its current meaning for the <code>'*'</code> arm, which is right as written.</p>
+  </div>
+</article>
+
+<!-- ============================= F17 ============================= -->
+<article class="finding" id="F17" data-tone="low" data-sev="low">
+  <div class="fhead">
+    <span class="fid">F17</span>
+    <span class="sev sev-low">Low</span>
+    <span class="fstate">Confirmed from code</span>
+    <h3>The edit-sync hook matcher omits `NotebookEdit`; the guard's, derived from the same map, does not</h3>
+  </div>
+  <p class="floc"><b>internal/cli/native_hooks.go:42</b> <code>writeClaudeNativeEditHook</code> · compare <b>:65</b> <code>guardHookMatcher</code> · <b>internal/toolspec/toolspec.go:80</b> <code>nativeToolToKey</code></p>
+
+  <div class="block">
+    <p class="blabel">Trigger</p>
+    <p>A project that lists <code>edit-update-db-plugin</code> in <code>plugins</code>, plus a native <code>NotebookEdit</code>.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Mechanism</p>
+    <p><code>guardHookMatcher</code> is derived from <code>toolspec.NativeToolNames()</code> precisely so it cannot fall behind the map — and it includes <code>NotebookEdit</code>. The edit-sync entry next to it still hard-codes <code>"Edit|Write|MultiEdit"</code>. <code>toolspec.nativeToolToKey</code>'s own comment describes this exact class of drift for <code>MultiEdit</code>; the fix did not reach the sibling writer.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Effect</p>
+    <p>Narrow today: the guard's <code>driftCheckApplies</code> covers <code>NotebookEdit</code>, so the warning still lands. What is lost is the inline sync the plugin exists to provide — for that one tool the graph is updated on the next call rather than with the edit. It matters more if F03's fix promotes this hook.</p>
+  </div>
+
+  <div class="fix">
+    <p class="blabel">Fix</p>
+    <p>Derive it from the same source. Add a <code>toolspec.NativeMutatorNames()</code> that returns the sorted names whose key is <code>edit</code> or <code>write</code>, and use it for the matcher — the same shape <code>NativeToolNames()</code> already has, and it stays in step by construction. Pin it with the same test that pins <code>guardHookMatcher</code> (<code>TestGuardHookMatcherCoversNativeTools</code>).</p>
+    <p>The OpenCode side has the same list spelled twice in JavaScript (<code>SCANNED_TOOLS</code> in one plugin, the <code>["edit","write","apply_patch","multi_edit","multiedit"]</code> literal in the other); they should be generated from the same Go source rather than typed.</p>
+  </div>
+</article>
+
+<!-- ============================= F18 ============================= -->
+<article class="finding" id="F18" data-tone="low" data-sev="low">
+  <div class="fhead">
+    <span class="fid">F18</span>
+    <span class="sev sev-low">Low</span>
+    <span class="fstate">Confirmed from code · not reproduced</span>
+    <h3>The manifest stamps a post-scan mtime, so a write landing mid-scan is invisible afterwards</h3>
+  </div>
+  <p class="floc"><b>internal/helper/manifest.go:109-115</b> <code>SyncManifest</code> · <b>:134</b> <code>SyncManifestFiles</code> · <b>:422</b> <code>DiffScanFiles</code></p>
+
+  <div class="block">
+    <p class="blabel">Trigger</p>
+    <p>A file written after the parser has read it but before the manifest is stamped. Reachable through parallel sub-agents editing during a guard pre-tool scan, an editor save during <code>arac scan</code>, or a long Python-scanner pass (one subprocess per file).</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Mechanism</p>
+    <p><code>SyncManifest</code> records <code>fi.ModTime()</code> read at stamping time, not the mtime the parser observed. <code>DiffScanFiles</code> then compares <code>fi.ModTime().After(stamped)</code>, which is false for the new mtime — so the file is “unchanged” while the database holds the pre-write parse. Nothing later corrects it: the entry only becomes stale again on a <em>further</em> write.</p>
+    <p>The <code>else</code> branch is worse in the same direction: when the stat fails it stamps <code>time.Now()</code>, a timestamp that may be ahead of every future write.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Effect</p>
+    <p>A permanently wrong graph entry for that file, with <code>check-updates</code> reporting clean. Reads of its symbols return stale spans; <code>healStale</code> recovers the ones whose span no longer fits the file, but a same-length edit produces silently wrong source.</p>
+    <p><b>Honest caveat:</b> I could not land this in a controlled timing test. On a 25,000-file fixture the window between one file's parse and <code>SyncManifest</code> measured under ~100 ms, and every injected write fell outside it. The mechanism is unambiguous in the code — and the dormant <code>TestAudit_ManifestDoesNotSwallowAWriteDuringTheScan</code> asserts it directly (it does not currently compile, against the newer three-argument signature) — but I am reporting it as a latent race rather than a demonstrated one.</p>
+  </div>
+
+  <div class="fix">
+    <p class="blabel">Fix</p>
+    <p>Stamp the mtime the parser saw, not the one the stamper sees. The scanners already stat each file to decide whether to parse it; carry that <code>time.Time</code> alongside the path in the <code>attempted</code> slice (make it <code>[]ScannedFile{Path, ModTime}</code>) and write that value into the manifest. A write during the scan then leaves a strictly newer mtime on disk and the next diff catches it.</p>
+    <p>Where a pre-parse mtime genuinely is not available, stamp the earliest safe value — the scan's own start time — rather than <code>time.Now()</code>. Erring early costs one redundant re-parse; erring late loses the write.</p>
+  </div>
+</article>
+
+<!-- ============================= F19 ============================= -->
+<article class="finding" id="F19" data-tone="low" data-sev="low">
+  <div class="fhead">
+    <span class="fid">F19</span>
+    <span class="sev sev-low">Low</span>
+    <span class="fstate">Confirmed from code</span>
+    <h3>`hasSourceExtension` truncates a Windows absolute path at the drive letter</h3>
+  </div>
+  <p class="floc"><b>internal/toolspec/toolspec.go:556</b> <code>hasSourceExtension</code></p>
+
+  <div class="block">
+    <p class="blabel">Trigger</p>
+    <p>Windows. Any classifier input carrying a drive-qualified path: <code>cp C:\tmp\x C:\src\main.go</code>, <code>python -c "open('C:\proj\a.py','w')"</code>.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Mechanism</p>
+    <p>The function strips a trailing <code>:line</code> suffix so <code>src/app.rs:95</code> still counts, guarded by “the tail contains no <code>/</code>”. On <code>C:\src\main.go</code> the last colon is at index 1 and the tail <code>:\src\main.go</code> contains no forward slash — the separators are backslashes — so the token is truncated to <code>C</code>, which has no extension.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Effect</p>
+    <p><code>commandTouchesSource</code> and <code>containsSourcePath</code> both return false, so on Windows <code>cp</code>/<code>mv</code>/<code>tee</code>/<code>patch</code> to an absolute path and interpreter one-liners writing to one are never classified as edits. Under <code>blocked_tools: ["edit"]</code> that is a bypass; more broadly the drift backstop still covers it, since an unclassified command triggers a scan.</p>
+  </div>
+
+  <div class="fix">
+    <p class="blabel">Fix</p>
+    <p>Normalise separators before the colon test, as <code>isScratchPath</code> two lines below already does:</p>
+<pre><code>slashed := filepath.ToSlash(tok)
+if i := strings.LastIndex(slashed, ":"); i &gt; 0 &amp;&amp; !strings.Contains(slashed[i:], "/") {
+    tok = tok[:i]
+}</code></pre>
+    <p style="margin-top:.7em">Then exclude a bare drive letter explicitly (<code>i == 1</code> with an ASCII letter before it) so <code>C:/src/main.go</code> keeps its extension while <code>src/app.rs:95</code> still loses its line suffix.</p>
+  </div>
+</article>
+
+<!-- ============================= F20 ============================= -->
+<article class="finding" id="F20" data-tone="low" data-sev="low">
+  <div class="fhead">
+    <span class="fid">F20</span>
+    <span class="sev sev-low">Low</span>
+    <span class="fstate repro">Reproduced</span>
+    <h3>`arac disable` leaves a zero-byte CLAUDE.md and empty `.opencode` directories</h3>
+  </div>
+  <p class="floc"><b>internal/cli/disable.go</b> · <b>internal/cli/setup.go:784</b> <code>writeMarkdownIntegrationFile</code></p>
+
+  <div class="block">
+    <p class="blabel">Trigger</p>
+    <p><code>arac disable</code> in a project where <code>CLAUDE.md</code> / <code>AGENTS.md</code> held nothing but the generated block.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Mechanism</p>
+    <p>Stripping the block leaves an empty string, which is written back as a zero-byte file. The command removes the generated command/agent/plugin files but not the directories it created for them.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Effect</p>
+    <p>Cosmetic. A zero-byte <code>CLAUDE.md</code> is still loaded by Claude Code (harmlessly), and empty <code>.opencode/{agents,commands,plugins}</code> directories are noise in a tree the user just asked to be cleaned. It also makes “did disable actually run?” harder to answer at a glance.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Reproduction</p>
+<pre><code>$ arac disable -y
+…
+Claude Code CLAUDE.md updated at CLAUDE.md
+
+$ wc -c CLAUDE.md
+0 CLAUDE.md
+$ ls .opencode
+agents  commands  plugins        # all empty</code></pre>
+  </div>
+
+  <div class="fix">
+    <p class="blabel">Fix</p>
+    <p>In the disable path, when the stripped content is blank, remove the file instead of writing it — and only when aracne created it, which is knowable: it was blank-but-for-the-block. Then <code>os.Remove</code> each directory the command emptied; <code>os.Remove</code> on a non-empty directory fails harmlessly, so no emptiness check is needed. This mirrors what <code>removeIfOnlyAracneWrote</code> already does for <code>opencode.json</code>.</p>
+  </div>
+</article>
+
+<!-- ============================= F21 ============================= -->
+<article class="finding" id="F21" data-tone="low" data-sev="low">
+  <div class="fhead">
+    <span class="fid">F21</span>
+    <span class="sev sev-low">Low</span>
+    <span class="fstate">Confirmed from code</span>
+    <h3>A relative operand is resolved against the project root, not the agent's shell — so a same-named file at the root shadows it</h3>
+  </div>
+  <p class="floc"><b>internal/cli/guard_untracked.go:76</b> <code>existingReadFiles</code> · <b>internal/cli/guard_intercept.go:300</b> <code>namesOnlyUnindexedFiles</code> · <b>:325</b> <code>namesAnIndexedFile</code></p>
+
+  <div class="block">
+    <p class="blabel">Trigger</p>
+    <p>The agent's Bash shell has <code>cd</code>'d into a subdirectory, its command names a relative path, and a file of the same relative name exists at the project root with a different tracked status.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Mechanism</p>
+    <p><code>existingReadFiles</code> resolves a relative token as <code>filepath.Join(root, tok)</code>. The choice is deliberate and correct in the general case — the hook cannot see the agent's shell cwd, and resolving against its own would answer about a different file. What it does not handle is the collision: from <code>internal/</code>, <code>cat util.go</code> resolves to <code>&lt;root&gt;/util.go</code>, and the tracked-status answer belongs to the wrong file.</p>
+  </div>
+
+  <div class="block">
+    <p class="blabel">Effect</p>
+    <p>Two asymmetric consequences:</p>
+    <ul>
+      <li><b>Interception</b> (<code>namesOnlyUnindexedFiles</code>): a false “all operands unindexed” refuses a rewrite aracne could have served. Costs one un-enriched read; harmless, because <code>arac cmd</code> re-checks in the agent's real shell.</li>
+      <li><b>The nudge</b> (<code>namesAnIndexedFile</code>): this one has no second check — whatever it decides is printed to the model. A false positive advertises the aracne read for a file that carries no nodes; a false negative withholds the pointer where it would have been right.</li>
+    </ul>
+    <p>Bounded, and the least-bad resolution given what a hook can see. Listed because the asymmetry is not currently written down where <code>existingReadFiles</code> is used for the nudge.</p>
+  </div>
+
+  <div class="fix">
+    <p class="blabel">Fix</p>
+    <p>Make the ambiguity visible rather than guessing. Have <code>existingReadFiles</code> return, alongside the resolved paths, whether any token was relative and therefore resolved speculatively. Then:</p>
+    <ul>
+      <li><code>namesAnIndexedFile</code> — which requires positive evidence — treats a speculative resolution as no evidence and returns false, so the nudge fires only on a token it could place unambiguously (an absolute path, or a directory inside the root);</li>
+      <li><code>namesOnlyUnindexedFiles</code> keeps today's behaviour, since a wrong guess there costs nothing.</li>
+    </ul>
+    <p>Claude Code's hook payload does not carry the Bash tool's persistent cwd, so there is no way to resolve it correctly; declining to answer is the honest alternative. If a future payload does carry it, prefer it over the root — the same tier order <code>guardDBPath</code> already uses.</p>
+  </div>
+</article>
+
+<hr class="thread">
+
+<h2>Checked and sound</h2>
+
+<p class="lede">Recorded so the register is honest about coverage. Each of these was exercised against a live binary and behaved correctly, including at the edges.</p>
+
+<ul class="sound">
+  <li><b>Shell-grep parity.</b> Thirteen flag combinations (<code>-n</code>, <code>-H</code>, <code>-c</code>, <code>-l</code>, <code>-r</code>, <code>-m</code>, <code>-i</code>, <code>-w</code>, <code>-x</code>, <code>-A</code>, <code>-B</code>, bare, and a single-file bare read) compared byte-for-byte against <code>/usr/bin/grep</code> on unindexed files — output and exit status identical in every case, including the bare-<code>line:text</code> single-file form and the <code>0</code> from <code>grep -c</code> with no matches.</li>
+  <li><b>Interception guard rails.</b> <code>$(…)</code>, backticks, <code>| sort</code>, <code>| wc -l</code>, <code>| xargs</code>, <code>&gt; out</code>, heredocs, <code>for … done</code>, and a rewrite of a rewrite are all correctly refused; <code>cd x &amp;&amp; cat f</code>, <code>a &amp;&amp; b</code>, <code>a; b</code>, quoted operands and <code>| grep -v … | head -N</code> are all correctly rewritten, with the compound splices landing at the right byte offsets.</li>
+  <li><b>Passthrough fidelity.</b> <code>cat &lt;dir&gt;</code>, <code>cat &lt;missing&gt;</code>, an unmodelled flag, and an uninstalled binary all reproduce the real command's stderr and exit status, with <code>argv[0]</code> preserved.</li>
+  <li><b>Window arithmetic.</b> <code>head -N</code> past EOF, <code>tail -N</code> past EOF, <code>tail -n +N</code>, <code>sed -n 'A,Bp'</code>, <code>head -0</code> and multi-operand <code>cat</code> all return exactly what the real command returns (modulo the fence and F09).</li>
+  <li><b>MCP protocol.</b> String and numeric ids echoed verbatim, <code>ping</code> answered, omitted/<code>null</code>/empty <code>arguments</code> all normalised, missing tool name reported as <code>-32602</code>, unknown method as <code>-32601</code>, notifications correctly unanswered, and <code>read_resource</code> vs <code>read</code> name resolution matching what the generators write.</li>
+  <li><b>Generated-file merging.</b> <code>arac setup</code> preserves a user's own PostToolUse hooks, other MCP servers, other OpenCode permission keys, and any prose after the generated block; it is idempotent across re-runs and self-heals a block whose closing line was deleted. <code>arac disable</code> restores only the keys aracne wrote and leaves structured bash policies alone.</li>
+  <li><b>`arac edit`.</b> Single and batch forms, all-or-nothing rollback on a failed hunk, sorted multi-file locking, CRLF matching without rewriting the file, <code>replace_all</code> uniqueness enforcement, and warnings rendered in the same shape the guard uses.</li>
+  <li><b>Config resilience.</b> <code>validConfig</code> derives its key set from the struct tags, so the “new key looks like a legacy config” failure the memory notes is fixed; <code>scan.pre_tool: "hard"</code> is rejected by <code>Validate</code> and defanged again in <code>EffectivePreToolScan</code>; the sqlite DSN now uses the driver's own <code>_pragma=busy_timeout()</code> spelling (an older audit finding, since fixed).</li>
+</ul>
+
+<h2>A note on the dormant audit suite</h2>
+
+<p>There is a <code>-tags audit</code> test suite in eight packages. It is not part of <code>make test</code>, and it does not currently build in <code>internal/helper</code> or <code>internal/topogrep</code> — both reference signatures that have since changed. Of the tests that do build, six fail; five of those are F05, F13, F14, F15 and F16 above, all independently reproduced here. One (<code>TestAudit_DSNBusyTimeoutReachesTheDriver</code>) is stale: the defect it describes has been fixed and the test now asserts against the old spelling.</p>
+
+<p>Whatever the intent of that tag, its current state is the worst of both: it encodes real, live defects that nothing runs, beside stale ones that would fail if anything did. Either wire it into CI as an expected-failure list with the count pinned, or fold the live assertions into the ordinary suite as skipped tests with a linked issue, and delete the rest.</p>
+
+<footer>
+  <p>Aracne Harness Defect Register · chore/debloat @ a882cd3 · 2026-09-10<br>
+  21 findings · 20 reproduced against a live binary · 1 confirmed from code and labelled as such<br>
+  No source file in this repository was modified in the course of this audit.</p>
+</footer>
+
+</div>
+
+<script>
+(function () {
+  var buttons = Array.prototype.slice.call(document.querySelectorAll('.filterbar button'));
+  var findings = Array.prototype.slice.call(document.querySelectorAll('.finding'));
+  var rows = Array.prototype.slice.call(document.querySelectorAll('table.index tbody tr'));
+
+  function severityOfRow(row) {
+    var chip = row.querySelector('.sev');
+    if (!chip) return '';
+    return chip.textContent.trim().toLowerCase();
+  }
+
+  function apply(filter) {
+    findings.forEach(function (f) {
+      f.classList.toggle('hidden', filter !== 'all' && f.dataset.sev !== filter);
+    });
+    rows.forEach(function (r) {
+      r.style.display = (filter === 'all' || severityOfRow(r) === filter) ? '' : 'none';
+    });
+    buttons.forEach(function (b) {
+      b.setAttribute('aria-pressed', String(b.dataset.filter === filter));
+    });
+  }
+
+  buttons.forEach(function (b) {
+    b.addEventListener('click', function () { apply(b.dataset.filter); });
+  });
+})();
+</script>

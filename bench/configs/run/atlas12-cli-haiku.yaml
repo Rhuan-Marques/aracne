@@ -1,25 +1,26 @@
-sample_id: atlas-g458
-languages: [go]
+sample_id: atlas12
+languages: [go, python]
 
 seeds: 1
-arms: [aracne]
+arms: [baseline, aracne]
 
 run_harness: claude_code
-model: opus
-effort: medium
+model: haiku
 max_turns: 100
 timeout_s: 3600
-run_parallel: 1
+run_parallel: 3
 
 grade_timeout_s: 10800
 grade_stall_timeout_s: 3600
+ni_margin: 0.10
 
 isolate_operator_config: true
 deny_answer_key: true
 allow_cold: true
 
 arm_builtin_tools:
-  aracne: [Bash, Glob]
+  baseline: [Bash, Glob]
+  aracne:   [Bash, Glob]
 
 arm_aracne_config:
-  aracne: lazy-linerange-run
+  aracne: lazy-aracneread

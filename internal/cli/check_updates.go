@@ -40,8 +40,10 @@ func RunCheckUpdates(args []string) {
 		}
 	}
 
-	manager, _ := InitRegistry(dbPath)
-	health, err := manager.IndexHealth(root)
+	manager, reg := InitRegistry(dbPath)
+	// The registry, so a language the tree has acquired since the last scan is reported as new
+	// rather than as nothing at all -- which is the whole question this command answers.
+	health, err := manager.IndexHealth(root, reg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error checking updates: %v\n", err)
 		os.Exit(1)

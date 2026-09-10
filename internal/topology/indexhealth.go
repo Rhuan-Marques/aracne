@@ -8,7 +8,38 @@ import (
 	"strings"
 
 	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/scanner"
 )
+
+// detectedLanguages is the set IndexHealth diffs: what the graph already holds, plus whatever
+// the registry finds in the tree right now.
+//
+// The union is the point. A stored language whose files have all been deleted still has
+// manifest entries to report as gone, and a language the tree has just acquired has files to
+// report as new -- and only one of the two lists knows about each. Order is stable so the diff
+// visits them the same way on every run.
+func detectedLanguages(topo *domain.Topology, root string, reg *scanner.Registry) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(name string) {
+		if name == "" || seen[name] {
+			return
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	for _, lang := range topo.Languages {
+		add(lang)
+	}
+	add(topo.Language)
+	if reg != nil {
+		for _, ls := range reg.DetectAll(root) {
+			add(ls.Name())
+		}
+	}
+	return out
+}
 
 // StaleIndexError reports that a resource's recorded location no longer fits the file that is
 // on disk: the index describes a version of the source that is not the one present.
@@ -113,15 +144,24 @@ func (h IndexHealth) Files() []string {
 	return out
 }
 
-// IndexHealth diffs the source tree against the file manifest, per indexed language, without
-// touching the database. Pass root == "" to use the root recorded in the topology.
+// IndexHealth diffs the source tree against the file manifest, per language, without touching
+// the database. Pass root == "" to use the root recorded in the topology.
 //
 // It is deliberately the same primitive the watch loop and `arac check-updates` use
 // (helper.DiffScanFiles), so "what the status command reports", "what a read blames a miss on"
 // and "what an incremental scan would re-parse" can never disagree. A root that cannot be
 // walked yields a zero IndexHealth and an error; callers treat that as "unknown", never as
 // "healthy".
-func (m *TopologyManager) IndexHealth(root string) (IndexHealth, error) {
+//
+// THE REGISTRY IS WHAT MAKES THAT TRUE FOR A LANGUAGE THE GRAPH HAS NEVER SEEN. Sharing the
+// diff was only half of it: this took its language list from the STORED topology while
+// IncrementalScan takes its from Registry.DetectAll against the tree, so the first .py file in
+// a Go repository was invisible here and obvious there. `arac check-updates` printed "All files
+// are up to date" and exited 0 with a whole unindexed language on disk, and the guard's
+// post-tool drift check -- which gates its scan on this -- skipped the very call that created
+// the file. reg may be nil, which keeps the old stored-languages-only answer for a caller that
+// has no registry to hand.
+func (m *TopologyManager) IndexHealth(root string, reg *scanner.Registry) (IndexHealth, error) {
 	topo, err := helper.ReadDb(m.dbPath)
 	if err != nil {
 		return IndexHealth{}, err
@@ -136,10 +176,7 @@ func (m *TopologyManager) IndexHealth(root string) (IndexHealth, error) {
 	// drift the caller cannot act on.
 	m.applyPathVisibility(root)
 
-	languages := topo.Languages
-	if len(languages) == 0 && topo.Language != "" {
-		languages = []string{topo.Language}
-	}
+	languages := detectedLanguages(topo, root, reg)
 
 	health := IndexHealth{Root: root}
 	manifestPath := helper.ManifestPath(m.dbPath)

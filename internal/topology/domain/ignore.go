@@ -132,10 +132,27 @@ func GlobToRegexp(pattern string) (*regexp.Regexp, error) {
 
 // relPath returns p expressed relative to the matcher's root in forward-slash
 // form, or "" when p is the root itself or lies outside it.
+//
+// A RELATIVE PATH IS RESOLVED AGAINST THE PROCESS, NOT AGAINST THE ROOT. Every caller hands
+// this the output of a real directory walk, so a relative path is relative to the working
+// directory the walk started from -- which is the root only when the caller happens to be
+// standing in it. Joining it onto m.root instead was right in that one case and wrong in every
+// other: an intercepted `grep -rn x ../../` run from a subdirectory produced
+// `../../generated/gen.go`, which joined to `<root>/../../generated/gen.go`, rel'd back to a
+// `../` chain, and returned "" -- read by every rule as "outside the root, nothing applies". So
+// scan.ignore silently stopped applying the moment the agent's shell was not at the project
+// root, and ignored trees reappeared in searches carrying no annotation and no node.
+//
+// filepath.Abs agrees with the old behaviour whenever the walk root WAS the working directory,
+// which is every other call site; it only differs where the join was already producing a path
+// that does not exist.
 func (m *IgnoreMatcher) relPath(p string) string {
 	abs := p
 	if !filepath.IsAbs(p) {
-		abs = filepath.Join(m.root, p)
+		var err error
+		if abs, err = filepath.Abs(p); err != nil {
+			abs = filepath.Join(m.root, p)
+		}
 	}
 	rel, err := filepath.Rel(m.root, abs)
 	if err != nil {

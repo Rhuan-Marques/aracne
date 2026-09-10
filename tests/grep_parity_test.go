@@ -645,7 +645,12 @@ func TestBinaryFileBytesAreNeverPrinted(t *testing.T) {
 	}
 	// The file still MATCHED, and saying so is grep's own wording. Silently dropping it
 	// would be the other way to get this wrong.
-	if !strings.Contains(got, "Binary file blob.bin matches") {
+	//
+	// `./blob.bin`, not `blob.bin`: real grep echoes the operand it walked, so a search rooted
+	// at `.` reports every path under it with that prefix. filepath.Join swallows it during the
+	// walk and topogrep puts it back on the shell surface -- the one that stands in for the real
+	// command. See topogrep.echoRoot.
+	if !strings.Contains(got, "Binary file ./blob.bin matches") {
 		t.Errorf("the binary match was not reported at all:\n%s", got)
 	}
 	if status != 0 {

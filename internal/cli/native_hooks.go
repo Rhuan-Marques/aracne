@@ -95,7 +95,9 @@ func writeClaudeGuardHook(settingsPath, hooksDir string, global, autoYes bool) {
 				"type":    "command",
 				"command": hook.command,
 				"shell":   hook.shell,
-				"timeout": 30,
+				// DERIVED from the guard's own budgets rather than chosen -- see
+				// GuardHookTimeoutSeconds for the arithmetic and for what a killed hook costs.
+				"timeout": GuardHookTimeoutSeconds,
 			},
 		},
 	}
@@ -432,21 +434,34 @@ func aracJSLiteral() string {
 }
 
 // writeOpenCodePreToolScanPlugin installs the OpenCode counterpart of the Claude Code
-// PreToolUse guard hook: a plugin that runs the scan.pre_tool scan before each tool call.
+// PreToolUse guard hook: a plugin that runs the scan.pre_tool scan before each tool call and
+// rewrites a shell read or search into the aracne answer.
 //
 // It is installed unconditionally, like the Claude guard hook, and NOT listed under
 // `plugins` in the config. Which scan runs -- including none at all -- is decided at call
 // time by `scan.pre_tool`, so flipping that knob takes effect without re-running init, and a
-// project cannot end up with a fresh graph on one harness and a stale one on the other.
+// project cannot end up with a fresh graph on one harness and a stale one on the other. The
+// same holds for the rewrite: `arac guard --rewrite` reads the mode at call time, so a project
+// that changes it gets the new behaviour on both harnesses without re-running setup.
+//
+// The file name predates the rewrite half and is kept: `arac disable` removes this plugin by
+// name, and renaming it would strip the removal of an installed file rather than the file.
 func writeOpenCodePreToolScanPlugin(pluginsDir string, autoYes bool) {
 	os.MkdirAll(pluginsDir, 0755)
 	writeMarkdownFile(filepath.Join(pluginsDir, "arac-pre-tool-scan.js"), "OpenCode pre-tool scan plugin", openCodePreToolScanPlugin(), autoYes)
 }
 
-// openCodePreToolScanPlugin returns the OpenCode plugin that re-syncs the topology before a
-// tool call. It mirrors the Claude guard hook's matcher (Read|Grep|Edit|Write|Bash) in
-// OpenCode's tool names, and defers the whole decision to `arac guard --pre-scan`, which reads
-// the project config and does nothing when scan.pre_tool is "none".
+// openCodePreToolScanPlugin returns the OpenCode plugin that keeps the topology current before
+// a tool call and intercepts the shell reads and searches aracne answers.
+//
+// BOTH HALVES OF THE CLAUDE CODE PreToolUse HOOK, in the spelling this harness offers. The scan
+// mirrors that hook's matcher (Read|Grep|Edit|Write|Bash) in OpenCode's tool names and defers
+// to `arac guard --pre-scan`. The rewrite is the half OpenCode never had: Claude Code returns
+// `hookSpecificOutput.updatedInput` and OpenCode hands `tool.execute.before` a mutable
+// `output.args`, so the same decision -- made once, in interceptCommand, reached here through
+// `arac guard --rewrite` -- lands through a different door. Without it, the AGENTS.md this same
+// command writes promised an enriched `cat` and an annotated `grep` that nothing on this
+// harness delivered.
 func openCodePreToolScanPlugin() string {
 	return strings.TrimPrefix(`
 import { execFile } from "node:child_process"
@@ -476,13 +491,32 @@ export const AracPreToolScan = async ({ directory, worktree }) => {
   const root = worktree ?? directory ?? process.cwd()
 
   return {
-    "tool.execute.before": async (input) => {
+    "tool.execute.before": async (input, output) => {
       if (!SCANNED_TOOLS.has(input?.tool)) return
       try {
         // Awaited on purpose: the scan is only worth running if it lands BEFORE the tool
         // reads the graph. Bounded and swallowed, like the Claude hook -- a scan that failed
         // must never turn into a tool call that failed.
         await run(ARAC, ["guard", "--pre-scan"], { cwd: root, timeout: 30000 })
+      } catch {}
+
+      // Interception. The command is replaced in place, so the model reads real stdout and has
+      // nothing to recover from -- the same trade the Claude Code rewrite makes. Every guard
+      // rail lives in "arac guard --rewrite": it declines across a pipe it cannot serve, a
+      // redirect, a heredoc, a substitution, a mutation, an unindexed target and its own
+      // output, and answers {} when there is nothing to do.
+      if (input?.tool !== "bash") return
+      const command = output?.args?.command
+      if (typeof command !== "string" || command === "") return
+      try {
+        const { stdout } = await run(ARAC, ["guard", "--rewrite", command], {
+          cwd: root,
+          timeout: 15000,
+        })
+        const rewritten = JSON.parse(stdout || "{}").command
+        if (typeof rewritten === "string" && rewritten !== "") {
+          output.args.command = rewritten
+        }
       } catch {}
     },
   }

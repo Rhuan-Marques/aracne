@@ -5,7 +5,7 @@ under. Select one from a run YAML with the `aracne_config` field, or from the CL
 `--aracne-config`:
 
 ```bash
-python bench/run_benchmark.py run --config gosmoke --aracne-config strict-tools
+python bench/run_benchmark.py run --config atlas-smoke --aracne-config strict-tools
 ```
 
 `aracne_config` accepts a **bare name** (resolved to `bench/configs/aracne/<name>.json`) or a
@@ -59,7 +59,7 @@ Three **complete** configs tuned to give the model the richest useful context an
 Meant to be A/B'd against `baseline` and each other:
 
 ```bash
-python bench/run_benchmark.py run --config gosmoke --aracne-config perf-balanced
+python bench/run_benchmark.py run --config atlas-smoke --aracne-config perf-balanced
 ```
 
 | config | context | MCP tools | native tools | intent |

@@ -15,23 +15,59 @@ import (
 
 // RunGuard is the `arac guard` entry point. It supports the Claude Code
 // PreToolUse/PostToolUse hook invocation (`--claude-hook`), which reads the hook
-// event JSON on stdin and writes a decision on stdout, and `--pre-scan`, the
-// bare scan.pre_tool scan for harnesses whose plugin API hands the guard no
-// event -- OpenCode's `tool.execute.before`, which needs the freshness half of
-// the hook and has no decision to make.
+// event JSON on stdin and writes a decision on stdout, and two halves of the same
+// job for a harness whose plugin API hands the guard no event to answer:
+// `--pre-scan`, the bare scan.pre_tool scan, and `--rewrite`, the interception
+// decision on its own.
 func RunGuard(args []string) {
-	if len(args) == 1 {
-		switch args[0] {
-		case "--claude-hook":
-			runClaudeGuardHook(os.Stdin, os.Stdout)
-			return
-		case "--pre-scan":
-			runPreToolScanCommand()
-			return
-		}
+	switch {
+	case len(args) == 1 && args[0] == "--claude-hook":
+		runClaudeGuardHook(os.Stdin, os.Stdout)
+		return
+	case len(args) == 1 && args[0] == "--pre-scan":
+		runPreToolScanCommand()
+		return
+	case len(args) == 2 && args[0] == "--rewrite":
+		runRewriteCommand(args[1], os.Stdout)
+		return
 	}
-	fmt.Fprintln(os.Stderr, "Usage: arac guard --claude-hook | arac guard --pre-scan")
+	fmt.Fprintln(os.Stderr,
+		"Usage: arac guard --claude-hook | arac guard --pre-scan | arac guard --rewrite <command>")
 	os.Exit(1)
+}
+
+// runRewriteCommand answers `arac guard --rewrite <command>`: the interception decision on its
+// own, for a harness that hands the guard the tool's ARGUMENTS to mutate rather than a hook
+// event to answer.
+//
+// WHY IT EXISTS. Interception was Claude Code only, because it was written against the one
+// mechanism Claude Code offers -- a PreToolUse hook returning
+// `hookSpecificOutput.updatedInput`. OpenCode has the same capability spelled differently:
+// `tool.execute.before` receives a mutable `output.args`. Without this, an OpenCode project on
+// either intercepting mode had no read surface at all and a generated AGENTS.md telling it that
+// `cat`, `head -40` and `sed -n` came back enriched, and every mode's contract promised an
+// annotated `grep` that nothing delivered -- a contract naming a capability the surface does
+// not have, which is the failure internal/prompts/contract.go says it exists to prevent.
+//
+// Both surfaces go through interceptCommand, so they cannot decide differently -- the same
+// reason `arac cmd` is a real verb rather than logic inside the hook.
+//
+// It prints `{"command": "..."}` when there is a rewrite and `{}` when there is not, and always
+// exits 0: a plugin standing in front of a tool call must never turn a decision it could not
+// make into a tool call that failed. The freshness scan is deliberately NOT run here -- the
+// plugin has already run `--pre-scan` for this same call, and scanning twice would double the
+// cost of every tool call on that harness.
+func runRewriteCommand(command string, output io.Writer) {
+	answer := map[string]string{}
+	dbPath := guardDBPath("")
+	if rewritten, ok := interceptCommand(command, dbPath, helper.LoadConfig(helper.ConfigPath(dbPath))); ok {
+		// Recorded for the same reason the Claude Code path records it: the rewrite reaches the
+		// model as the tool's own arguments, so the transcript keeps the command the model
+		// WROTE and nothing downstream can tell the two apart. See GuardLogEnv.
+		logGuardDecision(guardRewrote, "bash", command)
+		answer["command"] = rewritten
+	}
+	json.NewEncoder(output).Encode(answer)
 }
 
 // runPreToolScanCommand runs the configured pre-tool scan against the project the working
@@ -80,6 +116,21 @@ func runClaudeGuardHook(input io.Reader, output io.Writer) {
 		// stale graph is worse than not answering at all. A no-op when scan.pre_tool is
 		// "none", and an incremental diff otherwise.
 		preToolScan(dbPath, cfg)
+		// A WHOLE-BASH BLOCK IS THE ONE ENTRY NOTHING MAY BYPASS, and it is decided before
+		// anything else for that reason.
+		//
+		// It used to be decided last, inside decideGuard, where two earlier rules reached it
+		// first and neither is wrong on its own. Interception takes precedence over a denial
+		// (below), so `grep foo .` was rewritten and RAN under a config that had disabled the
+		// Bash tool. operatesOutsideProject returns an empty decision for a command touching
+		// nothing indexed, so `rm -rf /tmp/x` was permitted while `ls -la` was refused. Both
+		// exemptions are about routing a capability to a better surface; `bash` in
+		// blocked_tools is not a routing decision, it is the operator switching the tool off.
+		if event.ToolName == "Bash" && blocked["bash"] {
+			logGuardDecision(guardDenied, event.ToolName, guardLoggedCommand(event.ToolInput))
+			emitPreToolDeny(output, bashBlockedReason(cfg.Surface()))
+			return
+		}
 		// Interception comes first, and takes precedence over any denial the same command
 		// would have earned. A rewrite gives the model the aracne answer in the call it
 		// already made; a denial gives it a pointer and costs it another turn. When both
@@ -119,18 +170,19 @@ func runClaudeGuardHook(input io.Reader, output io.Writer) {
 		parts := []string{}
 		// A Bash read was either already answered by aracne (the PreToolUse rewrite) or is one
 		// aracne cannot answer at all; nudging it is bytes spent advertising something the
-		// agent just got, or something that does not exist. A NATIVE Read/Grep/Edit/Write is
-		// different: interception never sees it, so the nudge is the only place the model
-		// learns which spelling is the cheaper question.
+		// agent just got, or something that does not exist. A NATIVE Read/Grep is different:
+		// interception never sees it, so the nudge is the only place the model learns which
+		// spelling is the cheaper question. What is left of each key set after nudgeKeys is
+		// what still has something to say.
 		switch {
 		case event.ToolName != "Bash":
-			// A native Read/Grep/Edit/Write. Interception never sees these, so the nudge is
-			// the only place the model learns the shell forms are the cheaper question --
-			// but only where aracne has something to offer in exchange. See worthNudging.
-			if !worthNudging(keys, event.ToolInput, dbPath) {
+			// A native Read/Grep. Interception never sees these, so the nudge is the only
+			// place the model learns the shell forms are the cheaper question -- but only
+			// where aracne has something to offer in exchange. See worthNudging.
+			if !worthNudging(event.ToolInput, dbPath) {
 				break
 			}
-			if msg := warningMessage(keys, !blocked[toolspec.ReadToolName], cfg.Surface()); msg != "" {
+			if msg := warningMessage(nudgeKeys(keys, false), !blocked[toolspec.ReadToolName], cfg.Surface()); msg != "" {
 				parts = append(parts, msg)
 			}
 		case cfg.EffectiveMode() == helper.ModeMCP:
@@ -141,12 +193,25 @@ func runClaudeGuardHook(input io.Reader, output io.Writer) {
 			// ModeCLI, where a shell read is deliberately left alone and earns nothing --
 			// testing the mode is what keeps cli from falling through and printing the MCP
 			// pointer at a read it was never going to refuse.
-			if msg := warningMessage(keys, !blocked[toolspec.ReadToolName], cfg.Surface()); msg != "" {
+			//
+			// It needs the same evidence the native arm above needs, and had none: this arm
+			// emitted unconditionally, so `cat CHANGELOG.md`, `cat nonexistent.txt` and
+			// `cat /etc/hostname` all came back telling the model to use
+			// `mcp__aracne__read_resource` on something the tool cannot answer better, or at
+			// all. See worthNudgingBash.
+			if !worthNudgingBash(event.ToolInput, dbPath) {
+				break
+			}
+			if msg := warningMessage(nudgeKeys(keys, true), !blocked[toolspec.ReadToolName], cfg.Surface()); msg != "" {
 				parts = append(parts, msg)
 			}
 		}
 		if driftCheckApplies(event.ToolName, keys, event.ToolInput) {
-			if msg := driftCheck(dbPath); msg != "" {
+			// The tool name is threaded in for the log alone: driftCheck fires after a native
+			// Edit/Write as well as after a shell write, and the warning telemetry recorded
+			// every batch as "Bash" -- which reports zero for the native path, the one that
+			// has no other signal. See logGuardWarnings.
+			if msg := driftCheck(dbPath, event.ToolName); msg != "" {
 				parts = append(parts, msg)
 			}
 		}
@@ -157,9 +222,41 @@ func runClaudeGuardHook(input io.Reader, output io.Writer) {
 	}
 }
 
-// worthNudging reports whether a native tool call has anything to gain from the pointer.
+// nudgeKeys narrows the implicated keys to the ones a nudge still has something to say about.
 //
-// THE READ/SEARCH CASE NEEDS EVIDENCE. For a file the topology holds no nodes for -- a
+// A MUTATION SAYS IT ITSELF. The `arac edit` pointer sold the topology SYNC, and the sync
+// reports itself now: driftCheck attaches the warnings an edit caused to the edit that caused
+// them, on the native and the shell path alike. Nudging as well spends bytes on every edit
+// advertising a second spelling of what the model just got -- and on an edit that breaks
+// nothing the nudge was the ONLY thing attached, a hook firing with no finding behind it.
+// blocked_tools still names `arac edit` when it REFUSES one; that reason comes from
+// decideGuard, which reads the full key set and is untouched by this.
+//
+// A BASH GREP IS ALREADY ANSWERED. InterceptGrep is true in every mode, so the search came
+// back topology-annotated and the pointer would be describing output the model is holding. A
+// NATIVE grep is never rewritten -- the hook sees it too late -- so that one keeps its nudge,
+// and so does a bash read in ModeMCP, the one surface where nothing intercepts one.
+//
+// "bash" needs no case: it has no entry in any guidance table, so warningMessage skips it.
+func nudgeKeys(keys []string, isBash bool) []string {
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		switch k {
+		case "edit", "write":
+			continue
+		case toolspec.GrepToolName:
+			if isBash {
+				continue
+			}
+		}
+		out = append(out, k)
+	}
+	return out
+}
+
+// worthNudging reports whether a native read or search has anything to gain from the pointer.
+//
+// IT NEEDS EVIDENCE. For a file the topology holds no nodes for -- a
 // CHANGELOG, a lockfile, a template, an unsupported language -- aracne cannot answer the read
 // better, and the nudge tells the model that "`cat` on an indexed file is answered from the
 // topology" about a file that is not indexed. The hook fires on every matching call and its
@@ -168,19 +265,9 @@ func runClaudeGuardHook(input io.Reader, output io.Writer) {
 // requires a positive: unlike interception, the nudge has no second check downstream -- what it
 // decides is what the model reads.
 //
-// A MUTATION IS NUDGED UNCONDITIONALLY. Its guidance is about the SYNC (`arac edit` updates the
-// topology inline), which is true whether or not the file has nodes today -- and an edit that
-// creates the first declaration in a file is exactly the case that would fail an index test.
-func worthNudging(keys []string, toolInput map[string]interface{}, dbPath string) bool {
-	readOnly := true
-	for _, k := range keys {
-		if k == "edit" || k == "write" {
-			readOnly = false
-		}
-	}
-	if !readOnly {
-		return true
-	}
+// A MUTATION NEVER REACHES IT. nudgeKeys drops edit and write before the key set gets here,
+// and carries the reasoning for that; the index test below is about reads and searches only.
+func worthNudging(toolInput map[string]interface{}, dbPath string) bool {
 	paths := claudeHookPaths(toolInput)
 	if len(paths) == 0 {
 		// A Grep names a pattern and maybe a path glob; with nothing to resolve there is no
@@ -188,6 +275,45 @@ func worthNudging(keys []string, toolInput map[string]interface{}, dbPath string
 		return true
 	}
 	return namesAnIndexedFile(paths, dbPath)
+}
+
+// worthNudgingBash is worthNudging for a SHELL read, which reaches the nudge only in ModeMCP.
+//
+// Same two questions, because the same two answers make the pointer worthless. A command that
+// touches nothing inside the project has no resource for an aracne tool to serve, and a file
+// the topology holds no nodes for would come back as the identical raw bytes -- so in both
+// cases the nudge teaches a rule that fails the moment the model follows it, and its text is
+// injected into the transcript on every matching call.
+//
+// A command with no path-shaped operand at all keeps the nudge: `grep -r foo` and a `cat`
+// reading stdin resolve to nothing, and "nothing to resolve" is not counter-evidence -- the
+// same reading worthNudging applies to a pathless Grep.
+func worthNudgingBash(toolInput map[string]interface{}, dbPath string) bool {
+	command, _ := toolInput["command"].(string)
+	if operatesOutsideProject(command, projectRoot(dbPath)) {
+		return false
+	}
+	paths := commandPaths(command)
+	if len(paths) == 0 {
+		return true
+	}
+	return namesAnIndexedFile(paths, dbPath)
+}
+
+// bashBlockedReason is the refusal for `blocked_tools: ["bash"]`.
+//
+// It must not name a shell form or an `arac` subcommand, and the generic reason it replaces
+// named both: "Use the shell forms aracne answers, or an `arac` subcommand, instead of this
+// command" -- every one of which needs the tool that was just denied. `arac read main.go` was
+// itself refused with that sentence, so a model following the advice looped. What is left has
+// to be a capability the agent still has.
+func bashBlockedReason(surface toolspec.Surface) string {
+	const reason = "Blocked by aracne config (blocked_tools: bash). The Bash tool is disabled " +
+		"for this agent, so no shell command and no `arac` subcommand can run. "
+	if surface == toolspec.SurfaceMCP {
+		return reason + "Use the aracne MCP tools and this harness's own native tools instead."
+	}
+	return reason + "Use this harness's own native tools instead."
 }
 
 // driftCheckApplies reports whether a tool call is worth re-syncing the topology after.
@@ -468,6 +594,16 @@ type commandSegment struct {
 	// time the segment text is re-split into fields the quotes are gone and a
 	// `sed 's/a>b/c/'` expression is indistinguishable from a real redirect.
 	redirectsOut bool
+	// endedBy is the character the scanner cut this segment at, or 0 at the end of the string.
+	//
+	// It is the difference between "this command ended" and "this command continues", which
+	// nothing else here records. A `;`, `&` or newline ENDS a command and a `|` ends it into a
+	// consumer; a `(`, `)`, `{`, `}` or backtick is a nesting boundary INSIDE one, so the
+	// segment after it is the same command still being written. Without it, the walk that asks
+	// what a producer feeds had to guess -- and guessed wrong for
+	// `grep X $(echo .) extra.go | wc -l`, where the operand after the substitution looks
+	// exactly like a new command and made the pipe disappear. See pipelineStages.
+	endedBy rune
 	// depth is how many unclosed substitutions, subshells or groups this segment sits
 	// inside: 0 for a command whose stdout the caller reads, 1 or more for one whose output
 	// is a VALUE the enclosing command consumes.
@@ -517,12 +653,13 @@ func splitCommandSegments(command string) []commandSegment {
 	depth := 0           // unclosed `(`, `{` and backticks around the current segment
 	inBacktick := false  // a backtick is its own closer, so it toggles rather than nests
 	segStart := 0        // rune index where the current segment began
-	flush := func(endRune, nextStart int, nextPiped bool) {
+	flush := func(endRune, nextStart int, nextPiped bool, by rune) {
 		segs = append(segs, commandSegment{
 			text:         cur.String(),
 			pipedInto:    curPiped,
 			redirectsOut: curRedirect,
 			depth:        depth,
+			endedBy:      by,
 			start:        byteOf[segStart],
 			end:          byteOf[endRune],
 		})
@@ -554,32 +691,32 @@ func splitCommandSegments(command string) []commandSegment {
 			quote = r
 		case '|':
 			if i+1 < len(runes) && runes[i+1] == '|' {
-				flush(i, i+2, false) // `||` is logical OR, not a pipe
+				flush(i, i+2, false, ';') // `||` is logical OR, not a pipe
 				i++
 			} else {
-				flush(i, i+1, true)
+				flush(i, i+1, true, '|')
 			}
 		case ';', '\n':
-			flush(i, i+1, false)
+			flush(i, i+1, false, ';')
 		case '&':
 			// `2>&1` and `&>log` are redirection operators; only a bare `&` separates.
 			if isRedirectAmpersand(runes, i) {
 				cur.WriteRune(r)
 				continue
 			}
-			flush(i, i+1, false)
+			flush(i, i+1, false, '&')
 		case '(', '{':
 			// Flushed at the OUTER depth -- the segment ending here is the one around the
 			// group, not the one inside it -- and everything after opens one level deeper.
-			flush(i, i+1, false)
+			flush(i, i+1, false, r)
 			depth++
 		case ')', '}':
-			flush(i, i+1, false)
+			flush(i, i+1, false, r)
 			if depth > 0 {
 				depth--
 			}
 		case '`':
-			flush(i, i+1, false)
+			flush(i, i+1, false, '`')
 			if inBacktick {
 				if depth > 0 {
 					depth--
@@ -599,7 +736,7 @@ func splitCommandSegments(command string) []commandSegment {
 			cur.WriteRune(r)
 		}
 	}
-	flush(len(runes), len(runes), false)
+	flush(len(runes), len(runes), false, 0)
 	return segs
 }
 

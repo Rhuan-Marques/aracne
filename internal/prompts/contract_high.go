@@ -217,11 +217,15 @@ func highLanguageIDs(profiles []languageProfile) string {
 
 // highLineRanges is ModeInterceptLineRanges's addressing section.
 //
-// It teaches no ID vocabulary, and nothing this mode renders may. The mode exists to retire
-// that vocabulary on measured evidence -- the model used an ID as a command operand 0 times in
-// 408 commands -- so spending the long contract's extra room on re-teaching it would undo the
-// one thing the mode is for. The claim left is the only one the model cannot derive: that the
-// spans it is handed are exact.
+// It teaches no ID vocabulary, and no ADDRESSING section in this mode may. The mode exists to
+// retire that vocabulary on measured evidence -- the model used an ID as a command operand 0
+// times in 408 commands -- so spending the long contract's extra room on re-teaching it would
+// undo the one thing the mode is for. The claim left is the only one the model cannot derive:
+// that the spans it is handed are exact.
+//
+// A read's own output is a different matter: readunit.withLocations prints the span BESIDE the
+// id rather than in place of it, so highReadOutput shows what the renderer really emits. The
+// mode stops advertising ids as the way to address code; it does not pretend they are gone.
 func highLineRanges() string {
 	return "## Line ranges\n\n" +
 		"Search results and `# CONTEXT:` entries name each declaration by the exact lines it " +
@@ -244,9 +248,15 @@ func highLineRanges() string {
 // and a CONTEXT entry is already the answer for most questions" is what stops the recursive
 // read-everything walk.
 //
-// In ModeInterceptLineRanges the entries are keyed by `path:start-end` rather than by ID
-// (Config.LineRangeIdentification), so the language's ID-keyed example would be wrong there
-// and a span-keyed one is rendered instead.
+// In ModeInterceptLineRanges the entries carry `path:start-end` beside the id
+// (Config.LineRangeIdentification), so the language's plain ID-keyed example would be wrong
+// there and a span-carrying one is rendered instead.
+//
+// The example has to match readunit.withLocations exactly, and it did not: it showed the span
+// keying the line with the id gone, while the renderer keeps BOTH -- the id ties the entry to
+// the symbol the reader just saw in the code above it, the span says how to fetch it. A
+// documented shape the tool never emits costs the model the re-derivation the long contract is
+// paid to save.
 func highReadOutput(cfg *helper.Config, profiles []languageProfile) string {
 	var b strings.Builder
 	b.WriteString("## What a read returns\n\n" +
@@ -256,13 +266,13 @@ func highReadOutput(cfg *helper.Config, profiles []languageProfile) string {
 		"whole call, describing everything the requested declarations interact with. " +
 		"**Anything already shown as source above is never repeated in CONTEXT.**\n\n")
 	if cfg.LineRangeIdentification() {
-		b.WriteString("Each CONTEXT entry is keyed by the exact span the declaration " +
-			"occupies, ready to read:\n\n" +
+		b.WriteString("Each CONTEXT entry carries the exact span the declaration occupies, in " +
+			"parentheses after its name -- ready to read:\n\n" +
 			"```\n" +
 			"# CONTEXT:\n" +
-			"## src/shapes.rs:12-48 Circle: Description\n" +
-			"    src/shapes.rs:50-58 Circle::new: Description\n" +
-			"## src/factory.rs:9-31 make_circle: Description\n" +
+			"## mycrate::shapes::Circle (src/shapes.rs:12-48): Description\n" +
+			"    mycrate::shapes::Circle::new (src/shapes.rs:50-58): Description\n" +
+			"## mycrate::factory::make_circle (src/factory.rs:9-31): Description\n" +
 			"```\n\n")
 	} else {
 		for _, p := range profiles {

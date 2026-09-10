@@ -1,5 +1,7 @@
 package shellcmd
 
+import "strings"
+
 // Downstream consumers: what a command on the RIGHT of a pipe does to the bytes it receives.
 //
 // WHY THIS IS ITS OWN CLASSIFICATION. When aracne answers the producer of a pipeline, the
@@ -76,16 +78,99 @@ var consumerClasses = map[string]ConsumerClass{
 }
 
 // ClassifyConsumer reports what a downstream pipeline stage does to the lines it receives.
-// `word` is the segment's command word (already unwrapped of paths and quoting by Base).
-func ClassifyConsumer(word string) ConsumerClass {
-	if c, ok := consumerClasses[Base(word)]; ok {
-		return c
+// argv is the stage's command word followed by its arguments, with any leading environment
+// assignments already stripped.
+//
+// IT READS THE FLAGS, NOT ONLY THE WORD, and that is the half it used to be missing. The name
+// answers half the question: `grep -v _test` selects lines and `grep -c _test` COUNTS them --
+// and a count is exactly the "count of a different thing, returned as a bare number with
+// nothing to reveal the substitution" this file's header refuses `wc -l` for. Classified on the
+// word alone, `| grep -c` was waved through as a line filter, and so were `grep -l`,
+// `grep -o`, `grep -q` and `head -c`. Measured on a two-match fixture, `grep … | grep -c util`
+// answered 2 for the real pipeline and 3 for the intercepted one.
+func ClassifyConsumer(argv []string) ConsumerClass {
+	if len(argv) == 0 {
+		return ConsumerOpaque
 	}
-	return ConsumerOpaque
+	name := Base(argv[0])
+	class, ok := consumerClasses[name]
+	if !ok {
+		return ConsumerOpaque
+	}
+	if consumerFlagsChangeOutput(name, argv[1:]) {
+		return ConsumerOpaque
+	}
+	return class
+}
+
+// The flags that stop a stage from being a line-for-line selector, per family. Each changes
+// either the UNIT of the stage's output (a count, a file list, a match fragment, an exit
+// status, NUL separators) or the unit of its input (bytes rather than lines) -- which is the
+// same objection this file makes to `wc`, spelled as an option instead of as a command.
+//
+// Short and long are separate because only a short cluster is scanned letter by letter.
+var (
+	grepOutputShort = map[byte]bool{
+		'c': true, 'l': true, 'L': true, 'o': true, 'q': true, 'm': true, 'Z': true,
+	}
+	grepOutputLong = map[string]bool{
+		"--count": true, "--files-with-matches": true, "--files-without-match": true,
+		"--only-matching": true, "--quiet": true, "--silent": true, "--max-count": true,
+		"--null": true,
+	}
+	// `head -c` / `tail -c` count BYTES, so they can truncate mid-line -- and mid-annotation.
+	// `tail -f` follows a stream aracne answered once and will not extend.
+	pagerOutputShort = map[byte]bool{'c': true, 'f': true, 'F': true, 'q': true, 'z': true}
+	pagerOutputLong  = map[string]bool{
+		"--bytes": true, "--follow": true, "--quiet": true, "--silent": true,
+		"--zero-terminated": true,
+	}
+)
+
+// consumerFlagsChangeOutput reports whether any argument is one of the flags above.
+//
+// Over-refusing is the safe direction here and the asymmetry is the same one the allow-list
+// itself rests on: a flag wrongly called opaque costs one command aracne does not serve, and a
+// flag wrongly waved through costs a silently different answer.
+func consumerFlagsChangeOutput(name string, args []string) bool {
+	short, long := grepOutputShort, grepOutputLong
+	switch name {
+	case "head", "tail":
+		short, long = pagerOutputShort, pagerOutputLong
+	case "cat":
+		// `cat` has no flag that changes the unit of a line: -n, -A and friends decorate the
+		// lines they are given, and a decorated copy of aracne's answer is still aracne's
+		// answer -- which is what the caller of a `| cat` pass-along asked for.
+		return false
+	}
+	endOfFlags := false
+	for _, a := range args {
+		switch {
+		case endOfFlags, a == "-", !strings.HasPrefix(a, "-"):
+			continue
+		case a == "--":
+			endOfFlags = true
+		case strings.HasPrefix(a, "--"):
+			// `--max-count=5` is the same flag as `--max-count 5`.
+			flag, _, _ := strings.Cut(a, "=")
+			if long[flag] {
+				return true
+			}
+		default:
+			// A short cluster, possibly ending in a glued value (`-m5`, `-c40`). A value's
+			// digits are in no table, so scanning the whole token is safe.
+			for i := 1; i < len(a); i++ {
+				if short[a[i]] {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // ConsumerPreservesLines reports whether a stage can be handed aracne's answer instead of the
 // real command's without changing what the pipeline as a whole means.
-func ConsumerPreservesLines(word string) bool {
-	return ClassifyConsumer(word) != ConsumerOpaque
+func ConsumerPreservesLines(argv []string) bool {
+	return ClassifyConsumer(argv) != ConsumerOpaque
 }

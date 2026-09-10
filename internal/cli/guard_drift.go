@@ -16,6 +16,26 @@ import (
 // misses: the agent is blocked behind it on every tool call.
 const guardScanTimeout = 20 * time.Second
 
+// GuardHookTimeoutSeconds is the `timeout` `arac setup` writes onto its own hook entries.
+//
+// DERIVED FROM THE BUDGETS BELOW IT, not chosen. It was hard-coded at 30 while the guard's own
+// stages could run longer than that: driftCheck ran indexHasDrifted (20s) and then a scan (20s)
+// back to back for a worst case of 40, and the PreToolUse path reaches ~31 (a 20s pre-tool
+// scan, then trackedFiles at 3, the untracked check at 3 and the read proxy at 5). Past the
+// harness's timeout the hook is killed, and on the PostToolUse side that discards the warning
+// report -- the channel the contract says has no substitute.
+//
+// driftCheck now shares ONE budget across its two stages (see driftCheckBudget), so the two
+// paths cost at most guardScanTimeout plus the small checks around them. This leaves margin
+// over that rather than tracking it exactly: the number is a ceiling on a pathological run, not
+// a target.
+const GuardHookTimeoutSeconds = 45
+
+// driftCheckBudget is the wall clock the whole post-tool drift check may spend, SHARED by the
+// staleness probe and the scan it gates. Two independent 20s deadlines summed to 40 against a
+// hook allowed 30; one deadline is what makes the arithmetic in GuardHookTimeoutSeconds true.
+const driftCheckBudget = guardScanTimeout
+
 // runGuardScan opens the topology and runs scan inside a bounded, panic-proof goroutine,
 // reporting the warnings it produced. Every failure -- no database, a load error, a scan
 // error, a panic, a timeout -- returns nil, because a hook that breaks the agent's tool call
@@ -25,7 +45,14 @@ const guardScanTimeout = 20 * time.Second
 // which is correct for a CLI command and catastrophic inside a hook -- it would take the
 // agent's tool call down with it. A hook with no topology has nothing to do, so bail rather
 // than build one.
-func runGuardScan(dbPath string, scan func(*topology.TopologyManager, *scanner.Registry) ([]domain.TopologyWarning, error)) []domain.TopologyWarning {
+//
+// The budget is the caller's rather than a constant of its own, because a caller that runs two
+// bounded stages has to spend ONE deadline across both -- see driftCheck. A non-positive budget
+// is already out of time and skips the scan.
+func runGuardScan(dbPath string, budget time.Duration, scan func(*topology.TopologyManager, *scanner.Registry) ([]domain.TopologyWarning, error)) []domain.TopologyWarning {
+	if budget <= 0 {
+		return nil
+	}
 	if _, err := os.Stat(dbPath); err != nil {
 		return nil
 	}
@@ -57,7 +84,7 @@ func runGuardScan(dbPath string, scan func(*topology.TopologyManager, *scanner.R
 			return nil
 		}
 		return res.warnings
-	case <-time.After(guardScanTimeout):
+	case <-time.After(budget):
 		return nil
 	}
 }
@@ -88,7 +115,7 @@ func preToolScan(dbPath string, cfg *helper.Config) {
 	if mode == helper.PreToolScanNone {
 		return
 	}
-	runGuardScan(dbPath, func(mgr *topology.TopologyManager, reg *scanner.Registry) ([]domain.TopologyWarning, error) {
+	runGuardScan(dbPath, guardScanTimeout, func(mgr *topology.TopologyManager, reg *scanner.Registry) ([]domain.TopologyWarning, error) {
 		return nil, mgr.RunPreToolScan(reg, mode)
 	})
 }
@@ -109,7 +136,7 @@ func preToolScan(dbPath string, cfg *helper.Config) {
 //
 // It is deliberately cheap to skip and safe to fail: an unreadable topology, a scan error or a
 // timeout all return nothing, exactly like the rest of this hook.
-func driftCheck(dbPath string) string {
+func driftCheck(dbPath, toolName string) string {
 	// The scan still runs: it is what makes the topology describe the file the command just
 	// wrote. Its RETURN value is deliberately ignored.
 	//
@@ -129,9 +156,15 @@ func driftCheck(dbPath string) string {
 	// discover the tree was unchanged. IndexHealth is the same primitive `arac check-updates`
 	// uses and answers that in one pass. The REPORT below still runs either way: it reads the
 	// table, not this scan, which is the whole point of the ledger (see guard_warnstate.go).
+	//
+	// ONE DEADLINE ACROSS BOTH STAGES. The probe and the scan used to carry a 20s timeout each,
+	// so a slow repository could spend 40s inside a hook the generated settings.json allows 30
+	// -- and a killed PostToolUse hook loses the report below, which is the whole reason this
+	// function exists. See GuardHookTimeoutSeconds.
 	root := ProjectRootFor(dbPath)
-	if indexHasDrifted(dbPath, root) {
-		runGuardScan(dbPath, func(mgr *topology.TopologyManager, reg *scanner.Registry) ([]domain.TopologyWarning, error) {
+	deadline := time.Now().Add(driftCheckBudget)
+	if indexHasDrifted(dbPath, root, time.Until(deadline)) {
+		runGuardScan(dbPath, time.Until(deadline), func(mgr *topology.TopologyManager, reg *scanner.Registry) ([]domain.TopologyWarning, error) {
 			return mgr.IncrementalScan(root, reg)
 		})
 	}
@@ -145,16 +178,20 @@ func driftCheck(dbPath string) string {
 	fresh := unreportedWarnings(dbPath)
 	// Recorded here because nothing downstream can see it: hook output reaches the model as
 	// additionalContext, which the transcript does not carry. See logGuardWarnings.
-	logGuardWarnings("Bash", fresh)
+	logGuardWarnings(toolName, fresh)
 	return formatDriftWarnings(fresh)
 }
 
 // indexHasDrifted reports whether any file on disk differs from what the manifest recorded.
 //
-// Fails toward SCANNING: an unreadable database, an unusable root or any error at all returns
-// true, so the only thing this can cost is the scan that used to run unconditionally. Bounded
-// and panic-proof for the same reason as everything else on this path.
-func indexHasDrifted(dbPath, root string) bool {
+// Fails toward SCANNING: an unreadable database, an unusable root, a budget already spent or
+// any error at all returns true, so the only thing this can cost is the scan that used to run
+// unconditionally. Bounded and panic-proof for the same reason as everything else on this path,
+// and bounded by the CALLER's remaining budget rather than by a deadline of its own.
+func indexHasDrifted(dbPath, root string, budget time.Duration) bool {
+	if budget <= 0 {
+		return true
+	}
 	type result struct{ drifted bool }
 	done := make(chan result, 1)
 	go func() {
@@ -168,13 +205,13 @@ func indexHasDrifted(dbPath, root string) bool {
 			done <- result{true}
 			return
 		}
-		health, err := mgr.IndexHealth(root)
+		health, err := mgr.IndexHealth(root, NewScannerRegistry())
 		done <- result{err != nil || health.Stale()}
 	}()
 	select {
 	case r := <-done:
 		return r.drifted
-	case <-time.After(guardScanTimeout):
+	case <-time.After(budget):
 		return true
 	}
 }

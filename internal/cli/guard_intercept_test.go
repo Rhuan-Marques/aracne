@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -103,6 +104,8 @@ func TestCompoundCommandsAreRewrittenSegmentWise(t *testing.T) {
 	for _, tc := range []struct{ cmd, wantPrefixedBefore string }{
 		{"cd " + root + " && cat " + app, "cat "},
 		{"ls " + root + " && sed -n '1,20p' " + app, "sed "},
+		// A producer feeding a pipe carries `--piped`, so the answer is the rows the real
+		// command would have printed rather than the annotated rendering. See serveGrep.
 		{"grep -rn Serve " + root + " | head -30", "grep "},
 		{"sed -n '1,5p' " + app + "; sed -n '10,20p' " + app, "sed "},
 	} {
@@ -111,11 +114,12 @@ func TestCompoundCommandsAreRewrittenSegmentWise(t *testing.T) {
 			t.Errorf("%q was not intercepted", tc.cmd)
 			continue
 		}
-		if !strings.Contains(got, "cmd -- "+tc.wantPrefixedBefore) {
+		if !strings.Contains(got, "cmd -- "+tc.wantPrefixedBefore) &&
+			!strings.Contains(got, "cmd --piped -- "+tc.wantPrefixedBefore) {
 			t.Errorf("%q: prefix not spliced before %q:\n%s", tc.cmd, tc.wantPrefixedBefore, got)
 		}
 		// Everything the model wrote must still be there, in order.
-		stripped := strings.ReplaceAll(got, "cmd -- ", "")
+		stripped := strings.ReplaceAll(strings.ReplaceAll(got, "cmd --piped -- ", ""), "cmd -- ", "")
 		for _, piece := range strings.Fields(tc.cmd) {
 			if !strings.Contains(stripped, piece) {
 				t.Errorf("%q: rewrite lost %q:\n%s", tc.cmd, piece, got)
@@ -573,7 +577,10 @@ func TestGrepIsInterceptedThroughLinePreservingFilters(t *testing.T) {
 			t.Errorf("expected a rewrite for %q", cmd)
 			continue
 		}
-		if !strings.Contains(got, "cmd -- grep") {
+		// `--piped`, because a pipeline reads this answer: annotation, node rows, the head
+		// limit and the tiered order are all switched off so the stages downstream see the
+		// lines the real grep would have given them. See topogrep.Options.Plain.
+		if !strings.Contains(got, "cmd --piped -- grep") {
 			t.Errorf("rewrote the wrong segment of %q: %s", cmd, got)
 		}
 		// Everything downstream of the producer must survive byte-for-byte: the whole point is
@@ -633,5 +640,132 @@ func TestTheMCPFallbackIsKeyedOnTheModeNotOnInterception(t *testing.T) {
 	}
 	if cfg.EffectiveMode() == helper.ModeMCP {
 		t.Error("ModeCLI must not reach the MCP fallback")
+	}
+}
+
+// A SUBSTITUTION BETWEEN A PRODUCER AND ITS CONSUMER IS NOT A CONSUMER.
+//
+// The scanner cuts a new segment at every `(`, `)`, backtick and `{`, so a command carrying a
+// substitution is spread over several segments with the substitution's BODY between them. The
+// check that asks what a producer feeds used to read `segments[i+1]` -- adjacency -- and found
+// the body, whose pipedInto is false. It concluded "feeds no pipe" and rewrote
+// `grep -rn X $(echo .) | wc -l`, the exact shape it exists to refuse: measured on a two-match
+// fixture the real pipeline answered 2 and the intercepted one 4.
+//
+// This is the same break `2>&1` had before isRedirectAmpersand, on a path that had no rule.
+func TestASubstitutionDoesNotHideAnOpaqueConsumer(t *testing.T) {
+	root, dbPath := scannedProject(t)
+
+	for _, cmd := range []string{
+		"grep -rn Serve $(echo " + root + ") | wc -l",
+		"grep -rn Serve `echo " + root + "` | wc -l",
+		"grep -rn Serve ${PWD} | wc -l",
+		"grep -rn Serve " + root + " | wc -l",
+		// The consumer is inside a group, so its command word is a level down and cannot be
+		// read from here. An unreadable stage is an opaque one.
+		"grep -rn Serve " + root + " | ( wc -l )",
+	} {
+		if got := rewriteOf(t, dbPath, cmd); got != "" {
+			t.Errorf("%q feeds a consumer aracne cannot serve, but was rewritten:\n%s", cmd, got)
+		}
+	}
+
+	// The narrower shape of the same fault: the producer's own OPERANDS continue after the
+	// substitution, so the segment following it has a command word of its own. Deciding "is this
+	// a new command?" by looking for one read `extra.go` as the start of a new command and lost
+	// the pipe again -- which is why the scanner records why it cut each segment rather than
+	// leaving the walk to guess. See commandSegment.endedBy.
+	for _, cmd := range []string{
+		"grep -rn Serve $(echo " + root + ") " + filepath.Join(root, "app.go") + " | wc -l",
+		"grep -rn Serve ${PWD} " + filepath.Join(root, "app.go") + " | wc -l",
+		"grep -rn Serve `echo " + root + "` " + filepath.Join(root, "app.go") + " | grep -c x",
+	} {
+		if got := rewriteOf(t, dbPath, cmd); got != "" {
+			t.Errorf("%q feeds an opaque consumer past its own operands, but was rewritten:\n%s", cmd, got)
+		}
+	}
+
+	// A list separator is not a pipe, and must not be read as one.
+	for _, cmd := range []string{
+		"grep -rn Serve " + root + " ; wc -l",
+		"grep -rn Serve " + root + " && echo done",
+	} {
+		if got := rewriteOf(t, dbPath, cmd); got == "" {
+			t.Errorf("%q feeds nothing; it must still be served", cmd)
+		} else if strings.Contains(got, "--piped") {
+			t.Errorf("%q was read as feeding a pipe:\n%s", cmd, got)
+		}
+	}
+
+	// And the capability is not lost with it: the same substitution with NO pipe, or with a
+	// line-preserving one, is still served.
+	for _, cmd := range []string{
+		"grep -rn Serve $(echo " + root + ")",
+		"grep -rn Serve ${PWD}",
+		"grep -rn Serve $(echo " + root + ") " + filepath.Join(root, "app.go"),
+		"grep -rn Serve " + root + " | head -30",
+		"grep -rn Serve $(echo " + root + ") " + filepath.Join(root, "app.go") + " | head -30",
+	} {
+		if got := rewriteOf(t, dbPath, cmd); got == "" {
+			t.Errorf("%q is servable and must still be rewritten", cmd)
+		}
+	}
+}
+
+// A PIPELINE READS DIFFERENTLY FROM A MODEL, and the rewrite says which one is reading.
+//
+// Everything aracne adds to a search -- the `#` resource headers, the rows a node earned on its
+// name or description, the trailer, the tiered order, the 200-row cap -- is addressed to a
+// reader. Handed to a pipeline they are lines it counts, filters and caps alongside the real
+// matches, and the cap in particular loses matches the consumer cannot know are missing. So a
+// producer that feeds a pipe is marked `--piped` and answered plain.
+func TestAPipedProducerIsAnsweredPlain(t *testing.T) {
+	root, dbPath := scannedProject(t)
+	app := filepath.Join(root, "app.go")
+
+	piped := rewriteOf(t, dbPath, "grep -rn Serve "+root+" | head -30")
+	if !strings.Contains(piped, "cmd --piped -- grep") {
+		t.Errorf("a piped search must be answered plain:\n%s", piped)
+	}
+	// The rest of the pipeline is untouched, which is the whole point of splicing rather than
+	// replacing.
+	if !strings.HasSuffix(piped, "| head -30") {
+		t.Errorf("downstream of the pipe was not preserved:\n%s", piped)
+	}
+
+	// A search nothing consumes keeps the annotated answer -- that IS the product.
+	unpiped := rewriteOf(t, dbPath, "grep -rn Serve "+root)
+	if strings.Contains(unpiped, "--piped") {
+		t.Errorf("an unpiped search must keep its annotation:\n%s", unpiped)
+	}
+	// So does a read: a read producer is never rewritten across a pipe at all, so the flag can
+	// only ever reach a search.
+	read := rewriteOf(t, dbPath, "cat "+app)
+	if strings.Contains(read, "--piped") {
+		t.Errorf("a read is never piped-plain:\n%s", read)
+	}
+}
+
+// `--piped` has to survive the round trip into the verb, or the flag is decoration.
+func TestParseCmdFlagsReadsPiped(t *testing.T) {
+	for _, tc := range []struct {
+		args     []string
+		wantArgv []string
+		wantPipe bool
+	}{
+		{[]string{"--", "grep", "x"}, []string{"grep", "x"}, false},
+		{[]string{"--piped", "--", "grep", "x"}, []string{"grep", "x"}, true},
+		// A caller who forgot the `--` still gets their command run rather than a usage error
+		// about its first argument.
+		{[]string{"grep", "x"}, []string{"grep", "x"}, false},
+		{[]string{"--piped"}, nil, true},
+		// `--` ends the flags: a command's own `--piped` argument is its own business.
+		{[]string{"--", "grep", "--piped"}, []string{"grep", "--piped"}, false},
+	} {
+		argv, piped := parseCmdFlags(tc.args)
+		if piped != tc.wantPipe || !reflect.DeepEqual(argv, tc.wantArgv) {
+			t.Errorf("parseCmdFlags(%v) = %v, %v; want %v, %v",
+				tc.args, argv, piped, tc.wantArgv, tc.wantPipe)
+		}
 	}
 }

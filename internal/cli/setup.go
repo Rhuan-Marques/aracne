@@ -1,7 +1,7 @@
 package cli
 
 import (
-	"bufio"
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -14,24 +14,6 @@ import (
 	"github.com/Rhuan-Marques/aracne/internal/prompts"
 	"github.com/Rhuan-Marques/aracne/internal/toolspec"
 )
-
-// Prompts the user for confirmation before overwriting an existing file, returning true if they approve.
-func promptReplace(path string) bool {
-	fmt.Printf("File %s already exists. Replace? [y/N] ", path)
-	reader := bufio.NewReader(os.Stdin)
-	answer, _ := reader.ReadString('\n')
-	answer = strings.TrimSpace(strings.ToLower(answer))
-	return answer == "y" || answer == "yes"
-}
-
-// Prompts user to confirm overwriting an existing config file.
-func promptReplaceConfigExists(path string) bool {
-	fmt.Printf("Config %s already exists. Overwrite? [y/N] ", path)
-	reader := bufio.NewReader(os.Stdin)
-	answer, _ := reader.ReadString('\n')
-	answer = strings.TrimSpace(strings.ToLower(answer))
-	return answer == "y" || answer == "yes"
-}
 
 // RunSetup writes the harness integration this project's config describes: the commands, the
 // agents, the guard hook, the MCP entry (or its removal), and the contract in CLAUDE.md /
@@ -106,18 +88,11 @@ func initOpenCode(global bool, cfg *helper.Config, autoYes bool, languages []str
 	// agent with nothing to call in three of the four modes. What the mode still decides is
 	// the permission block below -- outside ModeMCP the main agent is allowed none of these
 	// tools, and only the sub-agents' own blocks open them.
-	if shouldWriteConfig(config, "mcp", configPath, "OpenCode", autoYes) {
-		mcpMap, _ := config["mcp"].(map[string]interface{})
-		if mcpMap == nil {
-			mcpMap = make(map[string]interface{})
-		}
-		mcpMap["aracne"] = map[string]interface{}{
-			"type":    "local",
-			"command": []string{aracBinary(), "serve", "--tool-profile", "all", "--harness", "opencode"},
-			"enabled": true,
-		}
-		config["mcp"] = mcpMap
-	}
+	upsertMCPServer(config, "mcp", map[string]interface{}{
+		"type":    "local",
+		"command": []string{aracBinary(), "serve", "--tool-profile", "all", "--harness", "opencode"},
+		"enabled": true,
+	})
 
 	permissionMap, _ := config["permission"].(map[string]interface{})
 	if permissionMap == nil {
@@ -188,18 +163,14 @@ func initClaudeCode(global bool, cfg *helper.Config, autoYes bool, languages []s
 
 	if cfg.MCPEnabled() {
 		claudeConfig := readJSONConfig(mcpConfigPath)
-		if shouldWriteConfig(claudeConfig, "mcpServers", mcpConfigPath, "Claude Code", autoYes) {
-			mcpServers, _ := claudeConfig["mcpServers"].(map[string]interface{})
-			if mcpServers == nil {
-				mcpServers = make(map[string]interface{})
-			}
-			mcpServers["aracne"] = map[string]interface{}{
-				"command": aracBinary(),
-				"args":    []string{"serve", "--tool-profile", "main", "--harness", "claude_code"},
-			}
-			claudeConfig["mcpServers"] = mcpServers
+		if upsertMCPServer(claudeConfig, "mcpServers", map[string]interface{}{
+			"command": aracBinary(),
+			"args":    []string{"serve", "--tool-profile", "main", "--harness", "claude_code"},
+		}) {
 			writeJSONConfig(mcpConfigPath, claudeConfig)
 			fmt.Printf("[Claude Code] MCP server configured in %s\n", mcpConfigPath)
+		} else {
+			fmt.Printf("[Claude Code] MCP server already current in %s\n", mcpConfigPath)
 		}
 	} else if dropAracneMCPServer(mcpConfigPath) {
 		// Leaving a stale entry behind would start a server whose tools the contract no
@@ -391,17 +362,38 @@ func readJSONConfig(path string) map[string]interface{} {
 	return config
 }
 
-// Determines whether to write a config value, prompting on overwrite unless autoYes is set; skips if key already exists and not approved.
-func shouldWriteConfig(config map[string]interface{}, key, path, label string, autoYes bool) bool {
-	if _, exists := config[key]; exists {
-		if autoYes || promptReplaceConfigExists(path) {
-			fmt.Printf("[%s] Overwriting %s\n", label, path)
-			return true
-		}
-		fmt.Printf("[%s] Skipping %s\n", label, path)
+// upsertMCPServer merges aracne's own server entry into a harness MCP config, reporting whether
+// anything changed. `section` is the key that holds the servers ("mcpServers" for Claude Code,
+// "mcp" for OpenCode); every other server in it, and every other key in the file, is untouched.
+//
+// IT GUARDS ON ARACNE'S ENTRY, NOT ON THE SECTION, and that is the whole of the fix. The
+// predicate it replaces asked whether the file already had a `mcpServers` key at all and then
+// prompted "Config .mcp.json already exists. Overwrite? [y/N]" -- a question that misdescribed
+// what the code does (it merges; it has never overwritten) and whose "no" skipped aracne
+// entirely. A project with any other MCP server, and every aracne project after its first
+// setup, took that branch: on a pipe it skipped unprompted, printed "Restart Claude Code to
+// activate the topology workflow", and wrote a CLAUDE.md promising MCP tools against a config
+// with no aracne server in it.
+func upsertMCPServer(config map[string]interface{}, section string, entry map[string]interface{}) bool {
+	servers, _ := config[section].(map[string]interface{})
+	if servers == nil {
+		servers = make(map[string]interface{})
+	}
+	if jsonEqual(servers["aracne"], entry) {
 		return false
 	}
+	servers["aracne"] = entry
+	config[section] = servers
 	return true
+}
+
+// jsonEqual compares two decoded JSON values by their encoding, which is stable: encoding/json
+// sorts map keys. It is how the writers above tell "already current" from "needs rewriting"
+// without re-deriving equality per value shape.
+func jsonEqual(a, b interface{}) bool {
+	left, errA := json.Marshal(a)
+	right, errB := json.Marshal(b)
+	return errA == nil && errB == nil && bytes.Equal(left, right)
 }
 
 // Marshals a config map to indented JSON and writes it to a file with directory creation.
@@ -675,15 +667,31 @@ func writeAgent(dir, name, content string, autoYes bool) {
 	writeMarkdownFile(filepath.Join(dir, name+".md"), "agent "+name, content, autoYes)
 }
 
-// Writes markdown content to a file, prompting for confirmation if it already exists unless autoYes is set.
+// writeMarkdownFile writes one of the files `arac setup` generates in full.
+//
+// IT DOES NOT ASK, and the prompt it used to carry was the largest single gap between what this
+// command promises and what it does. Every byte of these files is a pure function of
+// .aracne/config.json and the resolved binary path -- there is no user content in a generated
+// hook script, agent or command to protect -- so the question had nothing to preserve and one
+// bad answer: on a pipe, a Makefile or a CI step, ReadString returned EOF, that read as "no",
+// and the file was skipped while settings.json, the MCP entry and CLAUDE.md were rewritten
+// around it. The guard hook is the sharp edge, because it embeds the ABSOLUTE path of the
+// binary that generated it: rebuild elsewhere and `arac setup` would not repoint it, leaving a
+// hook that fails on every tool call. Generated agent markdown drifted the same way, which is
+// exactly the silent generator/server divergence ServableMCPTools exists to prevent.
+//
+// autoYes is kept in the signature because the flag still means something to the caller and to
+// every other writer; here there is nothing left for it to decide.
+//
+// A file already byte-identical is left alone and said to be up to date, so a re-run on an
+// unchanged config is quiet rather than a wall of "Overwriting".
 func writeMarkdownFile(path, label, content string, autoYes bool) {
-	if _, err := os.Stat(path); err == nil {
-		if autoYes || promptReplace(path) {
-			fmt.Printf("Overwriting %s at %s\n", label, path)
-		} else {
-			fmt.Printf("%s already present at %s, skipping\n", label, path)
+	if existing, err := os.ReadFile(path); err == nil {
+		if string(existing) == content {
+			fmt.Printf("%s already up to date at %s\n", label, path)
 			return
 		}
+		fmt.Printf("Overwriting %s at %s\n", label, path)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", filepath.Dir(path), err)

@@ -189,7 +189,7 @@ func TestCmdRefusesACommandTheShellCouldNotRun(t *testing.T) {
 		{"bat", "main.go"},
 		{"cat", "main.go"},
 	} {
-		if _, _, _, ok := serveCommand(argv); ok {
+		if _, _, _, ok := serveCommand(argv, false); ok {
 			t.Errorf("serveCommand(%v) served a command with no binary on PATH", argv)
 		}
 	}
@@ -326,21 +326,25 @@ func TestNudgeRequiresSomethingToOffer(t *testing.T) {
 	}
 
 	// A read of a file with no nodes buys nothing, so it earns no pointer.
-	if worthNudging([]string{"read"}, map[string]interface{}{"file_path": untracked}, dbPath) {
+	if worthNudging(map[string]interface{}{"file_path": untracked}, dbPath) {
 		t.Error("a read of an unindexed file must not be nudged: aracne cannot answer it better")
 	}
-	if !worthNudging([]string{"read"}, map[string]interface{}{"file_path": tracked}, dbPath) {
+	if !worthNudging(map[string]interface{}{"file_path": tracked}, dbPath) {
 		t.Error("a read of an indexed file is exactly what the pointer is for")
-	}
-	// A MUTATION is nudged whatever the index says: its guidance is about the topology sync,
-	// and an edit that creates a file's first declaration would fail an index test.
-	if !worthNudging([]string{"edit"}, map[string]interface{}{"file_path": untracked}, dbPath) {
-		t.Error("an edit's guidance is about the sync and holds for any file")
 	}
 	// A search names a pattern, not a path: with nothing to resolve there is no
 	// counter-evidence and the guidance holds for the tree.
-	if !worthNudging([]string{"grep"}, map[string]interface{}{"pattern": "needle"}, dbPath) {
+	if !worthNudging(map[string]interface{}{"pattern": "needle"}, dbPath) {
 		t.Error("a search with no path operand must keep its pointer")
+	}
+	// A MUTATION earns no pointer at all any more, whatever the index says: an edit reports
+	// its own topology warnings, so `arac edit` guidance beside them is a second spelling of
+	// what the model just got. See nudgeKeys.
+	if len(nudgeKeys([]string{"edit"}, false)) != 0 {
+		t.Error("an edit must not be nudged: it reports its own warnings")
+	}
+	if len(nudgeKeys([]string{"write"}, false)) != 0 {
+		t.Error("a write must not be nudged: it reports its own warnings")
 	}
 }
 

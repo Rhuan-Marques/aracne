@@ -1,28 +1,3 @@
-# SWE-Atlas refactors ranked by NET declaration removals, aracne_read, nudge OFF.
-#
-# WHY THIS TASK SET. Warnings fire when a declaration disappears and something still points at
-# it. The previous pool was ranked by RAW `-func`/`-class` lines, which counts "delete and
-# re-add under the same name" as a removal -- and that pattern dominated: secdev/scapy scored
-# 24 raw removals of which 23 were PCO_* classes rewritten in place, stranding nothing. It
-# raised exactly zero warnings, as did every other zero-net-removal task in atlas12-read-1.
-# These ten are ranked by removals the patch does NOT put back, which is the condition the
-# warning channel actually keys on.
-#
-# WHY NO NUDGE. Three runs, hundreds of shell reads, fifteen nudges fired on this task family,
-# and `arac read` called ZERO times. This run was the control for that line. The measurement
-# settled it: the shell-read nudge was removed from aracne entirely, so there is no longer a
-# knob here and no arm to compare against -- every `cli` run is now the "no nudge" arm.
-#
-# WHAT IS FIXED SINCE atlas12-read-1, both of which silently distorted that run:
-#   - netshim wraps `git`. Two baselines there cloned the upstream repo, found the commit with
-#     `log -S` and applied the real diff; the shim only covered curl/wget/gh.
-#   - The toolchain is pinned per fixture from the task image (atlas_prepare.probe_runtime).
-#     Every Go fixture disagreed with the host -- 1.19.13 through 1.25.3 against 1.26.4 -- and
-#     two trufflehog cells could not build at their own base commit as a result.
-#
-# CLUSTERING. Ten tasks, THREE repositories (grafana/grafana 3, grafana/k6 5, trufflehog 2).
-# The paired analysis bootstraps over repositories, so the effective N is 3. Read the per-task
-# rows; the aggregate is not an n=10 result and must not be quoted as one.
 sample_id: atlas-net
 languages: [go]
 

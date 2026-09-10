@@ -128,7 +128,7 @@ written back in whichever you used:
 |---|---|---|
 | `enabled` | `true` | The switch. |
 | `max_nodes` | `40` | Nodes one fill may describe. `≤ 0` means no cap. |
-| `timeout_seconds` | `120` | Bounds the whole fill, not one batch. `≤ 0` disables the deadline. |
+| `timeout_seconds` | `8` | Bounds the whole fill, not one batch — and it sits on the read path, so it is the ceiling on how long a `cat` can hang. `≤ 0` disables the deadline. |
 | `batch_size` | `5` | Resources per completion. Non-positive keeps the default. |
 | `parallel` | `4` | Batches in flight at once. Non-positive keeps the default. |
 

@@ -129,7 +129,7 @@ func TestProxyExtractsTheLineWindow(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := soleReadTarget(tc.cmd)
+			got := soleReadTarget(tc.cmd, dir)
 			if got.hasWindow != tc.wantOK ||
 				(got.hasWindow && (got.from != tc.wantFrom || got.to != tc.want)) {
 				t.Errorf("soleReadTarget(%q) = %d-%d hasWindow=%v, want %d-%d hasWindow=%v",

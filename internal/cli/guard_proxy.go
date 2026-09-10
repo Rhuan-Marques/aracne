@@ -2,7 +2,6 @@ package cli
 
 import (
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -38,12 +37,22 @@ const (
 // critical path, on every denied read:
 //   - reads only (never edit/write: those must go through the tools that re-sync the topology),
 //   - exactly one path, so a glob or a pipeline falls back rather than guessing,
+//   - the path is resolved against the PROJECT ROOT, never the hook's own cwd (see below),
 //   - the file must exist and be tracked, so this never invents an answer,
 //   - a size budget and a hard timeout, either of which returns "" and restores the pointer.
 //
+// THE PATH IS NOT RESOLVED WHERE THIS PROCESS IS STANDING. A hook runs in the session
+// directory; the agent's Bash shell has a working directory of its own that persists across
+// calls and that this process cannot see -- which is the entire reason guardDBPath exists. This
+// used to os.Stat the operand as typed and hand the same relative string to ReadIDs, whose
+// candidate list tries the process cwd first. With the agent in a subdirectory, `cat util.go`
+// was answered with the contents of a DIFFERENT util.go at the repository root, under a message
+// saying "Reading it for you" and naming no path. Every other resolver in the guard already
+// goes through existingReadFiles, and now so does this one.
+//
 // It returns "" whenever it cannot be certain, and "" means the caller keeps today's behaviour.
 func proxyRead(command, dbPath string) string {
-	target := soleReadTarget(command)
+	target := soleReadTarget(command, projectRoot(dbPath))
 	if target.path == "" {
 		return ""
 	}
@@ -144,7 +153,8 @@ type readTarget struct {
 }
 
 // soleReadTarget returns the single file a shell command reads and the window it wants, or a
-// zero value when the command is anything more complicated than that.
+// zero value when the command is anything more complicated than that. The operand is resolved
+// against root -- the project the topology indexes -- and the returned path is absolute.
 //
 // Deliberately strict. A pipeline, a glob, two operands or an unrecognized reader all return
 // nothing and cost the model the ordinary one-line denial it would have had anyway. The only
@@ -156,7 +166,10 @@ type readTarget struct {
 // all, proxyBudget measured against the whole file, and the proxy answered a twenty-line
 // request with the file. That is the 5.8x over-serve proxyBudget exists to prevent, still
 // live for one reader in four. One parser cannot have three of the four cases right.
-func soleReadTarget(command string) readTarget {
+func soleReadTarget(command, root string) readTarget {
+	if root == "" {
+		return readTarget{}
+	}
 	segments := splitCommandSegments(command)
 	if len(segments) != 1 {
 		return readTarget{}
@@ -177,7 +190,14 @@ func soleReadTarget(command string) readTarget {
 	if strings.ContainsAny(operand, "*?[]$`~") {
 		return readTarget{}
 	}
-	t := readTarget{path: filepath.Clean(operand)}
+	// The same resolver every other guard path uses: absolute as it stands, relative against
+	// the project root, regular files only. An operand it cannot place is not proxied at all --
+	// a bare pointer is a poor answer, and the wrong file's contents is a worse one.
+	resolved := existingReadFiles([]string{operand}, root)
+	if len(resolved) != 1 {
+		return readTarget{}
+	}
+	t := readTarget{path: resolved[0]}
 	if req.Window.Mode == shellcmd.WholeFile {
 		return t
 	}

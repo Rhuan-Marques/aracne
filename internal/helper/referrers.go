@@ -207,13 +207,21 @@ func ClearReferrerWarningsForFile(topo *domain.Topology, path string) {
 // shape and onto the referrer pass.
 //
 // Warnings that already name a caller -- goscanner builds the final shape
-// itself -- and every other kind pass through untouched. skipPaths are the files
-// re-parsed in this same update: a referrer living in one of them was just
-// re-resolved from source, so warning about it would duplicate what the scanner
-// already reported. A changed symbol whose referrers have all gone yields no
-// warning at all; there is nothing left to verify, which is what goscanner does
-// by only emitting inside its caller loop.
-func ExpandSignatureWarnings(topo *domain.Topology, ws []domain.TopologyWarning, skipPaths map[string]bool) []domain.TopologyWarning {
+// itself -- and every other kind pass through untouched. A changed symbol whose
+// referrers have all gone yields no warning at all; there is nothing left to
+// verify, which is what goscanner does by only emitting inside its caller loop.
+//
+// EVERY REFERRER COUNTS, INCLUDING ONE IN THE FILE THAT WAS JUST RE-PARSED. This used to take
+// a skipPaths set -- the files this update re-read -- on the reasoning that a referrer inside
+// one of them had already been re-resolved from source, so the scanner had reported whatever
+// was wrong with it. That is true of a symbol that was REMOVED: the re-parse finds a dangling
+// reference and reports use_missing_node against the caller. It is not true of a signature
+// change, where the callee still resolves and the re-parse has nothing to say -- so the skip
+// silently swallowed the one warning that case has. Widening a helper's parameter list when its
+// caller sits beside it broke the build and reported nothing, in every language but Go (which
+// had the same bug in its own producer). settleSignatureWarnings retires a warning as soon as
+// the call site fits, so a caller fixed in the same edit costs nothing.
+func ExpandSignatureWarnings(topo *domain.Topology, ws []domain.TopologyWarning) []domain.TopologyWarning {
 	changed := make(map[string]bool)
 	for _, w := range ws {
 		if w.Kind == domain.WarnSignatureChanged && w.TargetID == "" {
@@ -228,9 +236,6 @@ func ExpandSignatureWarnings(topo *domain.Topology, ws []domain.TopologyWarning,
 
 	referrers := make(map[string][]string, len(changed))
 	for _, res := range topo.Resources {
-		if skipPaths[res.Location.Path] {
-			continue
-		}
 		// A referrer reaching the same symbol through two edge kinds (calls and
 		// uses_struct, say) is still one thing to verify, so record it once per
 		// changed symbol rather than once per edge.

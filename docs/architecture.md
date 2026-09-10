@@ -221,9 +221,18 @@ status. That fidelity is what makes interception safe on by
 default: everything aracne does not model runs exactly as it would have, and
 `tests/terminal_e2e_test.go` asserts byte-identical output for those cases.
 
-The agent never types `arac cmd` itself. The `arac guard` PreToolUse hook rewrites its Bash
-call via `hookSpecificOutput.updatedInput` (`internal/cli/guard_intercept.go`), so the model
-writes `head -40 file.go` and reads real stdout. See §9.
+One limit is worth naming: passthrough resolves the command word with `exec.LookPath`, so it
+runs the binary on `PATH`. A shell FUNCTION or alias of the same name is invisible to a child
+process — Claude Code ships a `grep` wrapper around ugrep, for instance — so for a wrapped
+command the passthrough is byte-identical to the binary, not to what that shell would have
+resolved.
+
+The agent never types `arac cmd` itself. The guard rewrites its Bash call in place, through
+whichever door the harness offers: Claude Code's PreToolUse hook returns
+`hookSpecificOutput.updatedInput`, and OpenCode's `tool.execute.before` plugin overwrites
+`output.args.command` with the answer from `arac guard --rewrite`. Both go through the same
+`interceptCommand` (`internal/cli/guard_intercept.go`), so the two surfaces cannot decide
+differently. Either way the model writes `head -40 file.go` and reads real stdout. See §9.
 
 ### C. MCP server (`arac serve`) — `internal/mcp`
 JSON-RPC 2.0 over **stdio** (`initialize`, `tools/list`, `tools/call`). This is
@@ -362,7 +371,9 @@ Freshness itself is not a plugin. **Before** every tool call the guard sees, it 
 matches the code on disk — including changes nothing in the session made, like a
 `git checkout`, a rebase or an editor save. Claude Code gets this from the PreToolUse
 guard hook itself; OpenCode gets `arac-pre-tool-scan.js`, a plugin installed
-unconditionally by `arac setup` whose `tool.execute.before` runs `arac guard --pre-scan`.
+unconditionally by `arac setup` whose `tool.execute.before` runs `arac guard --pre-scan`
+and then, for a Bash call, `arac guard --rewrite` — the interception half, in the spelling
+this harness offers.
 Both read the same config key at call time, so `scan.pre_tool: "none"` disables it on
 both surfaces without re-running init. The pre-call scan reports nothing (a PreToolUse
 hook cannot address the model without blocking it); the warnings it finds are persisted

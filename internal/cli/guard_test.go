@@ -2,12 +2,14 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/Rhuan-Marques/aracne/internal/helper"
 	"github.com/Rhuan-Marques/aracne/internal/toolspec"
 )
 
@@ -274,6 +276,100 @@ func TestRunClaudeGuardHook_PostToolWarning(t *testing.T) {
 	})
 }
 
+// A MUTATION reports its own topology warnings, so it earns no pointer beside them -- and an
+// edit that breaks nothing earns nothing at all. The `arac edit` nudge used to fire on every
+// one, which on the common case (an edit with no callers to warn about) was a hook block with
+// no finding in it.
+func TestRunClaudeGuardHook_MutationsAreNotNudged(t *testing.T) {
+	root, _ := scannedProject(t)
+	app := filepath.Join(root, "app.go")
+
+	// An INDEXED file rewritten to the same bytes: the strongest case for the unconditional
+	// nudge this replaces, and the one that produced output with nothing to act on.
+	body, err := os.ReadFile(app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(app, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	postToolUse := func(tool string) string {
+		t.Helper()
+		raw, err := json.Marshal(map[string]interface{}{
+			"hook_event_name": "PostToolUse",
+			"tool_name":       tool,
+			"cwd":             root,
+			"tool_input":      map[string]interface{}{"file_path": app},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out bytes.Buffer
+		runClaudeGuardHook(bytes.NewReader(raw), &out)
+		return out.String()
+	}
+
+	if got := postToolUse("Edit"); got != "" {
+		t.Errorf("an edit with no warnings must say nothing at all, got:\n%s", got)
+	}
+	if got := postToolUse("Write"); got != "" {
+		t.Errorf("a write with no warnings must say nothing at all, got:\n%s", got)
+	}
+}
+
+// A bash GREP is intercepted in every mode, so the model already holds the annotated answer
+// and the pointer would describe it back. A bash READ is intercepted in neither toolful mode,
+// so ModeMCP keeps the one place it can name the read tool.
+//
+// It keeps it FOR A FILE THE TOPOLOGY CAN ANSWER BETTER, which is why this runs against a real
+// scanned project rather than a bare config. The arm used to emit unconditionally, so a `cat`
+// of an unindexed file, a missing file or a file outside the tree all came back recommending
+// `mcp__aracne__read_resource` for something the tool cannot serve -- the per-call cost
+// worthNudging exists to stop on the native path, on the one arm that never got it.
+func TestRunClaudeGuardHook_BashGrepNotNudgedBashReadIs(t *testing.T) {
+	root, dbPath := scannedProject(t)
+	cfg := helper.DefaultConfig()
+	cfg.Mode = helper.ModeMCP
+	if err := helper.SaveConfig(cfg, helper.ConfigPath(dbPath)); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+
+	post := func(command string) string {
+		var out bytes.Buffer
+		raw, err := json.Marshal(map[string]interface{}{
+			"hook_event_name": "PostToolUse",
+			"tool_name":       "Bash",
+			"cwd":             root,
+			"tool_input":      map[string]interface{}{"command": command},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		runClaudeGuardHook(bytes.NewReader(raw), &out)
+		return out.String()
+	}
+
+	if got := post("grep -rn foo " + root); strings.Contains(got, "arac grep") {
+		t.Errorf("an intercepted bash grep must not also be nudged: %q", got)
+	}
+	if got := post("cat " + filepath.Join(root, "app.go")); !strings.Contains(got, "mcp__aracne__read_resource") {
+		t.Errorf("ModeMCP intercepts no bash read, so it keeps its pointer: %q", got)
+	}
+
+	// And the three shapes the pointer has nothing to offer for. Each one used to get it.
+	for _, command := range []string{
+		"cat " + filepath.Join(root, "CHANGELOG.md"), // indexed by nothing: no nodes to serve
+		"cat " + filepath.Join(root, "absent.go"),    // not there at all
+		"cat /etc/hostname",                          // outside the project entirely
+	} {
+		if got := post(command); strings.Contains(got, "mcp__aracne__read_resource") {
+			t.Errorf("%q has nothing for the read tool to answer better, but was nudged: %q",
+				command, got)
+		}
+	}
+}
+
 func TestRunClaudeGuardHook_NoWarningForUnmappedTool(t *testing.T) {
 	withConfig(t, "", func() {
 		var out bytes.Buffer
@@ -311,5 +407,123 @@ func TestGuardHookMatcherCoversNativeTools(t *testing.T) {
 		if _, ok := toolspec.NativeToolKey(name); !ok {
 			t.Fatalf("toolspec.NativeToolNames() returned %q, which NativeToolKey does not know", name)
 		}
+	}
+}
+
+// A WHOLE-BASH BLOCK IS NOT A ROUTING DECISION, so none of the routing exemptions may reach it.
+//
+// It used to be decided last, inside decideGuard, behind two rules that are each right on their
+// own. Interception runs first and takes precedence over a denial, so `grep foo .` was rewritten
+// and RAN under a config that had switched the Bash tool off. operatesOutsideProject returns an
+// empty decision for a command touching nothing indexed, so `rm -rf /tmp/x` was permitted while
+// `ls -la` was refused. And the refusal everything else got named the shell forms and the `arac`
+// subcommands -- all of which need the tool just denied, so a model following the advice looped.
+func TestBlockedBashIsNotBypassedByInterceptionOrScope(t *testing.T) {
+	root, dbPath := scannedProject(t)
+	cfg := helper.DefaultConfig()
+	cfg.Mode = helper.ModeCLI
+	cfg.LLM.Any.MainAgent.BlockedTools = []string{"bash"}
+	if err := helper.SaveConfig(cfg, helper.ConfigPath(dbPath)); err != nil {
+		t.Fatal(err)
+	}
+
+	pre := func(command string) (string, string) {
+		raw, err := json.Marshal(map[string]interface{}{
+			"hook_event_name": "PreToolUse",
+			"tool_name":       "Bash",
+			"cwd":             root,
+			"tool_input":      map[string]interface{}{"command": command},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out bytes.Buffer
+		runClaudeGuardHook(bytes.NewReader(raw), &out)
+		if out.Len() == 0 {
+			return "allowed", ""
+		}
+		var decoded struct {
+			HookSpecificOutput struct {
+				PermissionDecision       string                 `json:"permissionDecision"`
+				PermissionDecisionReason string                 `json:"permissionDecisionReason"`
+				UpdatedInput             map[string]interface{} `json:"updatedInput"`
+			} `json:"hookSpecificOutput"`
+		}
+		if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+			t.Fatal(err)
+		}
+		if decoded.HookSpecificOutput.UpdatedInput != nil {
+			return "rewritten", ""
+		}
+		return decoded.HookSpecificOutput.PermissionDecision, decoded.HookSpecificOutput.PermissionDecisionReason
+	}
+
+	for _, command := range []string{
+		"ls -la",
+		"grep -rn Serve " + root, // interception must not outrank the block
+		"cat " + filepath.Join(root, "app.go"),
+		"rm -rf /tmp/scratch-file", // outside the project is still Bash
+		"arac read app.go",
+	} {
+		decision, reason := pre(command)
+		if decision != "deny" {
+			t.Errorf("%q: decision %q, want deny", command, decision)
+			continue
+		}
+		// The advice has to be something the agent can still do. Naming a shell form or an
+		// `arac` subcommand is naming the tool that was just refused.
+		for _, unrunnable := range []string{"shell forms", "`arac "} {
+			if strings.Contains(reason, unrunnable) {
+				t.Errorf("%q: refusal points at %q, which needs the Bash tool it just denied:\n%s",
+					command, unrunnable, reason)
+			}
+		}
+	}
+}
+
+// The search nudge is the only channel a NATIVE Grep has -- interception never sees one -- and
+// a directory is how that tool is normally scoped.
+//
+// worthNudging asks namesAnIndexedFile for evidence, and existingReadFiles keeps regular files
+// only: correct for a read, where a directory is not a target, and inverted as the sole test for
+// a search. `Grep{pattern, path: "pkg"}` resolved to no file, reported "nothing indexed" and was
+// silently exempted, while a Grep with NO path was nudged.
+func TestNativeGrepScopedToADirectoryIsStillNudged(t *testing.T) {
+	root, dbPath := scannedProject(t)
+	cfg := helper.DefaultConfig()
+	cfg.Mode = helper.ModeCLI
+	if err := helper.SaveConfig(cfg, helper.ConfigPath(dbPath)); err != nil {
+		t.Fatal(err)
+	}
+
+	nudged := func(input map[string]interface{}) bool {
+		raw, err := json.Marshal(map[string]interface{}{
+			"hook_event_name": "PostToolUse",
+			"tool_name":       "Grep",
+			"cwd":             root,
+			"tool_input":      input,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out bytes.Buffer
+		runClaudeGuardHook(bytes.NewReader(raw), &out)
+		return strings.Contains(out.String(), "arac grep")
+	}
+
+	for _, input := range []map[string]interface{}{
+		{"pattern": "Serve"},                   // nothing to resolve: no counter-evidence
+		{"pattern": "Serve", "path": root},     // the project root
+		{"pattern": "Serve", "path": "."},      // the same, as the model writes it
+		{"pattern": "Serve", "path": "doc"},    // a subdirectory holding no indexed file
+		{"pattern": "Serve", "path": "app.go"}, // a single indexed file
+	} {
+		if !nudged(input) {
+			t.Errorf("Grep %v names a scope aracne can search better, but earned no nudge", input)
+		}
+	}
+	// A directory outside the project is not aracne's to offer anything about.
+	if nudged(map[string]interface{}{"pattern": "Serve", "path": "/etc"}) {
+		t.Error("a Grep outside the project must not be nudged")
 	}
 }

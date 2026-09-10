@@ -31,17 +31,18 @@ import (
 // `arac cmd -- head -5 CHANGELOG.md` and `arac cmd -- tail -f log` must all be byte-identical
 // to running the command directly, or interception cannot be safely turned on by default.
 func RunCmd(args []string) {
-	argv := args
-	if len(argv) > 0 && argv[0] == "--" {
-		argv = argv[1:]
-	}
+	// `--piped` is the guard telling this verb that a pipeline, not the model, reads the
+	// answer -- so it must be the rows a real command would have printed and nothing else.
+	// See serveGrep and topogrep.Options.Plain.
+	argv, piped := parseCmdFlags(args)
 	if len(argv) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: arac cmd -- <command> [args...]")
+		fmt.Fprintln(os.Stderr, "Usage: arac cmd [--piped] -- <command> [args...]")
 		fmt.Fprintln(os.Stderr, "Runs the command, answering it from the topology when aracne can.")
+		fmt.Fprintln(os.Stderr, "  --piped  the answer feeds a pipeline: render it as the plain command would")
 		os.Exit(1)
 	}
 
-	out, status, refusal, ok := serveCommand(argv)
+	out, status, refusal, ok := serveCommand(argv, piped)
 	// A refusal is aracne saying no to a command it UNDERSTOOD, which is a different answer
 	// from having nothing to add. It goes to stderr with a non-zero status because that is
 	// what the command it replaced would have done, and because passing it through instead
@@ -63,6 +64,26 @@ func RunCmd(args []string) {
 	passthrough(argv)
 }
 
+// parseCmdFlags splits `arac cmd`'s own flags from the command it is to run.
+//
+// Everything after `--` is the command, verbatim. Before it, only the flags this verb defines
+// are read; anything else ends the flag list, so a caller who forgot the `--` still gets their
+// command run rather than a usage error about its first argument.
+func parseCmdFlags(args []string) (argv []string, piped bool) {
+	for len(args) > 0 {
+		switch args[0] {
+		case "--":
+			return args[1:], piped
+		case "--piped":
+			piped = true
+			args = args[1:]
+		default:
+			return args, piped
+		}
+	}
+	return nil, piped
+}
+
 // serveCommand returns aracne's answer for a command, or false to run the real thing.
 //
 // Every gate below returns false rather than an approximation. The command the caller typed is
@@ -72,7 +93,7 @@ func RunCmd(args []string) {
 // "read.kinds says this may not be read here" are opposite answers that were once the same
 // `false`: the first hands the command back to the shell, and the second must not, because
 // the shell would then answer a question about a resource id as though it were a filename.
-func serveCommand(argv []string) (out string, status int, refusal error, ok bool) {
+func serveCommand(argv []string, piped bool) (out string, status int, refusal error, ok bool) {
 	req := shellcmd.Parse(argv)
 	if req.Kind == shellcmd.KindPassthrough {
 		return "", 0, nil, false
@@ -117,7 +138,7 @@ func serveCommand(argv []string) (out string, status int, refusal error, ok bool
 		out, refusal, ok := serveRead(rd, cfg, req, dbPath)
 		return out, 0, refusal, ok
 	case shellcmd.KindGrep:
-		gOut, gStatus, gOK := serveGrep(mgr, cfg, req)
+		gOut, gStatus, gOK := serveGrep(mgr, cfg, req, piped)
 		return gOut, gStatus, nil, gOK
 	}
 	return "", 0, nil, false
@@ -331,7 +352,18 @@ func resolveWindow(w shellcmd.Window, lo, hi int) (from, to int, ok bool) {
 
 // serveGrep answers a search with the topology-annotated grep, which finds what a plain grep
 // cannot: node names and stored descriptions.
-func serveGrep(mgr *topology.TopologyManager, cfg *helper.Config, req shellcmd.Request) (string, int, bool) {
+//
+// UNLESS A PIPELINE IS READING IT. Everything aracne ADDS to a search -- the `#` resource
+// headers, the rows a node earned on its name or its description, the trailer, the tiered
+// ranking, the 200-row cap -- is addressed to a reader, and a pipeline is not one. The guard
+// only rewrites a piped search when every stage keeps whole lines in order, and that promise
+// only holds if the lines are the ones the real command would have produced: a cap the
+// consumer cannot see loses matches silently (measured at 181 real against 120 through the
+// pipe), extra header rows are counted and capped alongside the matches, and the ranking
+// changes WHICH rows a `| head -N` keeps. Plain mode is those four additions turned off. What
+// survives is the reason to intercept at all: the walk still honours scan.ignore and skips the
+// trees no search wants.
+func serveGrep(mgr *topology.TopologyManager, cfg *helper.Config, req shellcmd.Request, piped bool) (string, int, bool) {
 	topo, err := mgr.ReadAll()
 	if err != nil || topo == nil {
 		return "", 0, false
@@ -376,6 +408,7 @@ func serveGrep(mgr *topology.TopologyManager, cfg *helper.Config, req shellcmd.R
 		// matched, a bare number for one file's count, cap advice spelled in flags a
 		// caller can actually type. See topogrep.Options.Terse.
 		Terse: true,
+		Plain: piped,
 	}
 	if topo.Root != "" {
 		opt.Ignore = domain.BuildIgnoreMatcher(topo.Root, cfg.Scan.Ignore)
@@ -587,6 +620,14 @@ func withinBudget(answer string, rawBytes int, cfg *helper.Config) bool {
 //
 // This is what makes interception safe to ship on by default: whenever aracne is not certain
 // it has a better answer, the shell behaves exactly as it would have.
+//
+// EXACTLY AS IT WOULD HAVE, WITH ONE LIMIT. LookPath finds the binary on PATH, and a shell
+// FUNCTION or alias of the same name is invisible to a child process: bash exports one only
+// when it was explicitly exported, and the wrappers that matter in practice -- Claude Code
+// ships a `grep` function around ugrep -- are not. So for a wrapped command the fallback runs
+// the binary rather than the wrapper, and their flag surfaces can differ. There is no way to
+// re-enter a function the calling shell never handed us, so the claim in docs/architecture.md
+// §7B is scoped to the binary rather than the shell's own resolution.
 func passthrough(argv []string) {
 	bin, err := exec.LookPath(argv[0])
 	if err != nil {

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -145,19 +146,80 @@ func TestWriteJSONConfig(t *testing.T) {
 	}
 }
 
-func TestShouldWriteConfig_KeyAbsent(t *testing.T) {
-	cfg := map[string]interface{}{}
-	result := shouldWriteConfig(cfg, "mcpServers", "/tmp/test.json", "Test", true)
-	if !result {
-		t.Fatal("should return true when key is absent")
+// The MCP entry is decided by ARACNE'S OWN KEY, never by the presence of the section.
+//
+// Guarding on the section meant a project with any other MCP server -- and every aracne project
+// after its first setup -- was asked "Config .mcp.json already exists. Overwrite? [y/N]" for an
+// operation that merges rather than overwrites, and a "no" (which is what EOF reads as on a
+// pipe) skipped aracne entirely. Setup then reported success and wrote a contract promising MCP
+// tools against a config with no aracne server in it.
+func TestUpsertMCPServerAddsBesideOtherServers(t *testing.T) {
+	entry := map[string]interface{}{"command": "arac", "args": []string{"serve"}}
+	config := map[string]interface{}{
+		"mcpServers": map[string]interface{}{
+			"github": map[string]interface{}{"command": "gh-mcp"},
+		},
+	}
+	if !upsertMCPServer(config, "mcpServers", entry) {
+		t.Fatal("a config with another server but no aracne entry must be written")
+	}
+	servers, _ := config["mcpServers"].(map[string]interface{})
+	if _, ok := servers["aracne"]; !ok {
+		t.Errorf("aracne entry missing: %+v", servers)
+	}
+	if _, ok := servers["github"]; !ok {
+		t.Errorf("the other server was lost: %+v", servers)
 	}
 }
 
-func TestShouldWriteConfig_KeyExistsAutoYes(t *testing.T) {
-	cfg := map[string]interface{}{"mcp": "existing"}
-	result := shouldWriteConfig(cfg, "mcp", "/tmp/test.json", "Test", true)
-	if !result {
-		t.Fatal("should return true when key exists and autoYes is true")
+func TestUpsertMCPServerCreatesTheSection(t *testing.T) {
+	config := map[string]interface{}{}
+	if !upsertMCPServer(config, "mcpServers", map[string]interface{}{"command": "arac"}) {
+		t.Fatal("an empty config must be written")
+	}
+	if _, ok := config["mcpServers"].(map[string]interface{})["aracne"]; !ok {
+		t.Errorf("aracne entry missing: %+v", config)
+	}
+}
+
+// An entry that already says what the generator would write is left alone, so a re-run on an
+// unchanged config touches nothing and says so.
+func TestUpsertMCPServerIsQuietWhenCurrent(t *testing.T) {
+	entry := map[string]interface{}{"command": "arac", "args": []string{"serve", "--harness", "claude_code"}}
+	config := map[string]interface{}{}
+	if !upsertMCPServer(config, "mcpServers", entry) {
+		t.Fatal("the first write must report a change")
+	}
+	// A round trip through JSON, because that is the shape readJSONConfig hands back: []string
+	// comes back as []interface{}, and the comparison has to see through that.
+	raw, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]interface{}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if upsertMCPServer(decoded, "mcpServers", entry) {
+		t.Error("an entry that already matches must not be rewritten")
+	}
+}
+
+// A stale entry -- an aracne binary that has since moved, a changed tool profile -- is
+// replaced. This is the case SETUP-01's file writer has the same duty toward.
+func TestUpsertMCPServerReplacesAStaleEntry(t *testing.T) {
+	config := map[string]interface{}{
+		"mcpServers": map[string]interface{}{
+			"aracne": map[string]interface{}{"command": "/old/path/arac"},
+		},
+	}
+	if !upsertMCPServer(config, "mcpServers", map[string]interface{}{"command": "/new/path/arac"}) {
+		t.Fatal("a stale aracne entry must be rewritten")
+	}
+	servers, _ := config["mcpServers"].(map[string]interface{})
+	entry, _ := servers["aracne"].(map[string]interface{})
+	if entry["command"] != "/new/path/arac" {
+		t.Errorf("entry not updated: %+v", entry)
 	}
 }
 
@@ -462,19 +524,54 @@ func TestWriteMarkdownFile_CreatesWithContent(t *testing.T) {
 	}
 }
 
-func TestWriteMarkdownFile_SkipsExistingWithoutAutoYes(t *testing.T) {
+// `arac setup` RE-RENDERS; it does not negotiate. Every file this writer owns is a pure
+// function of .aracne/config.json and the resolved binary path, so an existing copy is stale
+// output rather than user content and is replaced whether or not anyone is at the keyboard.
+//
+// The behaviour this replaces was a `[y/N]` prompt, and on a pipe, a Makefile or a CI step the
+// EOF read as "no": the guard hook script -- which embeds the ABSOLUTE path of the binary that
+// wrote it -- was skipped while settings.json, the MCP entry and CLAUDE.md were rewritten
+// around it. Rebuilding the binary elsewhere then left a hook pointing at a path that no longer
+// existed, failing on every tool call, and `arac setup` would not repair it.
+func TestWriteMarkdownFileAlwaysReRenders(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.md")
 	os.WriteFile(path, []byte("original"), 0644)
 
+	// autoYes false, and no terminal: the case that used to skip.
 	writeMarkdownFile(path, "test label", "new content", false)
 
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	if string(data) != "original" {
-		t.Fatalf("should have kept original content: %q", string(data))
+	if string(data) != "new content" {
+		t.Fatalf("a generated file must be re-rendered, got %q", string(data))
+	}
+}
+
+// A file that already says what the generator would write is left exactly as it is, so a
+// re-run on an unchanged config touches nothing -- including its mtime, which the topology's
+// own manifest diff reads.
+func TestWriteMarkdownFileLeavesAnIdenticalFileAlone(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.md")
+	if err := os.WriteFile(path, []byte("same content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writeMarkdownFile(path, "test label", "same content", false)
+
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.ModTime().Equal(before.ModTime()) {
+		t.Error("an already-current file was rewritten")
 	}
 }
 

@@ -131,6 +131,13 @@ DEFAULTS = {
     "keep_workdir": False,
     "dry_run": False,
     "no_grade": False,
+    # SWE-Atlas only. Its verifier scores two independent halves: `tests_reward` (the suite
+    # run before and after the patch, compared) and a rubric graded by an LLM judge. This
+    # keeps the first and never starts the second, so a run needs no judge tokens at all.
+    # It is a WEAKER BAR, not a cheaper one: an Atlas RF task is a rename or a move, so a
+    # patch that does nothing keeps the suite green and scores 1.0. Use it as a regression
+    # signal ("the arm broke nothing"), never as a solve rate.
+    "atlas_tests_only": False,
     "resume": False,
     "continue_run": None,        # continue a prior run by id/name (re-run its errored + unfinished steps)
     "run_name": None,            # unique id for this run; None -> random; also names results/<id>
@@ -354,6 +361,9 @@ def parse_args(argv=None) -> argparse.Namespace:
     sp.add_argument("--grade-timeout-s", type=int, dest="grade_timeout_s", default=None)
     sp.add_argument("--grade-stall-timeout-s", type=int, dest="grade_stall_timeout_s", default=None)
     sp.add_argument("--ni-margin", dest="ni_margin", type=float, default=None)
+    sp.add_argument("--atlas-tests-only", action="store_true", dest="atlas_tests_only",
+                    help="SWE-Atlas: re-score on the deterministic tests_reward alone, "
+                         "without starting the rubric judge (see `run --atlas-tests-only`)")
     sp.add_argument("--analysis", action="store_true", dest="want_analysis",
                     help="regenerate the LLM prose analysis after re-scoring")
     sp.add_argument("--config", default=None)
@@ -408,6 +418,10 @@ def parse_args(argv=None) -> argparse.Namespace:
                          "using that run's saved config snapshot (config flags are ignored)")
     sp.add_argument("--no-grade", action="store_true", dest="no_grade",
                     help="run agents + capture metrics but skip Docker grading")
+    sp.add_argument("--atlas-tests-only", action="store_true", dest="atlas_tests_only",
+                    help="SWE-Atlas: score on the verifier's deterministic tests_reward and "
+                         "never start the rubric judge. Weaker bar -- a no-op patch keeps the "
+                         "suite green -- so read it as a regression signal, not a solve rate")
     sp.add_argument("--no-analysis", action="store_true", dest="no_analysis",
                     help="skip the end-of-run LLM results analysis")
     sp.add_argument("--dry-run", action="store_true", dest="dry_run",

@@ -87,7 +87,7 @@ func TestAudit_OverBudgetResourceIDIsRefusedNotPassedThrough(t *testing.T) {
 	}
 
 	t.Chdir(root)
-	_, _, refusal, ok := serveCommand([]string{"cat", "example.com/proj.Wide"})
+	_, _, refusal, ok := serveCommand([]string{"cat", "example.com/proj.Wide"}, false)
 	if !ok && refusal == nil {
 		t.Errorf("an over-budget read of a resource ID fell through to passthrough; " +
 			"the shell then runs `cat example.com/proj.Wide`, which reports " +

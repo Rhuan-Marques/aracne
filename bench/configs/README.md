@@ -3,8 +3,8 @@
 Named, reusable benchmark configs. Select one when running:
 
 ```bash
-python bench/run_benchmark.py run --config gosmoke
-python bench/run_benchmark.py run --config gosmoke --run-name my-experiment
+python bench/run_benchmark.py run --config atlas-smoke
+python bench/run_benchmark.py run --config atlas-smoke --run-name my-experiment
 ```
 
 `--config` accepts either a **bare name** (resolved to `bench/configs/<name>.yaml`) or a

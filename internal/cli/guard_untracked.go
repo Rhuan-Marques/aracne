@@ -102,6 +102,33 @@ func existingReadFiles(tokens []string, root string) []string {
 	return out
 }
 
+// namesProjectDir reports whether some token resolves to a directory inside the project.
+//
+// It is the half existingReadFiles deliberately drops. That resolver keeps regular files only,
+// which is right for a READ -- a directory is not something to print -- and wrong as the sole
+// evidence test for a SEARCH, whose scope is a directory almost every time. See
+// namesAnIndexedFile.
+//
+// Resolved the same two ways a file token is: absolute as it stands, relative against the
+// project root. A directory outside the root is not evidence: aracne indexes one tree.
+func namesProjectDir(tokens []string, root string) bool {
+	if root == "" {
+		return false
+	}
+	for _, tok := range tokens {
+		for _, cand := range []string{tok, filepath.Join(root, tok)} {
+			if !filepath.IsAbs(cand) {
+				continue
+			}
+			cand = filepath.Clean(cand)
+			if info, err := os.Stat(cand); err == nil && info.IsDir() && isUnder(cand, root) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // trackedFiles returns the subset of paths the topology holds nodes for, and whether the
 // topology could be consulted at all. A false second return means "unknown", never "empty" --
 // the caller keeps the block rather than treating an unreadable database as an empty one.

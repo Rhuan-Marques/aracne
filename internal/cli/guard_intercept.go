@@ -70,33 +70,48 @@ func interceptCommand(command, dbPath string, cfg *helper.Config) (string, bool)
 	}
 
 	segments := splitCommandSegments(original)
-	var at []int
-	for i := range segments {
-		if off, ok := interceptableSegment(segments, i, original, dbPath, cfg, cfg.InterceptReads()); ok {
-			at = append(at, off)
-		}
+	// Each splice is an offset plus the prefix that belongs at it: a segment whose stdout a
+	// pipeline consumes is answered in PLAIN mode, which is a different question from the one
+	// a segment printing to the model asks. See serveGrep and topogrep.Options.Plain.
+	type splice struct {
+		at     int
+		prefix string
 	}
-	if len(at) == 0 {
+	var splices []splice
+	plain := quoteForShell(arac) + " cmd --piped -- "
+	enriched := quoteForShell(arac) + " cmd -- "
+	for i := range segments {
+		off, piped, ok := interceptableSegment(segments, i, original, dbPath, cfg, cfg.InterceptReads())
+		if !ok {
+			continue
+		}
+		prefix := enriched
+		if piped {
+			prefix = plain
+		}
+		splices = append(splices, splice{at: off, prefix: prefix})
+	}
+	if len(splices) == 0 {
 		return "", false
 	}
-	prefix := quoteForShell(arac) + " cmd -- "
 	// Back to front, so an earlier offset is still valid after a later splice.
 	out := original
-	for i := len(at) - 1; i >= 0; i-- {
-		out = out[:at[i]] + prefix + out[at[i]:]
+	for i := len(splices) - 1; i >= 0; i-- {
+		out = out[:splices[i].at] + splices[i].prefix + out[splices[i].at:]
 	}
 	return out, true
 }
 
-// interceptableSegment reports whether one segment of a command may be rewritten, and the byte
-// offset in the original string where the `arac cmd --` prefix belongs.
+// interceptableSegment reports whether one segment of a command may be rewritten, the byte
+// offset in the original string where the `arac cmd` prefix belongs, and whether that segment
+// feeds a pipe (which decides how the answer is rendered).
 func interceptableSegment(segments []commandSegment, i int, original, dbPath string,
-	cfg *helper.Config, allowReads bool) (int, bool) {
+	cfg *helper.Config, allowReads bool) (int, bool, bool) {
 	seg := segments[i]
 	// A segment reading piped stdin has no file to look up, and one redirecting stdout would
 	// send aracne's answer to that file instead of to the model.
 	if seg.pipedInto || seg.redirectsOut {
-		return 0, false
+		return 0, false, false
 	}
 	// A segment INSIDE a substitution, a subshell or a group is not a command whose stdout
 	// the model reads: it is a value the enclosing command consumes. `X=$(cat f)`,
@@ -106,18 +121,18 @@ func interceptableSegment(segments []commandSegment, i int, original, dbPath str
 	// to mark the substitution. It is the same trade the pipe rule below refuses, on a path
 	// that had no rule at all.
 	if seg.depth > 0 {
-		return 0, false
+		return 0, false, false
 	}
 	argv := segmentArgv(seg)
 	if len(argv) == 0 {
-		return 0, false
+		return 0, false, false
 	}
 	// The command word must be the segment's FIRST word. commandFields deliberately looks past
 	// env assignments and wrappers (`sudo`, `rtk proxy`) to classify what really runs;
 	// prefixing those would put `arac cmd --` in front of the wrapper instead of the command.
 	rawFields := strings.Fields(seg.text)
 	if len(rawFields) == 0 || !strings.EqualFold(shellcmd.Base(rawFields[0]), shellcmd.Base(argv[0])) {
-		return 0, false
+		return 0, false, false
 	}
 
 	req := shellcmd.Parse(argv)
@@ -127,22 +142,25 @@ func interceptableSegment(segments []commandSegment, i int, original, dbPath str
 		// tool and in ModeCLI it is `arac read`; rewriting the model's `cat` on top of
 		// either would be a second answer to a question that already has one.
 		//
-		// The nudge path passes allowReads=true to ask the same question hypothetically --
-		// "would this have been answered, had reads been intercepted?" -- which is what keeps
-		// the nudge from advertising a capability that would not have applied.
+		// allowReads is the caller's answer to that, and interceptCommand is the only caller
+		// left: it passes cfg.InterceptReads(). The nudge path used to ask the same question
+		// hypothetically -- "would this have been answered, had reads been intercepted?" -- and
+		// no longer consults this at all; the guard decides a bash nudge from the mode and the
+		// key set (see nudgeKeys).
 		if !allowReads {
-			return 0, false
+			return 0, false, false
 		}
 	case shellcmd.KindGrep:
 		// Every mode. See Config.InterceptGrep.
 	default:
-		return 0, false
+		return 0, false, false
 	}
-	if !pipesIntoLinePreservingConsumers(segments, i, req.Kind) {
-		return 0, false
+	piped, ok := pipesIntoLinePreservingConsumers(segments, i, req.Kind)
+	if !ok {
+		return 0, false, false
 	}
 	if namesOnlyUnindexedFiles(req.Operands, dbPath) {
-		return 0, false
+		return 0, false, false
 	}
 
 	// Splice before the first non-blank byte, so the separator and any spacing survive.
@@ -150,7 +168,7 @@ func interceptableSegment(segments []commandSegment, i int, original, dbPath str
 	for off < seg.end && off < len(original) && (original[off] == ' ' || original[off] == '\t') {
 		off++
 	}
-	return off, true
+	return off, piped, true
 }
 
 // pipesIntoLinePreservingConsumers decides whether a segment that FEEDS a pipe may be
@@ -175,43 +193,108 @@ func interceptableSegment(segments []commandSegment, i int, original, dbPath str
 // is the opposite trade from the grep case: there, aracne's answer is the same KIND of thing
 // the consumer expected; here it is not.
 //
-// THE WALK IS ADJACENCY, AND THAT IS ONLY SAFE BECAUSE THE SCANNER KEEPS A PIPELINE WHOLE.
-// Anything that splits a stage in two puts a non-piped fragment between a producer and its
-// consumer, and the loop below stops at it and reports "feeds no pipe". That was live for
-// every `2>&1` -- `grep … | grep -v x 2>&1 | wc -l` reached `wc` only once the `&` stopped
-// ending a command (splitCommandSegments.isRedirectAmpersand), and a group or a subshell
-// around the producer is refused a step earlier, by its depth.
-func pipesIntoLinePreservingConsumers(segments []commandSegment, i int, kind shellcmd.Kind) bool {
-	if i+1 >= len(segments) || !segments[i+1].pipedInto {
-		return true // feeds no pipe
+// THE WALK IS OVER STAGES, NOT OVER NEIGHBOURS, and that distinction is the whole of the fix
+// below. It used to ask whether `segments[i+1].pipedInto` was set -- adjacency -- which is only
+// the same question while the scanner keeps a simple command in one segment. It does not: the
+// scanner cuts a new segment at every `(`, `)`, backtick and `{`, so a command carrying a
+// substitution is spread over several segments with the substitution's body BETWEEN them. The
+// producer's neighbour was then the body, `pipedInto` was false on it, and
+// `grep -rn X $(echo .) | wc -l` was rewritten -- the exact case this function exists to refuse,
+// on the path that had no rule. Measured on a two-match fixture it answered 4 where the real
+// pipeline answered 2. `${VAR}` and a backtick substitution took the same route.
+//
+// pipelineStages walks the command list at the producer's own depth instead, so a nested body
+// is skipped and the pipe bit is found wherever the scanner happened to leave it. The same
+// break was live for every `2>&1` until the `&` stopped ending a command
+// (splitCommandSegments.isRedirectAmpersand); a group or a subshell AROUND the producer is
+// refused a step earlier, by its depth.
+func pipesIntoLinePreservingConsumers(segments []commandSegment, i int, kind shellcmd.Kind) (piped, ok bool) {
+	stages, feedsPipe, readable := pipelineStages(segments, i)
+	if !feedsPipe {
+		return false, true // feeds no pipe
 	}
-	if kind != shellcmd.KindGrep {
-		return false
+	if kind != shellcmd.KindGrep || !readable {
+		return true, false
 	}
-	for j := i + 1; j < len(segments) && segments[j].pipedInto; j++ {
-		if !shellcmd.ConsumerPreservesLines(stdinReader(segments[j].text)) {
-			return false
+	for _, stage := range stages {
+		if !shellcmd.ConsumerPreservesLines(stage) {
+			return true, false
 		}
 	}
-	return true
+	return true, true
 }
 
-// stdinReader is the command word that actually RECEIVES the pipe.
+// pipelineStages returns the argv of every stage the segment at i feeds its stdout into,
+// whether it feeds a pipe at all, and whether every stage could be read.
 //
-// Deliberately not commandWord, which looks past wrappers to classify what ultimately runs.
-// That is the right answer for "what is this segment doing" and the wrong one here: in
-// `… | xargs sed -i s/a/b/` the stage reading stdin is `xargs`, which EXECUTES the lines it
-// is given, while commandWord reports `sed` -- a line filter -- and would wave it through.
-// Only environment assignments are skipped, because `LC_ALL=C sort` is still sort reading the
-// pipe.
-func stdinReader(segment string) string {
-	for _, f := range strings.Fields(segment) {
-		if isEnvAssignment(f) {
+// The scan runs at the producer's own nesting depth. A DEEPER segment is the body of a
+// substitution, a subshell or a group written inside this command and is skipped -- it is a
+// value the command consumes, not a stage that consumes the command. A SHALLOWER one means the
+// group around this command closed, which ends the list.
+//
+// At the producer's own depth, what a segment IS follows from why the scanner cut the one
+// before it (commandSegment.endedBy): after a `|` it is a stage of this pipeline, after a
+// nesting boundary it is the same command still being written, and after a list separator the
+// command list has ended. That is the fact the walk needs and the only one it cannot infer.
+// Guessing it from "does this segment have a command word" -- the first attempt -- read
+// `grep X $(echo .) extra.go | wc -l` as a new command starting at `extra.go`, lost the pipe,
+// and handed the annotated answer to a counter.
+//
+// readable is false for a stage aracne cannot name -- `… | ( wc -l )` puts the real consumer
+// one level down -- and the caller must treat that as an opaque consumer rather than as an
+// absent one.
+func pipelineStages(segments []commandSegment, i int) (stages [][]string, feedsPipe, readable bool) {
+	depth := segments[i].depth
+	for j := i + 1; j < len(segments); j++ {
+		seg := segments[j]
+		if seg.depth > depth {
 			continue
 		}
-		return f
+		if seg.depth < depth {
+			break
+		}
+		switch segments[j-1].endedBy {
+		case '|':
+			feedsPipe = true
+			argv := stdinReaderArgv(seg)
+			if len(argv) == 0 {
+				return nil, true, false
+			}
+			stages = append(stages, argv)
+		case '(', ')', '{', '}', '`':
+			// A nesting boundary inside the command this segment belongs to. Whatever follows
+			// is the rest of that command -- its remaining operands, or the pipe it feeds.
+			continue
+		default:
+			// A list separator, or the end of the string: nothing after this belongs to the
+			// producer's own pipeline.
+			return stages, feedsPipe, true
+		}
 	}
-	return ""
+	return stages, feedsPipe, true
+}
+
+// stdinReaderArgv is the argv of the command that actually RECEIVES the pipe.
+//
+// Deliberately not commandFields, which looks past wrappers to classify what ultimately runs.
+// That is the right answer for "what is this segment doing" and the wrong one here: in
+// `… | xargs sed -i s/a/b/` the stage reading stdin is `xargs`, which EXECUTES the lines it
+// is given, while commandFields reports `sed` -- a line filter -- and would wave it through.
+// Only environment assignments are skipped, because `LC_ALL=C sort` is still sort reading the
+// pipe.
+//
+// The ARGUMENTS come with it, because the flags decide as much as the word does: `grep -v` is
+// a line filter and `grep -c` is a counter. See shellcmd.ClassifyConsumer.
+func stdinReaderArgv(seg commandSegment) []string {
+	fields := strings.Fields(seg.text)
+	out := make([]string, 0, len(fields))
+	for _, f := range fields {
+		if len(out) == 0 && isEnvAssignment(f) {
+			continue
+		}
+		out = append(out, strings.ReplaceAll(f, string(quotedSpace), " "))
+	}
+	return out
 }
 
 // namesOnlyUnindexedFiles reports whether every operand is a file that exists on disk and has
@@ -223,12 +306,13 @@ func stdinReader(segment string) string {
 // did not write. An operand that is NOT a file on disk is left alone here on purpose -- it may
 // be a resource ID, which only the topology can settle, and `arac cmd` settles it.
 func namesOnlyUnindexedFiles(operands []string, dbPath string) bool {
-	// existingReadFiles is the same resolver the denial path uses, and it tries each token
-	// against the project root as well as the process cwd. That matters here: a hook runs in
-	// the SESSION directory while the agent's shell may have cd'd elsewhere, so resolving a
-	// relative operand against the hook's own cwd alone finds nothing and would judge every
-	// relative read "not a file". Where it still cannot tell, this returns false and `arac
-	// cmd` -- which runs in the agent's actual shell -- settles it correctly.
+	// existingReadFiles is the same resolver the denial path uses: an ALREADY-ABSOLUTE token as
+	// it stands, and a relative one joined onto the PROJECT ROOT. The hook's own working
+	// directory is deliberately not consulted -- it is the session directory while the agent's
+	// shell may have cd'd elsewhere, so resolving against it would answer about a different
+	// file (see guardDBPath for the same problem one layer down). Where the root cannot settle
+	// it either, this returns false and `arac cmd` -- which runs in the agent's actual shell --
+	// decides correctly.
 	existing := existingReadFiles(operands, projectRoot(dbPath))
 	if len(existing) == 0 || len(existing) != len(operands) {
 		return false // nothing to judge, or a mix that includes a possible resource ID
@@ -255,8 +339,20 @@ func namesOnlyUnindexedFiles(operands []string, dbPath string) bool {
 // `cat "$f"` names a shell variable, which resolves to no path, so "are all operands
 // unindexed?" answered false and the nudge fired -- recommending `arac read` for template
 // files carrying zero topology nodes.
+//
+// A DIRECTORY IS EVIDENCE IN ITS OWN RIGHT, and leaving it out inverted the whole test for the
+// commonest call there is. `existingReadFiles` keeps regular files only -- correct for a read,
+// where a directory is not a target -- so a native `Grep{pattern, path: "internal/cli"}`
+// resolved to no file, reported "nothing indexed", and was silently exempted from the one
+// channel that teaches the annotated grep. A `Grep` with NO path was nudged and a `Grep` scoped
+// to a tree full of indexed code was not. A directory inside the project is exactly the scope
+// aracne can search better, so it counts.
 func namesAnIndexedFile(operands []string, dbPath string) bool {
-	existing := existingReadFiles(operands, projectRoot(dbPath))
+	root := projectRoot(dbPath)
+	if namesProjectDir(operands, root) {
+		return true
+	}
+	existing := existingReadFiles(operands, root)
 	if len(existing) == 0 {
 		return false
 	}

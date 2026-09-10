@@ -1,24 +1,3 @@
-# HISTORICAL. Three arms on the MCP surface. The default surface is now terminal-first --
-# see scale40-fair.yaml. Kept so the runs that cite it stay reproducible.
-#
-# The three-arm sizing study: the same 40 tasks as `scale40`, run under a control and TWO
-# aracne arms.
-#
-# WHY A THIRD ARM. `scale40` can only compare aracne against no-aracne, which conflates two
-# effects that turned out to have OPPOSITE signs. In compact-blocked-20260830c the topology
-# itself worked -- symbol lookups resolved, context blocks were accurate, warnings were acted
-# on -- while getting TO it cost 20% of every tool call in the run (a guard denial plus a tool
-# lookup, in 24 of 27 cells). Pooled, those cancelled to a null result that says nothing about
-# either half.
-#
-#   baseline     no topology at all.
-#   aracne       topology + native read/edit/write BLOCKED (perf-balanced). What shipped.
-#   aracne-open  the same topology, blocking nothing (perf-open). Isolates the guard's cost:
-#                any difference between the two aracne arms IS the cost of blocking.
-#
-# Read the two aracne arms against the control separately -- `paired_by_arm` in results.json
-# carries one block per arm, all against `baseline`.
-
 sample_id: scale40
 languages: [go, javascript, typescript, rust, python]
 
@@ -32,8 +11,6 @@ max_describable_nodes: 8000
 seeds: 1
 arms: [baseline, aracne, aracne-open]
 
-# One preset per arm. They differ in `blocked_tools` and nothing else, so the comparison
-# between them is the guard and only the guard.
 arm_aracne_config:
   aracne: perf-balanced
   aracne-open: perf-open
@@ -43,9 +20,6 @@ model: opus
 max_turns: 80
 timeout_s: 2400
 
-# Both aracne arms share one canonical worktree per fixture and rewrite its config before each
-# cell, so two cells of the SAME task must not run concurrently. The per-fixture lock enforces
-# that; keeping this at 1 avoids relying on it.
 run_parallel: 1
 
 grade_timeout_s: 7200
@@ -53,19 +27,8 @@ grade_stall_timeout_s: 1800
 
 ni_margin: 0.10
 
-# Both confounds the previous run could not rule out.
-#
-# The agent inherits the operator's ~/.claude settings and memory, which in the last run meant
-# a standing "prefer Bash over the file tools" instruction was active in EVERY arm: the
-# baseline made 357 Bash calls and zero Read calls, and each aracne cell spent a denial
-# fighting the same instruction. Isolating the config dir removes it from all three arms at
-# once. VERIFY AUTH ON ONE CELL BEFORE COMMITTING A FULL MATRIX -- this copies credentials
-# into a scratch dir, and a run that loses auth wastes the whole matrix.
 isolate_operator_config: true
 
-# Keep the aracne MCP tools in the model's front tool list. Last run they arrived deferred
-# among ~21 unrelated tools, so 24 of 27 cells spent a call on ToolSearch discovering tools
-# their own CLAUDE.md had already named.
 allowed_tools:
   - Bash
   - Task

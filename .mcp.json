@@ -8,7 +8,7 @@
         "--harness",
         "claude_code"
       ],
-      "command": "arac"
+      "command": "/home/rhuan/repos/aracne/bin/arac"
     }
   }
 }
