@@ -608,6 +608,10 @@ func wordSafe(pattern string) bool {
 	return wordRun.MatchString(pattern)
 }
 
+// WordSafe is wordSafe for the other search surface that offers `-w`, `arac grep`, which has
+// to refuse the same patterns rather than wrap them in a `\b` that finds fewer matches.
+func WordSafe(pattern string) bool { return wordSafe(pattern) }
+
 // includeFamily and typeFamily say which search tools own which filename filters.
 //
 // A tool must not be credited with a flag it does not have. `grep -t go` is an ERROR in GNU
@@ -1021,7 +1025,14 @@ func breToRE2(pat string) (string, bool) {
 	// an ordinary character and `^` is an anchor: the start of the pattern, and just past
 	// a `\(` or a `\|`.
 	leading := true
+	// anchorable marks the positions where `^` anchors, which is NARROWER than leading: the
+	// start of the pattern and just past a `\(` or `\|`, and nowhere else. A caret does not
+	// give a following `*` something to repeat, so leading survives one -- but a SECOND caret
+	// is an ordinary character, and reading it off leading turned `^^foo` into two anchors.
+	anchorable := true
 	for i := 0; i < len(pat); i++ {
+		canAnchor := anchorable
+		anchorable = false
 		switch c := pat[i]; c {
 		case '\\':
 			if i+1 >= len(pat) {
@@ -1034,6 +1045,7 @@ func breToRE2(pat string) (string, bool) {
 			case d == '(' || d == ')' || d == '{' || d == '}' || d == '|' || d == '+' || d == '?':
 				b.WriteByte(d) // BRE's escaped operator is RE2's bare one
 				leading = d == '(' || d == '|'
+				anchorable = leading
 			case d == '<' || d == '>':
 				b.WriteString(`\b`) // GNU's word boundaries
 				leading = false
@@ -1054,9 +1066,9 @@ func breToRE2(pat string) (string, bool) {
 			}
 			leading = false
 		case '^':
-			// An anchor only where it leads, ordinary anywhere else. It does not itself
+			// An anchor only where it may anchor, ordinary anywhere else. It does not itself
 			// give a following `*` something to repeat, so `leading` survives it.
-			if leading {
+			if canAnchor {
 				b.WriteByte('^')
 			} else {
 				b.WriteString(`\^`)

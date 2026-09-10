@@ -286,7 +286,7 @@ func pipelineStages(segments []commandSegment, i int) (stages [][]string, feedsP
 // The ARGUMENTS come with it, because the flags decide as much as the word does: `grep -v` is
 // a line filter and `grep -c` is a counter. See shellcmd.ClassifyConsumer.
 func stdinReaderArgv(seg commandSegment) []string {
-	fields := strings.Fields(seg.text)
+	fields := strings.Fields(withoutRedirections(seg))
 	out := make([]string, 0, len(fields))
 	for _, f := range fields {
 		if len(out) == 0 && isEnvAssignment(f) {
@@ -364,8 +364,12 @@ func namesAnIndexedFile(operands []string, dbPath string) bool {
 // characters and substitutes a control byte for the spaces they held together, so putting
 // those spaces back yields exactly the tokens a shell would have produced -- which is what
 // shellcmd.Parse expects, and what makes `sed -n '120,160p' f` classify.
+//
+// Redirections are removed first, as the shell removes them: `cat f 2>/dev/null` is argv
+// [cat f], not a two-file read, and `sed -n '1,5p' f 2>/dev/null` is a one-file window rather
+// than a multi-file sed that shellcmd must refuse.
 func segmentArgv(seg commandSegment) []string {
-	fields := commandFields(seg.text)
+	fields := commandFields(withoutRedirections(seg))
 	out := make([]string, 0, len(fields))
 	for _, f := range fields {
 		out = append(out, strings.ReplaceAll(f, string(quotedSpace), " "))

@@ -257,8 +257,13 @@ func IsSourceFile(root, path, language string) bool {
 	case "java":
 		return isJavaSourceName(name) && !inJavaIgnoredDir(root, path)
 	default:
+		// The same per-language exclusions the named arms apply. This arm is reached for a
+		// language name no scanner owns -- the "multi" aggregate, an empty language -- and
+		// accepting test files here reported every one of them as unindexed forever.
 		ext := filepath.Ext(name)
-		return ext == ".go" || ext == ".py" || isJavaScriptSourceName(name) || isTypeScriptSourceName(name) ||
+		return (ext == ".go" && !strings.HasSuffix(name, "_test.go")) ||
+			(ext == ".py" && !strings.HasPrefix(name, "test_")) ||
+			isJavaScriptSourceName(name) || isTypeScriptSourceName(name) ||
 			(isRustSourceName(name) && !inRustIgnoredDir(root, path)) ||
 			(isJavaSourceName(name) && !inJavaIgnoredDir(root, path))
 	}

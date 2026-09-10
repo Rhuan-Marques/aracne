@@ -314,6 +314,11 @@ func TestGrepBREPatternsAreTranslatedForRE2(t *testing.T) {
 		// ordinary characters anywhere else.
 		{`grep ^foo$ .`, `^foo$`},
 		{`grep a^b .`, `a\^b`},
+		// Only the FIRST caret anchors. A second one is ordinary even though a `*` after it
+		// would still have nothing to repeat -- the two positional rules are not the same rule.
+		{`grep ^^foo .`, `^\^foo`},
+		{`grep ^* .`, `^\*`},
+		{`grep \(^a\)\|^b .`, `(^a)|^b`},
 		{`grep a$b .`, `a\$b`},
 		{`grep *foo .`, `\*foo`},
 		{`grep a*b .`, `a*b`},

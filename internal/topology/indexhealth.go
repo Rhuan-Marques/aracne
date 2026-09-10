@@ -19,6 +19,9 @@ import (
 // manifest entries to report as gone, and a language the tree has just acquired has files to
 // report as new -- and only one of the two lists knows about each. Order is stable so the diff
 // visits them the same way on every run.
+// multiLanguage is the value topo.Language takes when a project spans several languages.
+const multiLanguage = "multi"
+
 func detectedLanguages(topo *domain.Topology, root string, reg *scanner.Registry) []string {
 	seen := map[string]bool{}
 	var out []string
@@ -32,7 +35,15 @@ func detectedLanguages(topo *domain.Topology, root string, reg *scanner.Registry
 	for _, lang := range topo.Languages {
 		add(lang)
 	}
-	add(topo.Language)
+	// topo.Language is the SINGLE-language form, and only that. A project scanned in several
+	// languages stamps it with the aggregate "multi", which is not a scanner name: diffing
+	// under it reached IsSourceFile's default arm, which knows no per-language test-file rule,
+	// so every *_test.go and test_*.py was reported as new -- on every run, forever, since no
+	// scan ever indexes them. check-updates could never exit 0, every unresolved read carried
+	// a false "the index is STALE" note, and the guard's drift probe was permanently true.
+	if len(topo.Languages) == 0 && topo.Language != multiLanguage {
+		add(topo.Language)
+	}
 	if reg != nil {
 		for _, ls := range reg.DetectAll(root) {
 			add(ls.Name())
@@ -131,7 +142,7 @@ func (h IndexHealth) Files() []string {
 	out := make([]string, 0, h.Drifted())
 	add := func(paths []string) {
 		for _, p := range paths {
-			if rel, err := filepath.Rel(h.Root, p); err == nil && !strings.HasPrefix(rel, "..") {
+			if rel, err := filepath.Rel(h.Root, p); err == nil && domain.RelInside(rel) {
 				p = filepath.ToSlash(rel)
 			}
 			out = append(out, p)

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/Rhuan-Marques/aracne/internal/toolspec"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // The guard exists to route work to the aracne tools where they are the better answer. A
@@ -55,7 +56,7 @@ func isUnder(path, root string) bool {
 	if err != nil {
 		return false
 	}
-	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	return domain.RelInside(rel)
 }
 
 // commandPaths is toolspec.CommandPaths under the name the guard has always used for it.

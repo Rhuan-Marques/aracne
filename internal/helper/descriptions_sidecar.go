@@ -464,7 +464,7 @@ func relPath(root, path string) string {
 		return ""
 	}
 	if root != "" {
-		if rel, err := filepath.Rel(root, path); err == nil && !strings.HasPrefix(rel, "..") {
+		if rel, err := filepath.Rel(root, path); err == nil && domain.RelInside(rel) {
 			return filepath.ToSlash(rel)
 		}
 	}

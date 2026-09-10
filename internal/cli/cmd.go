@@ -178,6 +178,9 @@ func serveRead(rd *universaltools.Read, cfg *helper.Config,
 	// passes those through rather than answer them per file.
 	blocks := make([]string, 0, len(req.Operands))
 	resolved := make([]domain.Location, 0, len(req.Operands))
+	// The first operand answered as a RESOURCE ID, if any: the shell cannot serve that one, so
+	// an answer too large to give is refused rather than handed to it. See the budget below.
+	idOperand, idLoc := "", domain.Location{}
 	for _, operand := range req.Operands {
 		path, from, to, refusal, ok := resolveReadOperand(rd, cfg, req, operand, dbPath)
 		if refusal != nil {
@@ -200,6 +203,9 @@ func serveRead(rd *universaltools.Read, cfg *helper.Config,
 		}
 		blocks = append(blocks, out)
 		resolved = append(resolved, domain.Location{Path: path, StartsAt: from, EndsAt: to})
+		if _, statErr := os.Stat(operand); statErr != nil && idOperand == "" {
+			idOperand, idLoc = operand, domain.Location{Path: path, StartsAt: from, EndsAt: to}
+		}
 	}
 	if len(blocks) == 0 {
 		// Every operand resolved to an empty window. The command printed nothing, and so
@@ -210,10 +216,50 @@ func serveRead(rd *universaltools.Read, cfg *helper.Config,
 		return "", nil, false
 	}
 	answer := strings.Join(blocks, "\n")
-	if !withinBudget(answer, rawWindowBytes(resolved), cfg) {
+	if raw := rawWindowBytes(resolved); !withinBudget(answer, raw, cfg) {
+		// OVER BUDGET IS NOT "NOTHING TO ADD" WHEN AN OPERAND IS AN ID. For a path, the real
+		// command is a correct answer and passing through is right. For a resource id the
+		// shell runs `cat <id>` and reports "No such file or directory" about an id that
+		// resolves perfectly well -- the outcome rawWindowBytes was written to prevent,
+		// reached anyway through the absolute ceiling (helper.OverserveMaxBytes). So it is
+		// refused, with the move that does fit.
+		if idOperand != "" {
+			return "", overBudgetRefusal(idOperand, idLoc, len(answer),
+				cfg.OverserveBudget(raw, helper.OverserveReadFree)), false
+		}
 		return "", nil, false
 	}
 	return answer, nil, true
+}
+
+// overBudgetRefusal names the size, the ceiling and a read of part of the resource that fits.
+func overBudgetRefusal(operand string, loc domain.Location, size, budget int) error {
+	kb := func(n int) int { return (n + 1023) / 1024 }
+	end := min(loc.EndsAt, loc.StartsAt+99)
+	return fmt.Errorf("%s renders to %d KB, over the %d KB ceiling for this read; read part of "+
+		"it (`sed -n '%d,%dp' %s`) or raise terminal.max_overserve",
+		operand, kb(size), kb(budget), loc.StartsAt, end, displayRoot(loc.Path))
+}
+
+// looksLikeFilePath reports whether an operand that is not on disk still reads as a FILE the
+// caller mistyped rather than as a resource id: its last segment ends in a short lowercase
+// extension (`util.go`, `README.md`). Such a miss keeps the real command's own "No such file or
+// directory"; only an id-shaped miss is answered with the resolver's suggestions.
+func looksLikeFilePath(operand string) bool {
+	base := operand
+	if i := strings.LastIndexAny(base, `/\`); i >= 0 {
+		base = base[i+1:]
+	}
+	dot := strings.LastIndex(base, ".")
+	if dot <= 0 || dot == len(base)-1 || len(base)-dot-1 > 5 {
+		return false
+	}
+	for _, r := range base[dot+1:] {
+		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9') {
+			return false
+		}
+	}
+	return true
 }
 
 // renderReadOperand renders one already-resolved operand.
@@ -302,6 +348,17 @@ func resolveReadOperand(rd *universaltools.Read, cfg *helper.Config, req shellcm
 	}
 	rPath, bodyFrom, bodyTo, err := rd.BodyBounds(operand)
 	if err != nil || rPath == "" {
+		// A NEAR MISS IS ANSWERED, NOT PASSED THROUGH. Handed to the shell, `cat RunGuardd`
+		// reports "No such file or directory" -- a filesystem error about a symbol -- while the
+		// resolver already knows the id the caller meant; the intercept_id contract promises
+		// "a miss returns the nearest candidates rather than an error". An operand with no
+		// candidates at all, or one shaped like a mistyped FILE, still passes through: there is
+		// no policy in a typo, and the real command says it better.
+		if !looksLikeFilePath(operand) {
+			if hint := rd.Suggestion(operand); hint != "" {
+				return "", 0, 0, errors.New(hint), false
+			}
+		}
 		return "", 0, 0, nil, false
 	}
 	f, t, wOK := resolveWindow(req.Window, bodyFrom, bodyTo)
@@ -374,19 +431,7 @@ func serveGrep(mgr *topology.TopologyManager, cfg *helper.Config, req shellcmd.R
 		return "", 0, false
 	}
 
-	pattern := req.Grep.Pattern
-	if req.Grep.Fixed {
-		pattern = regexpQuote(pattern)
-	}
-	// `-w` and `-x` are anchorings of the pattern, not knobs. -w is only ever set for a
-	// pattern made of word characters, where `\b…\b` is exactly POSIX's rule; see
-	// shellcmd.wordSafe for the patterns that reach the real grep instead.
-	if req.Grep.WholeWord {
-		pattern = `\b(?:` + pattern + `)\b`
-	}
-	if req.Grep.WholeLine {
-		pattern = `^(?:` + pattern + `)$`
-	}
+	pattern := anchorPattern(req.Grep.Pattern, req.Grep.Fixed, req.Grep.WholeWord, req.Grep.WholeLine)
 
 	opt := topogrep.Options{
 		Pattern:          pattern,
@@ -444,6 +489,24 @@ func serveGrep(mgr *topology.TopologyManager, cfg *helper.Config, req shellcmd.R
 		return "", status, true
 	}
 	return strings.TrimRight(out, "\n") + "\n", status, true
+}
+
+// anchorPattern applies grep's literal and anchoring flags to a pattern.
+//
+// `-w` and `-x` are anchorings of the pattern, not knobs. -w must only ever be asked for a
+// pattern made of word characters, where `\b…\b` is exactly POSIX's rule; callers check
+// shellcmd.WordSafe first and send anything else to the real grep or refuse it.
+func anchorPattern(pattern string, fixed, word, line bool) string {
+	if fixed {
+		pattern = regexpQuote(pattern)
+	}
+	if word {
+		pattern = `\b(?:` + pattern + `)\b`
+	}
+	if line {
+		pattern = `^(?:` + pattern + `)$`
+	}
+	return pattern
 }
 
 // grepRoots turns a search's operands into the paths to walk, plus the line range to keep
@@ -519,7 +582,7 @@ func displayRoot(path string) string {
 		return path
 	}
 	rel, relErr := filepath.Rel(wd, path)
-	if relErr != nil || strings.HasPrefix(rel, "..") {
+	if relErr != nil || !domain.RelInside(rel) {
 		return path
 	}
 	return rel

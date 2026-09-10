@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // RunCheckUpdates reports index health: which source files have drifted from the topology
@@ -96,7 +98,7 @@ func relativize(root string, paths []string) []string {
 	out := make([]string, 0, len(paths))
 	for _, p := range paths {
 		rel, err := filepath.Rel(root, p)
-		if err != nil || len(rel) >= 2 && rel[:2] == ".." {
+		if err != nil || !domain.RelInside(rel) {
 			out = append(out, p)
 			continue
 		}

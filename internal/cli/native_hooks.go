@@ -454,7 +454,8 @@ func writeOpenCodePreToolScanPlugin(pluginsDir string, autoYes bool) {
 // openCodePreToolScanPlugin returns the OpenCode plugin that keeps the topology current before
 // a tool call and intercepts the shell reads and searches aracne answers.
 //
-// BOTH HALVES OF THE CLAUDE CODE PreToolUse HOOK, in the spelling this harness offers. The scan
+// BOTH HALVES OF THE CLAUDE CODE PreToolUse HOOK, and its PostToolUse half, in the spelling this
+// harness offers. The scan
 // mirrors that hook's matcher (Read|Grep|Edit|Write|Bash) in OpenCode's tool names and defers
 // to `arac guard --pre-scan`. The rewrite is the half OpenCode never had: Claude Code returns
 // `hookSpecificOutput.updatedInput` and OpenCode hands `tool.execute.before` a mutable
@@ -462,6 +463,12 @@ func writeOpenCodePreToolScanPlugin(pluginsDir string, autoYes bool) {
 // `arac guard --rewrite` -- lands through a different door. Without it, the AGENTS.md this same
 // command writes promised an enriched `cat` and an annotated `grep` that nothing on this
 // harness delivered.
+//
+// The after-half is the drift check: `arac guard --post-tool` after a shell call or a native
+// edit, its report appended to the tool's output. Without it an OpenCode model heard of no
+// topology warning at all. The shell command it classifies is the one the MODEL wrote,
+// remembered before the rewrite replaced it: `cd d && cat f` is a read, while its rewrite,
+// `cd d && arac cmd -- cat f`, would classify as an unknown command and cost a scan.
 func openCodePreToolScanPlugin() string {
 	return strings.TrimPrefix(`
 import { execFile } from "node:child_process"
@@ -487,12 +494,20 @@ const SCANNED_TOOLS = new Set([
   "multiedit",
 ])
 
+// The tools that can change source, and so earn the post-call drift check.
+const POST_TOOLS = new Set(["bash", "edit", "write", "patch", "apply_patch", "multi_edit", "multiedit"])
+
 export const AracPreToolScan = async ({ directory, worktree }) => {
   const root = worktree ?? directory ?? process.cwd()
+  // The command each shell call was WRITTEN as, by call id, captured before the rewrite.
+  const written = new Map()
 
   return {
     "tool.execute.before": async (input, output) => {
       if (!SCANNED_TOOLS.has(input?.tool)) return
+      if (input?.tool === "bash" && input?.callID !== undefined) {
+        written.set(input.callID, output?.args?.command)
+      }
       try {
         // Awaited on purpose: the scan is only worth running if it lands BEFORE the tool
         // reads the graph. Bounded and swallowed, like the Claude hook -- a scan that failed
@@ -516,6 +531,24 @@ export const AracPreToolScan = async ({ directory, worktree }) => {
         const rewritten = JSON.parse(stdout || "{}").command
         if (typeof rewritten === "string" && rewritten !== "") {
           output.args.command = rewritten
+        }
+      } catch {}
+    },
+
+    // The drift check. Whatever the call changed on disk is re-indexed, and every topology
+    // warning the model has not been shown yet is appended to the tool's output -- the same
+    // report, from the same ledger, that the Claude Code guard attaches after a tool call.
+    "tool.execute.after": async (input, output) => {
+      if (!POST_TOOLS.has(input?.tool)) return
+      const command = written.get(input?.callID) ?? input?.args?.command ?? ""
+      written.delete(input?.callID)
+      try {
+        const args = ["guard", "--post-tool", input.tool]
+        if (input.tool === "bash") args.push(typeof command === "string" ? command : "")
+        const { stdout } = await run(ARAC, args, { cwd: root, timeout: `+fmt.Sprint(GuardHookTimeoutSeconds*1000)+` })
+        const message = JSON.parse(stdout || "{}").message
+        if (typeof message === "string" && message !== "") {
+          output.output = (output.output ?? "") + "\n\n" + message
         }
       } catch {}
     },
@@ -554,13 +587,15 @@ export const AracNativeEditSync = async ({ directory, worktree }) => {
     return parts[0] === ".git" || parts[0] === ".aracne" || parts.includes("node_modules")
   }
 
+  // Syncs, and reports only a failure to sync. The warnings the edit caused are reported by
+  // arac-pre-tool-scan.js's tool.execute.after, through the ledger the Claude Code guard uses;
+  // reporting UpdateFile's own list here as well printed them twice.
   function updateFile(file) {
     file = normalizeFile(file)
     if (!file || shouldSkip(file)) return ""
     try {
-      const text = execFileSync(ARAC, ["update-file", file], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })
-      if (/Warning number\s+0/.test(text)) return ""
-      return `+"`"+`Aracne warnings for ${file}:\n${text}`+"`"+`
+      execFileSync(ARAC, ["update-file", file], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })
+      return ""
     } catch (error) {
       const text = `+"`"+`${error.stdout?.toString?.() ?? ""}${error.stderr?.toString?.() ?? ""}`+"`"+`
       return `+"`"+`arac update-file failed for ${file}:\n${text}`+"`"+`

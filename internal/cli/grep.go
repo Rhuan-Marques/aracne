@@ -3,11 +3,13 @@ package cli
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
 	"github.com/Rhuan-Marques/aracne/internal/helper"
 	"github.com/Rhuan-Marques/aracne/internal/lazydesc"
+	"github.com/Rhuan-Marques/aracne/internal/shellcmd"
 	"github.com/Rhuan-Marques/aracne/internal/topogrep"
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
@@ -15,27 +17,49 @@ import (
 // Searches file contents with a regex pattern against the topology database, returning
 // path:line:match output with the enclosing resource named once above its matches.
 func RunGrep(args []string) {
-	fs := flag.NewFlagSet("grep", flag.ExitOnError)
+	os.Exit(runGrep(args, os.Stdout, os.Stderr))
+}
+
+// runGrep is RunGrep with its streams and exit status handed back, so it can be tested.
+//
+// IT RESOLVES ITS OPERANDS THE WAY `arac cmd -- grep` DOES, through grepRoots. It used to take
+// fs.Arg(1) as THE path and hand topogrep a single root, so `arac grep pat a.go b.go` searched
+// a.go, dropped b.go and exited 0; and a resource id -- which the intercepted shell grep scopes
+// to that declaration -- failed with a raw `stat path:` error. This is the surface the guard's
+// nudge names after a native Grep, so it has to be at least as capable as the grep it is
+// recommended over.
+func runGrep(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("grep", flag.ContinueOnError)
+	fs.SetOutput(stderr)
 	dbPath := fs.String("db", DefaultDBRelative, "Topology database path")
-	glob := fs.String("glob", "", "Filename glob, e.g. '*.go' or '**/*_test.ts'")
+	glob := fs.String("glob", "", "Filename glob(s), comma-separated, e.g. '*.go' or '**/*_test.ts'")
+	exclude := fs.String("exclude", "", "Filename glob(s) to skip, comma-separated")
+	excludeDir := fs.String("exclude-dir", "", "Directory name glob(s) to skip, comma-separated")
 	typ := fs.String("type", "", "Language shorthand: go, py, js, ts, rust, java, ...")
 	ignoreCase := fs.Bool("i", false, "Case-insensitive match")
+	fixed := fs.Bool("F", false, "Treat the pattern as a literal string, not a regex")
+	word := fs.Bool("w", false, "Match whole words (the pattern must be made of word characters)")
+	line := fs.Bool("x", false, "Match whole lines")
+	maxCount := fs.Int("m", 0, "At most N matches from each file (0 = no cap)")
 	mode := fs.String("output-mode", "content", "content | files_with_matches | count")
 	headLimit := fs.Int("head-limit", 0, "Max matching lines (default 200; -1 for no limit)")
 	before := fs.Int("B", 0, "Lines of context before each match")
 	after := fs.Int("A", 0, "Lines of context after each match")
 	context := fs.Int("C", 0, "Lines of context on both sides of each match")
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
 	*dbPath = ProjectDBPath(*dbPath)
 	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "Usage: arac grep [flags] <pattern> [path]")
+		fmt.Fprintln(stderr, "Usage: arac grep [flags] <pattern> [path | resource-id]...")
 		fs.PrintDefaults()
-		os.Exit(1)
+		return 2
 	}
-
-	path := "."
-	if fs.NArg() > 1 {
-		path = fs.Arg(1)
+	pattern := fs.Arg(0)
+	if *word && !shellcmd.WordSafe(pattern) {
+		// Wrapping anything else in \b…\b finds fewer matches than grep -w; see shellcmd.wordSafe.
+		fmt.Fprintf(stderr, "arac grep: -w needs a pattern made of word characters, got %q\n", pattern)
+		return 2
 	}
 	if *context > 0 {
 		*before, *after = *context, *context
@@ -46,42 +70,49 @@ func RunGrep(args []string) {
 	if err != nil {
 		topo = nil
 	}
+	cfg := helper.LoadConfig(helper.ConfigPath(*dbPath))
+
+	operands := fs.Args()[1:]
+	roots, restrict, ok := grepRoots(manager, operands, cfg)
+	if !ok {
+		fmt.Fprintf(stderr, "arac grep: %s: no such file, directory or resource\n", strings.Join(operands, ", "))
+		return 2
+	}
 
 	// Honour the project's own scan.ignore rules, so a search does not descend into build
 	// output the scanner has been told to skip, and grep.description_kinds, which limits
 	// which kinds may match on their description. A nil kind slice means "not
 	// configured" and lets topogrep apply its defaults.
 	var ignore *domain.IgnoreMatcher
-	var descriptionKinds []domain.ResourceKind
-	lineRange := false
-	cfg := helper.LoadConfig(helper.ConfigPath(*dbPath))
-	if cfg != nil {
-		descriptionKinds = cfg.Grep.DescriptionKinds
-		lineRange = cfg.LineRangeIdentification()
-		if topo != nil && topo.Root != "" {
-			ignore = domain.BuildIgnoreMatcher(topo.Root, cfg.Scan.Ignore)
-		}
+	if topo != nil && topo.Root != "" {
+		ignore = domain.BuildIgnoreMatcher(topo.Root, cfg.Scan.Ignore)
 	}
 
 	opt := topogrep.Options{
-		Pattern:    fs.Arg(0),
-		Root:       path,
-		Globs:      splitGlobList(*glob),
-		Type:       *typ,
-		IgnoreCase: *ignoreCase,
-		Mode:       topogrep.OutputMode(*mode),
-		HeadLimit:  *headLimit,
-		Before:     *before,
-		After:      *after,
-		Ignore:     ignore,
-		LineRange:  lineRange,
+		Pattern:      anchorPattern(pattern, *fixed, *word, *line),
+		Roots:        roots,
+		Globs:        splitGlobList(*glob),
+		ExcludeGlobs: splitGlobList(*exclude),
+		ExcludeDirs:  splitGlobList(*excludeDir),
+		Type:         *typ,
+		IgnoreCase:   *ignoreCase,
+		Mode:         topogrep.OutputMode(*mode),
+		HeadLimit:    *headLimit,
+		PerFileLimit: max(*maxCount, 0),
+		Before:       *before,
+		After:        *after,
+		Ignore:       ignore,
+		LineRange:    cfg.LineRangeIdentification(),
 
-		DescriptionKinds: descriptionKinds,
+		DescriptionKinds: cfg.Grep.DescriptionKinds,
 	}
 	res, err := topogrep.SearchWith(opt, topo)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintf(stderr, "Error: %v\n", err)
+		return 2
+	}
+	if restrict != nil {
+		restrictResultToRange(res, restrict.StartsAt, restrict.EndsAt)
 	}
 	// Same lazy fill the MCP grep tool runs: the CLI and the tool answer the same question,
 	// so they must answer it with the same descriptions.
@@ -101,11 +132,12 @@ func RunGrep(args []string) {
 	// filename. The message belongs on stderr and the status belongs to the result.
 	if !res.Found(opt.Mode) {
 		if strings.TrimSpace(out) != "" {
-			fmt.Fprintln(os.Stderr, out)
+			fmt.Fprintln(stderr, out)
 		}
-		os.Exit(1)
+		return 1
 	}
-	fmt.Println(out)
+	fmt.Fprintln(stdout, out)
+	return 0
 }
 
 // splitGlobList turns the --glob flag into the list topogrep takes, so the CLI can pass more

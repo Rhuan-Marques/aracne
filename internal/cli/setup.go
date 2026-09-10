@@ -98,14 +98,14 @@ func initOpenCode(global bool, cfg *helper.Config, autoYes bool, languages []str
 	if permissionMap == nil {
 		permissionMap = make(map[string]interface{})
 	}
-	// blocked_tools bites in ModeMCP and ModeCLI (see Config.GuardBlocksNativeReads), and OpenCode's
-	// permission block is the same decision spelled for a different harness. Denying a native
-	// read here in a mode whose guard would never deny it is how the two enforcement paths
-	// drift apart -- and the one the operator notices is this one, because it refuses silently.
-	blocked := map[string]bool{}
-	if cfg.GuardBlocksNativeReads() {
-		blocked = toolNameSet(mainEff.BlockedTools)
-	}
+	// OpenCode's permission block is the guard's blocked_tools decision spelled for a different
+	// harness, so it goes through the SAME filter the guard does (Config.BlockableInMode): nothing
+	// in the intercepting modes, and no `grep` outside ModeMCP. Denying something here that the
+	// guard would never deny is how the two enforcement paths drift apart -- and the one the
+	// operator notices is this one, because it refuses silently. Gating on the mode alone missed
+	// the second rule: `blocked_tools: ["grep"]` in ModeCLI was answered on Claude Code and
+	// refused outright here, under an AGENTS.md that (correctly) mentioned no restriction.
+	blocked := openCodeMainBlocked(cfg)
 	permissionMap["read"] = nativePermission(!blocked["read"])
 	permissionMap["edit"] = nativePermission(!blocked["edit"] && !blocked["write"])
 	permissionMap["bash"] = openCodeBashPermission(blocked)
@@ -303,6 +303,12 @@ func countExisting(dir string, names []string) int {
 		}
 	}
 	return n
+}
+
+// openCodeMainBlocked is the OpenCode main agent's blocked_tools, narrowed to what this mode may
+// refuse -- the exact set loadGuardConfig computes for the Claude Code guard.
+func openCodeMainBlocked(cfg *helper.Config) map[string]bool {
+	return cfg.BlockableInMode(toolNameSet(cfg.EffectiveAgent("opencode", "main").BlockedTools))
 }
 
 // Converts a boolean permission flag to a string ("allow" or "deny").
@@ -744,11 +750,98 @@ func findAracIntegrationEnd(content string, from int) (int, string) {
 
 // findAracIntegrationStart locates the generated block's opening heading, current or legacy,
 // returning -1 when the file has no aracne block.
+//
+// A `# Aracne` HEADING IS NOT PROOF THE BLOCK IS ARACNE'S. It is the obvious title for a team's
+// own notes about aracne, and the first such line used to be taken as the start of the
+// generated block: with no closing line after it the bounds ran to the next top-level heading,
+// and `arac setup` replaced the team's section with the contract -- silently, since this file is
+// rewritten without a prompt. So each candidate has to be recognisably ours (see
+// isAracneBlockAt); a heading that is not is skipped, and a file holding only a foreign one
+// gets the contract appended like any other first-time insertion.
 func findAracIntegrationStart(content string) int {
-	if i := findMarkdownLine(content, AracIntegrationStart, 0); i >= 0 {
-		return i
+	for from := 0; from < len(content); {
+		i := findMarkdownLine(content, AracIntegrationStart, from)
+		if i < 0 {
+			break
+		}
+		if isAracneBlockAt(content, i) {
+			return i
+		}
+		_, from = nextMarkdownLine(content, i)
 	}
 	return findMarkdownLine(content, AracIntegrationLegacyStart, 0)
+}
+
+// isAracneBlockAt reports whether the `# Aracne` heading at offset i opens a block aracne wrote.
+//
+// Two ways to know, because a block may predate the current wording:
+//   - its first line of prose is the opening line some contract renders today (the case that
+//     survives a reader deleting the closing line, which the fallback in aracIntegrationBounds
+//     exists for), or
+//   - one of the contract's closing lines follows it with no other `# Aracne` heading in
+//     between -- a block written by an older binary, whose opening prose has since changed.
+//
+// A team's own section satisfies neither: its prose is its own, and the only closing line after
+// it, if any, belongs to the real block further down.
+func isAracneBlockAt(content string, i int) bool {
+	_, body := nextMarkdownLine(content, i)
+	for pos := body; pos < len(content); {
+		line, next := nextMarkdownLine(content, pos)
+		if text := strings.TrimSpace(line); text != "" {
+			for _, opening := range contractOpenings() {
+				if strings.HasPrefix(text, opening) {
+					return true
+				}
+			}
+			break
+		}
+		pos = next
+	}
+	end, _ := findAracIntegrationEnd(content, body)
+	if end < 0 {
+		return false
+	}
+	other := findMarkdownLine(content, AracIntegrationStart, body)
+	return other < 0 || other > end
+}
+
+// contractOpeningLen is how much of a contract's opening line identifies it. Short enough to
+// stop before the part that varies with the project's languages ("…a pre-analyzed graph of this
+// Go project"), long enough that no one writes it by accident.
+const contractOpeningLen = 32
+
+// contractOpenings is the start of the first prose line of every contract this binary renders,
+// in every mode at either verbosity. Rendered rather than restated, so a change to the contract's
+// wording cannot leave the parser looking for the old one.
+func contractOpenings() []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, mode := range []string{helper.ModeMCP, helper.ModeCLI, helper.ModeInterceptID, helper.ModeInterceptLineRanges} {
+		for _, verbosity := range []string{helper.ContractVerbosityLow, helper.ContractVerbosityHigh} {
+			cfg := helper.DefaultConfig()
+			cfg.Mode, cfg.ContractVerbosity = mode, verbosity
+			opening := firstProseLine(prompts.ContractContent(cfg, nil))
+			if len(opening) > contractOpeningLen {
+				opening = opening[:contractOpeningLen]
+			}
+			if opening != "" && !seen[opening] {
+				seen[opening] = true
+				out = append(out, opening)
+			}
+		}
+	}
+	return out
+}
+
+// firstProseLine is the first non-blank line after a contract's opening heading.
+func firstProseLine(contract string) string {
+	lines := strings.Split(contract, "\n")
+	for _, line := range lines[1:] {
+		if text := strings.TrimSpace(line); text != "" {
+			return text
+		}
+	}
+	return ""
 }
 
 // aracIntegrationBounds locates the generated block: the byte offsets of its opening heading

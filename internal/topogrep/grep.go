@@ -208,7 +208,10 @@ type Options struct {
 	// whose every consumer keeps whole lines in order -- and that promise is only true of rows
 	// the real command would have printed. See cli.serveGrep.
 	//
-	// What it delivers is the same SET of rows, each byte-identical, in path and line order.
+	// What it delivers is the same SET of rows, each byte-identical, in path and line order --
+	// which is why the walk prunes nothing under it but what the caller excluded (see
+	// shouldSkipDir): the dependency and build trees an enriched search skips are trees the
+	// real command searches.
 	// Not the same sequence: `grep -r` walks in readdir order, which it does not define and
 	// which differs between filesystems, while this walk is lexical. A counter, a line filter
 	// and anything reading a row's fields therefore agree exactly; a `| head -N` gets N real
@@ -267,6 +270,12 @@ type Result struct {
 	// RootIsFile records that the caller named exactly one file. `grep -c pat file` prints
 	// a bare number and `grep -rc pat dir` prints path:count; the difference is this.
 	RootIsFile bool
+	// SkippedDirs are the directories this walk pruned by aracne's OWN rules -- the dependency
+	// and build trees in prunedDirs, and scan.ignore -- that a plain grep would have searched.
+	// FormatResult names them: a search that found nothing because it never looked in
+	// node_modules must not read as "nothing uses this". Empty under Plain, which prunes
+	// nothing a real grep would not, and never lists what the caller excluded itself.
+	SkippedDirs []string
 }
 
 // Found reports whether the search has anything to show, in the mode it was run in.
@@ -338,6 +347,7 @@ func SearchWith(opt Options, topo *domain.Topology) (*Result, error) {
 	// and belong in Counts, but its LINES may never be rendered, so they must not sit in
 	// the list the head limit slices and the formatter prints.
 	binaryCounts := map[string]int{}
+	skippedDirs := map[string]bool{}
 	var all []Match
 	if err := walkSearch(opt, exts, func(path string) error {
 		found, err := searchFile(path, re, index, tiers, opt)
@@ -356,10 +366,16 @@ func SearchWith(opt Options, topo *domain.Topology) (*Result, error) {
 			out.Context[found.display] = found.context
 		}
 		return nil
+	}, func(dir string) {
+		skippedDirs[displayPath(dir, echoRoot(opt))] = true
 	}); err != nil {
 		return nil, err
 	}
 	sort.Strings(out.BinaryFiles)
+	for dir := range skippedDirs {
+		out.SkippedDirs = append(out.SkippedDirs, dir)
+	}
+	sort.Strings(out.SkippedDirs)
 
 	// Priority first, then the familiar path/line order within a tier. Tier is a
 	// property of the resource, so one resource's rows never straddle two tiers and
@@ -580,12 +596,38 @@ func Format(matches []Match) string {
 	}, Options{Mode: OutputContent})
 }
 
-// FormatResult renders a result for the requested mode.
+// FormatResult renders a result for the requested mode, followed by a one-line note naming the
+// trees aracne chose not to search (see Result.SkippedDirs). The note is prose for a reader, so
+// it never appears under Plain, and it is the whole output when nothing matched -- which is the
+// case it matters most for.
+func FormatResult(res *Result, opt Options) string {
+	out := formatBody(res, opt)
+	if res == nil || opt.Plain || len(res.SkippedDirs) == 0 {
+		return out
+	}
+	if out == "" {
+		return skippedNote(res.SkippedDirs)
+	}
+	return out + "\n" + skippedNote(res.SkippedDirs)
+}
+
+// skippedNote names the pruned trees, capped so a scan.ignore matching dozens of directories
+// costs one line rather than a paragraph.
+func skippedNote(dirs []string) string {
+	shown, more := dirs, ""
+	if len(shown) > 3 {
+		shown, more = shown[:3], fmt.Sprintf(" and %d more", len(shown)-3)
+	}
+	return "… skipped " + strings.Join(shown, ", ") + more +
+		" (aracne does not search dependency, build or scan.ignore trees); name one as a path to search it."
+}
+
+// formatBody renders a result for the requested mode, without the skipped-directory note.
 //
 // In content mode the resource annotation is emitted ONCE per resource, as a header above
 // its matches, rather than as two extra lines under every matching line. A resource with
 // forty hits used to repeat its description forty times.
-func FormatResult(res *Result, opt Options) string {
+func formatBody(res *Result, opt Options) string {
 	if res == nil {
 		return ""
 	}
@@ -709,7 +751,14 @@ func FormatResult(res *Result, opt Options) string {
 
 	// A binary file's content is never rendered. Saying so is grep's own wording, and it
 	// is the only honest row: the file matched, and its bytes are not for a terminal.
-	for _, path := range res.BinaryFiles {
+	// Under Plain a binary match gets no row: GNU grep (3.5 and later) reports it on STDERR,
+	// so the rows a pipeline reads from the real command hold nothing for it. It is still
+	// counted, and still listed by -l -- which is what those modes print.
+	binaries := res.BinaryFiles
+	if opt.Plain {
+		binaries = nil
+	}
+	for _, path := range binaries {
 		if !first {
 			b.WriteByte('\n')
 		}
@@ -881,7 +930,7 @@ func rootIsSingleFile(opt Options) bool {
 //
 // A file reached through two roots is visited once: `grep pat . src` would otherwise report
 // every hit under src twice, and the caps would be measured against a doubled total.
-func walkSearch(opt Options, exts map[string]bool, visit func(path string) error) error {
+func walkSearch(opt Options, exts map[string]bool, visit func(path string) error, skipped func(dir string)) error {
 	seen := map[string]bool{}
 	once := func(path string) error {
 		key := canonicalPath(path)
@@ -892,7 +941,7 @@ func walkSearch(opt Options, exts map[string]bool, visit func(path string) error
 		return visit(path)
 	}
 	for _, root := range searchRoots(opt) {
-		if err := walkOneRoot(root, opt, exts, once); err != nil {
+		if err := walkOneRoot(root, opt, exts, once, skipped); err != nil {
 			return err
 		}
 	}
@@ -900,7 +949,8 @@ func walkSearch(opt Options, exts map[string]bool, visit func(path string) error
 }
 
 // walkOneRoot visits the candidate files under a single root.
-func walkOneRoot(root string, opt Options, exts map[string]bool, visit func(path string) error) error {
+func walkOneRoot(root string, opt Options, exts map[string]bool, visit func(path string) error,
+	skipped func(dir string)) error {
 	info, err := os.Stat(root)
 	if err != nil {
 		return fmt.Errorf("stat path: %w", err)
@@ -918,8 +968,13 @@ func walkOneRoot(root string, opt Options, exts map[string]bool, visit func(path
 		if d.IsDir() {
 			// The search root is never pruned by its own name: searching inside
 			// ~/.dotfiles must work.
-			if path != root && shouldSkipDir(path, d.Name(), opt) {
-				return filepath.SkipDir
+			if path != root {
+				if skip, report := shouldSkipDir(path, d.Name(), opt); skip {
+					if report && skipped != nil {
+						skipped(path)
+					}
+					return filepath.SkipDir
+				}
 			}
 			return nil
 		}
@@ -968,28 +1023,48 @@ var prunedDirs = map[string]bool{
 	".gradle": true, ".terraform": true, ".next": true, ".nuxt": true,
 }
 
-// shouldSkipDir prunes a directory. Beyond the always-noise set it applies the caller's own
-// --exclude-dir and the project's scan.ignore rules, which were previously not wired in
-// here at all -- so a search happily descended into build output the scanner itself had
-// been told to skip.
-func shouldSkipDir(path, name string, opt Options) bool {
+// silentlyPruned are the pruned directories no search is ABOUT -- version-control metadata and
+// aracne's own store -- so skipping them is not worth a line of output. The rest hold code
+// someone else wrote, and a search that skipped them says so; see Result.SkippedDirs.
+var silentlyPruned = map[string]bool{".git": true, ".hg": true, ".svn": true, ".aracne": true}
+
+// shouldSkipDir reports whether to prune a directory, and whether the pruning is worth naming.
+//
+// Beyond the always-noise set it applies the caller's own --exclude-dir and the project's
+// scan.ignore rules, which were previously not wired in here at all -- so a search happily
+// descended into build output the scanner itself had been told to skip.
+//
+// UNDER Plain ONLY THE CALLER'S OWN EXCLUSIONS APPLY. A plain search is what an intercepted
+// command renders when a pipeline reads it, and its promise is the rows the real command would
+// have printed; the real `grep -r` descends into node_modules and vendor, so pruning them there
+// silently returned a smaller set -- `grep -rn X . | head` lost every dependency hit with nothing
+// to show it had.
+func shouldSkipDir(path, name string, opt Options) (skip, report bool) {
 	if name == "." {
-		return false
-	}
-	if prunedDirs[name] {
-		return true
+		return false, false
 	}
 	for _, ex := range opt.ExcludeDirs {
 		if ok, err := filepath.Match(ex, name); err == nil && ok {
-			return true
+			return true, false // the caller asked for this; they know
 		}
 	}
-	return opt.Ignore.MatchDir(path)
+	if opt.Plain {
+		return false, false
+	}
+	if prunedDirs[name] {
+		return true, !silentlyPruned[name]
+	}
+	if opt.Ignore.MatchDir(path) {
+		return true, true
+	}
+	return false, false
 }
 
 // wantFile applies the glob and type filters, the exclusions and the ignore rules.
 func wantFile(path, name string, exts map[string]bool, opt Options) bool {
-	if opt.Ignore.Match(path) {
+	// scan.ignore is aracne's rule, not the caller's, and a plain search makes no additions
+	// or omissions of its own; see shouldSkipDir.
+	if !opt.Plain && opt.Ignore.Match(path) {
 		return false
 	}
 	for _, ex := range opt.ExcludeGlobs {
@@ -1386,7 +1461,7 @@ func canonicalPath(path string) string {
 
 func displayPath(path string, dotPrefix bool) string {
 	out := filepath.ToSlash(path)
-	if rel, err := filepath.Rel(".", path); err == nil && !strings.HasPrefix(rel, "..") {
+	if rel, err := filepath.Rel(".", path); err == nil && domain.RelInside(rel) {
 		out = filepath.ToSlash(rel)
 	}
 	if dotPrefix && !filepath.IsAbs(out) && !strings.HasPrefix(out, "./") {

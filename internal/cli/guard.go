@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/Rhuan-Marques/aracne/internal/helper"
@@ -30,10 +31,58 @@ func RunGuard(args []string) {
 	case len(args) == 2 && args[0] == "--rewrite":
 		runRewriteCommand(args[1], os.Stdout)
 		return
+	case (len(args) == 2 || len(args) == 3) && args[0] == "--post-tool":
+		command := ""
+		if len(args) == 3 {
+			command = args[2]
+		}
+		runPostToolCommand(args[1], command, os.Stdout)
+		return
 	}
-	fmt.Fprintln(os.Stderr,
-		"Usage: arac guard --claude-hook | arac guard --pre-scan | arac guard --rewrite <command>")
+	fmt.Fprintln(os.Stderr, "Usage: arac guard --claude-hook | arac guard --pre-scan | "+
+		"arac guard --rewrite <command> | arac guard --post-tool <tool> [<command>]")
 	os.Exit(1)
+}
+
+// openCodePostTools maps the OpenCode tools the post-tool check has anything to say about onto
+// the Claude Code names the guard's rules are written against: the shell, and every native edit.
+var openCodePostTools = map[string]string{
+	"bash": "Bash", "edit": "Edit", "write": "Write", "patch": "Edit", "apply_patch": "Edit",
+	"multiedit": "MultiEdit", "multi_edit": "MultiEdit",
+}
+
+// runPostToolCommand answers `arac guard --post-tool <tool> [<command>]`: the Claude Code
+// PostToolUse drift check, for a harness whose plugin API hands the guard a tool name rather
+// than a hook event.
+//
+// WHY IT EXISTS. OpenCode had the before-half of the guard and not the after-half. Its only
+// tool.execute.after handler lived in the edit-sync plugin, behind a plugins flag no shipped path
+// sets, so on a default install no topology warning ever reached the model -- after a native
+// edit, after a shell write, after anything -- under an AGENTS.md telling it to "act on any
+// topology warning that comes back". This is that channel, reached through the same driftCheck
+// and the same reported-warnings ledger the Claude hook uses, so the two harnesses report the
+// same warnings, once each.
+//
+// It prints `{"message": "..."}` when there is something to report and `{}` when there is not,
+// and always exits 0: a plugin must never turn a report it could not make into a failed call.
+// No nudge is attached -- the guidance tables name Claude Code's tool spellings.
+func runPostToolCommand(tool, command string, output io.Writer) {
+	answer := map[string]string{}
+	if name, ok := openCodePostTools[strings.ToLower(strings.TrimSpace(tool))]; ok {
+		dbPath := guardDBPath("")
+		input := map[string]interface{}{}
+		if name == "Bash" {
+			input["command"] = command
+		}
+		_, exemptPiped := loadGuardConfig(dbPath)
+		if driftCheckApplies(name, implicatedKeys(name, input, exemptPiped), input) {
+			if msg := driftCheck(dbPath, name); msg != "" {
+				logGuardDecision(guardNudged, name, command)
+				answer["message"] = msg
+			}
+		}
+	}
+	json.NewEncoder(output).Encode(answer)
 }
 
 // runRewriteCommand answers `arac guard --rewrite <command>`: the interception decision on its
@@ -615,6 +664,13 @@ type commandSegment struct {
 	// `$(...)`, so `X=$(cat f)` captured aracne's rendering -- fences, elision markers and a
 	// `# CONTEXT:` block -- in place of the file, and nothing downstream could tell.
 	depth int
+	// redirs are the rune offsets in text of every UNQUOTED redirection operator (`>`, `<`).
+	//
+	// Recorded here for the same reason redirectsOut is: afterwards the quotes are gone, and
+	// `grep '2>x' f` -- a pattern -- is indistinguishable from `grep x f 2>err` -- a redirect.
+	// It is what lets segmentArgv drop a redirection from the argv it hands shellcmd, the way
+	// the shell would, instead of reading `2>/dev/null` as a second file operand.
+	redirs []int
 }
 
 // splitCommandSegments splits a shell command into simple-command candidates on
@@ -653,6 +709,12 @@ func splitCommandSegments(command string) []commandSegment {
 	depth := 0           // unclosed `(`, `{` and backticks around the current segment
 	inBacktick := false  // a backtick is its own closer, so it toggles rather than nests
 	segStart := 0        // rune index where the current segment began
+	curLen := 0          // runes written to cur, so an operator's offset in text is known
+	var curRedirs []int  // offsets of the unquoted redirection operators in cur
+	put := func(r rune) {
+		cur.WriteRune(r)
+		curLen++
+	}
 	flush := func(endRune, nextStart int, nextPiped bool, by rune) {
 		segs = append(segs, commandSegment{
 			text:         cur.String(),
@@ -662,8 +724,11 @@ func splitCommandSegments(command string) []commandSegment {
 			endedBy:      by,
 			start:        byteOf[segStart],
 			end:          byteOf[endRune],
+			redirs:       curRedirs,
 		})
 		cur.Reset()
+		curLen = 0
+		curRedirs = nil
 		curPiped = nextPiped
 		curRedirect = false
 		segStart = nextStart
@@ -680,9 +745,9 @@ func splitCommandSegments(command string) []commandSegment {
 				// without this a quoted argument fragments and its words become
 				// indistinguishable from real command words -- which is how
 				// `echo "use grep here"` came to look like a grep.
-				cur.WriteRune(quotedSpace)
+				put(quotedSpace)
 			default:
-				cur.WriteRune(r)
+				put(r)
 			}
 			continue
 		}
@@ -701,7 +766,7 @@ func splitCommandSegments(command string) []commandSegment {
 		case '&':
 			// `2>&1` and `&>log` are redirection operators; only a bare `&` separates.
 			if isRedirectAmpersand(runes, i) {
-				cur.WriteRune(r)
+				put(r)
 				continue
 			}
 			flush(i, i+1, false, '&')
@@ -727,17 +792,115 @@ func splitCommandSegments(command string) []commandSegment {
 				inBacktick = true
 			}
 		case '>':
-			// `2>&1` duplicates a descriptor, it does not write a file.
-			if i+1 >= len(runes) || runes[i+1] != '&' {
+			curRedirs = append(curRedirs, curLen)
+			switch {
+			case i > 0 && runes[i-1] == '>':
+				// The second half of `>>`; the first half already decided.
+			case i+1 < len(runes) && runes[i+1] == '&':
+				// `2>&1`, `>&2` duplicate a descriptor, they do not write a file.
+			case redirectsOtherDescriptor(runes, i):
+				// `2>/dev/null` writes STDERR. Only stdout is the output a caller reads, and
+				// only stdout makes `sed -n` an edit: counting `2>` as a redirect classified
+				// `sed -n '1,5p' f 2>/dev/null` as a write -- refused as one under
+				// blocked_tools ["edit"], never intercepted, and followed by a drift scan.
+			default:
 				curRedirect = true
 			}
-			cur.WriteRune(r)
+			put(r)
+		case '<':
+			curRedirs = append(curRedirs, curLen)
+			put(r)
 		default:
-			cur.WriteRune(r)
+			put(r)
 		}
 	}
 	flush(len(runes), len(runes), false, 0)
 	return segs
+}
+
+// redirectsOtherDescriptor reports whether the `>` at i redirects a descriptor other than stdout:
+// it is preceded by a descriptor number that stands as the start of a word (`2>`, ` 3>>`), and
+// that number is not 1. A number glued to a word is not a descriptor -- in `echo a2>f` the word
+// is `a2` and the redirect is stdout's.
+func redirectsOtherDescriptor(runes []rune, i int) bool {
+	j := i
+	for j > 0 && runes[j-1] >= '0' && runes[j-1] <= '9' {
+		j--
+	}
+	if j == i {
+		return false
+	}
+	if j > 0 && !unicode.IsSpace(runes[j-1]) && !strings.ContainsRune(";|&(){}`", runes[j-1]) {
+		return false
+	}
+	return string(runes[j:i]) != "1"
+}
+
+// withoutRedirections is the segment's text with every redirection removed -- the operator, its
+// descriptor, and its target when that is the next word -- which is what the shell removes
+// before the command sees its argv. A word that merely CONTAINS an operator keeps what comes
+// before it (`f.go>out` is the operand `f.go`).
+func withoutRedirections(seg commandSegment) string {
+	if len(seg.redirs) == 0 {
+		return seg.text
+	}
+	isOp := make(map[int]bool, len(seg.redirs))
+	for _, at := range seg.redirs {
+		isOp[at] = true
+	}
+	runes := []rune(seg.text)
+	var kept []string
+	skipTarget := false
+	for i := 0; i < len(runes); {
+		for i < len(runes) && unicode.IsSpace(runes[i]) {
+			i++
+		}
+		if i >= len(runes) {
+			break
+		}
+		start := i
+		for i < len(runes) && !unicode.IsSpace(runes[i]) {
+			i++
+		}
+		if skipTarget {
+			skipTarget = false
+			continue
+		}
+		firstOp, lastOp := -1, -1
+		for k := start; k < i; k++ {
+			if isOp[k] {
+				if firstOp < 0 {
+					firstOp = k
+				}
+				lastOp = k
+			}
+		}
+		if firstOp < 0 {
+			kept = append(kept, string(runes[start:i]))
+			continue
+		}
+		// What precedes the operator is an argument unless it is the operator's own
+		// descriptor (`2>`) or the `&` of `&>` standing at the start of the word.
+		prefixEnd := firstOp
+		j := firstOp
+		for j > start && runes[j-1] >= '0' && runes[j-1] <= '9' {
+			j--
+		}
+		if j == start {
+			prefixEnd = start
+		} else if firstOp-1 == start && runes[start] == '&' {
+			prefixEnd = start
+		}
+		if prefixEnd > start {
+			kept = append(kept, string(runes[start:prefixEnd]))
+		}
+		// An operator ending its word takes the next word as its target; `>&2` and a glued
+		// target (`2>/dev/null`) are complete on their own.
+		if lastOp == i-1 {
+			skipTarget = true
+		}
+	}
+	return strings.Join(kept, " ")
 }
 
 // isRedirectAmpersand reports whether the `&` at i is half of a redirection operator rather

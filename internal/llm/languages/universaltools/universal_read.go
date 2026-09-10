@@ -85,9 +85,18 @@ func resolveReadTargetWith(mgr *topology.TopologyManager, name string, matches f
 		return readTarget{}, ambiguousTargets(name, candidates), nil
 	}
 	if hint := idresolve.FormatCandidates(name, res.Candidates); hint != "" {
-		return readTarget{}, "", fmt.Errorf("resource %q not found in topology. %s", name, hint)
+		return readTarget{}, "", &candidatesError{name: name, hint: hint}
 	}
 	return readTarget{}, "", fmt.Errorf("resource %q not found in topology", name)
+}
+
+// candidatesError is a miss that came back with ranked suggestions. It is typed so a caller that
+// otherwise hands a miss to the shell can tell "nothing like this exists" from "you probably
+// meant one of these" -- see Read.Suggestion.
+type candidatesError struct{ name, hint string }
+
+func (e *candidatesError) Error() string {
+	return fmt.Sprintf("resource %q not found in topology. %s", e.name, e.hint)
 }
 
 // Formats an error message listing multiple resource candidates matching a name query.

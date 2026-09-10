@@ -354,9 +354,14 @@ func TestNudgeRequiresSomethingToOffer(t *testing.T) {
 // real closing sentence the contract ends on. `arac setup` had a fallback for a reader who
 // edited that sentence away; `arac disable` did not, and returned the content unchanged while
 // printing "already clean". Both now ask aracIntegrationBounds.
+//
+// The block is a REAL contract with its closing line removed: since aracne stopped taking any
+// `# Aracne` heading as its own (a team's own section by that name was being deleted), a block
+// is recognised by the contract's opening prose, and placeholder prose is correctly left alone.
 func TestDisableRemovesABlockMissingItsClosingLine(t *testing.T) {
-	const doc = "# Mine\n\nBefore.\n\n# Aracne\n\nthe contract, closing line deleted\n"
-	if got := stripAracneIntegrationSegment(doc); strings.Contains(got, "the contract") {
+	contract := strings.Replace(contractFor(helper.ModeMCP), AracIntegrationEnd+"\n", "", 1)
+	doc := "# Mine\n\nBefore.\n\n" + contract
+	if got := stripAracneIntegrationSegment(doc); strings.Contains(got, "pre-analyzed graph") {
 		t.Fatalf("disable left the contract behind:\n%s", got)
 	}
 	// What the reader wrote survives.

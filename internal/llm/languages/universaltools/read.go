@@ -229,6 +229,22 @@ func (r *Read) KindOf(id string) domain.ResourceKind {
 	return target.res.Kind
 }
 
+// Suggestion is what the resolver has to say about an id that names nothing uniquely: the
+// resources an ambiguous id matched, or the ranked "did you mean" list for a near miss. It is ""
+// when the id resolves, and when nothing resembles it -- the case a caller should hand back to
+// the shell unchanged.
+func (r *Read) Suggestion(id string) string {
+	_, note, err := resolveReadTargetWith(r.mgr, id, func(domain.Resource) bool { return true })
+	if note != "" {
+		return strings.TrimSpace(note)
+	}
+	var ce *candidatesError
+	if errors.As(err, &ce) {
+		return ce.Error()
+	}
+	return ""
+}
+
 // KindRefusal is the error every entrance gives for a kind read.kinds does not allow, so the
 // tool, the CLI and the shell all say the same thing about the same setting.
 func KindRefusal(kind domain.ResourceKind, kinds []domain.ResourceKind) error {
@@ -916,7 +932,7 @@ func displayPath(topo *domain.Topology, path string) string {
 		return path
 	}
 	rel, err := filepath.Rel(topo.Root, path)
-	if err != nil || strings.HasPrefix(rel, "..") {
+	if err != nil || !domain.RelInside(rel) {
 		return path
 	}
 	return filepath.ToSlash(rel)

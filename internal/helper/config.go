@@ -486,6 +486,20 @@ type Config struct {
 	// mode (default/all/hard). More specific (more internal) rules win, so a
 	// parent can be hidden while a nested child stays visible.
 	Paths []domain.PathRule `json:"paths"`
+
+	// spelled is what the file said for the three enum keys normalizeConfig coerces, captured
+	// before it coerced them. Nil on a config built in code rather than loaded. See Validate.
+	spelled *spelledEnums
+}
+
+// spelledEnums pairs each coerced enum with the value it was coerced FROM and TO. The "to" half
+// is what lets Validate tell a value still as loaded from one a caller has since set: the
+// `arac init` wizard loads a config, overwrites Mode with the answer, then validates -- and a
+// typo it has just corrected must not be reported.
+type spelledEnums struct {
+	mode, modeTo                   string
+	verbosity, verbosityTo         string
+	contextFilter, contextFilterTo string
 }
 
 // Returns the maximum file size for scanning, defaulting to 512KB if not set.
@@ -738,6 +752,25 @@ func ConfigPath(dbPath string) string {
 	return filepath.Join(filepath.Dir(dbPath), "config.json")
 }
 
+// spelledValues returns the mode, contract verbosity and context filter Validate should judge:
+// the file's own spelling for each one still holding the value it was loaded with, and the
+// current value for one a caller has set since (or for a config that was never loaded).
+func (c *Config) spelledValues() (mode, verbosity, contextFilter string) {
+	mode, verbosity, contextFilter = c.Mode, c.ContractVerbosity, c.Read.ContextFilter
+	if s := c.spelled; s != nil {
+		if c.Mode == s.modeTo {
+			mode = s.mode
+		}
+		if c.ContractVerbosity == s.verbosityTo {
+			verbosity = s.verbosity
+		}
+		if c.Read.ContextFilter == s.contextFilterTo {
+			contextFilter = s.contextFilter
+		}
+	}
+	return mode, verbosity, contextFilter
+}
+
 // Validate checks every tool name referenced in the config against the tool
 // catalog (toolspec). It returns an error naming the offending agent and tool
 // so a typo fails fast at init time.
@@ -745,11 +778,12 @@ func (c *Config) Validate() error {
 	if err := ValidateReadKinds(c.Read.Kinds); err != nil {
 		return fmt.Errorf("read.kinds: %w", err)
 	}
-	switch strings.ToLower(strings.TrimSpace(c.Mode)) {
+	mode, verbosity, contextFilter := c.spelledValues()
+	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "", ModeMCP, ModeCLI, ModeInterceptID, ModeInterceptLineRanges:
 	default:
 		return fmt.Errorf("mode: unknown mode %q (want %s, %s, %s or %s)",
-			c.Mode, ModeMCP, ModeCLI, ModeInterceptID, ModeInterceptLineRanges)
+			mode, ModeMCP, ModeCLI, ModeInterceptID, ModeInterceptLineRanges)
 	}
 	// `hard` is a valid `arac scan` mode and a catastrophic PRE-TOOL one: it rebuilds from
 	// scratch, which drops every description and every bug -- before EVERY tool call the guard
@@ -761,17 +795,17 @@ func (c *Config) Validate() error {
 			"description and bug before every tool call (want %s, %s or %s; use `arac scan --hard` "+
 			"for a one-off rebuild)", PreToolScanHard, PreToolScanNone, PreToolScanDefault, PreToolScanFull)
 	}
-	switch strings.ToLower(strings.TrimSpace(c.ContractVerbosity)) {
+	switch strings.ToLower(strings.TrimSpace(verbosity)) {
 	case "", ContractVerbosityLow, ContractVerbosityHigh:
 	default:
 		return fmt.Errorf("contract_verbosity: unknown value %q (want %s or %s)",
-			c.ContractVerbosity, ContractVerbosityLow, ContractVerbosityHigh)
+			verbosity, ContractVerbosityLow, ContractVerbosityHigh)
 	}
-	switch strings.ToLower(strings.TrimSpace(c.Read.ContextFilter)) {
+	switch strings.ToLower(strings.TrimSpace(contextFilter)) {
 	case "", ContextFilterOff, ContextFilterNormal, ContextFilterFull:
 	default:
 		return fmt.Errorf("read.context_filter: unknown value %q (want %s, %s or %s)",
-			c.Read.ContextFilter, ContextFilterOff, ContextFilterNormal, ContextFilterFull)
+			contextFilter, ContextFilterOff, ContextFilterNormal, ContextFilterFull)
 	}
 	if err := ValidateDescriptionProvider(c.Descriptions); err != nil {
 		return err
@@ -1427,6 +1461,13 @@ func (c *Config) AgentEnabled() bool { return c.Features.Agent }
 
 // Applies defaults to config fields for scan modes, file limits, visibility filters, descriptions, optimization rules, and LLM agents.
 func normalizeConfig(c *Config) {
+	// The spellings are kept BEFORE anything is coerced. Every Validate() caller loads through
+	// here, so validating the stamped values meant a typo had already become a valid value by
+	// the time it was checked: `"mode": "intercept_lineranges"` ran as cli with nothing
+	// reported, while EffectiveMode's contract is that Validate reports it.
+	spelled := &spelledEnums{
+		mode: c.Mode, verbosity: c.ContractVerbosity, contextFilter: c.Read.ContextFilter,
+	}
 	// Resolve the mode once and stamp it, so a re-saved config states its surface instead of
 	// leaving it implicit.
 	c.Mode = c.EffectiveMode()
@@ -1434,6 +1475,13 @@ func normalizeConfig(c *Config) {
 	// decides how big every request's contract is should be visible in the file rather than
 	// inferred from a missing key.
 	c.ContractVerbosity = c.EffectiveContractVerbosity()
+	spelled.modeTo, spelled.verbosityTo = c.Mode, c.ContractVerbosity
+	defer func() {
+		spelled.contextFilterTo = c.Read.ContextFilter
+		if c.spelled == nil {
+			c.spelled = spelled
+		}
+	}()
 	if c.Scanner.UpdateFrequency <= 0 {
 		c.Scanner.UpdateFrequency = 200
 	}

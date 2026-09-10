@@ -360,7 +360,7 @@ func printChangedList(root, marker string, files []string) {
 // output, falling back to p unchanged when it lies outside root.
 func relForDisplay(root, p string) string {
 	if absRoot, err := filepath.Abs(root); err == nil {
-		if rel, relErr := filepath.Rel(absRoot, p); relErr == nil && !strings.HasPrefix(rel, "..") {
+		if rel, relErr := filepath.Rel(absRoot, p); relErr == nil && domain.RelInside(rel) {
 			return filepath.ToSlash(rel)
 		}
 	}

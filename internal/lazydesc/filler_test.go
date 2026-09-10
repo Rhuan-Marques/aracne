@@ -430,3 +430,63 @@ func (g *blockingGenerator) Describe(ctx context.Context, _ Batch) (map[string]s
 		return nil, ctx.Err()
 	}
 }
+
+// stallingGenerator blocks every batch until its context is cancelled while stall is set, and
+// answers like fakeGenerator once it is cleared -- a provider that is slow now and fine later.
+type stallingGenerator struct {
+	mu    sync.Mutex
+	stall bool
+	fake  fakeGenerator
+}
+
+func (g *stallingGenerator) setStall(v bool) {
+	g.mu.Lock()
+	g.stall = v
+	g.mu.Unlock()
+}
+
+func (g *stallingGenerator) Describe(ctx context.Context, batch Batch) (map[string]string, error) {
+	g.mu.Lock()
+	stall := g.stall
+	g.mu.Unlock()
+	if stall {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return g.fake.Describe(ctx, batch)
+}
+
+// A DEADLINE IS NOT AN ANSWER. A batch the timeout cut off used to be recorded as attempted --
+// in this process and in the persisted ledger, which only forgets when the code changes -- so
+// the first slow read on a cold repository abandoned its resources for good. Both the next
+// read in this process and the next process must try them again.
+func TestFillRetriesWhatItsDeadlineCutOff(t *testing.T) {
+	one := 1
+	cfg := lazyConfig(true)
+	cfg.Descriptions.Lazy.TimeoutSeconds = &one
+
+	// The same Filler, once the provider recovers.
+	mgr := project(t, fixture())
+	gen := &stallingGenerator{stall: true}
+	f := NewWithGenerator(mgr, cfg, "", gen)
+	topo, _ := mgr.ReadAll()
+	if f.FillForRead(topo, []string{"seed"}) {
+		t.Fatal("a fill cut off by its deadline reported a change")
+	}
+	gen.setStall(false)
+	topo, _ = mgr.ReadAll()
+	if !f.FillForRead(topo, []string{"seed"}) {
+		t.Error("the timed-out targets stayed claimed: the same process never retried them")
+	}
+
+	// A fresh Filler over the same database -- the next `arac cmd` process.
+	mgr = project(t, fixture())
+	f = NewWithGenerator(mgr, cfg, "", &stallingGenerator{stall: true})
+	topo, _ = mgr.ReadAll()
+	f.FillForRead(topo, []string{"seed"})
+	next := NewWithGenerator(mgr, cfg, "", &fakeGenerator{})
+	topo, _ = mgr.ReadAll()
+	if !next.FillForRead(topo, []string{"seed"}) {
+		t.Error("the timed-out targets were persisted as attempted: the next process never retried them")
+	}
+}

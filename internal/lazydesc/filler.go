@@ -149,13 +149,47 @@ func (f *Filler) fill(topo *domain.Topology, targets []Target) bool {
 		defer cancel()
 	}
 
-	results := f.run(ctx, topo, pending)
+	results, settled := f.run(ctx, topo, pending)
 	written := f.write(pending, results)
-	// Recorded AFTER the run and for the whole pending set: a target that succeeded drops out
-	// of the plan on its own the moment the topology is re-read, and a target that failed is
-	// exactly what the record exists to hold.
-	f.recordAttempts(pending)
+	// Recorded AFTER the run, and only for the targets whose batch came back: a target that
+	// succeeded drops out of the plan on its own the moment the topology is re-read, and a
+	// target the provider declined or failed on is exactly what the record exists to hold.
+	//
+	// A target whose batch the DEADLINE cut off is neither. Recording it -- as this once did,
+	// for the whole pending set -- persisted a timeout as though it were an answer, and since
+	// the record only expires when the code changes, the first slow read on a cold repository
+	// abandoned up to max_nodes resources for good: exactly the reads the feature exists for.
+	// Those are released instead, so the next read, in this process or the next, tries again.
+	f.recordAttempts(settled)
+	f.release(unsettled(pending, settled))
 	return written > 0
+}
+
+// unsettled is the pending targets whose batch did not come back before the deadline.
+func unsettled(pending, settled []Target) []Target {
+	done := make(map[string]bool, len(settled))
+	for _, t := range settled {
+		done[t.ID] = true
+	}
+	var out []Target
+	for _, t := range pending {
+		if !done[t.ID] {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// release returns targets to the unclaimed pool, so a later fill on this Filler may try them.
+func (f *Filler) release(targets []Target) {
+	if len(targets) == 0 {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, t := range targets {
+		delete(f.attempted, t.ID)
+	}
 }
 
 // claim takes the targets this fill is responsible for, marking them attempted so no other
@@ -233,13 +267,22 @@ func (f *Filler) generator() Generator {
 	return f.gen
 }
 
-// run fans the batches out and collects whatever comes back.
+// batchResult is one batch's reply. settled is false for a batch the deadline cut off, which
+// is not an answer about its resources and must not be remembered as one.
+type batchResult struct {
+	targets []Target
+	descs   map[string]string
+	settled bool
+}
+
+// run fans the batches out and collects whatever comes back, plus the targets whose batch came
+// back at all -- see fill for why the two are different.
 //
 // "In the background, then waited on" is exactly this: the batches are goroutines so several
 // completions are in flight at once, and the read blocks until they are done or the deadline
 // expires. A batch that fails takes only itself down -- its siblings' descriptions are still
 // written, because four descriptions the project did not have is a better answer than none.
-func (f *Filler) run(ctx context.Context, topo *domain.Topology, targets []Target) map[string]string {
+func (f *Filler) run(ctx context.Context, topo *domain.Topology, targets []Target) (map[string]string, []Target) {
 	batches := chunk(targets, f.lazyCfg.BatchSize)
 	parallel := f.lazyCfg.Parallel
 	if parallel > len(batches) {
@@ -250,7 +293,7 @@ func (f *Filler) run(ctx context.Context, topo *domain.Topology, targets []Targe
 	}
 
 	jobs := make(chan []Target)
-	out := make(chan map[string]string, len(batches))
+	out := make(chan batchResult, len(batches))
 	var wg sync.WaitGroup
 	for i := 0; i < parallel; i++ {
 		wg.Add(1)
@@ -258,11 +301,13 @@ func (f *Filler) run(ctx context.Context, topo *domain.Topology, targets []Targe
 			defer wg.Done()
 			for batch := range jobs {
 				descs, err := f.gen.Describe(ctx, f.batch(topo, batch))
+				// A provider error while the deadline still stands is an answer (the batch
+				// failed); one raised because the deadline passed is not.
+				settled := err == nil || ctx.Err() == nil
 				if err != nil {
-					out <- nil
-					continue
+					descs = nil
 				}
-				out <- descs
+				out <- batchResult{targets: batch, descs: descs, settled: settled}
 			}
 		}()
 	}
@@ -285,11 +330,18 @@ func (f *Filler) run(ctx context.Context, topo *domain.Topology, targets []Targe
 	}()
 
 	merged := map[string]string{}
+	var settled []Target
+	take := func(r batchResult) {
+		for id, desc := range r.descs {
+			merged[id] = desc
+		}
+		if r.settled {
+			settled = append(settled, r.targets...)
+		}
+	}
 	collect := func() {
-		for descs := range out {
-			for id, desc := range descs {
-				merged[id] = desc
-			}
+		for r := range out {
+			take(r)
 		}
 	}
 	select {
@@ -301,19 +353,17 @@ func (f *Filler) run(ctx context.Context, topo *domain.Topology, targets []Targe
 		// own cancellation rather than waited on, so the read returns on time.
 		for {
 			select {
-			case descs, ok := <-out:
+			case r, ok := <-out:
 				if !ok {
-					return merged
+					return merged, settled
 				}
-				for id, desc := range descs {
-					merged[id] = desc
-				}
+				take(r)
 			default:
-				return merged
+				return merged, settled
 			}
 		}
 	}
-	return merged
+	return merged, settled
 }
 
 // batch turns targets into a request, cutting each resource's source and choosing the

@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // CleanSourceEnv opts a process into describing resources from the LAST COMMIT instead of from
@@ -75,7 +77,7 @@ func cutFromCommit(ref, path, name string, startsAt, endsAt int) (string, bool) 
 		return "", false // not a git repository: nothing committed to read
 	}
 	rel, err := filepath.Rel(strings.TrimSpace(top), abs)
-	if err != nil || strings.HasPrefix(rel, "..") {
+	if err != nil || !domain.RelInside(rel) {
 		return "", false
 	}
 	rel = filepath.ToSlash(rel) // git wants forward slashes in a pathspec on every platform

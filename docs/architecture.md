@@ -358,7 +358,8 @@ plugins. Two hooks ship for Claude Code:
   report through the same `guard-reported-warnings.json` ledger, so whichever
   runs first reports and the other adds nothing.
 - OpenCode additionally gets `arac-native-edit-sync.js` (a plugin doing the same
-  topology sync on native edits), under the same plugin flag.
+  topology sync on native edits), under the same plugin flag. It syncs and nothing more: the
+  warnings come from `arac-pre-tool-scan.js`'s post-call half (below), through the same ledger.
 
 Both hook commands **quote** the script path and, under `--global`, name the absolute path
 `arac setup` actually wrote rather than `${CLAUDE_PROJECT_DIR}` — which expands to the
@@ -373,7 +374,10 @@ matches the code on disk — including changes nothing in the session made, like
 guard hook itself; OpenCode gets `arac-pre-tool-scan.js`, a plugin installed
 unconditionally by `arac setup` whose `tool.execute.before` runs `arac guard --pre-scan`
 and then, for a Bash call, `arac guard --rewrite` — the interception half, in the spelling
-this harness offers.
+this harness offers. Its `tool.execute.after` runs `arac guard --post-tool` after a shell call
+or a native edit — the drift check described next — and appends what it reports to the tool's
+output, so an OpenCode model hears about warnings the way a Claude Code one does. (It had no
+after-half at all until 2026-09: on a default install no warning reached an OpenCode model.)
 Both read the same config key at call time, so `scan.pre_tool: "none"` disables it on
 both surfaces without re-running init. The pre-call scan reports nothing (a PreToolUse
 hook cannot address the model without blocking it); the warnings it finds are persisted
