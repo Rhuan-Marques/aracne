@@ -26,7 +26,7 @@ package tests_test
 // G9–G19 cover additional Go edge cases and use runGoScenario (a GO-ONLY corpus
 // copy), so they run independently of that crash — mirroring the python-only
 // isolation trick. GREEN: G9 (mutual recursion calls), G10 (error interface +
-// sentinel), G11 (cross-pkg embedding / promotion-not-modeled), G14 (defer/go
+// sentinel), G11 (cross-pkg embedding / promoted-method calls), G14 (defer/go
 // calls), G15 (unexported interface matching + cross-visibility calls), G16
 // (init + package-init var), G18 (iota-expr/typed consts/struct tags), G19 (dot
 // import — no false internal edge). RED PROBES (assert the correct edge the
@@ -420,9 +420,10 @@ func TestAtScaleGo_G10_ErrorInterface(t *testing.T) {
 }
 
 // G11: embedding. Cross-package embedding records uses_package (NOT uses_struct
-// to the embedded type), and promoted methods are not modeled (Greet's call to
-// the promoted Base.Hello does not resolve) — both asserted to lock current
-// behavior.
+// to the embedded type). A call to a promoted method resolves to the embedded
+// type's method: Greet's d.Hello() is a calls edge to Base.Hello (WN-7 — this
+// probe used to lock the gap in, asserting the edge was absent). Promoted
+// methods are still not separate resources; Derived has no Hello node.
 func TestAtScaleGo_G11_Embedding(t *testing.T) {
 	runGoScenario(t, scenario{
 		name:   "G11_embedding",
@@ -430,7 +431,8 @@ func TestAtScaleGo_G11_Embedding(t *testing.T) {
 		assert: func(t *testing.T, topo *domain.Topology, mode string) {
 			assertResPresent(t, topo, mode, idEmbDerived)
 			assertHasConn(t, topo, mode, idEmbDecorated, connUsesPkg, idEmbRecursivePkg)
-			assertNoConn(t, topo, mode, idEmbGreet, connCalls, idEmbBaseHello) // promotion not modeled
+			assertHasConn(t, topo, mode, idEmbGreet, connCalls, idEmbBaseHello) // promoted method call resolves
+			assertResAbsent(t, topo, mode, "github.com/Rhuan-Marques/aracne/testing_ground/go/embedding.(Derived).Hello")
 		},
 	})
 }

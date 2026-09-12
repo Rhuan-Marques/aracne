@@ -26,6 +26,9 @@ func main() {
 	switch os.Args[1] {
 	case "--version", "-v", "version":
 		fmt.Printf("arac %s\n", Version)
+	case "--help", "-h", "help":
+		// Asked for, so stdout and status 0 -- like a bare `arac`, unlike a typo below.
+		cli.PrintUsage()
 	case "scan":
 		cli.RunScan(os.Args[2:])
 	case "agent":

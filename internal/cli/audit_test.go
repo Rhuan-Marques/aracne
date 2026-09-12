@@ -5,6 +5,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/Rhuan-Marques/aracne/internal/topogrep"
 	"github.com/Rhuan-Marques/aracne/internal/topology"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // firePostToolUse runs the guard's PostToolUse path and returns the additionalContext it
@@ -114,29 +116,39 @@ func TestAudit_DisplayRootHandlesADotDotPrefixedDirectory(t *testing.T) {
 	}
 }
 
-// A-10: restrictResultToRange narrows a resource-scoped search to the resource's own lines and
-// recomputes Files/Counts/Total -- but leaves Result.Context untouched. FormatResult reads
-// context by absolute line number, so a -B/-A window still prints lines from outside the
-// declaration the caller scoped the search to.
+// A-10: a resource-scoped search trimmed its finished result to the resource's lines and left
+// Result.Context untouched, so a -B/-A window still printed lines from outside the declaration
+// the caller scoped the search to. The span now goes on the search itself (scopeToSpan), which
+// never reads a line outside it -- so there is no out-of-range context to print.
 func TestAudit_RangeRestrictionAlsoDropsOutOfRangeContext(t *testing.T) {
-	res := &topogrep.Result{
-		Matches: []topogrep.Match{
-			{Path: "app.go", Line: 10, Text: "match inside the resource"},
-			{Path: "app.go", Line: 2, Text: "match above the resource"},
-		},
-		Counts: map[string]int{"app.go": 2},
-		Files:  []string{"app.go"},
-		Total:  2,
-		Context: map[string]map[int]string{
-			"app.go": {8: "line 8 - above the resource", 9: "line 9 - above the resource"},
-		},
+	var body strings.Builder
+	for i := 1; i <= 20; i++ {
+		switch i {
+		case 2:
+			body.WriteString("match above the resource\n")
+		case 8, 9:
+			fmt.Fprintf(&body, "line %d - above the resource\n", i)
+		case 10:
+			body.WriteString("match inside the resource\n")
+		default:
+			fmt.Fprintf(&body, "line %d\n", i)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "app.go")
+	if err := os.WriteFile(path, []byte(body.String()), 0o644); err != nil {
+		t.Fatal(err)
 	}
 
 	// The resource spans lines 10..20.
-	restrictResultToRange(res, 10, 20)
+	opt := topogrep.Options{Pattern: "match", Root: path, Mode: topogrep.OutputContent, Before: 2}
+	scopeToSpan(&opt, &domain.Location{Path: path, StartsAt: 10, EndsAt: 20})
+	res, err := topogrep.SearchWith(opt, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	out := topogrep.FormatResult(res, topogrep.Options{Mode: topogrep.OutputContent, Before: 2})
-	if strings.Contains(out, "above the resource") {
+	out := topogrep.FormatResult(res, opt)
+	if strings.Contains(out, "above the resource") || !strings.Contains(out, "match inside the resource") {
 		t.Errorf("a search scoped to lines 10-20 rendered context from outside that range:\n%s", out)
 	}
 }

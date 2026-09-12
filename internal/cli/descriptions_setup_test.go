@@ -38,9 +38,11 @@ func TestMissingDescriptionAnswers(t *testing.T) {
 	}{
 		{"nothing at all", func(*helper.DescriptionsSection) {}, []string{answerProvider}},
 		{
+			// Answered: an absent api_key_env falls back to the provider's own variable
+			// (DEEPSEEK_API_KEY here), as configuration.md documents and the lazy fill does.
 			"an API provider with no variable",
 			func(d *helper.DescriptionsSection) { d.Provider = helper.ProviderNameDeepSeek },
-			[]string{answerAPIKeyEnv},
+			nil,
 		},
 		{
 			"an API provider, fully answered",
@@ -77,7 +79,7 @@ func TestMissingDescriptionAnswers(t *testing.T) {
 			// moved onto the section.
 			"the legacy provider spelling counts",
 			func(d *helper.DescriptionsSection) { d.Lazy.Provider = helper.ProviderNameAnthropic },
-			[]string{answerAPIKeyEnv},
+			nil,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -106,19 +108,31 @@ func TestUnansweredSetupErrorNamesInitAndTheKeys(t *testing.T) {
 }
 
 // A half-answered config is asked about the half that is missing, and not about the half it
-// already settled: a project that has chosen openai and lost only api_key_env should not be
-// told to pick a vendor again.
+// already settled: a project that has chosen cli and lost only cli_provider_command should not
+// be told to pick a vendor again.
 func TestUnansweredSetupErrorAsksOnlyForWhatIsMissing(t *testing.T) {
-	d := helper.DescriptionsSection{Provider: helper.ProviderNameOpenAI}
+	d := helper.DescriptionsSection{Provider: helper.ProviderNameCLI}
 	err := unansweredSetupError(&d)
 	if err == nil {
-		t.Fatal("a provider with no key variable must produce an error")
+		t.Fatal("a cli provider with no command must produce an error")
 	}
-	if !strings.Contains(err.Error(), "OPENAI_API_KEY") {
-		t.Errorf("the error should offer the provider's usual variable, got:\n%v", err)
+	if !strings.Contains(err.Error(), "cli_provider_command") {
+		t.Errorf("the error should name the missing command key, got:\n%v", err)
 	}
 	if strings.Contains(err.Error(), "deepseek") {
 		t.Errorf("a chosen provider's error should not list the others, got:\n%v", err)
+	}
+}
+
+// DE-6: a provider named without api_key_env is a complete answer. configuration.md says an
+// absent api_key_env falls back to the provider's own variable, and the lazy fill already
+// resolves it that way; the sweep refused the same config as "not configured".
+func TestAPIProviderWithoutKeyEnvIsAnswered(t *testing.T) {
+	for _, p := range helper.APIProviderNames() {
+		d := helper.DescriptionsSection{Provider: p, BaseURL: "http://127.0.0.1:1"}
+		if got := missingDescriptionAnswers(&d); len(got) != 0 {
+			t.Errorf("provider %q without api_key_env: missing = %v, want nothing", p, got)
+		}
 	}
 }
 

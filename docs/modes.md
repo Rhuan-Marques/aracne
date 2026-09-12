@@ -47,8 +47,9 @@ The surfaces are not independent axes; they are four coherent products, and `mod
 product. A config with no `mode` resolves to `cli`.
 
 `intercept_line_ranges` carries a promise the slice reader enforces: reading an advertised span
-returns byte-for-byte what the resource read would have, imports and context included
-(`whollyContained` in `universaltools/slice.go`). It is the default addressing for the
+returns byte-for-byte what the resource read would have, imports and context included — for a
+method inside a class too, whose resource read carries the enclosing class
+(`promotable` in `universaltools/slice.go`). It is the default addressing for the
 intercepting pair because file+line is vocabulary the model already has: benchmarking found
 models address code as file+line essentially always and as a resource ID essentially never,
 whatever the contract asks for. `intercept_id` is there for the properties an ID has that a

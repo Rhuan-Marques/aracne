@@ -2,9 +2,11 @@ package tests_test
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -871,6 +873,392 @@ func TestGrepHonoursExplicitFilenameAndLineNumberFlags(t *testing.T) {
 				t.Errorf("grep %s: row %q is not in aracne's answer:\n%s",
 					strings.Join(argv, " "), line, got)
 			}
+		}
+	}
+}
+
+// runAracGrepPiped is runAracGrep the way the guard splices a search that feeds a pipeline:
+// `--piped` asks for the rows the real grep would have printed and nothing else.
+func runAracGrepPiped(t *testing.T, dir string, argv ...string) (string, int) {
+	t.Helper()
+	cmd := exec.Command(AracBin, append([]string{"cmd", "--piped", "--", "grep"}, argv...)...)
+	cmd.Dir = dir
+	out, _ := cmd.Output()
+	return string(out), cmd.ProcessState.ExitCode()
+}
+
+// Overlapping context windows are ONE line-ordered stream, with `--` only between groups that do
+// not touch -- which is what GNU grep prints. Each match's after-window used to be printed whole
+// before the next match, so a match inside it came out below its own following lines:
+// `31: 33- 34- 32: 35-` where grep prints `31: 32: 33- 34- 35-`. Under --piped a pipeline reads
+// the rows, so the parity is byte for byte. The annotated rendering may add headers and node
+// rows, but it must print every row the real grep printed, in file order, once.
+func TestOverlappingContextWindowsRenderLikeGNUGrep(t *testing.T) {
+	root := grepFixture(t)
+
+	// `Shape` is on lines 8, 9, 24, 28 and 34 of pkg/shapes.go: two pairs whose windows overlap.
+	for _, argv := range [][]string{
+		{"-n", "-A3", "Shape", "pkg/shapes.go"},
+		{"-n", "-B2", "Shape", "pkg/shapes.go"},
+		{"-n", "-C2", "Shape", "pkg/shapes.go"},
+		{"-A3", "Shape", "pkg/shapes.go"},
+		{"-rn", "-A3", "Shape", "pkg"},
+		// -m stops at N matches and prints the rest of the open window as CONTEXT, a matching
+		// line included: grep prints line 9 as `9-`, and stops at 11.
+		{"-n", "-m1", "-A3", "Shape", "pkg/shapes.go"},
+	} {
+		want, wantStatus := runGrep(t, root, argv...)
+		got, gotStatus := runAracGrepPiped(t, root, argv...)
+		if got != want || gotStatus != wantStatus {
+			t.Errorf("grep %s --piped (exit %d):\n%s\nreal grep (exit %d):\n%s",
+				strings.Join(argv, " "), gotStatus, got, wantStatus, want)
+		}
+
+		annotated, _ := runAracGrep(t, root, argv...)
+		implied := singleFileOperand(root, argv)
+		have := map[string]bool{}
+		last := map[string]int{}
+		for _, ln := range strings.Split(annotated, "\n") {
+			matches, context := parseRowsIn(ln, implied)
+			for _, r := range append(matches, context...) {
+				if r.line <= last[r.path] {
+					t.Errorf("grep %s: %s printed after line %d:\n%s",
+						strings.Join(argv, " "), r.key(), last[r.path], annotated)
+				}
+				last[r.path] = r.line
+				have[r.key()] = true
+			}
+		}
+		wantMatches, wantContext := parseRowsIn(want, implied)
+		for _, r := range append(wantMatches, wantContext...) {
+			if !have[r.key()] {
+				t.Errorf("grep %s: the real grep's row %s is missing:\n%s",
+					strings.Join(argv, " "), r.key(), annotated)
+			}
+		}
+	}
+}
+
+// A path-less rg searches its STDIN when stdin is a file or a pipe, and walks the working
+// directory only when it is a terminal or /dev/null. `arac cmd` holds the stdin the real command
+// would have had, so it hands the first two to the real binary: `rg retry < README.md` used to
+// come back as a search of the whole tree, matches from five files for a question about one.
+// /dev/null is what an agent's Bash tool hands a command, so that one is still answered.
+func TestPathlessRipgrepReadingStdinRunsTheRealBinary(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the stand-in rg is a shell script")
+	}
+	root := grepFixture(t)
+	// A stand-in rg that only says it ran, so the suite needs no ripgrep and a passthrough is
+	// unmistakable. It is needed for the answered case too: `arac cmd` serves a command only
+	// when its binary is on PATH, and asks it which files it would search (`rg --files`), which
+	// the stand-in answers with the fixture's non-hidden files.
+	shims := t.TempDir()
+	rg := filepath.Join(shims, "rg")
+	writeFile(t, rg, "#!/bin/sh\nif [ \"$1\" = --files ]; then\n"+
+		"  find . -type f ! -path './.*' | sed 's|^\\./||' | tr '\\n' '\\000'; exit 0\nfi\n"+
+		"echo \"REAL rg $*\"\n")
+	if err := os.Chmod(rg, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env := append(os.Environ(), "PATH="+shims+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	run := func(stdin io.Reader) string {
+		t.Helper()
+		cmd := exec.Command(AracBin, "cmd", "--", "rg", "Describe")
+		cmd.Dir, cmd.Env, cmd.Stdin = root, env, stdin
+		out, _ := cmd.Output()
+		return string(out)
+	}
+
+	readme, err := os.Open(filepath.Join(root, "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer readme.Close()
+	if got := run(readme); !strings.HasPrefix(got, "REAL rg") {
+		t.Errorf("`rg Describe < README.md` was answered instead of run:\n%s", got)
+	}
+	if got := run(strings.NewReader("Describe\n")); !strings.HasPrefix(got, "REAL rg") {
+		t.Errorf("`… | rg Describe` was answered instead of run:\n%s", got)
+	}
+	if got := run(nil); strings.Contains(got, "REAL rg") || !strings.Contains(got, "pkg/shapes.go") {
+		t.Errorf("`rg Describe` with /dev/null on stdin must still be answered from the tree:\n%s", got)
+	}
+}
+
+// --- PIPED: the rows the real command prints, and nothing else -----------------
+
+// shellParityFixture is a scanned project shaped for the places a piped search used to print
+// rows the real grep does not: three files for -c, a symbolic link into a directory, a binary, a
+// CRLF file and a Latin-1 one, and a test file for the order of --include and --exclude.
+func shellParityFixture(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	write := func(rel, body string) {
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, full, body)
+	}
+	write("go.mod", "module demo\n\ngo 1.21\n")
+	write("cnt/a.go", "package cnt\n\n// Area is one.\nfunc A() {}\n")
+	write("cnt/b.go", "package cnt\n\nfunc B() {}\n")
+	write("cnt/c.go", "package cnt\n\nfunc C() {}\n")
+	write("cnt/a_test.go", "package cnt\n\nfunc ATest() {}\n")
+	write("README.md", "# demo\n\nfunc docs\n")
+	write("tree/real/r.txt", "retry in real\n")
+	write("elsewhere/e.txt", "retry elsewhere\n")
+	write("crlf.txt", "retry\r\nnope\r\nretry again\r\n")
+	write("latin1.txt", "caf\xe9 retry\nplain retry\n")
+	if err := os.WriteFile(filepath.Join(root, "tree", "blob.bin"), []byte("retry\x00binary\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" {
+		for link, target := range map[string]string{"linkdir": "tree/real", "tree/lnk": "../elsewhere"} {
+			if err := os.Symlink(target, filepath.Join(root, link)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	mustRun(t, root, "scan", "--hard", "--root", ".", "--output", ".aracne/topology.db")
+	return root
+}
+
+// Every search below is one the guard splices `--piped` into when a pipeline reads it, and that
+// promise is the real grep's rows: its stdout byte for byte, and its exit status. The one
+// deliberate difference is the order WITHIN a walked tree -- grep walks in readdir order, which
+// no filesystem defines, and aracne lexically -- so a search that walks a directory is compared
+// as a set of rows. Everything named on the command line is answered in the order given.
+func TestPipedSearchPrintsTheRowsTheRealGrepPrints(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fixture needs symbolic links")
+	}
+	root := shellParityFixture(t)
+	t.Setenv("LC_ALL", "C.UTF-8")
+
+	for _, tc := range []struct {
+		argv []string
+		tree bool // walks a directory: compare the rows as a set
+	}{
+		// SH-4: a path-less `grep -r` prints no `./`, and each root echoes its own spelling.
+		{[]string{"-rn", "Area"}, true},
+		{[]string{"-rl", "retry", "./tree", "elsewhere"}, false},
+		// GR-4: `path:0` for every file searched, the pipeline behind `| grep ':0$'`.
+		{[]string{"-c", "Area", "cnt/a.go", "cnt/b.go", "cnt/c.go"}, false},
+		{[]string{"-c", "zzz", "cnt/a.go", "cnt/b.go"}, false},
+		{[]string{"-rc", "Area", "cnt"}, true},
+		// ... and a binary file's count is of the runs between newlines AND NULs, as grep counts.
+		{[]string{"-c", "^binary", "tree/blob.bin"}, false},
+		// GR-12: -cH, operand order, the operand's own spelling, a repeated operand.
+		{[]string{"-cH", "Area", "cnt/a.go"}, false},
+		{[]string{"-n", "func", "cnt/c.go", "cnt/a.go"}, false},
+		{[]string{"-rn", "Area", "cnt/../cnt/a.go", "tree/"}, false},
+		{[]string{"-n", "func", "cnt/a.go", "cnt/a.go"}, false},
+		// GR-6: a linked directory named as an operand is followed; -R follows links in the walk.
+		{[]string{"-rl", "retry", "linkdir"}, false},
+		{[]string{"-rl", "retry", "tree"}, true},
+		{[]string{"-Rl", "retry", "tree"}, true},
+		// GR-13: the last matching filter wins, and operands are held to the filters.
+		{[]string{"-rl", "--exclude=*_test.go", "--include=*.go", "func", "."}, true},
+		{[]string{"-rl", "--include=*.go", "--exclude=*_test.go", "func", "cnt"}, true},
+		{[]string{"-l", "--exclude=*_test.go", "func", "cnt/a_test.go", "cnt/a.go"}, false},
+		{[]string{"-l", "--include=*.md", "func", "cnt/a.go"}, false},
+		{[]string{"-rl", "--exclude-dir=cnt", "func", "./cnt"}, false},
+		{[]string{"-rl", "--binary-files=without-match", "retry", "tree"}, true},
+		// GR-14: CR is content to grep, and a Latin-1 row is suppressed in a UTF-8 locale.
+		{[]string{"-n", "retry$", "crlf.txt"}, false},
+		{[]string{"-n", "retry", "crlf.txt"}, false},
+		{[]string{"-n", "retry", "latin1.txt"}, false},
+		{[]string{"-c", "caf.", "latin1.txt"}, false},
+	} {
+		want, wantStatus := runGrep(t, root, tc.argv...)
+		got, gotStatus := runAracGrepPiped(t, root, tc.argv...)
+		if tc.tree {
+			want, got = sortedRows(want), sortedRows(got)
+		}
+		if got != want || gotStatus != wantStatus {
+			t.Errorf("grep %s --piped (exit %d):\n%q\nreal grep (exit %d):\n%q",
+				strings.Join(tc.argv, " "), gotStatus, got, wantStatus, want)
+		}
+	}
+}
+
+func sortedRows(out string) string {
+	rows := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	sort.Strings(rows)
+	return strings.Join(rows, "\n")
+}
+
+// --- rg: ripgrep's own file set ------------------------------------------------
+
+// rgFixture is a project whose files ripgrep and a `grep -r` disagree about: an ignored bundle,
+// a hidden directory, a binary, and the shapes rg's glob dialect has and fnmatch lacks.
+func rgFixture(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	write := func(rel, body string) {
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, full, body)
+	}
+	write("go.mod", "module demo\n\ngo 1.21\n")
+	write("pkg/a.go", "package pkg\n\n// Retry once.\nfunc Retry() {}\n")
+	write("pkg/a_test.go", "package pkg\n\nfunc TestRetry() {}\n")
+	write("cfg/a.json", "{\"retry\": 1}\n")
+	write("cfg/b.yaml", "retry: 1\n")
+	write("cfg/c.toml", "retry = 1\n")
+	write("deep/x/y/Z.java", "class Z { int retry; }\n")
+	write("dist/bundle.js", "retry()\n")
+	write(".github/ci.yml", "retry: true\n")
+	// .ignore, which ripgrep honours without a git repository.
+	write(".ignore", "dist/\n")
+	if err := os.WriteFile(filepath.Join(root, "blob.bin"), []byte("retry\x00binary\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, root, "scan", "--hard", "--root", ".", "--output", ".aracne/topology.db")
+	return root
+}
+
+// GR-8: rg is served from the list of files rg itself would search -- its ignore files, hidden
+// and binary rules, and its glob dialect -- so a piped rg prints the real rg's rows. Needs a real
+// ripgrep on PATH; rg prints files in no fixed order, so the rows are compared as a set.
+func TestPipedRipgrepPrintsTheRowsTheRealRipgrepPrints(t *testing.T) {
+	rg, err := exec.LookPath("rg")
+	if err != nil {
+		t.Skip("ripgrep is not installed")
+	}
+	root := rgFixture(t)
+
+	for _, argv := range [][]string{
+		{"-l", "retry"},
+		{"-n", "retry", "."},
+		{"-c", "retry"},
+		{"-l", "-g", "*.{json,yaml}", "retry"},
+		{"-l", "-g", "deep/**/*.java", "retry", "."},
+		{"-l", "-g", "!cfg/", "retry"},
+		{"-l", "-g", "*.go", "-g", "!*_test.go", "Retry"},
+		{"-l", "-g", "!*_test.go", "-g", "*.go", "Retry"},
+		{"-l", "-t", "go", "Retry"},
+		{"-n", "retry", "cfg/"},
+		{"-l", "retry", ".github"},
+	} {
+		real := exec.Command(rg, argv...)
+		real.Dir = root
+		wantOut, _ := real.Output()
+		wantStatus := real.ProcessState.ExitCode()
+
+		cmd := exec.Command(AracBin, append([]string{"cmd", "--piped", "--", "rg"}, argv...)...)
+		cmd.Dir = root
+		gotOut, _ := cmd.Output()
+		gotStatus := cmd.ProcessState.ExitCode()
+
+		want, got := sortedRows(string(wantOut)), sortedRows(string(gotOut))
+		if got != want || gotStatus != wantStatus {
+			t.Errorf("rg %s --piped (exit %d):\n%s\nreal rg (exit %d):\n%s",
+				strings.Join(argv, " "), gotStatus, got, wantStatus, want)
+		}
+	}
+	// And it was ANSWERED, not handed back: the annotated form carries a resource header.
+	cmd := exec.Command(AracBin, "cmd", "--", "rg", "-n", "Retry", "pkg")
+	cmd.Dir = root
+	if out, _ := cmd.Output(); !strings.Contains(string(out), "# demo/pkg.Retry") {
+		t.Errorf("`rg -n Retry pkg` was not served from the topology:\n%s", out)
+	}
+}
+
+// GR-8, without a real ripgrep: the search asks `rg --files` which files to visit -- with the
+// caller's globs in the order typed and its type -- and visits only those, spelled as rg spelled
+// them. A stand-in rg answers the listing and says so for anything else, so a passthrough is
+// unmistakable.
+func TestRipgrepIsServedFromRipgrepsOwnFileList(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the stand-in rg is a shell script")
+	}
+	root := rgFixture(t)
+	shims := t.TempDir()
+	logPath := filepath.Join(shims, "args.log")
+	writeFile(t, filepath.Join(shims, "rg"), "#!/bin/sh\nif [ \"$1\" = --files ]; then\n"+
+		"  echo \"$*\" >> '"+logPath+"'\n"+
+		"  printf './pkg/a.go\\000./cfg/a.json\\000./blob.bin\\000'; exit 0\nfi\n"+
+		"echo \"REAL rg $*\"\n")
+	if err := os.Chmod(filepath.Join(shims, "rg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run := func(argv ...string) string {
+		t.Helper()
+		cmd := exec.Command(AracBin, append([]string{"cmd", "--", "rg"}, argv...)...)
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(), "PATH="+shims+string(os.PathListSeparator)+os.Getenv("PATH"))
+		out, _ := cmd.Output()
+		return string(out)
+	}
+
+	got := run("-l", "-g", "*.go", "-g", "!*_test.go", "-t", "go", "retry", ".")
+	if strings.Contains(got, "REAL rg") {
+		t.Fatalf("a plain rg search was passed through:\n%s", got)
+	}
+	// Only listed files, under rg's spelling; the binary one rg met in a walk it skips.
+	for _, ln := range strings.Split(strings.TrimSpace(got), "\n") {
+		if ln != "./cfg/a.json" && ln != "./pkg/a.go" {
+			t.Errorf("row %q is not a file rg listed (or is the binary it skips):\n%s", ln, got)
+		}
+	}
+	logged, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "--files --null --glob=*.go --glob=!*_test.go --type=go -- ."; strings.TrimSpace(string(logged)) != want {
+		t.Errorf("rg was asked %q, want %q", strings.TrimSpace(string(logged)), want)
+	}
+	// rg's message for a binary file it was NAMED is its own; that runs for real.
+	if got := run("retry", "blob.bin"); !strings.HasPrefix(got, "REAL rg") {
+		t.Errorf("`rg retry blob.bin` was answered instead of run:\n%s", got)
+	}
+}
+
+// SH-2 (word tests): in a UTF-8 locale grep reads `é` as a word character, which Go's `\b` and
+// `\w` do not. Every form is compared with the real grep, piped (byte for byte) and annotated (the
+// same rows, headers aside): the ones where the word test lands beside a non-ASCII letter run for
+// real, and the ASCII controls stay answered.
+func TestWordTestsAgreeWithGrepBesideNonASCIILetters(t *testing.T) {
+	root := grepFixture(t)
+	t.Setenv("LC_ALL", "C.UTF-8")
+	writeFile(t, filepath.Join(root, "words.txt"),
+		"// éRadius here\n// Radiusé there\n// xRadius ascii\n// Radius alone\n// café\n// naïve\n")
+	rows := func(out string) string {
+		var kept []string
+		for _, ln := range strings.Split(strings.TrimSuffix(out, "\n"), "\n") {
+			if !strings.HasPrefix(ln, "# ") {
+				kept = append(kept, ln)
+			}
+		}
+		return strings.Join(kept, "\n")
+	}
+
+	for _, argv := range [][]string{
+		{"-nw", "Radius", "words.txt"},
+		{"-cw", "Radius", "words.txt"},
+		{"-n", `\bRadius`, "words.txt"},
+		{"-n", `Radius\>`, "words.txt"},
+		{"-nE", `caf\w`, "words.txt"},
+		{"-nE", `na\W`, "words.txt"},
+		{"-nw", "alone", "words.txt"},
+		{"-nw", "sum", "pkg/shapes.go"},
+	} {
+		want, wantStatus := runGrep(t, root, argv...)
+		piped, pipedStatus := runAracGrepPiped(t, root, argv...)
+		if piped != want || pipedStatus != wantStatus {
+			t.Errorf("grep %s --piped (exit %d):\n%q\nreal grep (exit %d):\n%q",
+				strings.Join(argv, " "), pipedStatus, piped, wantStatus, want)
+		}
+		annotated, status := runAracGrep(t, root, argv...)
+		if rows(annotated) != rows(want) || status != wantStatus {
+			t.Errorf("grep %s (exit %d):\n%s\nreal grep (exit %d):\n%s",
+				strings.Join(argv, " "), status, annotated, wantStatus, want)
 		}
 	}
 }

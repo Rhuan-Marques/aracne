@@ -96,7 +96,7 @@ func (g *Grep) Run(args json.RawMessage) (string, error) {
 		After:      params.After,
 	}
 	cfg := helper.LoadConfig(helper.ConfigPath(g.mgr.DbPath()))
-	opt.Ignore, opt.DescriptionKinds, opt.LineRange = grepConfig(cfg, topo)
+	opt.DescriptionKinds, opt.LineRange = grepConfig(cfg, topo)
 	if params.HeadLimit != nil {
 		opt.HeadLimit = *params.HeadLimit
 	}
@@ -133,25 +133,21 @@ func splitGlobs(glob string) []string {
 	return out
 }
 
-// grepConfig reads the project settings the search honours: the
-// scan.ignore matcher, so a search does not descend into build output the project has
-// explicitly told aracne to skip, and grep.description_kinds, which limits the kinds
-// whose description may match.
+// grepConfig reads the project settings the search honours: grep.description_kinds, which
+// limits the kinds whose description may match, and the identification mode.
+//
+// SCAN.IGNORE IS NOT AMONG THEM, THOUGH IT USED TO BE. It is the scanner's rule, and it
+// answers a different question -- what earns a place in the topology, not what exists on
+// disk. Borrowing it here meant a directory deliberately left out of the graph could not be
+// grepped either, which is the opposite of what a caller wants from the one tool that reads
+// raw files. Pruning is the .gitignore hierarchy's job now; see topogrep/gitignore.go.
 //
 // A nil kind slice means "not configured" and lets topogrep apply its defaults, so a
 // missing or unreadable config still gets description matching rather than silently
 // losing it.
-func grepConfig(cfg *helper.Config, topo *domain.Topology) (*domain.IgnoreMatcher, []domain.ResourceKind, bool) {
+func grepConfig(cfg *helper.Config, topo *domain.Topology) ([]domain.ResourceKind, bool) {
 	if cfg == nil {
-		return nil, nil, false
+		return nil, false
 	}
-	root := ""
-	if topo != nil {
-		root = topo.Root
-	}
-	if root == "" {
-		return nil, cfg.Grep.DescriptionKinds, cfg.LineRangeIdentification()
-	}
-	return domain.BuildIgnoreMatcher(root, cfg.Scan.Ignore), cfg.Grep.DescriptionKinds,
-		cfg.LineRangeIdentification()
+	return cfg.Grep.DescriptionKinds, cfg.LineRangeIdentification()
 }

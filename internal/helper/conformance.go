@@ -44,6 +44,25 @@ func InterfaceConflictWarnings(topo *domain.Topology) []domain.TopologyWarning {
 		if impl.Kind == domain.ResourceInterface {
 			continue
 		}
+		// A Java abstract class may leave any interface method to its subclasses -- the
+		// skeletal-implementation pattern, AbstractList and its kin. It promises nothing until
+		// something concrete extends it, and that subclass is held to the promise below
+		// instead. TypeScript is not exempted the same way: its abstract class must still
+		// declare every interface member, if only as abstract, which declaresAbstract covers.
+		if impl.Language == "java" && isAbstractType(impl) {
+			continue
+		}
+		// One warning per id: a class can reach one interface both directly and through an
+		// abstract parent.
+		seen := map[string]bool{}
+		emit := func(ws []domain.TopologyWarning) {
+			for _, w := range ws {
+				if !seen[w.ID] {
+					seen[w.ID] = true
+					out = append(out, w)
+				}
+			}
+		}
 		for _, edge := range conformanceEdges {
 			for _, ifaceID := range impl.Connections[edge] {
 				iface, ok := topo.Resources[ifaceID]
@@ -56,20 +75,56 @@ func InterfaceConflictWarnings(topo *domain.Topology) []domain.TopologyWarning {
 				if isDerived(impl, iface.Name) {
 					continue
 				}
-				out = append(out, conflictsFor(topo, implID, impl, ifaceID, iface)...)
+				// TypeScript's `extends` is a SUPERCLASS, not an interface claim, and only
+				// the parent's ABSTRACT members are promises the subclass has to keep.
+				// Reading the parent's published method list instead reported two shapes of
+				// correct code: a class that merely does not override an inherited concrete
+				// method, and -- because declaration merging folds a same-name interface's
+				// members into the class's list -- every subclass of a merged class. An
+				// ABSTRACT subclass keeps none of it either: passing the requirement down is
+				// what abstract means.
+				if tsSuperclass(impl, iface, edge) {
+					if isAbstractType(impl) {
+						continue
+					}
+					emit(conflictsFor(topo, implID, impl, ifaceID, iface, nil, abstractRequirements))
+					continue
+				}
+				emit(conflictsFor(topo, implID, impl, ifaceID, iface, nil, declaredRequirements))
+			}
+		}
+		for _, via := range abstractAncestors(topo, impl) {
+			for _, ifaceID := range via.Connections["implements"] {
+				iface, ok := topo.Resources[ifaceID]
+				if !ok || iface.Language != impl.Language {
+					continue
+				}
+				emit(conflictsFor(topo, implID, impl, ifaceID, iface, &via, declaredRequirements))
 			}
 		}
 	}
 	return out
 }
 
-// conflictsFor checks one declared relationship.
+// requirementSource says which of a supertype's members the implementer is held to:
+// everything the type publishes, or only what it declares abstract. See tsSuperclass.
+type requirementSource int
+
+const (
+	declaredRequirements requirementSource = iota
+	abstractRequirements
+)
+
+// conflictsFor checks one declared relationship. via is the abstract ancestor that made the
+// declaration when impl inherited it rather than writing it, and nil otherwise.
 func conflictsFor(
 	topo *domain.Topology,
 	implID string, impl domain.Resource,
 	ifaceID string, iface domain.Resource,
+	via *domain.Resource,
+	source requirementSource,
 ) []domain.TopologyWarning {
-	required := requiredMethods(topo, iface)
+	required := requiredMethods(topo, iface, source)
 	if len(required) == 0 {
 		return nil
 	}
@@ -82,9 +137,18 @@ func conflictsFor(
 	}
 
 	var out []domain.TopologyWarning
+	external := hasExternalAncestor(topo, impl, 0)
 	for _, req := range required {
 		if req.Name == "" || req.HasDefault {
 			continue // the interface supplies a body; an implementer need not
+		}
+		// Every Java type already has equals/hashCode/toString and the rest of Object's
+		// public surface, inherited from a class no scan of the project can see. An
+		// interface is free to REDECLARE them -- java.util.Comparator does exactly that --
+		// and requiring them reported every implementer of such an interface, records and
+		// enums included, for methods the compiler supplies.
+		if impl.Language == "java" && isObjectMethod(req) {
+			continue
 		}
 		candidates := concreteOnly(provided[req.Name])
 		if len(candidates) == 0 {
@@ -93,9 +157,27 @@ func conflictsFor(
 			if inheritedMethod(topo, impl, req.Name, 0) {
 				continue
 			}
-			out = append(out, conflictWarning(implID, impl, ifaceID, iface, req.Name,
-				fmt.Sprintf("%s declares it implements %s but does not provide %s",
-					impl.Name, iface.Name, req.Name)))
+			// `class MyList extends ArrayList<String> implements Sizeable` gets size() from
+			// a superclass outside the scan. Its methods are unreadable, so ANY of them
+			// could be the implementation and a missing-method verdict would be a guess.
+			// A class with no such ancestor is still held to the promise below.
+			if external {
+				continue
+			}
+			msg := fmt.Sprintf("%s declares it implements %s but does not provide %s",
+				impl.Name, iface.Name, req.Name)
+			if via != nil {
+				msg = fmt.Sprintf("%s extends %s, which declares it implements %s, but nothing provides %s",
+					impl.Name, via.Name, iface.Name, req.Name)
+			}
+			out = append(out, conflictWarning(implID, impl, ifaceID, iface, req.Name, msg))
+			continue
+		}
+		// A requirement inherited from an abstract CLASS is checked by presence only. Its
+		// signature is written against the class's own type parameters -- `abstract T get()`
+		// overridden by `String get()` -- and comparing that text would call the override a
+		// mismatch.
+		if iface.Kind != domain.ResourceInterface {
 			continue
 		}
 		// Overloads mean one name can have several methods, and only ONE of them has to
@@ -104,8 +186,15 @@ func conflictsFor(
 		// verdict depend on map iteration order, which is a test that passes at random.
 		why := ""
 		satisfied := false
+		typeParams := interfaceTypeParams(iface)
 		for _, have := range candidates {
-			v, reason := contract.Satisfies(impl.Language, req, contract.SignatureOf(have))
+			v, reason := contract.SatisfiesIn(impl.Language, req, contract.SignatureOf(have),
+				contract.ConformanceCtx{
+					TypeParams: typeParams,
+					Related: func(a, b string) bool {
+						return relatedTypes(topo, a, b)
+					},
+				})
 			if v != contract.Mismatch {
 				satisfied = true
 				break
@@ -140,15 +229,42 @@ func conflictWarning(
 	}
 }
 
+// interfaceTypeParams reads the type-parameter names an interface declares -- Java's
+// `interface Repo<T>`, TypeScript's `interface Repo<T>`. Its methods are written against
+// these, so a position that mentions one cannot be compared with the implementer's concrete
+// type; see contract.SatisfiesWithTypeParams. Properties survive a database round trip as
+// JSON, so the list arrives as []string on a fresh scan and []any when read back.
+func interfaceTypeParams(iface domain.Resource) []string {
+	raw, ok := iface.Properties["generics"]
+	if !ok {
+		return nil
+	}
+	switch v := raw.(type) {
+	case []string:
+		return v
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if name, ok := item.(string); ok && name != "" {
+				out = append(out, name)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
 // requiredMethods returns what an interface demands.
 //
 // Two shapes, because the languages publish it two ways. Rust, TypeScript and Java give an
 // interface node its own method list. Python has no interface node at all -- an abstract
 // base class is an ordinary class -- so its requirements are its own methods carrying the
 // abstractmethod decorator.
-func requiredMethods(topo *domain.Topology, iface domain.Resource) []contract.Signature {
-	if sigs := contract.InterfaceMethods(iface); len(sigs) > 0 {
-		return sigs
+func requiredMethods(topo *domain.Topology, iface domain.Resource, source requirementSource) []contract.Signature {
+	if source == declaredRequirements {
+		if sigs := contract.InterfaceMethods(iface); len(sigs) > 0 {
+			return sigs
+		}
 	}
 	var out []contract.Signature
 	for id := range methodIDs(iface) {
@@ -259,8 +375,47 @@ func declaresAbstract(methods map[string][]domain.Resource) bool {
 	return false
 }
 
-// isAbstractMethod reports whether a Python method is declared abstract.
+// abstractAncestors returns the Java abstract classes a type inherits from with no concrete
+// class in between: the ones whose interface promises pass to it unkept. The walk stops at a
+// concrete ancestor, which is checked against those promises itself, and is bounded for the
+// same reason inheritedMethod is.
+func abstractAncestors(topo *domain.Topology, impl domain.Resource) []domain.Resource {
+	if impl.Language != "java" {
+		return nil
+	}
+	var out []domain.Resource
+	seen := map[string]bool{}
+	var walk func(res domain.Resource, depth int)
+	walk = func(res domain.Resource, depth int) {
+		if depth > 8 {
+			return
+		}
+		for _, parentID := range res.Connections["inherits"] {
+			parent, ok := topo.Resources[parentID]
+			if !ok || seen[parentID] || !isAbstractType(parent) {
+				continue
+			}
+			seen[parentID] = true
+			out = append(out, parent)
+			walk(parent, depth+1)
+		}
+	}
+	walk(impl, 0)
+	return out
+}
+
+// isAbstractType reports whether a Java or TypeScript class is declared abstract.
+func isAbstractType(res domain.Resource) bool {
+	abstract, _ := res.Properties["is_abstract"].(bool)
+	return abstract
+}
+
+// isAbstractMethod reports whether a method is declared abstract. Java and TypeScript say so
+// on the method itself; Python says it with a decorator.
 func isAbstractMethod(m domain.Resource) bool {
+	if abstract, _ := m.Properties["is_abstract"].(bool); abstract {
+		return true
+	}
 	raw, ok := m.Properties["decorators"]
 	if !ok {
 		return false
@@ -290,6 +445,105 @@ func isAbstractDecorator(d string) bool {
 		"abstractproperty", "abc.abstractproperty",
 		"abstractclassmethod", "abstractstaticmethod":
 		return true
+	}
+	return false
+}
+
+// tsSuperclass reports whether this edge is a TypeScript class extending another CLASS --
+// the one conformance edge that is not a claim about an interface. See the call site.
+func tsSuperclass(impl, parent domain.Resource, edge string) bool {
+	return impl.Language == "typescript" && edge == "inherits" &&
+		parent.Kind != domain.ResourceInterface
+}
+
+// isObjectMethod reports whether a required method is one java.lang.Object already provides,
+// matched on name AND arity so an interface's own `hashCode(String salt)` stays required.
+func isObjectMethod(req contract.Signature) bool {
+	switch req.Name {
+	case "equals":
+		return len(req.Input) == 1
+	case "hashCode", "toString", "clone", "finalize", "getClass", "notify", "notifyAll":
+		return len(req.Input) == 0
+	case "wait":
+		return len(req.Input) <= 2
+	}
+	return false
+}
+
+// hasExternalAncestor reports whether a Java type extends a class the scan cannot see.
+//
+// The scanner records an `extends` clause's raw name whether or not it resolves, and the
+// matcher only draws the inherits edge when the parent is a type in the project -- so a
+// superclass name with no edge behind it is a class from a dependency or the JDK. Its
+// methods are unreadable, and any of them may be the implementation of an interface method
+// the class itself does not declare.
+//
+// Bounded like inheritedMethod: a cycle in a half-parsed file must not hang a scan.
+func hasExternalAncestor(topo *domain.Topology, impl domain.Resource, depth int) bool {
+	if impl.Language != "java" || depth > 8 {
+		return false
+	}
+	if len(baseNames(impl)) > 0 && len(impl.Connections["inherits"]) == 0 {
+		return true
+	}
+	for _, parentID := range impl.Connections["inherits"] {
+		parent, ok := topo.Resources[parentID]
+		if !ok {
+			continue
+		}
+		if hasExternalAncestor(topo, parent, depth+1) {
+			return true
+		}
+	}
+	return false
+}
+
+// baseNames reads the superclass names a type wrote in its `extends` clause, before any
+// resolution. Properties survive a database round trip as JSON, so the list arrives as
+// []string on a fresh scan and []any when read back.
+func baseNames(res domain.Resource) []string {
+	switch v := res.Properties["bases"].(type) {
+	case []string:
+		return v
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if name, ok := item.(string); ok && name != "" {
+				out = append(out, name)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+// relatedTypes reports whether two topology types stand in an inheritance relationship in
+// either direction -- the question contract.ConformanceCtx cannot answer for itself. A
+// parameter narrowed to a subtype is legal TypeScript, and so is one widened to a supertype;
+// only two types with no path between them are evidence of a broken implementation.
+func relatedTypes(topo *domain.Topology, a, b string) bool {
+	if a == b {
+		return true
+	}
+	return reachesType(topo, a, b, 0) || reachesType(topo, b, a, 0)
+}
+
+// reachesType walks from a type up through its supertypes looking for a target. Bounded for
+// the same reason inheritedMethod is.
+func reachesType(topo *domain.Topology, from, target string, depth int) bool {
+	if depth > 8 {
+		return false
+	}
+	res, ok := topo.Resources[from]
+	if !ok {
+		return false
+	}
+	for _, edge := range conformanceEdges {
+		for _, parentID := range res.Connections[edge] {
+			if parentID == target || reachesType(topo, parentID, target, depth+1) {
+				return true
+			}
+		}
 	}
 	return false
 }

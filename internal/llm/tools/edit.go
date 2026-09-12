@@ -18,6 +18,10 @@ import (
 type Edit struct {
 	mgr *topology.TopologyManager
 	reg *scanner.Registry
+	// OmitWarnings leaves the topology warnings out of the summary, for a caller that
+	// reports them itself. `arac edit` does: it reports through the guard's ledger, so that
+	// a warning printed here is not printed a second time by the PostToolUse drift check.
+	OmitWarnings bool
 }
 
 // Creates a new Edit tool instance with the given topology manager and scanner registry. Returns a pointer to the initialized Edit struct.
@@ -189,6 +193,44 @@ func (e *Edit) withFileLocks(paths []string, fn func(waited bool) (string, error
 // text an earlier edit in the same batch produced -- the same semantics a shell heredoc doing
 // several replacements has, which is what this replaces.
 func (e *Edit) applyBatch(ops []editOp, waited bool) (string, error) {
+	// Phases 1 and 2 are one critical section ACROSS PROCESSES. Each `arac edit` call is its
+	// own process, so without this every concurrent call read the same original and the last
+	// atomic rename won -- while every one of them reported success. See helper.WithPathLock.
+	var order []string
+	locked := make([]string, 0, len(ops))
+	for _, op := range ops {
+		locked = append(locked, op.FilePath)
+	}
+	if err := helper.WithPathLock(locked, func() error {
+		var err error
+		order, err = e.resolveAndCommit(ops, waited)
+		return err
+	}); err != nil {
+		return "", err
+	}
+
+	// Phase 3: one topology sync per FILE rather than per edit. Ten edits to one file used to
+	// mean ten re-scans of it; now it means one, and one coherent set of warnings. Outside the
+	// lock: the bytes are already committed, and a scan is long enough that holding it would
+	// serialize unrelated edits.
+	var warnings []domain.TopologyWarning
+	if e.mgr != nil {
+		for _, abs := range order {
+			w, err := e.mgr.UpdateFile(abs, e.reg)
+			if err != nil {
+				return "", fmt.Errorf("update topology for %s: %w", abs, err)
+			}
+			warnings = append(warnings, w...)
+		}
+	}
+	if e.OmitWarnings {
+		warnings = nil
+	}
+	return editSummary(len(ops), order, warnings), nil
+}
+
+// resolveAndCommit is phases 1 and 2, run under the cross-process lock its caller holds.
+func (e *Edit) resolveAndCommit(ops []editOp, waited bool) ([]string, error) {
 	// Phase 1: resolve every edit in memory. Nothing touches disk.
 	order := []string{}
 	pending := map[string]string{}
@@ -201,14 +243,14 @@ func (e *Edit) applyBatch(ops []editOp, waited bool) (string, error) {
 		if !loaded {
 			data, err := os.ReadFile(abs)
 			if err != nil {
-				return "", fmt.Errorf("%s: read file: %w", editLabel(ops, op), err)
+				return nil, fmt.Errorf("%s: read file: %w", editLabel(ops, op), err)
 			}
 			content = string(data)
 			order = append(order, abs)
 		}
 		next, err := applyOne(content, op, waited)
 		if err != nil {
-			return "", fmt.Errorf("%s: %w%s", editLabel(ops, op), err, nothingWritten(ops))
+			return nil, fmt.Errorf("%s: %w%s", editLabel(ops, op), err, nothingWritten(ops))
 		}
 		pending[abs] = next
 	}
@@ -220,23 +262,10 @@ func (e *Edit) applyBatch(ops []editOp, waited bool) (string, error) {
 		// half-written source file, and phase 1 exists precisely so this phase cannot leave
 		// the repository in a state the model does not know about. See helper.AtomicWriteFile.
 		if err := helper.AtomicWriteFile(abs, []byte(pending[abs]), 0644); err != nil {
-			return "", fmt.Errorf("write file %s: %w", abs, err)
+			return nil, fmt.Errorf("write file %s: %w", abs, err)
 		}
 	}
-
-	// Phase 3: one topology sync per FILE rather than per edit. Ten edits to one file used to
-	// mean ten re-scans of it; now it means one, and one coherent set of warnings.
-	var warnings []domain.TopologyWarning
-	if e.mgr != nil {
-		for _, abs := range order {
-			w, err := e.mgr.UpdateFile(abs, e.reg)
-			if err != nil {
-				return "", fmt.Errorf("update topology for %s: %w", abs, err)
-			}
-			warnings = append(warnings, w...)
-		}
-	}
-	return editSummary(len(ops), order, warnings), nil
+	return order, nil
 }
 
 // apply is the single-edit entry point this tool had before batching. Kept because a

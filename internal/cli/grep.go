@@ -11,7 +11,6 @@ import (
 	"github.com/Rhuan-Marques/aracne/internal/lazydesc"
 	"github.com/Rhuan-Marques/aracne/internal/shellcmd"
 	"github.com/Rhuan-Marques/aracne/internal/topogrep"
-	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // Searches file contents with a regex pattern against the topology database, returning
@@ -61,6 +60,14 @@ func runGrep(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "arac grep: -w needs a pattern made of word characters, got %q\n", pattern)
 		return 2
 	}
+	// topogrep renders anything it does not recognise as content, uncapped -- so a typo such as
+	// `-output-mode count_only` used to print every matching line and exit 0.
+	switch topogrep.OutputMode(*mode) {
+	case topogrep.OutputContent, topogrep.OutputFiles, topogrep.OutputCount:
+	default:
+		fmt.Fprintf(stderr, "arac grep: unknown -output-mode %q (want content, files_with_matches or count)\n", *mode)
+		return 2
+	}
 	if *context > 0 {
 		*before, *after = *context, *context
 	}
@@ -79,15 +86,10 @@ func runGrep(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	// Honour the project's own scan.ignore rules, so a search does not descend into build
-	// output the scanner has been told to skip, and grep.description_kinds, which limits
-	// which kinds may match on their description. A nil kind slice means "not
-	// configured" and lets topogrep apply its defaults.
-	var ignore *domain.IgnoreMatcher
-	if topo != nil && topo.Root != "" {
-		ignore = domain.BuildIgnoreMatcher(topo.Root, cfg.Scan.Ignore)
-	}
-
+	// Pruning is the .gitignore hierarchy's, applied inside topogrep; scan.ignore is the
+	// scanner's rule about the topology and deliberately has no say over what a search can
+	// reach on disk. grep.description_kinds limits which kinds may match on their
+	// description; a nil slice means "not configured" and lets topogrep apply its defaults.
 	opt := topogrep.Options{
 		Pattern:      anchorPattern(pattern, *fixed, *word, *line),
 		Roots:        roots,
@@ -101,18 +103,17 @@ func runGrep(args []string, stdout, stderr io.Writer) int {
 		PerFileLimit: max(*maxCount, 0),
 		Before:       *before,
 		After:        *after,
-		Ignore:       ignore,
 		LineRange:    cfg.LineRangeIdentification(),
 
 		DescriptionKinds: cfg.Grep.DescriptionKinds,
 	}
+	// The span goes on the search, not on its result, so the head limit counts the resource's
+	// own matches. See scopeToSpan.
+	scopeToSpan(&opt, restrict)
 	res, err := topogrep.SearchWith(opt, topo)
 	if err != nil {
 		fmt.Fprintf(stderr, "Error: %v\n", err)
 		return 2
-	}
-	if restrict != nil {
-		restrictResultToRange(res, restrict.StartsAt, restrict.EndsAt)
 	}
 	// Same lazy fill the MCP grep tool runs: the CLI and the tool answer the same question,
 	// so they must answer it with the same descriptions.

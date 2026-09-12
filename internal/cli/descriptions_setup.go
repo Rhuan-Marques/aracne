@@ -26,8 +26,9 @@ import (
 //
 // The answers are written to .aracne/config.json, so this is a first-run flow and not a
 // per-run interrogation. A value that goes missing later is asked for again on its own: a
-// project that has chosen `openai` and lost only `api_key_env` is asked one question, not
-// four.
+// project that has chosen `cli` and lost only `cli_provider_command` is asked one question,
+// not four. (`api_key_env` is never missing: absent falls back to the provider's own
+// variable.)
 //
 // The lazy fill on the read path deliberately never reaches this. A read is not the place to
 // stop and ask which vendor to bill.
@@ -44,7 +45,6 @@ const defaultDescribeCLICommand = "claude -p"
 // the others are even asked depends on it.
 const (
 	answerProvider   = "provider"
-	answerAPIKeyEnv  = "api_key_env"
 	answerCLICommand = "cli_provider_command"
 )
 
@@ -61,14 +61,14 @@ func missingDescriptionAnswers(d *helper.DescriptionsSection) []string {
 		return []string{answerProvider}
 	}
 	var missing []string
-	switch {
-	case strings.EqualFold(provider, helper.ProviderNameCLI):
+	// An API provider with no api_key_env is answered: absent falls back to the provider's own
+	// variable (helper.APIKeyEnvFor), which is what the documentation promises and what the
+	// lazy fill already does. Counting it as unanswered refused hand-written configs that
+	// followed the docs; a key that is actually missing is reported by name further on
+	// (unresolvedProviderError).
+	if strings.EqualFold(provider, helper.ProviderNameCLI) {
 		if argv, err := helper.SplitCommand(d.CLIProviderCommand); err != nil || len(argv) == 0 {
 			missing = append(missing, answerCLICommand)
-		}
-	case helper.IsAPIProvider(provider):
-		if strings.TrimSpace(d.APIKeyEnv) == "" {
-			missing = append(missing, answerAPIKeyEnv)
 		}
 	}
 	return missing
@@ -105,11 +105,6 @@ func unansweredSetupError(d *helper.DescriptionsSection) error {
 				"\n(providers: %s, %s)\n",
 				defaultDescribeCLICommand,
 				strings.Join(helper.APIProviderNames(), ", "), helper.ProviderNameCLI)
-		case answerAPIKeyEnv:
-			provider := effectiveConfiguredProvider(d)
-			fmt.Fprintf(&b, "\nprovider %q needs the variable its key comes from:\n"+
-				"  \"descriptions\": {\"api_key_env\": %q}\n",
-				provider, helper.DefaultAPIKeyEnv(provider))
 		case answerCLICommand:
 			fmt.Fprintf(&b, "\nprovider %q needs the command to run:\n"+
 				"  \"descriptions\": {\"cli_provider_command\": %q}\n"+

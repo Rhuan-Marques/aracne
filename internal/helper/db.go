@@ -848,6 +848,11 @@ func ReadDb(path string) (*domain.Topology, error) {
 // restores go through UpdateDescriptions, which stays uncapped so a sidecar can put back
 // long descriptions written before the cap existed.
 func UpdateDescription(dbPath string, kind domain.ResourceKind, id string, description string) error {
+	// A description is one line: it is printed after "## id: " in every later CONTEXT block
+	// and grep row header. Stored raw, a newline from any writer -- a model, an MCP caller --
+	// broke that grammar and could forge a "# CONTEXT:" header of its own. Same collapse the
+	// scanner's harvest applies (domain.DescriptionForStorage).
+	description = strings.Join(strings.Fields(description), " ")
 	if err := domain.ValidateDescription(kind, description); err != nil {
 		return err
 	}
@@ -865,6 +870,23 @@ func UpdateDescription(dbPath string, kind domain.ResourceKind, id string, descr
 		n, err := result.RowsAffected()
 		if err != nil {
 			return err
+		}
+		// A function and a method are one question asked two ways. The scanners store a
+		// function with a receiver or a declaring class as `method`, which no caller can see
+		// from the id -- and every language's update_description mapped "Method" (Java's
+		// "Constructor" too) to `function`, so each such write was refused. `id` is the primary
+		// key, so the id alone names exactly one row and this cannot land on a same-named
+		// resource of another kind; the two share one description budget, so the check above
+		// holds for either. Every other kind stays enforced.
+		if n == 0 && (kind == domain.ResourceFunction || kind == domain.ResourceMethod) {
+			result, err = db.Exec("UPDATE resources SET description = ? WHERE id = ? AND kind IN (?, ?)",
+				description, id, string(domain.ResourceFunction), string(domain.ResourceMethod))
+			if err != nil {
+				return err
+			}
+			if n, err = result.RowsAffected(); err != nil {
+				return err
+			}
 		}
 		if n == 0 {
 			if kind != "" {

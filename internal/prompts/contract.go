@@ -83,11 +83,13 @@ func mcpHowItReaches() string {
 	return "## How it reaches you\n\n" +
 		"Aracne's capabilities arrive as MCP tools; each tool's own description says how to " +
 		"call it. **Prefer a symbol over a file:** reading a declaration returns its source, " +
-		"its imports, and a `# CONTEXT:` list of the neighbours it touches with their " +
-		"descriptions -- usually the answer, for a fraction of a file's tokens.\n\n" +
+		"its imports, and a `# CONTEXT:` list of the neighbours around it with their " +
+		"descriptions -- what it touches, AND what implements or uses it -- usually the " +
+		"answer, for a fraction of a file's tokens.\n\n" +
 		"`grep` is answered from the topology however you run it, and additionally searches " +
 		"node names and stored descriptions -- so a plain-English query finds code that never " +
-		"says the word.\n\n"
+		"says the word.\n" +
+		"When aracne is a viable option, prefer it over searching with grep, sed, car or find"
 }
 
 // aracneReadContract is the whole document for ModeCLI.
@@ -119,14 +121,19 @@ func aracneReadContract(cfg *helper.Config) string {
 		"This repository supports Aracne: every function, type, interface and variable is " +
 			"indexed, with a description and unique id you can use to read it.\n\n" +
 			"`arac read <id> <id> ...` returns declarations with their source, their imports " +
-			"and additional context, several in one call. Very useful for exploring and " +
-			"navigating. Prefer it over reading whole files or line ranges.\n\n" +
-			"```\narac read internal/cli.RunGuard app.Flask.register_blueprint\n```\n\n" +
+			"and the context around them -- what they touch, AND what implements, subclasses " +
+			"or uses them -- several in one call. Very useful for exploring and " +
+			"navigating. When possible, Prefer " +
+			"it over reading with commands like grep, sed, cat ot find.\n\n" +
+			"**The bare name is enough** any unique trailing part of an id " +
+			"resolves, so you can use it even if you only know the name of the function, struct or other resource you're looking for\n\n" +
+			"Example: If you need information about function NotifyPlayers, you should use" +
+			"`arac read Notify Players`" +
 			"Edits keep the graph current automatically; act on any topology warning that " +
 			"comes back.\n\n" +
 			"Let descriptions guide you: only read files and resources you need to understand " +
 			"fully -- most times the descriptions are enough.\n\n" +
-			"")
+			"When aracne is a viable option, prefer it over searching with grep, sed, car or find")
 	// Only when someone has opted into blocked_tools. A denial the contract has not explained
 	// costs a turn to work out. Written BEFORE the closing line, because that line is what
 	// init and disable find to locate the end of this block.
@@ -152,7 +159,8 @@ func interceptHowItReaches() string {
 		"Read files the way you normally would -- `cat`, `head -40`, `sed -n '80,120p'`. When " +
 		"the target is indexed, the answer comes back enriched: the lines you asked for, the " +
 		"signature of the declaration they sit inside, and a `# CONTEXT:` list of what they " +
-		"touch. `grep` is answered the same way, and additionally searches node names and " +
+		"touch and of what implements or uses them. `grep` is answered the same way, and " +
+		"additionally searches node names and " +
 		"stored descriptions -- so a plain-English query finds code that never says the word.\n\n" +
 		"Flags aracne does not model, and files it does not index, run as the plain command.\n\n"
 }
@@ -172,8 +180,10 @@ func interceptResourceIDs() string {
 		"head -20 app.Flask             # the first 20 lines of the class body\n" +
 		"grep 'retry' internal/http.Client   # search inside one resource\n" +
 		"```\n\n" +
-		"A unique trailing part is enough (`Flask.register_blueprint`), and a miss returns the " +
-		"nearest candidates rather than an error. **Reach for an ID before a file.** An ID " +
+		"**The bare name is usually enough** (`RunGuard`, `register_blueprint`): any unique " +
+		"trailing part resolves, and an ambiguous or unknown one comes back with the " +
+		"matching candidates rather than an error -- so guess an ID rather than searching " +
+		"for one first. **Reach for an ID before a file.** An ID " +
 		"cannot land mid-declaration and does not go stale when the file shifts, and it comes " +
 		"back with the neighbours' descriptions attached. Search results and `# CONTEXT:` " +
 		"entries print the ID of every declaration they name -- feed those straight back.\n\n"

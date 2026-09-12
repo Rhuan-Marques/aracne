@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 	java "github.com/Rhuan-Marques/aracne/internal/topology/java"
@@ -157,11 +158,35 @@ func (s *JavaScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.T
 		warnings = diffMethodWarnings(oldMethods, pr)
 	}
 
-	applyParsedFile(gt, pr)
+	// Every other file declaring one of the same IDs is re-parsed along with this one,
+	// and all are applied in path order, as Scan applies them; see coOwners.
+	results := []*ParseResult{pr}
+	var coOldMethods []map[string]java.JavaMethod
+	for _, f := range coOwners(gt, absPath, oldMod, pr) {
+		coMod := gt.Modules[f]
+		coMethods, coClasses, coIfaces := snapshotModule(gt, coMod)
+		removeModule(gt, coMod)
+		coPR, coErr := ParseFile(f, "")
+		if coErr != nil {
+			gt.Errors[f] = coErr.Error()
+			continue
+		}
+		preserveDescriptions(coPR, coClasses, coIfaces, coMod)
+		coOldMethods = append(coOldMethods, coMethods)
+		results = append(results, coPR)
+		delete(gt.Errors, f)
+	}
+	sort.Slice(results, func(i, j int) bool { return results[i].FileID < results[j].FileID })
+	for _, r := range results {
+		applyParsedFile(gt, r)
+	}
 	ctx.indexDeclarations(gt)
-	resolveTopology(gt, []*ParseResult{pr}, ctx)
+	resolveTopology(gt, results, ctx)
 	if had {
 		preserveMethodDescriptions(gt, oldMethods)
+	}
+	for _, m := range coOldMethods {
+		preserveMethodDescriptions(gt, m)
 	}
 	delete(gt.Errors, absPath)
 
@@ -270,6 +295,67 @@ func removeModule(gt *java.JavaTopology, mod java.JavaModule) {
 	delete(gt.Modules, mod.ID)
 }
 
+// coOwners returns, sorted, the other files that declare one of the type or method
+// IDs path declares -- before its edit or after it -- closed transitively.
+//
+// One FQN can be declared by several files (src/main/java and src/main/java11 of a
+// multi-release jar, two modules of one build). The graph keeps a single copy of the
+// ID: the last one in path order, which is the one Scan applies last. Re-parsing only
+// the edited file let IT win instead, so an edit to the src/main/java copy replaced
+// the copy a full scan keeps. Re-parsing the co-owners with it restores Scan's order.
+//
+// A co-owner whose file no longer exists is left out: it is about to be removed, and
+// the survivors must take its IDs over first, or the removal takes them along.
+func coOwners(gt *java.JavaTopology, path string, oldMod java.JavaModule, pr *ParseResult) []string {
+	owners := map[string][]string{} // ID -> the other modules declaring it
+	for id, mod := range gt.Modules {
+		if id == path {
+			continue
+		}
+		for _, x := range ownedIDs(mod) {
+			owners[x] = append(owners[x], id)
+		}
+	}
+	pending := ownedIDs(oldMod)
+	for _, c := range pr.Classes {
+		pending = append(pending, c.ID)
+	}
+	for _, t := range pr.Interfaces {
+		pending = append(pending, t.ID)
+	}
+	for _, mp := range pr.Methods {
+		pending = append(pending, mp.Method.ID)
+	}
+	group := map[string]bool{}
+	for len(pending) > 0 {
+		x := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		for _, f := range owners[x] {
+			if group[f] {
+				continue
+			}
+			if _, err := os.Stat(f); err != nil {
+				continue
+			}
+			group[f] = true
+			pending = append(pending, ownedIDs(gt.Modules[f])...)
+		}
+	}
+	out := make([]string, 0, len(group))
+	for f := range group {
+		out = append(out, f)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// ownedIDs lists every type and method ID a module declares.
+func ownedIDs(mod java.JavaModule) []string {
+	ids := append([]string(nil), mod.Functions()...)
+	ids = append(ids, mod.Structs()...)
+	return append(ids, mod.Interfaces()...)
+}
+
 // preserveDescriptions carries forward stored class/interface and module
 // descriptions when the re-parsed resource has none. Methods are handled
 // separately (after resolution recreates them).
@@ -308,7 +394,7 @@ func preserveMethodDescriptions(gt *java.JavaTopology, oldMethods map[string]jav
 // their signature, a signature change appears as a removed ID whose owner+name
 // still exists.
 func diffMethodWarnings(oldMethods map[string]java.JavaMethod, pr *ParseResult) []domain.TopologyWarning {
-	newByID := map[string]bool{}
+	newByID := map[string]java.JavaMethod{}
 	// owner+"."+name -> the method's NEW id. A Java method id encodes its
 	// signature, so a signature change shows up as a removed id whose owner and
 	// name still exist under a different id. The warning has to be attributed to
@@ -316,7 +402,7 @@ func diffMethodWarnings(oldMethods map[string]java.JavaMethod, pr *ParseResult) 
 	// drop every Java sig_change warning before it reached the database.
 	newIDByOwnerName := map[string]string{}
 	for _, mp := range pr.Methods {
-		newByID[mp.Method.ID] = true
+		newByID[mp.Method.ID] = mp.Method
 		if mp.Method.MethodFrom != nil {
 			newIDByOwnerName[*mp.Method.MethodFrom+"."+mp.Method.Name] = mp.Method.ID
 		}
@@ -324,7 +410,18 @@ func diffMethodWarnings(oldMethods map[string]java.JavaMethod, pr *ParseResult) 
 
 	var warnings []domain.TopologyWarning
 	for id, old := range oldMethods {
-		if newByID[id] {
+		if nm, ok := newByID[id]; ok {
+			// The id encodes only the parameter list, so a surviving id can still have
+			// changed what it RETURNS -- invisible to every call site, and a compile error at
+			// each one that uses the result.
+			if !sameJavaTypes(old.Output, nm.Output) {
+				warnings = append(warnings, domain.TopologyWarning{
+					ID:       id + "@sig_change@",
+					SourceID: id,
+					Kind:     domain.WarnSignatureChanged,
+					Message:  fmt.Sprintf("method %s changed its return type, verify callers", old.Name),
+				})
+			}
 			continue
 		}
 		owner := ""
@@ -344,4 +441,17 @@ func diffMethodWarnings(oldMethods map[string]java.JavaMethod, pr *ParseResult) 
 		// its surviving callers; see the note in jsscanner.diffFuncWarnings.
 	}
 	return warnings
+}
+
+// sameJavaTypes compares two declared type lists by their written text.
+func sameJavaTypes(a, b []java.VariableDefinition) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Typing != b[i].Typing {
+			return false
+		}
+	}
+	return true
 }

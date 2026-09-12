@@ -80,6 +80,10 @@ type GolangInterface struct {
 	Name        string
 	Description string
 	Methods     []FunctionDefinition
+	// Embeds are the interfaces this one embeds, as written (`Shape`, `fmt.Stringer`). They
+	// are requirements, not methods: `interface { Shape }` demands Shape's methods, and
+	// recording them as a method named "Shape" meant nothing could ever satisfy it.
+	Embeds      []string
 	Loc         domain.Location
 	Connections map[ConnectionKind][]string
 }

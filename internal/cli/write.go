@@ -21,10 +21,17 @@ func RunWrite() {
 	}
 
 	manager, reg := InitRegistry(ProjectDBPath(DefaultDBRelative))
-	result, err := tools.NewWrite(manager, reg).Run(data)
+	write := tools.NewWrite(manager, reg)
+	// Reported through the guard's ledger, once -- see RunEdit.
+	write.OmitWarnings = true
+	result, err := write.Run(data)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Println(result)
+	if msg := formatDriftWarnings(unreportedWarnings(manager.DbPath())); msg != "" {
+		fmt.Println()
+		fmt.Println(msg)
+	}
 }

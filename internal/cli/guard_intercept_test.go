@@ -769,3 +769,44 @@ func TestParseCmdFlagsReadsPiped(t *testing.T) {
 		}
 	}
 }
+
+// A search reading REDIRECTED stdin is the pipe case spelled differently, and is left alone. The
+// shell strips `< f` before the command sees its argv, so `rg retry < README.md` reached shellcmd
+// as a path-less `rg retry` -- the working directory, for rg -- and came back as a search of the
+// whole tree: matches from five files where the real command printed one README line.
+func TestInputRedirectedSearchesAreNotRewritten(t *testing.T) {
+	root, dbPath := scannedProject(t)
+	app := filepath.Join(root, "app.go")
+
+	for _, cmd := range []string{
+		"rg Serve < " + app,
+		"rg Serve <" + app,
+		"rg -n Serve < " + app,
+		"ag Serve < " + app,
+		"grep -rn Serve < " + app,
+		"grep -rn Serve " + root + " < " + app,
+		"rg Serve <(cat " + app + ")",
+		// The redirect sits in the segment AFTER the substitution's body; see
+		// commandRedirectsInput.
+		"grep -rn Serve $(echo " + root + ") < " + app,
+		"cd " + root + " && rg Serve < " + app,
+	} {
+		if got := rewriteOf(t, dbPath, cmd); got != "" {
+			t.Errorf("%q was rewritten to %q -- it reads a file on stdin, so it must run as typed", cmd, got)
+		}
+	}
+
+	// Nothing else changes. A path-less search with no redirect walks the tree from the Bash
+	// tool's /dev/null stdin, and `arac cmd` re-checks the stdin it actually gets; a stderr
+	// redirect is not an input; a `<` inside a quoted pattern is not an operator at all.
+	for _, cmd := range []string{
+		"rg Serve",
+		"grep -rn Serve",
+		"grep -rn Serve " + app + " 2>/dev/null",
+		"grep -rn '<Serve' " + app,
+	} {
+		if got := rewriteOf(t, dbPath, cmd); got == "" {
+			t.Errorf("%q must still be rewritten", cmd)
+		}
+	}
+}

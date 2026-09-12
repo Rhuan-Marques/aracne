@@ -113,6 +113,8 @@ func (m *JavaManager) ReadFunction(id string, opts ...topology.TopologyOption) (
 		}
 	}
 
+	m.filterFunctionContext(gt, ctx, opt.ContextFilter(), fn.ID)
+
 	return ctx, nil
 }
 
@@ -197,6 +199,8 @@ func (m *JavaManager) ReadStruct(id string, opts ...topology.TopologyOption) (*J
 		}
 	}
 
+	m.filterStructContext(gt, ctx, opt.ContextFilter(), s.ID)
+
 	return ctx, nil
 }
 
@@ -205,10 +209,11 @@ func (m *JavaManager) ReadStruct(id string, opts ...topology.TopologyOption) (*J
 // Default/static method summaries and the annotation flag are carried on the
 // interface cut.
 func (m *JavaManager) ReadInterface(id string, opts ...topology.TopologyOption) (*JavaInterfaceContext, error) {
-	// Options are accepted for API parity with the other Read* methods; an
-	// interface read always surfaces its supertypes and implementors.
+	// An interface read always surfaces its supertypes and implementors; the options only
+	// decide whether its incoming references ("# USED BY:") are collected.
+	opt := &topology.TopologyOptions{}
 	for _, o := range opts {
-		o(&topology.TopologyOptions{})
+		o(opt)
 	}
 
 	topo, err := m.generic.ReadAll()
@@ -239,6 +244,8 @@ func (m *JavaManager) ReadInterface(id string, opts ...topology.TopologyOption) 
 			ctx.ImplementedBy = append(ctx.ImplementedBy, simplifyStruct(s))
 		}
 	}
+
+	m.filterInterfaceContext(gt, ctx, opt.ContextFilter(), t.ID)
 
 	return ctx, nil
 }

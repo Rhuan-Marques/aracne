@@ -173,7 +173,11 @@ type DescriptionsSection struct {
 	Kinds []domain.ResourceKind `json:"kinds"`
 	// StyleExemplars is how many already-written neighbor descriptions to feed
 	// the executor as house-style anchors. 0 disables (saves tokens).
-	StyleExemplars int `json:"style_exemplars,omitempty"`
+	//
+	// Absent means DefaultDescriptionStyleExemplars (LoadConfigRead seeds it before decoding),
+	// so it is written even when 0: with omitempty an explicit 0 vanished on save and came
+	// back as the default.
+	StyleExemplars int `json:"style_exemplars"`
 	// IncludeNotVisible, when false (default), skips undocumented targets the
 	// read context filter would not render as a normal line (small functions /
 	// external vars configured full or hidden).
@@ -481,6 +485,27 @@ type Config struct {
 	// CLAUDE.md, AGENTS.md and aracne's own harness, which all render one document.
 	// EffectiveContractVerbosity() is the only reader.
 	ContractVerbosity string `json:"contract_verbosity"`
+	// PreloadMCPTools asks Claude Code to put every tool schema in the model's context up
+	// front instead of deferring it behind its tool-search, by writing
+	// `env.ENABLE_TOOL_SEARCH: "false"` into .claude/settings.json.
+	//
+	// WHY THIS IS WORTH A KEY. A deferred tool reaches the model as a bare NAME with no
+	// schema and no description, and calling it costs a lookup round-trip first. Against a
+	// `grep` that is right there, fully described, that asymmetry decides which one gets
+	// used -- so in ModeMCP the tools aracne exists to serve are exactly the ones the model
+	// is most likely to talk itself out of reaching for. Preloading spends context on every
+	// request to remove the friction.
+	//
+	// It is Claude-Code-only (OpenCode defers nothing) and ModeMCP-only (no other mode
+	// serves the main agent an MCP tool at all), which is why `arac init` asks for it only
+	// when both hold, and why setup withdraws the key when either stops holding.
+	//
+	// THREE STATES, and nil is not "false". nil means aracne does not manage the variable,
+	// so a project that predates this key -- or one whose operator set ENABLE_TOOL_SEARCH
+	// themselves -- is left exactly as it is. Only a value aracne itself wrote is ever
+	// removed again.
+	PreloadMCPTools *bool `json:"preload_mcp_tools"`
+
 	// Paths marks directories/files (relative to the topology root) as hidden or
 	// visible. Hidden paths are skipped by the indexing and scan stages in every
 	// mode (default/all/hard). More specific (more internal) rules win, so a
@@ -567,6 +592,13 @@ const (
 	// ContextFilterFull renders neighbours as fenced source cuts and adds "# USED BY:".
 	ContextFilterFull = "full"
 )
+
+// ContextOff reports whether read.context_filter is "off": a read returns the code asked for
+// and no "# CONTEXT:" section at all. EffectiveContextFilter cannot say this on its own -- it
+// resolves to per-neighbour visibilities, and some context lines take none.
+func (c *Config) ContextOff() bool {
+	return strings.EqualFold(strings.TrimSpace(c.Read.ContextFilter), ContextFilterOff)
+}
 
 // EffectiveIncludeIncoming reports whether a read appends the "# USED BY:" section.
 func (c *Config) EffectiveIncludeIncoming() bool {
@@ -1322,6 +1354,17 @@ func (c *Config) EffectiveContractVerbosity() string {
 // MCPEnabled reports whether the MCP server is wired and its tools served.
 func (c *Config) MCPEnabled() bool { return c.EffectiveMode() == ModeMCP }
 
+// PreloadMCPToolsEnabled reports whether setup should write the tool-search opt-out into
+// .claude/settings.json. See Config.PreloadMCPTools.
+//
+// The mode is folded in here rather than left to each caller: outside ModeMCP the main agent is
+// served no MCP tool at all, so the variable would buy nothing and still pay for every other
+// deferred tool's schema on every request. A config that says true keeps saying it while the
+// project is elsewhere -- switching back to mcp restores the setting without asking again.
+func (c *Config) PreloadMCPToolsEnabled() bool {
+	return c.PreloadMCPTools != nil && *c.PreloadMCPTools && c.MCPEnabled()
+}
+
 // InterceptReads reports whether a shell read (`cat`, `head`, `tail`, `sed -n`) is answered
 // from the topology instead of by the real command.
 //
@@ -1568,10 +1611,17 @@ func LoadConfigRead(path string) (cfg *Config, ok bool, readErr error) {
 	if err != nil {
 		return DefaultConfig(), false, err
 	}
+	// A UTF-8 byte order mark is how Notepad and several Windows editors save UTF-8. It is an
+	// encoding artifact, not content (RFC 8259 lets a parser ignore it), but encoding/json
+	// rejects it -- so a valid config saved that way was judged unreadable and EnsureConfig
+	// replaced the project's mode and ignore rules with defaults.
+	data = bytes.TrimPrefix(data, []byte("\xef\xbb\xbf"))
 	if !validConfig(data) {
 		return DefaultConfig(), false, nil
 	}
-	var loaded Config
+	// Seeded, not zero: Unmarshal keeps what the file does not mention, which is how an absent
+	// style_exemplars means the documented 1 rather than a silent 0.
+	loaded := Config{Descriptions: DescriptionsSection{StyleExemplars: DefaultDescriptionStyleExemplars}}
 	if err := json.Unmarshal(data, &loaded); err != nil {
 		return DefaultConfig(), false, nil
 	}

@@ -80,9 +80,18 @@ func WriteManifest(m FileManifest, path string) error {
 // the mtime is the right thing to trust; the parse error is recorded in topo.Errors, which is
 // where a reader should learn about it.
 //
-// A path that no longer exists must not be passed here: the stamp would resurrect a manifest
-// entry the deletion sweep below exists to remove.
-func SyncManifest(topo *domain.Topology, dbPath string, attempted []string) {
+// `stamps` carries each attempted file's mtime AS IT WAS BEFORE THE SCAN READ IT (see
+// SnapshotManifest), and those are the values recorded -- never the mtime on disk now. The
+// scan used to stat every file at the END and stamp that: a file edited while the scan ran
+// was recorded as current although the parse had read the older bytes, so the edit was never
+// indexed and `check-updates` vouched for it. Recording the pre-read mtime leaves such a file
+// looking modified, and the next scan picks it up.
+//
+// Only files in `stamps` are stamped. A file node that is merely still in the graph keeps the
+// entry it already has: the incremental path used to restamp EVERY file in the topology here,
+// declaring files current that this scan never opened. A path that no longer exists is skipped,
+// so a stamp can never resurrect an entry the deletion sweep below exists to remove.
+func SyncManifest(topo *domain.Topology, dbPath string, stamps FileManifest) {
 	manifestPath := ManifestPath(dbPath)
 	manifest := ReadManifest(manifestPath)
 
@@ -96,21 +105,10 @@ func SyncManifest(topo *domain.Topology, dbPath string, attempted []string) {
 			currentFiles[res.ID] = true
 		}
 	}
-	for _, path := range attempted {
-		abs, err := filepath.Abs(path)
-		if err != nil {
-			abs = path
-		}
-		if info, statErr := os.Stat(abs); statErr == nil && info.Mode().IsRegular() {
-			currentFiles[abs] = true
-		}
-	}
-
-	for path := range currentFiles {
-		if fi, err := os.Stat(path); err == nil {
-			manifest[path] = fi.ModTime().UTC().Format(time.RFC3339Nano)
-		} else {
-			manifest[path] = time.Now().UTC().Format(time.RFC3339Nano)
+	for path, stamp := range stamps {
+		if info, statErr := os.Stat(path); statErr == nil && info.Mode().IsRegular() {
+			currentFiles[path] = true
+			manifest[path] = stamp
 		}
 	}
 
@@ -125,30 +123,46 @@ func SyncManifest(topo *domain.Topology, dbPath string, attempted []string) {
 	}
 }
 
-// SyncManifestFiles updates the manifest entries for only the given file paths
-// (the partial-path equivalent of SyncManifest, which enumerates every file in a
-// full topology). Each path is stamped with its on-disk mtime so the next
-// IncrementalScan diff sees it as unchanged. Paths that no longer exist on disk
-// should not reach here (the partial path only handles added/modified files), so
-// no deletion sweep is performed.
-func SyncManifestFiles(dbPath string, paths []string) error {
-	if len(paths) == 0 {
-		return nil
-	}
-	manifestPath := ManifestPath(dbPath)
-	manifest := ReadManifest(manifestPath)
+// SnapshotManifest records each path's on-disk mtime as it is NOW, keyed by absolute path.
+//
+// Take it BEFORE the scan reads the files, and hand the result to SyncManifest or
+// StampManifest once the scan is done. A file edited in between then keeps the older stamp,
+// its newer mtime reads as modified, and the next incremental scan re-parses it. Paths that are
+// not regular files are left out, so a file deleted before the scan is never stamped.
+func SnapshotManifest(paths []string) FileManifest {
+	snap := make(FileManifest, len(paths))
 	for _, path := range paths {
 		abs, err := filepath.Abs(path)
 		if err != nil {
 			abs = path
 		}
-		if fi, statErr := os.Stat(abs); statErr == nil {
-			manifest[abs] = fi.ModTime().UTC().Format(time.RFC3339Nano)
-		} else {
-			manifest[abs] = time.Now().UTC().Format(time.RFC3339Nano)
+		if fi, statErr := os.Stat(abs); statErr == nil && fi.Mode().IsRegular() {
+			snap[abs] = fi.ModTime().UTC().Format(time.RFC3339Nano)
 		}
 	}
+	return snap
+}
+
+// StampManifest writes the given entries into the manifest and touches nothing else: the
+// scoped counterpart of SyncManifest for a path that parsed only a few files. See
+// SnapshotManifest for why the values must be captured before the parse.
+func StampManifest(dbPath string, stamps FileManifest) error {
+	if len(stamps) == 0 {
+		return nil
+	}
+	manifestPath := ManifestPath(dbPath)
+	manifest := ReadManifest(manifestPath)
+	for path, stamp := range stamps {
+		manifest[path] = stamp
+	}
 	return WriteManifest(manifest, manifestPath)
+}
+
+// SyncManifestFiles stamps only the given file paths with their mtime as it is now, for a
+// caller that has no pre-read snapshot. A path that no longer exists is skipped. Callers that
+// parse the files themselves should snapshot first and use StampManifest instead.
+func SyncManifestFiles(dbPath string, paths []string) error {
+	return StampManifest(dbPath, SnapshotManifest(paths))
 }
 
 // ForgetManifestFiles drops the manifest entries for the given paths: the scoped counterpart
@@ -184,21 +198,41 @@ func ForgetManifestFiles(dbPath string, paths []string) error {
 
 // Recursively collects source files of a given language from a directory, skipping ignored directories.
 func CollectSourceFiles(root, language string) ([]string, error) {
-	var files []string
+	files, _, err := collectSourceFiles(root, language)
+	return files, err
+}
+
+// collectSourceFiles is CollectSourceFiles that also reports the directories it could not read.
+//
+// AN UNREADABLE DIRECTORY IS SKIPPED, NOT FATAL. The walk callback used to return the error,
+// which aborted the whole walk -- and this walk feeds DiffScanFiles for every language, so one
+// directory owned by another user (a Docker volume, a `pgdata/`) stopped every incremental scan,
+// `check-updates` and the watcher, while the guard's pre-scan swallowed the error and indexed
+// nothing. The scanners' own walks already skip what they cannot read; this one now agrees with
+// them. The skipped directories are returned so DiffScanFiles does not report the files it could
+// not see as deleted. Only the root itself is still an error.
+func collectSourceFiles(root, language string) (files, unreadable []string, err error) {
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	info, err := os.Stat(absRoot)
 	if err != nil {
-		return nil, fmt.Errorf("access root %s: %w", absRoot, err)
+		return nil, nil, fmt.Errorf("access root %s: %w", absRoot, err)
 	}
 	if !info.IsDir() {
-		return nil, fmt.Errorf("root is not a directory: %s", absRoot)
+		return nil, nil, fmt.Errorf("root is not a directory: %s", absRoot)
 	}
 	err = filepath.WalkDir(absRoot, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
-			return err
+			if path == absRoot {
+				return err
+			}
+			if d != nil && d.IsDir() {
+				unreadable = append(unreadable, path)
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		if d.IsDir() {
 			// The root itself is never pruned by its own basename: WalkDir does
@@ -221,9 +255,19 @@ func CollectSourceFiles(root, language string) ([]string, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return files, nil
+	return files, unreadable, nil
+}
+
+// underAnyDir reports whether path lies inside one of dirs.
+func underAnyDir(path string, dirs []string) bool {
+	for _, dir := range dirs {
+		if rel, err := filepath.Rel(dir, path); err == nil && domain.RelInside(rel) {
+			return true
+		}
+	}
+	return false
 }
 
 // Checks if a file path is a valid source file for a given language, excluding
@@ -234,12 +278,30 @@ func CollectSourceFiles(root, language string) ([]string, error) {
 // (~/.claude/scratch/app, /home/runner/.cache/x, /srv/build/app) must scan
 // normally. An empty root falls back to examining the whole path.
 func IsSourceFile(root, path, language string) bool {
-	if path == "" || isIgnoredSourcePath(root, path) {
-		return false
-	}
 	// Paths marked hidden by config are excluded from both the indexing stage
 	// (this gate feeds manifest diffing / file discovery) and the scan stage.
-	if domain.PathHidden(path) {
+	return !domain.PathHidden(path) && isSourcePath(root, path, language)
+}
+
+// ManifestHoldsLanguage reports whether manifest still records a file of language, by the same
+// test DiffScanFiles uses to pick that language's entries. An incremental scan diffs the
+// languages it detects on disk, and a language whose last file was deleted is no longer
+// detected -- this is how the scan finds the languages whose deletions are still pending.
+func ManifestHoldsLanguage(root string, manifest FileManifest, language string) bool {
+	for path := range manifest {
+		if IsSourceFile(root, path, language) ||
+			(domain.PathHidden(path) && isSourcePath(root, path, language)) {
+			return true
+		}
+	}
+	return false
+}
+
+// isSourcePath is IsSourceFile without the config's hidden/ignore rules: whether path is a
+// source file of language by its name and fixed directory rules alone. DiffScanFiles uses it
+// to tell a file the config now hides from one that was never this language's.
+func isSourcePath(root, path, language string) bool {
+	if path == "" || isIgnoredSourcePath(root, path) {
 		return false
 	}
 	name := filepath.Base(path)
@@ -379,8 +441,18 @@ func DiffScanFiles(root, language, manifestPath string) (added, modified, delete
 	manifest := ReadManifest(manifestPath)
 
 	manifestTimes := make(map[string]time.Time)
+	// Entries of this language that the config now hides or ignores. They are reported deleted
+	// so the scan removes them: dropping them here like any other non-source entry left an
+	// indexed file in the graph for good once a `scan.ignore` or hidden `paths` rule covered it
+	// -- still readable and searchable, although hidden paths are skipped in every mode -- and
+	// only `--hard` took it out. They stay out of manifestTimes, so the mass-deletion guard
+	// below, which exists for a walk that went wrong, does not refuse what the config asked for.
+	var nowHidden []string
 	for path, ts := range manifest {
 		if !IsSourceFile(root, path, language) {
+			if domain.PathHidden(path) && isSourcePath(root, path, language) {
+				nowHidden = append(nowHidden, normalizeManifestPath(root, path))
+			}
 			continue
 		}
 		normalizedPath := normalizeManifestPath(root, path)
@@ -390,7 +462,7 @@ func DiffScanFiles(root, language, manifestPath string) (added, modified, delete
 		}
 	}
 
-	currentFiles, err := CollectSourceFiles(root, language)
+	currentFiles, unreadable, err := collectSourceFiles(root, language)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -425,19 +497,37 @@ func DiffScanFiles(root, language, manifestPath string) (added, modified, delete
 			added = append(added, f)
 		} else {
 			fi, statErr := os.Stat(f)
-			if statErr == nil && fi.ModTime().UTC().After(t) {
+			if statErr == nil && MtimeChanged(fi.ModTime(), t) {
 				modified = append(modified, f)
 			}
 		}
 	}
 
 	for path := range manifestTimes {
-		if !currentSet[path] {
+		// A file the walk could not see because its directory is unreadable is unverified,
+		// not gone: reporting it deleted would strip it from the graph over a permission bit.
+		if !currentSet[path] && !underAnyDir(path, unreadable) {
 			deleted = append(deleted, path)
 		}
 	}
+	deleted = append(deleted, nowHidden...)
 
 	return added, modified, deleted, nil
+}
+
+// MtimeChanged reports whether a file whose on-disk mtime is onDisk has changed since the
+// manifest recorded it at recorded. It is the one staleness rule: DiffScanFiles (what a scan
+// re-parses) and topology.StaleFiles (what a read refreshes) both use it, so they cannot
+// disagree.
+//
+// ANY DIFFERENCE COUNTS, NOT ONLY A NEWER TIME. The rule used to be "on disk after recorded",
+// which assumes a file's mtime only ever moves forward. It does not: `mv` or `cp -p` of an
+// older copy, `rsync -a`, `tar`/`unzip`, a backup restore and `git stash pop` of old content
+// all put different bytes on disk under an OLDER mtime, and such a file was never re-indexed --
+// `check-updates` called it up to date while `--hard` found the new declarations. The stamp is
+// the pre-read snapshot (SnapshotManifest), so an unchanged file still compares equal.
+func MtimeChanged(onDisk, recorded time.Time) bool {
+	return !onDisk.Equal(recorded)
 }
 
 // anyPathExists reports the first manifest path that is still a file on disk, in sorted order
@@ -513,12 +603,89 @@ func windowsPathToWSL(path string) string {
 //
 // The file node itself is never subject to the test: a file resource carries an empty
 // Location.Path because its identity IS its path, and it really is gone.
+//
+// WHAT GOES WITH IT, so the graph matches a cold scan of the tree without the file:
+//
+//   - A parse error recorded against the file. Nothing re-parses a deleted file, so the error
+//     used to be reported by every scan until `scan --all`. It goes even when the file never
+//     produced a node, which is exactly the file that failed to parse.
+//   - A `__call_sites` record naming a removed callee. It is keyed by the callee's id inside
+//     the edge's value, so the id-equality strip below never matched it, and a cold scan, which
+//     cannot resolve the call any more, records nothing.
+//   - A package left with no file (see emptiedPackages), and a dependency nothing imports any
+//     more. A cold scan mints both only from files that exist.
 func RemoveFileResources(topo *domain.Topology, fileID string) []domain.TopologyWarning {
-	fileRes, ok := topo.Resources[fileID]
-	if !ok {
+	delete(topo.Errors, fileID)
+	if _, ok := topo.Resources[fileID]; !ok {
 		return nil
 	}
 
+	toRemove := FileRemovalSet(topo, fileID)
+	emptied := emptiedPackages(topo, fileID)
+
+	// Whole-file removal counts every edge kind as a reference, and skips no
+	// referrer: nothing in this update was re-parsed from source. Except a package going
+	// with the file: its has_* edges only say it held what is being removed.
+	warnings := ScanReferrers(topo, ReferrerScan{Removed: toRemove, Origin: fileID,
+		SkipSource: func(id string) bool { return emptied[id] }})
+
+	// Only dependencies the removed resources imported can have lost their last importer.
+	orphanDeps := map[string]bool{}
+	for resID := range toRemove {
+		for _, targets := range topo.Resources[resID].Connections {
+			for _, t := range targets {
+				if dep, ok := topo.Resources[t]; ok && dep.Kind == domain.ResourceDependency && !toRemove[t] {
+					orphanDeps[t] = true
+				}
+			}
+		}
+	}
+
+	for resID := range toRemove {
+		delete(topo.Resources, resID)
+	}
+	// An emptied package's own edges go with it. Edges INTO it are left as a cold scan leaves
+	// them -- an import of a package that has no files is still written in the importer -- so a
+	// package that comes back is linked again without its importers being re-parsed.
+	for resID := range emptied {
+		delete(topo.Resources, resID)
+	}
+
+	for id, res := range topo.Resources {
+		for connType, targets := range res.Connections {
+			var kept []string
+			for _, t := range targets {
+				if toRemove[t] {
+					continue
+				}
+				if callSiteNamesAny(connType, t, toRemove) {
+					continue
+				}
+				kept = append(kept, t)
+				delete(orphanDeps, t)
+			}
+			if len(kept) > 0 {
+				res.Connections[connType] = kept
+			} else {
+				delete(res.Connections, connType)
+			}
+		}
+		topo.Resources[id] = res
+	}
+	for dep := range orphanDeps {
+		delete(topo.Resources, dep)
+	}
+
+	return warnings
+}
+
+// FileRemovalSet returns the ids RemoveFileResources would delete for fileID: the file node and
+// every resource it owns that still says it lives there. Empty when fileID is not indexed.
+func FileRemovalSet(topo *domain.Topology, fileID string) map[string]bool {
+	fileRes, ok := topo.Resources[fileID]
+	if !ok {
+		return map[string]bool{}
+	}
 	toRemove := map[string]bool{fileID: true}
 	for connType, targets := range fileRes.Connections {
 		if ownedConnTypes[connType] {
@@ -530,33 +697,32 @@ func RemoveFileResources(topo *domain.Topology, fileID string) []domain.Topology
 			}
 		}
 	}
+	return toRemove
+}
 
-	// Whole-file removal counts every edge kind as a reference, and skips no
-	// referrer: nothing in this update was re-parsed from source.
-	warnings := ScanReferrers(topo, ReferrerScan{Removed: toRemove, Origin: fileID})
-
-	for resID := range toRemove {
-		delete(topo.Resources, resID)
-	}
-
+// emptiedPackages returns the packages whose only remaining file is fileID, so removing the
+// file leaves them holding nothing. Only Go mints package nodes today, and only from the files
+// in them: `rm -r pkg` used to leave `example.com/m/pkg` in reads, grep and the graph view.
+func emptiedPackages(topo *domain.Topology, fileID string) map[string]bool {
+	out := map[string]bool{}
 	for id, res := range topo.Resources {
-		for connType, targets := range res.Connections {
-			var kept []string
-			for _, t := range targets {
-				if !toRemove[t] {
-					kept = append(kept, t)
-				}
-			}
-			if len(kept) > 0 {
-				res.Connections[connType] = kept
-			} else {
-				delete(res.Connections, connType)
+		if res.Kind != domain.ResourcePackage {
+			continue
+		}
+		files := res.Connections["has_file"]
+		holds, others := false, false
+		for _, f := range files {
+			if f == fileID {
+				holds = true
+			} else if _, indexed := topo.Resources[f]; indexed {
+				others = true
 			}
 		}
-		topo.Resources[id] = res
+		if holds && !others {
+			out[id] = true
+		}
 	}
-
-	return warnings
+	return out
 }
 
 // movedOutOfFile reports whether a resource the removed file used to own now lives somewhere

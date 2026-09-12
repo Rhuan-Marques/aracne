@@ -13,6 +13,7 @@ package tests_test
 // parse time, so full == incremental == hard; every scenario is expected GREEN.
 
 import (
+	"os"
 	"testing"
 
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
@@ -310,6 +311,106 @@ func TestAtScaleJava_J9_LambdaMethodRefLockIn(t *testing.T) {
 			assertHasConn(t, topo, mode, jEvAreaOf, connUsesStruct, jCircle)
 			assertHasConn(t, topo, mode, jEvMaker, connCalls, jCircleInit)
 			assertHasConn(t, topo, mode, jEvMakerRef, connCalls, jCircleInit)
+		},
+	})
+}
+
+// J10 (JV-1): an internal type sharing its simple name with java.util.List must
+// not capture the corpus's `import java.util.List` users. The setup seeds
+// shapes/List.java (the copy only); the importers are touched so the incremental
+// scan re-resolves them too, and every mode must leave them unbound.
+func TestAtScaleJava_J10_InternalListDoesNotCaptureJavaUtilList(t *testing.T) {
+	const (
+		jShapesList    = "com.aracne.shapes.List"
+		jShapesListAdd = "com.aracne.shapes.List.add(Object)"
+		jExtNames      = "com.aracne.external.ExternalUser.names()"
+		jBoxTotal      = "com.aracne.generics.Box.total(List)"
+		fShapesList    = javaSrc + "shapes/List.java"
+		fExternalUser  = javaSrc + "external/ExternalUser.java"
+		fBox           = javaSrc + "generics/Box.java"
+	)
+	runJavaScenario(t, scenario{
+		name: "J10_internal_list_vs_java_util_list",
+		setup: func(t *testing.T, root string) {
+			writeCorpusFile(t, root, fShapesList,
+				"package com.aracne.shapes;\n\npublic class List {\n    public void add(Object o) {\n    }\n}\n")
+		},
+		mutate: func(t *testing.T, root string) {
+			touchCorpusFile(t, root, fExternalUser)
+			touchCorpusFile(t, root, fBox)
+		},
+		assert: func(t *testing.T, topo *domain.Topology, mode string) {
+			assertResPresent(t, topo, mode, jShapesList)
+			for _, id := range []string{jExtNames, jBoxTotal} {
+				assertResPresent(t, topo, mode, id)
+				assertNoConn(t, topo, mode, id, connUsesStruct, jShapesList)
+				assertNoConn(t, topo, mode, id, connCalls, jShapesListAdd)
+			}
+			// The JDK import still yields its dependency edge.
+			assertHasConn(t, topo, mode, jExtNames, connUsesDep, "java.util")
+		},
+	})
+}
+
+// J11 (JV-7): a method added to Base binds an unqualified call in a class two
+// levels down. setup seeds inheritance/Leaf.java (Leaf extends Derived extends
+// Base), which has no edge into Base.java: the incremental scan reaches it
+// through Derived, whose file depends on Base.java.
+func TestAtScaleJava_J11_GrandparentMethodBindsUnqualifiedCall(t *testing.T) {
+	const (
+		jLeafGo    = "com.aracne.inheritance.Leaf.go()"
+		jBaseFresh = "com.aracne.inheritance.Base.fresh()"
+		jLeafRank  = "com.aracne.inheritance.Leaf.ranked()"
+		jDerivRank = "com.aracne.inheritance.Derived.rank()"
+		jBaseRank  = "com.aracne.inheritance.Base.rank()"
+		fLeaf      = javaSrc + "inheritance/Leaf.java"
+		fBase      = javaSrc + "inheritance/Base.java"
+	)
+	runJavaScenario(t, scenario{
+		name: "J11_grandparent_method_binds_unqualified_call",
+		setup: func(t *testing.T, root string) {
+			writeCorpusFile(t, root, fLeaf, "package com.aracne.inheritance;\n\n"+
+				"public class Leaf extends Derived {\n"+
+				"    public String go() {\n        return fresh();\n    }\n\n"+
+				"    public int ranked() {\n        return rank();\n    }\n}\n")
+		},
+		mutate: func(t *testing.T, root string) {
+			replaceInCorpusFile(t, root, fBase, [2]string{
+				"    public String label() {",
+				"    public String fresh() {\n        return name;\n    }\n\n    public String label() {",
+			})
+		},
+		assert: func(t *testing.T, topo *domain.Topology, mode string) {
+			assertHasConn(t, topo, mode, jLeafGo, connCalls, jBaseFresh)
+			// The nearest declaration wins: Derived's override, not Base's abstract rank().
+			assertHasConn(t, topo, mode, jLeafRank, connCalls, jDerivRank)
+			assertNoConn(t, topo, mode, jLeafRank, connCalls, jBaseRank)
+		},
+	})
+}
+
+// J12 (JV-6): Circle also declared under src/main/java11 (the copy the graph
+// keeps: last in path order). Deleting that copy must leave src/main/java's
+// Circle in place, with its implements and callers, as a cold scan has it.
+func TestAtScaleJava_J12_DeleteOneOfTwoSourceSetCopies(t *testing.T) {
+	const fCircle11 = "javafamily/src/main/java11/com/aracne/shapes/Circle.java"
+	runJavaScenario(t, scenario{
+		name: "J12_delete_one_of_two_source_set_copies",
+		setup: func(t *testing.T, root string) {
+			data, err := os.ReadFile(corpusFile(root, fCircle))
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeCorpusFile(t, root, fCircle11, string(data))
+		},
+		mutate: func(t *testing.T, root string) {
+			removeCorpusFile(t, root, fCircle11)
+		},
+		assert: func(t *testing.T, topo *domain.Topology, mode string) {
+			assertResPresent(t, topo, mode, jCircle)
+			assertResPresent(t, topo, mode, jCircleInit)
+			assertHasConn(t, topo, mode, jShape, connImplBy, jCircle)
+			assertHasConn(t, topo, mode, jMakeCircle, connCalls, jCircleInit)
 		},
 	})
 }

@@ -1,14 +1,3 @@
 {
-  "mcpServers": {
-    "aracne": {
-      "args": [
-        "serve",
-        "--tool-profile",
-        "main",
-        "--harness",
-        "claude_code"
-      ],
-      "command": "/home/rhuan/repos/aracne/bin/arac"
-    }
-  }
+  "mcpServers": {}
 }

@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"path/filepath"
 	"strings"
 
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
@@ -17,6 +18,9 @@ type ParseResult struct {
 	FileDescription string
 	PkgPath         golang.PackagePath
 	ModulePath      string
+	// SiblingModules are the other Go modules under the same scan root (a go.work workspace,
+	// a monorepo). Their imports are internal too; see moduleLayout.
+	SiblingModules  []string
 	RootPath        string
 	InternalImports []golang.PackagePath
 	ExternalImports []golang.Dependancy
@@ -37,7 +41,8 @@ type FunctionParse struct {
 }
 
 // Parses a Go source file and extracts imports, declarations, types, functions, and metadata into a ParseResult.
-func ParseFile(filePath string, pkgPath golang.PackagePath, modulePath, rootPath string) (*ParseResult, error) {
+// siblingModules names the other modules under the same scan root, whose imports are internal.
+func ParseFile(filePath string, pkgPath golang.PackagePath, modulePath, rootPath string, siblingModules ...string) (*ParseResult, error) {
 	fset := token.NewFileSet()
 	astFile, err := parser.ParseFile(fset, filePath, nil, parser.ParseComments)
 	if err != nil {
@@ -49,22 +54,23 @@ func ParseFile(filePath string, pkgPath golang.PackagePath, modulePath, rootPath
 		FileDescription: commentText(astFile.Doc),
 		PkgPath:         pkgPath,
 		ModulePath:      modulePath,
+		SiblingModules:  siblingModules,
 		RootPath:        rootPath,
 		ImportMap:       make(map[string]string),
 	}
 
+	modDir, _ := moduleDirOf(filepath.Dir(filePath), pkgPath, modulePath)
 	for _, imp := range astFile.Imports {
 		impPath := strings.Trim(imp.Path.Value, "\"")
 		var alias string
 		if imp.Name != nil {
 			alias = imp.Name.Name
 		} else {
-			parts := strings.Split(impPath, "/")
-			alias = parts[len(parts)-1]
+			alias = importName(impPath, modDir, modulePath)
 		}
 		pr.ImportMap[alias] = impPath
 
-		if strings.HasPrefix(impPath, modulePath) {
+		if pr.importsInternal(impPath) {
 			pr.InternalImports = append(pr.InternalImports, golang.PackagePath(impPath))
 		} else {
 			pr.ExternalImports = append(pr.ExternalImports, golang.Dependancy{
@@ -148,9 +154,14 @@ func (pr *ParseResult) processStruct(typeSpec *ast.TypeSpec, st *ast.StructType,
 	for _, field := range st.Fields.List {
 		ft := exprToString(field.Type)
 		if len(field.Names) == 0 {
+			// An embedded field carries its canonical type id: its methods are promoted into
+			// this struct, and a caller in another file resolving o.Promoted() has no access to
+			// this file's imports (see bodyAnalyzer.structMethodID). The partial scan follows
+			// the same id to load the embedded type's package.
 			params = append(params, golang.VariableDefinition{
-				Name:   exprToString(field.Type),
-				Typing: ft,
+				Name:     exprToString(field.Type),
+				Typing:   ft,
+				TypingID: canonicalTypeID(ft, pr.PkgPath, pr.ImportMap),
 			})
 		} else {
 			for _, name := range field.Names {
@@ -160,7 +171,7 @@ func (pr *ParseResult) processStruct(typeSpec *ast.TypeSpec, st *ast.StructType,
 				})
 			}
 		}
-		extractTypeRefs(field.Type, pr.ImportMap, pr.ModulePath, refSeen, &pkgRefs, &depRefs)
+		extractTypeRefs(field.Type, pr.ImportMap, pr.importsInternal, refSeen, &pkgRefs, &depRefs)
 	}
 
 	conns := make(map[golang.ConnectionKind][]string)
@@ -188,6 +199,7 @@ func (pr *ParseResult) processInterface(typeSpec *ast.TypeSpec, it *ast.Interfac
 	loc := locationFromNode(fset, typeSpec, pr.FileID)
 
 	var methods []golang.FunctionDefinition
+	var embeds []string
 	var pkgRefs []golang.PackagePath
 	var depRefs []golang.DependancyPath
 	refSeen := make(map[string]bool)
@@ -201,18 +213,14 @@ func (pr *ParseResult) processInterface(typeSpec *ast.TypeSpec, it *ast.Interfac
 				Output: pr.parseFieldList(t.Results),
 			}
 			methods = append(methods, def)
-			extractParamsTypeRefs(t.Params, pr.ImportMap, pr.ModulePath, refSeen, &pkgRefs, &depRefs)
-			extractParamsTypeRefs(t.Results, pr.ImportMap, pr.ModulePath, refSeen, &pkgRefs, &depRefs)
+			extractParamsTypeRefs(t.Params, pr.ImportMap, pr.importsInternal, refSeen, &pkgRefs, &depRefs)
+			extractParamsTypeRefs(t.Results, pr.ImportMap, pr.importsInternal, refSeen, &pkgRefs, &depRefs)
 		case *ast.Ident:
-			methods = append(methods, golang.FunctionDefinition{
-				Name: t.Name,
-			})
+			// An embedded interface, not a method: see GolangInterface.Embeds.
+			embeds = append(embeds, t.Name)
 		case *ast.SelectorExpr:
-			name := exprToString(field.Type)
-			methods = append(methods, golang.FunctionDefinition{
-				Name: name,
-			})
-			extractTypeRefs(field.Type, pr.ImportMap, pr.ModulePath, refSeen, &pkgRefs, &depRefs)
+			embeds = append(embeds, exprToString(field.Type))
+			extractTypeRefs(field.Type, pr.ImportMap, pr.importsInternal, refSeen, &pkgRefs, &depRefs)
 		}
 	}
 
@@ -229,6 +237,7 @@ func (pr *ParseResult) processInterface(typeSpec *ast.TypeSpec, it *ast.Interfac
 		Name:        typeSpec.Name.Name,
 		Description: pickComment(typeSpec.Doc, genDecl.Doc),
 		Methods:     methods,
+		Embeds:      embeds,
 		Loc:         loc,
 		Connections: conns,
 	})
@@ -245,7 +254,7 @@ func (pr *ParseResult) processNamedType(typeSpec *ast.TypeSpec, underlying ast.E
 	var pkgRefs []golang.PackagePath
 	var depRefs []golang.DependancyPath
 	refSeen := make(map[string]bool)
-	extractTypeRefs(underlying, pr.ImportMap, pr.ModulePath, refSeen, &pkgRefs, &depRefs)
+	extractTypeRefs(underlying, pr.ImportMap, pr.importsInternal, refSeen, &pkgRefs, &depRefs)
 
 	conns := make(map[golang.ConnectionKind][]string)
 	if len(pkgRefs) > 0 {
@@ -318,7 +327,7 @@ func (pr *ParseResult) processFuncDecl(funcDecl *ast.FuncDecl, fset *token.FileS
 				fi.TypeParamNames = append(fi.TypeParamNames, name.Name)
 			}
 			if tp.Type != nil {
-				extractTypeRefs(tp.Type, pr.ImportMap, pr.ModulePath, refSeen, &pkgRefs, &depRefs)
+				extractTypeRefs(tp.Type, pr.ImportMap, pr.importsInternal, refSeen, &pkgRefs, &depRefs)
 			}
 		}
 		if len(pkgRefs) > 0 {
@@ -349,13 +358,22 @@ func exprToString(expr ast.Expr) string {
 	case *ast.MapType:
 		return "map[" + exprToString(e.Key) + "]" + exprToString(e.Value)
 	case *ast.InterfaceType:
-		return "interface{}"
+		return "interface{" + interfaceBodyString(e.Methods) + "}"
 	case *ast.Ellipsis:
 		return "..." + exprToString(e.Elt)
 	case *ast.FuncType:
-		return "func(...)"
+		return "func" + funcTypeString(e)
 	case *ast.ChanType:
-		return "chan " + exprToString(e.Value)
+		// Direction is part of the type: a parameter that went from `chan<- int` to
+		// `<-chan int` breaks every caller, and rendering both as "chan int" hid it.
+		switch {
+		case e.Dir == ast.SEND:
+			return "chan<- " + exprToString(e.Value)
+		case e.Dir == ast.RECV:
+			return "<-chan " + exprToString(e.Value)
+		default:
+			return "chan " + exprToString(e.Value)
+		}
 	case *ast.BasicLit:
 		return e.Value
 	case *ast.ParenExpr:
@@ -363,7 +381,7 @@ func exprToString(expr ast.Expr) string {
 	case *ast.IndexExpr:
 		return exprToString(e.X) + "[" + exprToString(e.Index) + "]"
 	case *ast.StructType:
-		return "struct{...}"
+		return "struct{" + typeFieldsString(e.Fields, "; ") + "}"
 	case *ast.IndexListExpr:
 		var indices []string
 		for _, idx := range e.Indices {
@@ -373,6 +391,68 @@ func exprToString(expr ast.Expr) string {
 	default:
 		return fmt.Sprintf("%T", expr)
 	}
+}
+
+// funcTypeString renders a func type's parameters and results -- everything after the `func`
+// keyword. A single unnamed result is written bare, as Go writes it; anything else is
+// parenthesised.
+//
+// Every func type used to render as the placeholder "func(...)", so the signature diff could
+// not see a callback's parameter list change, and interface matching could not tell two
+// different func-typed fields apart.
+func funcTypeString(ft *ast.FuncType) string {
+	out := "(" + typeFieldsString(ft.Params, ", ") + ")"
+	if ft.Results == nil || len(ft.Results.List) == 0 {
+		return out
+	}
+	if len(ft.Results.List) == 1 && len(ft.Results.List[0].Names) == 0 {
+		return out + " " + exprToString(ft.Results.List[0].Type)
+	}
+	return out + " (" + typeFieldsString(ft.Results, ", ") + ")"
+}
+
+// interfaceBodyString renders an interface's methods and embedded interfaces. A method is
+// written the way the source writes it -- `Read(p []byte) (int, error)`, with no `func`.
+func interfaceBodyString(fl *ast.FieldList) string {
+	if fl == nil || len(fl.List) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(fl.List))
+	for _, field := range fl.List {
+		ft, isFunc := field.Type.(*ast.FuncType)
+		if !isFunc || len(field.Names) == 0 {
+			parts = append(parts, exprToString(field.Type))
+			continue
+		}
+		for _, n := range field.Names {
+			parts = append(parts, n.Name+funcTypeString(ft))
+		}
+	}
+	return strings.Join(parts, "; ")
+}
+
+// typeFieldsString renders a field list the way it is written inside a type: a struct's
+// fields (sep "; "), or a func type's parameters and results (sep ", "). Names that share a
+// type stay grouped, as the source has them, so two renderings differ exactly when the
+// types do.
+func typeFieldsString(fl *ast.FieldList, sep string) string {
+	if fl == nil || len(fl.List) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(fl.List))
+	for _, field := range fl.List {
+		typ := exprToString(field.Type)
+		if len(field.Names) == 0 {
+			parts = append(parts, typ)
+			continue
+		}
+		names := make([]string, 0, len(field.Names))
+		for _, n := range field.Names {
+			names = append(names, n.Name)
+		}
+		parts = append(parts, strings.Join(names, ", ")+" "+typ)
+	}
+	return strings.Join(parts, sep)
 }
 
 // Converts an AST field list into variable definitions with resolved type information.
@@ -457,52 +537,52 @@ func pickComment(preferred, fallback *ast.CommentGroup) string {
 }
 
 // Extracts package and dependency type references from an AST expression.
-func extractTypeRefs(expr ast.Expr, importMap map[string]string, modulePath string, seen map[string]bool, packages *[]golang.PackagePath, deps *[]golang.DependancyPath) {
-	extractTypeRefsRec(expr, importMap, modulePath, seen, packages, deps)
+func extractTypeRefs(expr ast.Expr, importMap map[string]string, internal func(string) bool, seen map[string]bool, packages *[]golang.PackagePath, deps *[]golang.DependancyPath) {
+	extractTypeRefsRec(expr, importMap, internal, seen, packages, deps)
 }
 
 // Recursively extracts package and dependency references from AST type expressions, separating internal and external imports.
-func extractTypeRefsRec(expr ast.Expr, importMap map[string]string, modulePath string, seen map[string]bool, packages *[]golang.PackagePath, deps *[]golang.DependancyPath) {
+func extractTypeRefsRec(expr ast.Expr, importMap map[string]string, internal func(string) bool, seen map[string]bool, packages *[]golang.PackagePath, deps *[]golang.DependancyPath) {
 	switch e := expr.(type) {
 	case *ast.SelectorExpr:
 		alias := rootIdent(e.X)
 		if impPath, ok := importMap[alias]; ok && !seen[impPath] {
 			seen[impPath] = true
-			if strings.HasPrefix(impPath, modulePath) {
+			if internal(impPath) {
 				*packages = append(*packages, golang.PackagePath(impPath))
 			} else {
 				*deps = append(*deps, golang.DependancyPath(impPath))
 			}
 		}
 	case *ast.StarExpr:
-		extractTypeRefsRec(e.X, importMap, modulePath, seen, packages, deps)
+		extractTypeRefsRec(e.X, importMap, internal, seen, packages, deps)
 	case *ast.ArrayType:
-		extractTypeRefsRec(e.Elt, importMap, modulePath, seen, packages, deps)
+		extractTypeRefsRec(e.Elt, importMap, internal, seen, packages, deps)
 	case *ast.MapType:
-		extractTypeRefsRec(e.Key, importMap, modulePath, seen, packages, deps)
-		extractTypeRefsRec(e.Value, importMap, modulePath, seen, packages, deps)
+		extractTypeRefsRec(e.Key, importMap, internal, seen, packages, deps)
+		extractTypeRefsRec(e.Value, importMap, internal, seen, packages, deps)
 	case *ast.ChanType:
-		extractTypeRefsRec(e.Value, importMap, modulePath, seen, packages, deps)
+		extractTypeRefsRec(e.Value, importMap, internal, seen, packages, deps)
 	case *ast.IndexExpr:
-		extractTypeRefsRec(e.X, importMap, modulePath, seen, packages, deps)
-		extractTypeRefsRec(e.Index, importMap, modulePath, seen, packages, deps)
+		extractTypeRefsRec(e.X, importMap, internal, seen, packages, deps)
+		extractTypeRefsRec(e.Index, importMap, internal, seen, packages, deps)
 	case *ast.ParenExpr:
-		extractTypeRefsRec(e.X, importMap, modulePath, seen, packages, deps)
+		extractTypeRefsRec(e.X, importMap, internal, seen, packages, deps)
 	case *ast.IndexListExpr:
-		extractTypeRefsRec(e.X, importMap, modulePath, seen, packages, deps)
+		extractTypeRefsRec(e.X, importMap, internal, seen, packages, deps)
 		for _, idx := range e.Indices {
-			extractTypeRefsRec(idx, importMap, modulePath, seen, packages, deps)
+			extractTypeRefsRec(idx, importMap, internal, seen, packages, deps)
 		}
 	}
 }
 
 // Extracts package and dependency type references from function parameter fields.
-func extractParamsTypeRefs(fl *ast.FieldList, importMap map[string]string, modulePath string, seen map[string]bool, packages *[]golang.PackagePath, deps *[]golang.DependancyPath) {
+func extractParamsTypeRefs(fl *ast.FieldList, importMap map[string]string, internal func(string) bool, seen map[string]bool, packages *[]golang.PackagePath, deps *[]golang.DependancyPath) {
 	if fl == nil {
 		return
 	}
 	for _, field := range fl.List {
-		extractTypeRefs(field.Type, importMap, modulePath, seen, packages, deps)
+		extractTypeRefs(field.Type, importMap, internal, seen, packages, deps)
 	}
 }
 
@@ -527,6 +607,32 @@ func isInternalImport(impPath, modulePath string) bool {
 		return false
 	}
 	return impPath == modulePath || strings.HasPrefix(impPath, modulePath+"/")
+}
+
+// internalImport is isInternalImport against this file's module and its sibling modules.
+func (pr *ParseResult) internalImport(impPath string) bool {
+	return isInternalImport(impPath, pr.ModulePath) || pr.inSiblingModule(impPath)
+}
+
+// importsInternal classifies an import or a type reference as internal: a path in the file's
+// own module or in a sibling module. It is internalImport, and must stay so: it used to test a
+// plain string prefix, which filed example.com/apputil as part of module example.com/app -- an
+// imports_package edge to a package that does not exist, and no dependency node for the real one.
+func (pr *ParseResult) importsInternal(impPath string) bool {
+	return pr.internalImport(impPath)
+}
+
+// inSiblingModule reports whether impPath lies in another module under the same scan root.
+func (pr *ParseResult) inSiblingModule(impPath string) bool {
+	if pr == nil {
+		return false
+	}
+	for _, m := range pr.SiblingModules {
+		if isInternalImport(impPath, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // Converts an AST node to a Location with file path and line range.

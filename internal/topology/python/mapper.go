@@ -65,6 +65,9 @@ func FromGeneric(topo *domain.Topology) *PythonTopology {
 			if bases, ok := res.Properties["bases"]; ok {
 				jsonConvert(bases, &c.Bases)
 			}
+			if cands, ok := res.Properties["base_candidates"]; ok {
+				jsonConvert(cands, &c.BaseCandidates)
+			}
 			if ctor, ok := res.Properties["constructor"].(string); ok && ctor != "" {
 				cid := FunctionID(ctor)
 				c.Constructor = &cid
@@ -167,6 +170,9 @@ func ToGeneric(gt *PythonTopology) *domain.Topology {
 		}
 		if c.Constructor != nil {
 			props["constructor"] = string(*c.Constructor)
+		}
+		if len(c.BaseCandidates) > 0 {
+			props["base_candidates"] = c.BaseCandidates
 		}
 		topo.Resources[string(id)] = domain.Resource{
 			ID:          string(id),

@@ -1,20 +1,28 @@
 package jsscanner
 
-import js "github.com/Rhuan-Marques/aracne/internal/topology/javascript"
+import (
+	"path/filepath"
+	"strings"
 
-// matchClassInheritance wires up `class X extends Y` relationships. Base classes
-// are resolved by name: same module first, then any class in the topology. This
-// is best-effort (JavaScript inheritance can be dynamic), mirroring the Python
-// scanner's by-name resolution.
+	js "github.com/Rhuan-Marques/aracne/internal/topology/javascript"
+)
+
+// matchClassInheritance wires up `class X extends Y` relationships. A base class is
+// resolved the way the declaring file sees the name (see resolveHeritage): its own
+// declarations, then its imports, then -- for a name it neither declares nor imports -- the
+// one class of that name in the topology. This is best-effort (JavaScript inheritance can be
+// dynamic), mirroring the Python scanner's by-name resolution.
 func matchClassInheritance(gt *js.JavaScriptTopology) {
+	byName := make(map[string][]string)
 	for id, cls := range gt.Classes {
 		delete(cls.Connections, js.ConnInherits)
 		delete(cls.Connections, js.ConnInheritedBy)
 		gt.Classes[id] = cls
+		byName[extractClassName(id)] = append(byName[extractClassName(id)], id)
 	}
 	for classID, cls := range gt.Classes {
 		for _, baseName := range cls.Bases {
-			parentID := resolveBaseClassID(baseName, cls, gt)
+			parentID := resolveBaseClassID(baseName, cls, gt, byName[baseName])
 			if parentID == nil {
 				continue
 			}
@@ -40,19 +48,76 @@ func matchClassInheritance(gt *js.JavaScriptTopology) {
 	}
 }
 
-// Resolves a base class ID by searching in the same module first, then across all classes in the topology.
-func resolveBaseClassID(baseName string, cls js.JavaScriptClass, gt *js.JavaScriptTopology) *js.ClassID {
-	sameModuleID := js.ClassID(extractModulePath(string(cls.ID)) + "." + baseName)
-	if _, exists := gt.Classes[sameModuleID]; exists {
-		return &sameModuleID
+// resolveBaseClassID resolves a class's `extends` name to a class ID (see resolveHeritage).
+func resolveBaseClassID(baseName string, cls js.JavaScriptClass, gt *js.JavaScriptTopology, sameName []string) *js.ClassID {
+	id, ok := resolveHeritage(baseName, string(cls.ID), cls.Loc.Path, cls.HeritageImports, gt, sameName,
+		func(gt *js.JavaScriptTopology, id string) (exportRef, bool) {
+			if isClass(gt, id) {
+				return exportRef{Kind: js.ConnUsesClass, ID: id}, true
+			}
+			return exportRef{}, false
+		})
+	if !ok {
+		return nil
 	}
-	for id := range gt.Classes {
-		if extractClassName(id) == baseName {
-			cid := js.ClassID(id)
-			return &cid
+	cid := js.ClassID(id)
+	return &cid
+}
+
+// resolveHeritage resolves a name written in an `extends`/`implements` clause of the
+// declaration fromID, which lives in file, the way that file sees the name:
+//
+//  1. the file's import of the name (`import {Base as B}` + `extends B` is shapes' Base;
+//     `extends ns.Base` is ns's), followed through re-exports. An imported name never falls
+//     back: it names one module's export, and a package import (`extends React.Component`)
+//     must not be pinned on a project class that happens to share the name -- not even the
+//     declaring class itself;
+//  2. else a declaration of the file's own, innermost enclosing namespace first;
+//  3. else, for a name the file neither imports nor declares (a global, a script-style
+//     project), the one declaration of that name in the topology -- and nothing when there
+//     are several, since picking one would be a guess.
+//
+// It used to take the first same-named declaration Go's map iteration produced, so with two
+// `Base` classes in a project the edge changed from one scan to the next.
+func resolveHeritage(name, fromID, file string, imports map[string]js.HeritageImport, gt *js.JavaScriptTopology, sameName []string, classify func(*js.JavaScriptTopology, string) (exportRef, bool)) (string, bool) {
+	if imp, ok := imports[name]; ok {
+		if !(isRelativeSpecifier(imp.Source) || filepath.IsAbs(imp.Source)) || file == "" {
+			return "", false
+		}
+		abs, ok := resolveSpecifier(file, imp.Source, gt)
+		if !ok {
+			return "", false
+		}
+		for _, exported := range bindingExportNames(importInfo{Source: imp.Source, Internal: true, ImportedName: imp.Name, Namespace: imp.Name == ""}, name) {
+			if ref, ok := resolveExportWith(gt, abs, exported, classify, nil); ok {
+				return ref.ID, true
+			}
+		}
+		return "", false
+	}
+	modulePath := extractModulePath(fromID)
+	if file != "" {
+		modulePath = moduleKey(gt, file)
+	}
+	for scope := extractModulePath(fromID); ; scope = extractModulePath(scope) {
+		if ref, ok := classify(gt, scope+"."+name); ok {
+			return ref.ID, true
+		}
+		if len(scope) <= len(modulePath) || !strings.HasPrefix(scope, modulePath+".") {
+			break
 		}
 	}
-	return nil
+	var found string
+	for _, id := range sameName {
+		if _, ok := classify(gt, id); !ok {
+			continue
+		}
+		if found != "" {
+			return "", false // ambiguous
+		}
+		found = id
+	}
+	return found, found != ""
 }
 
 // matchImplementsAndInterfaceExtends wires TypeScript `class C implements I` edges
@@ -71,9 +136,13 @@ func matchImplementsAndInterfaceExtends(gt *js.JavaScriptTopology) {
 		gt.Interfaces[id] = iface
 	}
 
+	byName := make(map[string][]string)
+	for id := range gt.Interfaces {
+		byName[extractClassName(id)] = append(byName[extractClassName(id)], id)
+	}
 	for classID, c := range gt.Classes {
 		for _, name := range c.ImplementsRaw {
-			ifaceID := resolveInterfaceID(name, string(classID), gt)
+			ifaceID := resolveInterfaceID(name, string(classID), c.Loc.Path, c.HeritageImports, gt, byName[name])
 			if ifaceID == nil {
 				continue
 			}
@@ -94,7 +163,7 @@ func matchImplementsAndInterfaceExtends(gt *js.JavaScriptTopology) {
 
 	for ifaceID, iface := range gt.Interfaces {
 		for _, name := range iface.Bases {
-			parentID := resolveInterfaceID(name, string(ifaceID), gt)
+			parentID := resolveInterfaceID(name, string(ifaceID), iface.Loc.Path, iface.HeritageImports, gt, byName[name])
 			if parentID == nil {
 				continue
 			}
@@ -114,19 +183,21 @@ func matchImplementsAndInterfaceExtends(gt *js.JavaScriptTopology) {
 	}
 }
 
-// Looks up an interface by name within the same module or by class name across all interfaces.
-func resolveInterfaceID(name, fromID string, gt *js.JavaScriptTopology) *js.InterfaceID {
-	sameModuleID := js.InterfaceID(extractModulePath(fromID) + "." + name)
-	if _, ok := gt.Interfaces[sameModuleID]; ok {
-		return &sameModuleID
+// resolveInterfaceID resolves an `implements`/interface `extends` name to an interface ID
+// (see resolveHeritage).
+func resolveInterfaceID(name, fromID, file string, imports map[string]js.HeritageImport, gt *js.JavaScriptTopology, sameName []string) *js.InterfaceID {
+	id, ok := resolveHeritage(name, fromID, file, imports, gt, sameName,
+		func(gt *js.JavaScriptTopology, id string) (exportRef, bool) {
+			if _, ok := gt.Interfaces[js.InterfaceID(id)]; ok {
+				return exportRef{Kind: js.ConnImplements, ID: id}, true
+			}
+			return exportRef{}, false
+		})
+	if !ok {
+		return nil
 	}
-	for id := range gt.Interfaces {
-		if extractClassName(id) == name {
-			iid := js.InterfaceID(id)
-			return &iid
-		}
-	}
-	return nil
+	iid := js.InterfaceID(id)
+	return &iid
 }
 
 // Extracts the module path from a fully-qualified identifier by returning the text before the last dot.

@@ -37,6 +37,16 @@ type ModuleCut struct {
 	Cut string
 }
 
+// FullBlock carries everything needed to render a neighbour as a full source cut (its crate
+// dependencies, an optional enclosing type, and the resource's own cut) without its own
+// CONTEXT section. Path labels the fenced code block.
+type FullBlock struct {
+	Path      string
+	Deps      []DependencyPath
+	ParentCut string
+	Cut       string
+}
+
 // SimplifiedFunction is a lightweight reference to a Rust function/method used
 // in context lists.
 type SimplifiedFunction struct {
@@ -46,6 +56,10 @@ type SimplifiedFunction struct {
 	Input       []VariableDefinition
 	Output      []VariableDefinition
 	Location    domain.Location
+	// Visibility is the read.context_filter verdict for this neighbour (hidden / normal /
+	// full), not the Rust `pub` visibility -- that is RustFunction.Visibility.
+	Visibility domain.Visibility
+	Full       *FullBlock
 }
 
 // SimplifiedStruct is a lightweight reference to a Rust struct/enum/union.
@@ -64,6 +78,9 @@ type StructUsage struct {
 	Description string
 	Location    domain.Location
 	Methods     []SimplifiedFunction
+	// Visibility is the read.context_filter verdict, as on SimplifiedFunction.
+	Visibility domain.Visibility
+	Full       *FullBlock
 }
 
 // SimplifiedTrait is a lightweight reference to a Rust trait.
@@ -72,6 +89,10 @@ type SimplifiedTrait struct {
 	Name        string
 	Description string
 	Location    domain.Location
+	// Visibility is the read.context_filter verdict, as on SimplifiedFunction. Set only where
+	// the trait is a neighbour the filter governs (a trait a function uses); the relationship
+	// lists -- implements, supertraits -- leave it zero and always render.
+	Visibility domain.Visibility
 }
 
 // SimplifiedNamedType is a lightweight reference to a Rust type alias.
@@ -80,6 +101,8 @@ type SimplifiedNamedType struct {
 	Name        string
 	Description string
 	Location    domain.Location
+	// Visibility is the read.context_filter verdict, as on SimplifiedFunction.
+	Visibility domain.Visibility
 }
 
 // SimplifiedVariable is a lightweight reference to a Rust module-level const or
@@ -90,6 +113,9 @@ type SimplifiedVariable struct {
 	Description string
 	Value       string
 	Location    domain.Location
+	// Visibility is the read.context_filter verdict, as on SimplifiedFunction.
+	Visibility domain.Visibility
+	Full       *FullBlock
 }
 
 // ResourceUsage describes a Rust resource that uses some target (named type or
@@ -118,6 +144,7 @@ type RustFunctionContext struct {
 	NamedTypesUsed  []SimplifiedNamedType
 	VarsUsed        []SimplifiedVariable
 	Dependencies    []DependencyPath
+	Incoming        []domain.ResourceRef
 }
 
 // RustStructContext is the full context for a struct/enum/union: its own code
@@ -133,6 +160,7 @@ type RustStructContext struct {
 	StructsUsed    []StructUsage
 	NamedTypesUsed []SimplifiedNamedType
 	Dependencies   []DependencyPath
+	Incoming       []domain.ResourceRef
 }
 
 // RustInterfaceContext is the full context for a trait (the interface kind): its
@@ -142,6 +170,7 @@ type RustInterfaceContext struct {
 	Trait        *TraitCut
 	Supertraits  []SimplifiedTrait
 	Implementors []SimplifiedStruct
+	Incoming     []domain.ResourceRef
 }
 
 // RustNamedTypeContext is the context for a type alias: its own code cut and the

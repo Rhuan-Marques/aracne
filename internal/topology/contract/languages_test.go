@@ -231,11 +231,18 @@ func TestPythonRules(t *testing.T) {
 		{"an optional keyword-only parameter may be omitted",
 			fnOf("python", "f", p("x", "int"), kwonly("mode", false)), arity(1), Env{}, Match},
 
-		// The receiver is declared but never passed.
-		{"self is not counted",
-			res("python", "m", domain.ResourceMethod, p("self", ""), p("a", "str")), arity(1), Env{}, Match},
-		{"cls is not counted",
-			res("python", "m", domain.ResourceMethod, p("cls", ""), p("a", "str")), arity(1), Env{}, Match},
+		// The receiver is declared but never passed, and the SCANNER drops it -- it is the
+		// only place that can tell a receiver from a real parameter, by position and by
+		// decorator. So a stored signature that still shows self or cls in first position
+		// is a staticmethod's real parameter, and must be counted: stripping it by name
+		// here hid `register(self, cls)` gaining a parameter, a call the interpreter
+		// rejects.
+		{"a stored parameter named self is counted",
+			res("python", "m", domain.ResourceMethod, p("self", ""), p("a", "str")), arity(2), Env{}, Match},
+		{"a stored parameter named cls is counted",
+			res("python", "m", domain.ResourceMethod, p("cls", ""), p("a", "str")), arity(2), Env{}, Match},
+		{"a method whose receiver the scanner dropped takes what is left",
+			res("python", "m", domain.ResourceMethod, p("a", "str")), arity(1), Env{}, Match},
 
 		// A starred call supplies an unknown number under unknown names.
 		{"a starred call cannot be judged",
@@ -345,6 +352,15 @@ func TestSameTypeTextToleratesHowARealRepoWritesTypes(t *testing.T) {
 		{"different types", "String", "u32", false},
 		// A scanner that could not name a type must not be the reason anything is reported.
 		{"unreadable", "", "Gradient", true},
+		// Java: a type argument is spelled as freely as the outer type. Formatting and
+		// qualification inside the brackets are not a different type.
+		{"type arguments spaced differently", "Map<String, Integer>", "Map<String,Integer>", true},
+		{"qualified type argument", "java.util.List<java.lang.Integer>", "List<Integer>", true},
+		{"nested, qualified and spaced", "Map<String, java.util.List<Long>>", "java.util.Map<String,List<java.lang.Long>>", true},
+		{"wildcard bound", "List<? extends Number>", "List<? extends java.lang.Number>", true},
+		// ...but a genuinely different type argument still differs.
+		{"different type arguments", "Map<String, Integer>", "Map<String, Long>", false},
+		{"different wildcard bound", "List<? extends Number>", "List<? super Number>", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if got := sameTypeText(c.a, c.b); got != c.want {
@@ -378,4 +394,125 @@ func TestRustConformanceOnlyReportsAMissingMethod(t *testing.T) {
 		Signature{Name: "draw", Input: []Param{{Name: "a", Typing: "int"}, {Name: "b", Typing: "int"}}}); v != Mismatch {
 		t.Error("java must still catch an arity mismatch")
 	}
+}
+
+// Java compares signatures exactly, so a type argument written with different spacing or
+// qualification on the two sides must not read as a missing override -- while a genuinely
+// different type argument still does.
+func TestJavaConformanceIgnoresTypeArgumentSpelling(t *testing.T) {
+	req := Signature{Name: "put",
+		Input:  []Param{{Name: "m", Typing: "Map<String, Integer>"}},
+		Output: []Param{{Typing: "java.util.List<java.lang.Integer>"}}}
+	same := Signature{Name: "put",
+		Input:  []Param{{Name: "m", Typing: "Map<String,Integer>"}},
+		Output: []Param{{Typing: "List<Integer>"}}}
+	if v, why := Satisfies("java", req, same); v != Match {
+		t.Errorf("the same types spelled differently must satisfy, got %s: %s", v, why)
+	}
+	other := Signature{Name: "put",
+		Input:  []Param{{Name: "m", Typing: "Map<String,Long>"}},
+		Output: []Param{{Typing: "List<Integer>"}}}
+	if v, _ := Satisfies("java", req, other); v != Mismatch {
+		t.Errorf("a different type argument must still mismatch, got %s", v)
+	}
+}
+
+// TestTypeScriptAcceptsTheFormsItUsedToReject pins the three legal calls the literal
+// matcher judged as mismatches. Each of them produced a signature_changed warning that
+// could never retire -- the call fits, so no edit to the caller could ever make it fit
+// "harder", and the warning stayed on screen until the callee was reverted.
+//
+// The counter-cases at the bottom are the point of the whole table: widening what the
+// matcher accepts must not cost it the mismatches it exists to report.
+func TestTypeScriptAcceptsTheFormsItUsedToReject(t *testing.T) {
+	// enumEnv resolves m.Kind to the named type an `enum Kind {...}` produces.
+	enumEnv := Env{Lookup: func(id string) (domain.Resource, bool) {
+		if id != "m.Kind" {
+			return domain.Resource{}, false
+		}
+		return domain.Resource{ID: id, Kind: domain.ResourceNamedType,
+			Properties: map[string]any{"underlying": "enum"}}, true
+	}}
+	named := func(name, id string) Param { return Param{Name: "x", Typing: name, TypingID: id} }
+
+	runLangCases(t, "typescript", []langCase{
+		// A primitive is assignable to its wrapper type; only the reverse is an error.
+		{"a number literal fits Number", fnOf("typescript", "f", p("n", "Number")), args("#int"), Env{}, Match},
+		{"a string literal fits String", fnOf("typescript", "f", p("s", "String")), args("#string"), Env{}, Match},
+		{"a boolean literal fits Boolean", fnOf("typescript", "f", p("b", "Boolean")), args("#bool"), Env{}, Match},
+		{"Object takes anything", fnOf("typescript", "f", p("o", "Object")), args("#int"), Env{}, Match},
+
+		// `enum Kind { A }` is a named type whose members ARE numbers, so numEnum(0)
+		// compiles. What an alias or an enum accepts is written in its right-hand side,
+		// which this package does not parse, so it declines rather than guesses.
+		{"a numeric enum takes a number literal",
+			fnOf("typescript", "f", named("Kind", "m.Kind")), args("#int"), enumEnv, Match},
+		{"an alias is never judged",
+			fnOf("typescript", "f", named("UserId", "m.Kind")), args("#string"), enumEnv, Match},
+
+		// `x?: string` is `string | undefined`, and an argument spelled `undefined` is
+		// exactly what an optional parameter is for.
+		{"undefined fits an optional parameter",
+			fnOf("typescript", "f", opt("x", "string")), args("#nil"), Env{}, Match},
+
+		// Counter-cases: the mismatches must survive.
+		{"a string literal still misses a number parameter",
+			fnOf("typescript", "f", p("n", "number")), args("#string"), Env{}, Mismatch},
+		{"a number literal still misses a String parameter",
+			fnOf("typescript", "f", p("s", "String")), args("#int"), Env{}, Mismatch},
+		{"null still misses a required string parameter",
+			fnOf("typescript", "f", p("s", "string")), args("#nil"), Env{}, Mismatch},
+		{"an optional parameter still rejects a wrong-typed literal",
+			fnOf("typescript", "f", opt("x", "string")), args("#int"), Env{}, Mismatch},
+	})
+}
+
+// TestTypeScriptMatchesAgainstOverloads.
+//
+// An overload set declares N signatures and one implementation, and only the N are callable
+// -- TypeScript rejects a call that fits the implementation but no overload. Judging a call
+// against one signature therefore gets it wrong in both directions: it reports correct calls
+// against every overload but the one that survived, and it accepts calls that fit nothing
+// anybody may write.
+func TestTypeScriptMatchesAgainstOverloads(t *testing.T) {
+	withOverloads := func(res domain.Resource, sigs ...[]Param) domain.Resource {
+		var out []map[string]any
+		for _, params := range sigs {
+			in := make([]map[string]any, 0, len(params))
+			for _, p := range params {
+				in = append(in, map[string]any{"Name": p.Name, "Typing": p.Typing, "Optional": p.Optional})
+			}
+			out = append(out, map[string]any{"Name": res.Name, "Input": in})
+		}
+		res.Properties["overloads"] = out
+		return res
+	}
+
+	// A bodiless set -- `declare function parse(s: string): number;` plus a two-parameter
+	// overload. The resource carries one of them; both are callable.
+	bodiless := withOverloads(
+		fnOf("typescript", "parse", p("s", "string")),
+		[]Param{p("s", "string")},
+		[]Param{p("s", "string"), p("radix", "number")},
+	)
+
+	// The ordinary shape: typed overloads over an `any` implementation. The
+	// implementation accepts everything and is callable by nobody.
+	anyImpl := withOverloads(
+		fnOf("typescript", "convert", p("x", "any")),
+		[]Param{p("s", "string")},
+		[]Param{p("n", "number")},
+	)
+
+	runLangCases(t, "typescript", []langCase{
+		{"a call fitting the first signature", bodiless, args("#string"), Env{}, Match},
+		{"a call fitting a later overload", bodiless, args("#string", "#int"), Env{}, Match},
+		{"a call fitting no overload is a mismatch", bodiless, arity(3), Env{}, Mismatch},
+
+		{"an overload takes it", anyImpl, args("#string"), Env{}, Match},
+		{"another overload takes it", anyImpl, args("#int"), Env{}, Match},
+		// The implementation's `any` would take this; no overload does, so TypeScript
+		// rejects it and so must the matcher.
+		{"fitting only the implementation is a mismatch", anyImpl, args("#bool"), Env{}, Mismatch},
+	})
 }

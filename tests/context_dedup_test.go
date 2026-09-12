@@ -94,6 +94,19 @@ pub fn run() {
 }
 `)
 	mustRun(t, dir, "scan", "--hard", "--root", ".", "--output", ".aracne/topology.db")
+	// Described in the topology, not just in `///` comments (which are not stored as
+	// descriptions): read.context_filter "normal" omits an undescribed neighbour, so without
+	// these the struct read would have no methods left to list once.
+	for _, d := range [][2]string{
+		{"demo::logger::Logger", "struct"},
+		{"demo::logger::Logger::new", "method"},
+		{"demo::logger::Logger::enabled", "method"},
+		{"demo::logger::Logger::log", "method"},
+		{"demo::logger::init", "function"},
+		{"demo::app::run", "function"},
+	} {
+		mustRun(t, dir, "update-description", d[0], d[1], "Described "+d[0]+".")
+	}
 	return dir
 }
 

@@ -95,20 +95,45 @@ func (r *Read) readsFiles() bool {
 	return false
 }
 
-// Description tells the model the one thing that actually changes its behaviour: prefer a
-// symbol over a file, and batch.
+// Description tells the model the things that actually change its behaviour: prefer a symbol
+// over a file, the context runs both ways, an ID is derivable, and batch.
+//
+// THE TWO LATE ADDITIONS, and the turn each was costing.
+//
+// "Context runs BOTH ways" is here because the old text only ever promised outgoing edges --
+// "a symbol carries its neighbours" reads as what it touches. So a reverse-edge question
+// ("who implements this interface", "what subclasses this") looked like something this tool
+// could not answer, and the model fell back to grepping the method signature across the repo:
+// a whole-repo scan, plus a hand-assembled answer, for something one read returns already
+// grouped and described. The renderer has emitted "## Implemented By" / "## Used By" the whole
+// time (gotools.InterfaceUnit, pythontools, jstools, javatools, rusttools); only the
+// advertisement was one-directional.
+//
+// "Do NOT search for an ID first" is here because a tool that takes an ID reads as a tool you
+// cannot call until you have one, which makes SEARCH the first step of every lookup -- and once
+// a grep has answered the question there is no second call. idresolve has always taken a bare
+// name, and both ways of getting it wrong (ambiguous, unknown) return the candidates rather
+// than an error, so the bootstrap search this tool kept losing its first turn to never existed.
+// The old text said only "a unique trailing part is enough", tucked in last, which describes
+// the resolver without telling the model to guess.
 func (r *Read) Description() string {
 	var b strings.Builder
 	b.WriteString("Read one or more resources by ID and get their source plus the context they connect to. ")
 	b.WriteString("Prefer resources -- a function, method, struct/class or interface -- over whole files: ")
 	b.WriteString("a symbol carries its neighbours and their descriptions, which usually answers the question ")
 	b.WriteString("for a fraction of a file's tokens. ")
+	b.WriteString("Interfaces carry information on who implements them and files on their methods, so \"who implements X\" is also a valid call")
+	// Only where the section actually renders: read.context_filter "full" turns on "# USED
+	// BY:", and promising callers under "normal" would send the model looking for a heading
+	// the renderer never emits.
+	if r.cfg.EffectiveIncludeIncoming() {
+		b.WriteString("A `# USED BY:` section names each resource's callers as well. ")
+	}
 	if r.readsFiles() {
-		b.WriteString("A file path works too, for a config, an unsupported language, or when you genuinely need the whole file. ")
+		b.WriteString("A file path works too, for anything you need the fool file for. ")
 	}
 	b.WriteString("Pass every ID you need in ONE call: results are grouped by file and share a single context section, ")
-	b.WriteString("so one batched call costs far less than one call per ID. ")
-	b.WriteString("IDs are forgiving -- a unique trailing part is enough, and a miss returns the nearest candidates.")
+	b.WriteString("If you do not know an ID, bare names serve as one. Anything like the name of a function, struct, etc, will resolve. And if multiple, tell you the matching candidates.")
 	return b.String()
 }
 
@@ -122,14 +147,27 @@ func (r *Read) Parameters() []tools.Parameter {
 	params := []tools.Parameter{
 		{Name: "ids", Type: "array", Items: "string", Description: desc, Required: true},
 	}
-	// Only worth advertising when file reads are abridged; otherwise it is a no-op knob and
-	// every token spent describing it is wasted on every call.
-	if r.readsFiles() && r.cfg.EffectiveFileMode() == helper.FileModeSkeleton {
-		params = append(params, tools.Parameter{
-			Name: "full", Type: "boolean", Required: false,
-			Description: "Return whole file bodies verbatim instead of signatures with large " +
-				"bodies elided. Use when you need exact text to edit. No effect on non-file ids.",
-		})
+	// Only worth advertising when something is abridged; otherwise it is a no-op knob and every
+	// token spent describing it is wasted on every call. Two things are: whole-file reads under
+	// file_mode "skeleton", and any symbol over read.max_symbol_lines -- whose elision marker
+	// names `full` as the way back to the exact bytes, so leaving it out of the schema pointed
+	// the model at a parameter it had never been told exists.
+	skeletonFiles := r.readsFiles() && r.cfg.EffectiveFileMode() == helper.FileModeSkeleton
+	cappedSymbols := r.cfg.EffectiveMaxSymbolLines() > 0
+	if skeletonFiles || cappedSymbols {
+		var d string
+		switch {
+		case skeletonFiles && cappedSymbols:
+			d = "Return exact source: whole file bodies verbatim instead of signatures with large " +
+				"bodies elided, and symbols over the line cap in full. Use when you need exact text to edit."
+		case skeletonFiles:
+			d = "Return whole file bodies verbatim instead of signatures with large " +
+				"bodies elided. Use when you need exact text to edit. No effect on non-file ids."
+		default:
+			d = "Return a symbol over the line cap in full instead of abridged. " +
+				"Use when you need exact text to edit."
+		}
+		params = append(params, tools.Parameter{Name: "full", Type: "boolean", Required: false, Description: d})
 	}
 	return params
 }
@@ -275,6 +313,12 @@ func (r *Read) ReadIDs(rawIDs []string, opt ReadIDsOptions) (string, error) {
 	}
 	allowed := kindSet(kinds)
 	filter := topology.WithContextFilter(cfg.EffectiveContextFilter())
+	// context_filter "off" is "the code asked for, nothing around it". The filter above only
+	// hides the neighbours a visibility applies to, and several context lines -- base classes,
+	// implemented interfaces, a described callee -- render regardless, so "off" is enforced
+	// here, where every unit passes, rather than in forty render loops. A package or dependency
+	// read is the exception: it has no source, and its listing IS what was asked for.
+	contextOff := cfg.ContextOff()
 
 	topo, topoErr := r.mgr.ReadAll()
 
@@ -306,6 +350,10 @@ func (r *Read) ReadIDs(rawIDs []string, opt ReadIDsOptions) (string, error) {
 	build := func(topo *domain.Topology, topoErr error, st *renderstate.State) ([]readunit.Unit, []string) {
 		var units []readunit.Unit
 		var problems []string
+		// normalizeIDs drops repeats by the string the model typed, but `Point`,
+		// `shapes.Point` and `shapes.py:Point` are three strings and one resource. The schema
+		// says duplicates are ignored, so they are ignored by what they RESOLVE to.
+		resolved := map[string]bool{}
 		for _, id := range ids {
 			u, note, err := r.unitFor(topo, topoErr, id, allowed, kinds, filter, opt.ForcedKind, st, fileMode, skeletonThreshold)
 			switch {
@@ -313,16 +361,40 @@ func (r *Read) ReadIDs(rawIDs []string, opt ReadIDsOptions) (string, error) {
 				problems = append(problems, fmt.Sprintf("- %s: %v", id, err))
 			case note != "":
 				problems = append(problems, fmt.Sprintf("- %s: %s", id, note))
+			case u.ID != "" && resolved[u.ID]:
+				// Already in this response under another spelling.
 			default:
+				resolved[u.ID] = true
 				u.Label = displayPath(topo, u.Path)
 				u.Body = abridgeSymbolBody(u, maxSymbolLines)
+				if contextOff && u.Kind != domain.ResourcePackage && u.Kind != domain.ResourceDependency {
+					u.Context = nil
+				}
 				units = append(units, u)
 			}
 		}
+		dropRepeatedSource(topo, units)
 		return units, problems
 	}
 
 	units, problems := build(topo, topoErr, st)
+
+	// FRESHNESS. Every body above was cut at a span the index recorded, and nothing guarantees
+	// the file still matches it: an edit made outside the session never reaches the graph on
+	// its own (the guard's pre-tool scan does not see MCP calls, and `arac serve` never
+	// scans). Cut only catches a span that runs past the end of the file, so a span that
+	// still fits was served as whatever lines now sit there -- two methods of one file each
+	// came back showing the other's source. So the files this response cut from are checked
+	// here, one stat each, and if any changed they are re-indexed and the units rebuilt.
+	// Checked after the build rather than before it because only the units know which files
+	// they touched; on the common, fresh path that costs nothing but the stats.
+	if topoErr == nil && r.freshen(touchedFiles(topo, units)) {
+		if refreshed, err := r.mgr.ReadAll(); err == nil {
+			topo = refreshed
+			st = renderstate.New()
+			units, problems = build(topo, topoErr, st)
+		}
+	}
 
 	// The neighbours this response is about to name are only known once the units exist, so
 	// the fill happens between building them and rendering them -- and a fill that writes
@@ -406,6 +478,39 @@ func withoutTopology(units []readunit.Unit) []readunit.Unit {
 		out[i].Incoming = nil
 	}
 	return out
+}
+
+// dropRepeatedSource empties the body of a unit whose source another unit in the batch already
+// prints: its declaration lies inside the other's, and the other's body carries its text
+// verbatim. The unit stays -- its context still belongs to the answer -- it just has no source
+// left to add.
+//
+// The render ledger catches the common shape of this (a class and a member that inlines it),
+// but not a member whose class is too big to inline -- it prints only itself, and the class
+// read prints it again -- nor an interface with its own default method. Checking the text as
+// well as the spans keeps an abridged class, which no longer holds the member's lines, from
+// swallowing it.
+func dropRepeatedSource(topo *domain.Topology, units []readunit.Unit) {
+	if topo == nil || len(units) < 2 {
+		return
+	}
+	for i := range units {
+		body := strings.TrimSpace(units[i].Body)
+		inner, ok := topo.Resources[units[i].ID]
+		if body == "" || !ok || units[i].Kind == domain.ResourceFile {
+			continue
+		}
+		for j := range units {
+			outer, ok := topo.Resources[units[j].ID]
+			if i == j || !ok || units[j].Kind == domain.ResourceFile || outer.Location == inner.Location {
+				continue
+			}
+			if outer.Location.Contains(inner.Location) && strings.Contains(units[j].Body, body) {
+				units[i].Body = ""
+				break
+			}
+		}
+	}
 }
 
 // unitIDs is the canonical ids a response will show as source: the seeds a read fill plans
@@ -560,8 +665,14 @@ func (r *Read) unitFor(topo *domain.Topology, topoErr error, id string, allowed 
 		if !allowed[domain.ResourceFile] {
 			return readunit.Unit{}, "", resolveErr
 		}
-		if u, err := r.rawFileUnit(topo, id); err == nil {
+		u, rawErr := r.rawFileUnit(topo, id)
+		if rawErr == nil {
 			return u, "", nil
+		}
+		// The file IS there and was refused -- over read.max_file_size, or binary. Saying so
+		// beats a "did you mean" list of other files, which reads as "no such file".
+		if !errors.Is(rawErr, errNoReadableFile) {
+			return readunit.Unit{}, "", rawErr
 		}
 		return readunit.Unit{}, "", resolveErr
 	}
@@ -600,12 +711,7 @@ func (r *Read) healStale(se *topology.StaleIndexError, id string, match func(dom
 	if r.reg == nil || se.Path == "" {
 		return readunit.Unit{}, "", original
 	}
-	// Under the per-file lock, so a re-index racing a concurrent edit of the same file cannot
-	// interleave with it.
-	if _, err := r.mgr.WithFileLock(se.Path, func(bool) (string, error) {
-		_, updErr := r.mgr.UpdateFile(se.Path, r.reg)
-		return "", updErr
-	}); err != nil {
+	if err := r.reindex(se.Path); err != nil {
 		return readunit.Unit{}, "", original
 	}
 
@@ -623,6 +729,72 @@ func (r *Read) healStale(se *topology.StaleIndexError, id string, match func(dom
 		return readunit.Unit{}, "", original
 	}
 	return r.buildUnit(topo, target, filter, st, fileMode, smallThreshold)
+}
+
+// reindex re-parses one file into the topology through the single-file update path, under the
+// per-file lock, so a re-index racing a concurrent edit of the same file cannot interleave
+// with it.
+func (r *Read) reindex(path string) error {
+	_, err := r.mgr.WithFileLock(path, func(bool) (string, error) {
+		_, updErr := r.mgr.UpdateFile(path, r.reg)
+		return "", updErr
+	})
+	return err
+}
+
+// freshen re-indexes every file among paths that changed on disk since the index recorded it,
+// and reports whether it re-indexed anything -- the caller's cue that whatever it built or
+// resolved against the graph it holds is out of date and must be done again.
+//
+// The check is topology.StaleFiles: one stat per path against the file manifest. A nil
+// registry cannot re-parse anything, so it reports false and the read proceeds as before.
+func (r *Read) freshen(paths []string) bool {
+	if r.reg == nil || len(paths) == 0 {
+		return false
+	}
+	refreshed := false
+	for _, path := range r.mgr.StaleFiles(paths) {
+		if r.reindex(path) == nil {
+			refreshed = true
+		}
+	}
+	return refreshed
+}
+
+// touchedFiles is every file the units' bodies may have been cut from: each unit's own file,
+// the files of what it covers, and the files of every resource those reach in one hop --
+// which is where the context section's inlined neighbour source (a small callee's whole
+// body, say) comes from. A superset is fine: a file that was not cut from costs one stat.
+func touchedFiles(topo *domain.Topology, units []readunit.Unit) []string {
+	if topo == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	add := func(path string) {
+		if path != "" && !seen[path] {
+			seen[path] = true
+			out = append(out, path)
+		}
+	}
+	for _, u := range units {
+		add(u.Path)
+		for _, id := range append([]string{u.ID}, u.Covers...) {
+			res, ok := topo.Resources[id]
+			if !ok {
+				continue
+			}
+			add(res.Location.Path)
+			for _, targets := range res.Connections {
+				for _, target := range targets {
+					if n, ok := topo.Resources[target]; ok {
+						add(n.Location.Path)
+					}
+				}
+			}
+		}
+	}
+	return out
 }
 
 // indexHealthNote is the line appended under "# UNRESOLVED:" when the database has drifted
@@ -685,19 +857,19 @@ func (r *Read) buildUnit(topo *domain.Topology, t readTarget, filter topology.To
 		switch t.res.Language {
 		case "go":
 			ctx, err := golang.NewGoManager(r.mgr).ReadStruct(t.id, filter)
-			return wrap(gotools.StructUnit, ctx, err)
+			return wrapStateful(gotools.StructUnit, ctx, err, st)
 		case "python":
 			ctx, err := python.NewPythonManager(r.mgr).ReadClass(t.id, filter)
-			return wrap(pythontools.ClassUnit, ctx, err)
+			return wrapStateful(pythontools.ClassUnit, ctx, err, st)
 		case "javascript", "typescript":
 			ctx, err := javascript.NewJavaScriptManager(r.mgr).ReadClass(t.id, filter)
-			return wrap(jstools.ClassUnit, ctx, err)
+			return wrapStateful(jstools.ClassUnit, ctx, err, st)
 		case "rust":
 			ctx, err := rust.NewRustManager(r.mgr).ReadStruct(t.id, filter)
-			return wrap(rusttools.StructUnit, ctx, err)
+			return wrapStateful(rusttools.StructUnit, ctx, err, st)
 		case "java":
 			ctx, err := java.NewJavaManager(r.mgr).ReadStruct(t.id, filter)
-			return wrap(javatools.StructUnit, ctx, err)
+			return wrapStateful(javatools.StructUnit, ctx, err, st)
 		}
 	case domain.ResourceInterface:
 		switch t.res.Language {
@@ -781,6 +953,17 @@ func wrapStateful[T any](build func(T, *renderstate.State) readunit.Unit, ctx T,
 // context section should have been showing all along.
 func (r *Read) fileUnit(topo *domain.Topology, t readTarget, filter domain.ContextFilter,
 	fileMode string, smallThreshold int) (readunit.Unit, string, error) {
+	// read.max_file_size: "files above this are neither read nor indexed". The raw-file path
+	// always refused them; an INDEXED file -- one scanned before it grew, or before the limit
+	// applied at indexing -- was served whole, in one 600 KB tool result. Its declarations
+	// are still readable one by one.
+	if limit := r.cfgOrLoad().EffectiveMaxFileSize(); limit > 0 {
+		if info, err := os.Stat(t.id); err == nil && info.Size() > limit {
+			return readunit.Unit{}, "", fmt.Errorf("file %q is %d bytes, exceeding the configured "+
+				"read.max_file_size of %d bytes; read the declarations in it by id instead",
+				displayPath(topo, t.id), info.Size(), limit)
+		}
+	}
 	var body string
 	if fileMode == helper.FileModeSkeleton {
 		// The locator is passed so the skeleton's markers speak the identification mode's
@@ -855,8 +1038,12 @@ func (r *Read) rawFileUnit(topo *domain.Topology, id string) (readunit.Unit, err
 		}
 		return readunit.Unit{ID: cand, Kind: domain.ResourceFile, Path: cand, Body: content}, nil
 	}
-	return readunit.Unit{}, fmt.Errorf("not found in topology and not a readable file")
+	return readunit.Unit{}, errNoReadableFile
 }
+
+// errNoReadableFile is rawFileUnit finding no file at all under any candidate path, as opposed
+// to finding one and refusing it.
+var errNoReadableFile = errors.New("not found in topology and not a readable file")
 
 // readPathCandidates returns the input followed by alternative path forms: its absolute form,
 // and (for a relative input) its form joined onto the topology root.

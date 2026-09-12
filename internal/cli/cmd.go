@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/Rhuan-Marques/aracne/internal/helper"
@@ -16,6 +15,7 @@ import (
 	"github.com/Rhuan-Marques/aracne/internal/topogrep"
 	"github.com/Rhuan-Marques/aracne/internal/topology"
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	"golang.org/x/term"
 )
 
 // RunCmd is `arac cmd -- <command…>`: run a shell read or search, answered from the topology
@@ -112,6 +112,16 @@ func serveCommand(argv []string, piped bool) (out string, status int, refusal er
 	if !commandIsAvailable(argv[0]) {
 		return "", 0, nil, false
 	}
+	// A PATH-LESS rg READS ITS STDIN WHEN STDIN HOLDS DATA. ripgrep, ag and ack walk the working
+	// directory only when stdin is a terminal or /dev/null -- which is what an agent's shell
+	// hands them -- and search the file or pipe they were given otherwise; ugrep reads any stdin
+	// that is not a terminal. Parse cannot tell which, because it does no I/O, but this process
+	// was handed exactly the stdin the real command would have been, so it can. Answering
+	// `rg retry < README.md` with a search of the tree returned five files' matches for a
+	// question about one.
+	if req.Kind == shellcmd.KindGrep && stdinWouldBeSearched(req.Grep.Stdin, os.Stdin) {
+		return "", 0, nil, false
+	}
 	dbPath := guardDBPath("")
 	if !fileExists(dbPath) {
 		return "", 0, nil, false
@@ -138,7 +148,7 @@ func serveCommand(argv []string, piped bool) (out string, status int, refusal er
 		out, refusal, ok := serveRead(rd, cfg, req, dbPath)
 		return out, 0, refusal, ok
 	case shellcmd.KindGrep:
-		gOut, gStatus, gOK := serveGrep(mgr, cfg, req, piped)
+		gOut, gStatus, gOK := serveGrep(mgr, cfg, req, argv[0], piped)
 		return gOut, gStatus, nil, gOK
 	}
 	return "", 0, nil, false
@@ -160,6 +170,29 @@ func commandIsAvailable(word string) bool {
 	}
 	_, err := exec.LookPath(word)
 	return err == nil
+}
+
+// stdinWouldBeSearched reports whether the real command, handed this stdin, would search it
+// instead of the working directory. See shellcmd.StdinRule for which test each tool applies.
+func stdinWouldBeSearched(rule shellcmd.StdinRule, stdin *os.File) bool {
+	if stdin == nil {
+		return false
+	}
+	switch rule {
+	case shellcmd.StdinIfData:
+		// ripgrep's own test: a regular file, a pipe or a socket is data someone put there. A
+		// terminal and /dev/null -- the Bash tool's stdin -- are character devices, and rg
+		// walks the tree for both, as it does for a stdin it cannot even stat.
+		info, err := stdin.Stat()
+		if err != nil {
+			return false
+		}
+		mode := info.Mode()
+		return mode.IsRegular() || mode&(os.ModeNamedPipe|os.ModeSocket) != 0
+	case shellcmd.StdinUnlessTerminal:
+		return !term.IsTerminal(int(stdin.Fd()))
+	}
+	return false
 }
 
 // serveRead answers a read command. Every operand must be answerable: a half-enhanced
@@ -420,7 +453,7 @@ func resolveWindow(w shellcmd.Window, lo, hi int) (from, to int, ok bool) {
 // changes WHICH rows a `| head -N` keeps. Plain mode is those four additions turned off. What
 // survives is the reason to intercept at all: the walk still honours scan.ignore and skips the
 // trees no search wants.
-func serveGrep(mgr *topology.TopologyManager, cfg *helper.Config, req shellcmd.Request, piped bool) (string, int, bool) {
+func serveGrep(mgr *topology.TopologyManager, cfg *helper.Config, req shellcmd.Request, argv0 string, piped bool) (string, int, bool) {
 	topo, err := mgr.ReadAll()
 	if err != nil || topo == nil {
 		return "", 0, false
@@ -454,18 +487,40 @@ func serveGrep(mgr *topology.TopologyManager, cfg *helper.Config, req shellcmd.R
 		// caller can actually type. See topogrep.Options.Terse.
 		Terse: true,
 		Plain: piped,
+		// -R, and the filename filters as grep applies them: in order, and to the operands too.
+		FollowLinks: req.Grep.FollowLinks,
+		GrepFilters: gnuGrepFamily[req.Name],
+		CountZeros:  countsZeros[req.Name],
+		// grep in a UTF-8 locale and rg both read `é` as a word character; Go does not. A word
+		// test that lands beside one is left to the real command.
+		UnicodeWords: true,
 	}
-	if topo.Root != "" {
-		opt.Ignore = domain.BuildIgnoreMatcher(topo.Root, cfg.Scan.Ignore)
+	if opt.GrepFilters {
+		for _, f := range req.Grep.Filters {
+			opt.NameFilters = append(opt.NameFilters, topogrep.NameFilter{Glob: f.Glob, Exclude: f.Exclude})
+		}
 	}
+	// RIPGREP DECIDES WHICH FILES IT SEARCHES, and no walk here reproduces how: .gitignore,
+	// .ignore and .rgignore at every level and above the root, the global excludes, hidden files,
+	// its own glob dialect (`*.{json,yaml}`, `a/**/b`, `!dir/`) and its type table. Serving `rg`
+	// as a `grep -r` listed .git hooks, hidden CI files and gitignored bundles, and found nothing
+	// for every brace glob. So rg is asked -- `rg --files` with the same filters and roots is the
+	// exact list -- and the search visits that list, spelled as rg spells it.
+	if req.Name == "rg" {
+		files, listed := ripgrepFiles(argv0, req, roots)
+		if !listed {
+			return "", 0, false
+		}
+		opt.Only, opt.Globs, opt.ExcludeGlobs, opt.Type = files, nil, nil, ""
+	}
+	scopeToSpan(&opt, restrict)
+	// An error is a search that could not look, or one that met what it does not model
+	// (topogrep.ErrUnmodelled): either way the real command answers.
 	res, err := topogrep.SearchWith(opt, topo)
 	if err != nil {
 		return "", 0, false
 	}
-	if restrict != nil {
-		restrictResultToRange(res, restrict.StartsAt, restrict.EndsAt)
-	}
-	// After the range restriction, not before: a node the window dropped is a node this
+	// After the search, which kept to the resource's span: a node outside it is a node this
 	// answer will never print, and describing it would be paying for a line nobody sees.
 	lazydesc.New(mgr, cfg, "").FillSearch(topo, res)
 	// grep's exit vocabulary, and it is mode-aware because the modes answer different
@@ -489,6 +544,51 @@ func serveGrep(mgr *topology.TopologyManager, cfg *helper.Config, req shellcmd.R
 		return "", status, true
 	}
 	return strings.TrimRight(out, "\n") + "\n", status, true
+}
+
+// gnuGrepFamily are the commands whose --include, --exclude and --exclude-dir follow GNU grep's
+// rules, and countsZeros the ones whose -c prints `path:0` for a file with no match. ripgrep
+// and ag print only files that matched.
+var (
+	gnuGrepFamily = map[string]bool{"grep": true, "egrep": true, "fgrep": true}
+	countsZeros   = map[string]bool{"grep": true, "egrep": true, "fgrep": true, "ug": true, "ack": true}
+)
+
+// ripgrepFiles is the list of files ripgrep would search for this request, spelled as it prints
+// them: `rg --files` with the same globs, in the same order, the same type and the same roots.
+// Nothing else in the request changes which files rg opens -- every flag that would (--hidden,
+// -u, --no-ignore, -L, a type exclusion) is one shellcmd does not model, so the command never
+// got this far. False when rg cannot list them; the real command then reports why.
+func ripgrepFiles(argv0 string, req shellcmd.Request, roots []string) ([]string, bool) {
+	bin, err := exec.LookPath(argv0)
+	if err != nil {
+		return nil, false
+	}
+	args := []string{"--files", "--null"}
+	for _, f := range req.Grep.Filters {
+		glob := f.Glob
+		if f.Exclude {
+			glob = "!" + glob
+		}
+		args = append(args, "--glob="+glob)
+	}
+	if req.Grep.Type != "" {
+		args = append(args, "--type="+req.Grep.Type)
+	}
+	args = append(append(args, "--"), roots...)
+	// Stdin is left at /dev/null, the terminal-like stdin under which a path-less rg walks the
+	// working directory -- the only case serveCommand lets through.
+	out, err := exec.Command(bin, args...).Output()
+	if err != nil {
+		return nil, false
+	}
+	var files []string
+	for _, f := range strings.Split(string(out), "\x00") {
+		if f != "" {
+			files = append(files, f)
+		}
+	}
+	return files, true
 }
 
 // anchorPattern applies grep's literal and anchoring flags to a pattern.
@@ -521,8 +621,10 @@ func grepRoots(mgr *topology.TopologyManager, operands []string,
 	switch len(operands) {
 	case 0:
 		// Only reached for the tools whose path-less form already means "the tree", and for
-		// `grep -r` with no operand; see shellcmd.parseGrep.
-		return []string{"."}, nil, true
+		// `grep -r` with no operand; see shellcmd.parseGrep. No roots rather than ".": the
+		// working directory is walked either way, but only a `.` the caller typed is echoed as
+		// the `./` on every row.
+		return nil, nil, true
 	case 1:
 		root, loc, ok := grepScope(mgr, operands[0], cfg)
 		if !ok {
@@ -588,43 +690,19 @@ func displayRoot(path string) string {
 	return rel
 }
 
-// restrictResultToRange narrows a search to the lines of one resource, recomputing the
-// accounting so the rendered trailer still describes what was actually found.
-func restrictResultToRange(res *topogrep.Result, from, to int) {
-	if res == nil || from < 1 || to < from {
+// scopeToSpan confines a search to the lines of the resource an operand named, and leaves it
+// alone when the operands named none.
+//
+// The span goes ON THE SEARCH, not on its finished result, and the difference is the head
+// limit. Trimming the result kept only rows that had already survived the 200-row cap, so a
+// resource whose file held more than 200 earlier matches came back empty with exit 1 -- while
+// `-c` on the same operand said 2 -- and the trim reset the truncation flag, so nothing said a
+// cap had been involved. See topogrep.Options.FromLine.
+func scopeToSpan(opt *topogrep.Options, loc *domain.Location) {
+	if loc == nil || loc.StartsAt < 1 || loc.EndsAt < loc.StartsAt {
 		return
 	}
-	kept := res.Matches[:0]
-	files := map[string]bool{}
-	counts := map[string]int{}
-	resources := map[string]bool{}
-	for _, m := range res.Matches {
-		if m.Line < from || m.Line > to {
-			continue
-		}
-		kept = append(kept, m)
-		// Files and Counts describe TEXTUAL matches only, the same rule SearchWith applies:
-		// a node row is not a match of the string, and a count has to be a count.
-		if !m.NodeHit {
-			files[m.Path] = true
-			counts[m.Path]++
-			if m.ResourceID != "" {
-				resources[m.ResourceID] = true
-			}
-		}
-	}
-	res.Matches = kept
-	res.Files = res.Files[:0]
-	for p := range files {
-		res.Files = append(res.Files, p)
-	}
-	// Sorted, because a map's iteration order is not one: `grep -l pat some.Resource` would
-	// otherwise list its files in a different order on every run.
-	sort.Strings(res.Files)
-	res.Counts = counts
-	res.Total = len(kept)
-	res.Truncated = false
-	res.DistinctResources = len(resources)
+	opt.FromLine, opt.ToLine = loc.StartsAt, loc.EndsAt
 }
 
 // regexpQuote escapes a literal pattern for `-F`/`fgrep`, where the caller expects no regex

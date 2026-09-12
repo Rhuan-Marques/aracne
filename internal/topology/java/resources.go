@@ -77,6 +77,12 @@ type JavaClass struct {
 	Variants []string
 	// Components holds record header components (when IsRecord).
 	Components []VariableDefinition
+	// Bases holds the raw superclass names from an `extends` clause, before resolution (at
+	// most one in Java). Kept even when the name resolves to nothing in the project: a
+	// superclass with no inherits edge behind it is a class from a dependency or the JDK,
+	// whose methods this scan cannot read -- which is what lets the conformance check tell
+	// "inherits it from somewhere unreadable" apart from "does not have it".
+	Bases []string
 	// Permits holds the names from a `permits` clause (when IsSealed).
 	Permits []string
 	// Generics holds declared type-parameter names, e.g. ["T"].

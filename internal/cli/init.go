@@ -113,7 +113,24 @@ func RunInit(args []string) {
 	}
 	fmt.Printf("Saved your answers to %s\n\n", configPath)
 
-	manager := initScan(reg)
+	finishInit(reg, cfg, answers, *global)
+}
+
+// finishInit is everything `arac init` does once the answers are saved: scan, write the
+// integration, and sweep or not.
+//
+// A FAILED SCAN DOES NOT END IT. It used to exit here -- after the config was saved and before
+// the integration was written -- so a repository with no source file yet (`no language scanner
+// detected`), or any other scan error, came out of the wizard half set up, with a message that
+// did not name the command that finishes the job. The integration does not need the graph: it
+// is written with the language-free contract, and the failure is reported with what to run.
+func finishInit(reg *scanner.Registry, cfg *helper.Config, answers initAnswers, global bool) {
+	manager, scanErr := initScan(reg)
+	if scanErr != nil {
+		fmt.Fprintf(os.Stderr, "The initial scan failed: %v\n"+
+			"The integration is written anyway, with the language-free contract. Once `arac scan`\n"+
+			"succeeds, run `arac setup` to name this project's languages in it.\n", scanErr)
+	}
 
 	// The scan comes FIRST, and the integration files second. The contract's per-language
 	// sections are read out of the database (TopologyLanguages), so a setup that ran before
@@ -124,9 +141,12 @@ func RunInit(args []string) {
 	// questions after a full-screen flow is a second, worse prompt, and the markdown files
 	// are merged in place rather than clobbered.
 	fmt.Println()
-	runSetupFor(answers, *global)
+	runSetupFor(answers, global)
 
-	if answers.DescribeNow {
+	if answers.DescribeNow && scanErr != nil {
+		fmt.Fprint(os.Stderr, "\nSkipping the description sweep: there is no graph to describe. "+
+			"Run `arac descriptions generate` after a successful `arac scan`.\n")
+	} else if answers.DescribeNow {
 		fmt.Println()
 		sweepDescriptions(manager, reg, cfg)
 	} else {
@@ -149,12 +169,14 @@ To write the integration files without questions:
   arac setup --claude        Claude Code only
   arac setup --opencode      OpenCode only
 
-They render from .aracne/config.json, whose four setup keys are:
+They render from .aracne/config.json, whose five setup keys are:
   "mode"                 mcp | cli | intercept_id | intercept_line_ranges
   "contract_verbosity"   low | high
   "descriptions"         {"provider": "anthropic", "api_key_env": "ANTHROPIC_API_KEY"}
                          {"provider": "cli", "cli_provider_command": "claude -p"}
   "llm": {"<any>": {"agents": {"descriptions-generation-executor": {"model": "..."}}}}
+  "preload_mcp_tools"    true | false   (Claude Code + mode "mcp" only; omit to leave
+                         ENABLE_TOOL_SEARCH alone)
 `
 
 // askInitQuestions runs the flow, opening the terminal and giving it back whatever happens.
@@ -216,6 +238,23 @@ func runInitQuestions(s *tui.Session, cfg *helper.Config, sourceFiles int) (init
 		return a, err
 	}
 	a.Verbosity = chosenVerbosity
+
+	// Question seven, asked only where it means anything -- which is decided by the answers
+	// to questions one and two, both already collected. See initAnswers.asksPreloadTools.
+	if a.asksPreloadTools() {
+		preload := preloadToolsQuestion()
+		// Like mode and verbosity, a re-run opens on the answer the project already has.
+		// Unlike them the key is a tri-state, and nil is not false: a project that has
+		// never answered gets the first row, which is the one this mode wants.
+		if cfg.PreloadMCPTools != nil && !*cfg.PreloadMCPTools {
+			preload.Default = indexOfValue(preload, preloadToolsDeferred)
+		}
+		_, chosenPreload, err := tui.Select(s, preload)
+		if err != nil {
+			return a, err
+		}
+		a.PreloadTools = chosenPreload == preloadToolsEager
+	}
 	return a, nil
 }
 
@@ -329,7 +368,7 @@ const describeEverythingFileCap = 800
 // initScan builds the topology, with the progress bar the wizard has already earned the right
 // to draw: it is on a terminal by definition, and a first scan of an unindexed repository is
 // the longest thing this command does.
-func initScan(reg *scanner.Registry) *topology.TopologyManager {
+func initScan(reg *scanner.Registry) (*topology.TopologyManager, error) {
 	const dbPath = ".aracne/topology.db"
 	cfg := helper.LoadConfig(helper.ConfigPath(dbPath))
 
@@ -345,13 +384,13 @@ func initScan(reg *scanner.Registry) *topology.TopologyManager {
 	fmt.Println("Scanning the project...")
 	scanner.SetProgressEnabled(true)
 	start := time.Now()
-	if _, err := manager.IncrementalScan(".", reg); err != nil {
-		fmt.Fprintf(os.Stderr, "Error scanning project: %v\n", err)
-		os.Exit(1)
-	}
+	_, err := manager.IncrementalScan(".", reg)
 	scanner.SetProgressEnabled(false)
+	if err != nil {
+		return manager, err
+	}
 	fmt.Printf("Topology built in %s\n", time.Since(start).Round(time.Millisecond))
-	return manager
+	return manager, nil
 }
 
 // runSetupFor writes the integration the harness answer selected.

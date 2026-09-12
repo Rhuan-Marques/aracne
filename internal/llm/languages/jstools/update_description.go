@@ -33,7 +33,7 @@ func (u *UpdateDescriptionTool) Description() string {
 func (u *UpdateDescriptionTool) Parameters() []Parameter {
 	return []Parameter{
 		{Name: "id", Type: "string", Description: "Resource ID", Required: true},
-		{Name: "resource_name", Type: "string", Description: "Resource kind: Function, Class(Type), Variable, File, Package", Required: true},
+		{Name: "resource_name", Type: "string", Description: "Resource kind: Function, Method, Class(Type), Interface, NamedType, Variable, File, Package", Required: true},
 		{Name: "description", Type: "string", Description: "The new description text", Required: true},
 	}
 }
@@ -53,8 +53,15 @@ func (u *UpdateDescriptionTool) Run(args json.RawMessage) (string, error) {
 	switch params.ResourceName {
 	case "Function":
 		kind = domain.ResourceFunction
+	// A class member is stored as kind `method`, and the write filters on kind.
+	case "Method":
+		kind = domain.ResourceMethod
 	case "Class", "Struct", "Type":
 		kind = domain.ResourceStruct
+	case "Interface":
+		kind = domain.ResourceInterface
+	case "NamedType":
+		kind = domain.ResourceNamedType
 	case "ExternalVar", "Variable":
 		kind = domain.ResourceVariable
 	case "File", "Module":

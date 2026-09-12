@@ -16,6 +16,9 @@ import (
 type Write struct {
 	mgr *topology.TopologyManager
 	reg *scanner.Registry
+	// OmitWarnings leaves the topology warnings out of the result, for a caller that reports
+	// them itself -- see Edit.OmitWarnings.
+	OmitWarnings bool
 }
 
 // Creates a Write tool for editing and writing files with topology updates.
@@ -72,9 +75,13 @@ func (w *Write) apply(filePath, contentStr string) (string, error) {
 		return "", fmt.Errorf("create directories: %w", err)
 	}
 
+	// The same cross-process lock `arac edit` takes: each call is its own process, and a whole
+	// file written between another process's read and its rename is an edit silently undone.
 	// Atomic: a truncate-then-write that is interrupted leaves the file empty, and this
 	// tool's whole job is to leave a file whose contents the caller stated.
-	if err := helper.AtomicWriteFile(filePath, []byte(contentStr), 0644); err != nil {
+	if err := helper.WithPathLock([]string{filePath}, func() error {
+		return helper.AtomicWriteFile(filePath, []byte(contentStr), 0644)
+	}); err != nil {
 		return "", fmt.Errorf("write file: %w", err)
 	}
 
@@ -83,7 +90,7 @@ func (w *Write) apply(filePath, contentStr string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("update topology: %w", err)
 		}
-		if len(warnings) > 0 {
+		if len(warnings) > 0 && !w.OmitWarnings {
 			var msgs []string
 			for _, w := range warnings {
 				msgs = append(msgs, fmt.Sprintf("  - [%s] %s (source: %s, target: %s)", w.Kind, w.Message, w.SourceID, w.TargetID))

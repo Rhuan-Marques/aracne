@@ -386,6 +386,10 @@ func TestGrepWithSeveralOperandsPassesThroughOrKeepsThemAll(t *testing.T) {
 // The dialect an agent's pattern is written in decides what it MEANS. These are the patterns
 // that actually appear in transcripts; each must survive into RE2 saying the same thing.
 func TestGrepRealWorldPatternsSurviveTheDialectRewrite(t *testing.T) {
+	// The POSIX classes follow LC_CTYPE (see asciiCtype), so the expectations below pin it
+	// rather than inheriting whatever locale the machine running the tests has.
+	t.Setenv("LC_ALL", "C.UTF-8")
+
 	for _, tc := range []struct{ cmd, want string }{
 		// Plain grep is BRE. Parentheses, braces, + and ? are ORDINARY characters there.
 		{`grep func(ctx .`, `func\(ctx`},
@@ -397,13 +401,14 @@ func TestGrepRealWorldPatternsSurviveTheDialectRewrite(t *testing.T) {
 		{`grep [Ee]rror .`, `[Ee]rror`},
 		{`grep .*Error .`, `.*Error`},
 		{`grep \.go$ .`, `\.go$`},
-		{`grep ^[[:space:]]*return .`, `^[[:space:]]*return`},
+		{`grep ^[[:space:]]*return .`, `^[\t\n\v\f\r\p{Z}]*return`},
 		{`grep \<Serve\> .`, `\bServe\b`},
 
-		// -E and the extended-by-default tools take the pattern as written.
-		{`grep -E ^func\s+\(?[A-Z] .`, `^func\s+\(?[A-Z]`},
+		// -E and the extended-by-default tools keep their operators. `\s` is spelled as the
+		// POSIX class, because GNU's and rg's take a vertical tab and RE2's does not.
+		{`grep -E ^func\s+\(?[A-Z] .`, `^func[\t\n\v\f\r\p{Z}]+\(?[A-Z]`},
 		{`egrep (foo|bar)+ .`, `(foo|bar)+`},
-		{`rg ^\s*func\s+\w+\( .`, `^\s*func\s+\w+\(`},
+		{`rg ^\s*func\s+\w+\( .`, `^[\t\n\v\f\r\p{Z}]*func[\t\n\v\f\r\p{Z}]+\w+\(`},
 		{`rg (?i)todo .`, `(?i)todo`},
 
 		// -F means every byte is literal; the escaping happens downstream, so the parser
@@ -441,7 +446,7 @@ func TestPathlessFormsFollowEachToolsOwnDefault(t *testing.T) {
 	for _, cmd := range []string{"grep needle", "egrep needle", "fgrep needle"} {
 		mustPass(t, cmd) // POSIX grep reads stdin
 	}
-	for _, cmd := range []string{"rg needle", "ag needle", "ack needle", "ug needle"} {
+	for _, cmd := range []string{"rg needle", "ug needle"} {
 		if got := Parse(strings.Fields(cmd)); got.Kind != KindGrep {
 			t.Errorf("%q walks the working directory: kind = %v (%s), want grep", cmd, got.Kind, got.Why)
 		}
@@ -479,6 +484,34 @@ func TestFilenameAndLineNumberFlagsAreCarried(t *testing.T) {
 		}
 		if got.Grep.LineNumbers != tt.lineNumber {
 			t.Errorf("%v: LineNumbers = %v, want %v", tt.argv, got.Grep.LineNumbers, tt.lineNumber)
+		}
+	}
+}
+
+// TestPathlessSearchCarriesItsStdinRule pins what a search with no path does with its stdin.
+//
+// Parse does no I/O, so it cannot know whether `rg foo` walks the tree (from a terminal, or
+// /dev/null) or searches the file in `rg foo < README.md` -- it can only say which test applies,
+// for the caller holding the real stdin. Answering the second with a search of the tree returned
+// five files' matches for a question about one.
+func TestPathlessSearchCarriesItsStdinRule(t *testing.T) {
+	for _, tt := range []struct {
+		cmd  string
+		want StdinRule
+	}{
+		{"rg needle", StdinIfData},
+		{"ug needle", StdinUnlessTerminal},
+		// -r means the working directory, whatever stdin holds, for GNU grep and for ugrep.
+		{"grep -r needle", StdinIgnored},
+		{"grep -rn needle", StdinIgnored},
+		{"ug -r needle", StdinIgnored},
+		// A named path is what is searched; stdin never enters into it.
+		{"rg needle .", StdinIgnored},
+		{"rg needle src", StdinIgnored},
+		{"grep -rn needle .", StdinIgnored},
+	} {
+		if got := grepOf(t, tt.cmd).Stdin; got != tt.want {
+			t.Errorf("%q: Stdin = %v, want %v", tt.cmd, got, tt.want)
 		}
 	}
 }

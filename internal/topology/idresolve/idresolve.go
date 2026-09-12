@@ -114,6 +114,7 @@ func Resolve(topo *domain.Topology, raw string, opt Options) Result {
 	// "the root prefix and the separators are not what I guessed" mistakes, because it
 	// compares the trailing identifiers and ignores both.
 	want := tokenize(raw)
+	sig := signatureOf(raw)
 	if len(want) > 0 {
 		var hits []string
 		for id, res := range topo.Resources {
@@ -124,6 +125,7 @@ func Resolve(topo *domain.Topology, raw string, opt Options) Result {
 				hits = append(hits, id)
 			}
 		}
+		hits = preferSignature(hits, sig)
 		if len(hits) == 1 {
 			return Result{ID: hits[0], Resource: topo.Resources[hits[0]], Tier: TierSuffix}
 		}
@@ -143,7 +145,14 @@ func Resolve(topo *domain.Topology, raw string, opt Options) Result {
 				}
 				return hits[i] < hits[j]
 			})
-			if depth[hits[0]] < depth[hits[1]] {
+			// Shorter alone is not enough. The rule exists for genuine NESTING -- `a.b.Foo`
+			// against `x.y.z.a.b.Foo`, where the short id is literally the tail of the long
+			// one -- and applied to resources that merely share a trailing name it answered
+			// a one-token query with whichever file happened to sort shortest, silently:
+			// `area` returned one of twenty unrelated `area`s, in another language, framed
+			// as the answer. So the shortest hit wins only when every other hit ENDS WITH
+			// it; otherwise these are different resources and the caller has to say which.
+			if depth[hits[0]] < depth[hits[1]] && nestedInAll(hits[0], hits[1:]) {
 				return Result{ID: hits[0], Resource: topo.Resources[hits[0]], Tier: TierSuffix}
 			}
 			return Result{Tier: TierAmbiguous, Candidates: candidatesFor(topo, hits)}
@@ -162,6 +171,7 @@ func Resolve(topo *domain.Topology, raw string, opt Options) Result {
 				hits = append(hits, id)
 			}
 		}
+		hits = preferSignature(hits, sig)
 		if len(hits) == 1 {
 			return Result{ID: hits[0], Resource: topo.Resources[hits[0]], Tier: TierName}
 		}
@@ -189,6 +199,22 @@ func Resolve(topo *domain.Topology, raw string, opt Options) Result {
 //
 // A Java signature is dropped before splitting so `Circle.area(int)` and `Circle.area`
 // tokenize alike; the exact tier still distinguishes overloads when the caller is precise.
+// nestedInAll reports whether every one of the other ids ends with the tokens of id -- the
+// "same resource, spelled with more of its path" relationship the shortest-id preference is
+// for. See the call site.
+func nestedInAll(id string, others []string) bool {
+	want := tokenize(id)
+	if len(want) == 0 {
+		return false
+	}
+	for _, other := range others {
+		if !hasTokenSuffix(tokenize(other), want) {
+			return false
+		}
+	}
+	return true
+}
+
 func tokenize(id string) []string {
 	if id == "" {
 		return nil
@@ -211,6 +237,38 @@ func tokenize(id string) []string {
 		}
 	}
 	return out
+}
+
+// signatureOf returns an ID's trailing parameter signature -- "(int,String)" -- with its
+// whitespace removed, or "" when it has none. The same rule tokenize uses to drop it.
+func signatureOf(id string) string {
+	if i := strings.LastIndex(id, "("); i > 0 && strings.HasSuffix(id, ")") {
+		return strings.Join(strings.Fields(id[i:]), "")
+	}
+	return ""
+}
+
+// preferSignature narrows hits to those whose signature is the one the caller wrote.
+//
+// tokenize drops the signature so `Circle.area` still finds `Circle.area(int)`. But a caller who
+// DID write one named an overload: `M.area(int)` matching both `M.area()` and `M.area(int)` and
+// coming back "ambiguous" threw away the one token that told them apart. When no hit carries
+// that signature the hits are returned unchanged, so a mistyped signature is no worse off than
+// an unsigned query.
+func preferSignature(hits []string, sig string) []string {
+	if sig == "" || len(hits) < 2 {
+		return hits
+	}
+	var exact []string
+	for _, h := range hits {
+		if signatureOf(h) == sig {
+			exact = append(exact, h)
+		}
+	}
+	if len(exact) == 0 {
+		return hits
+	}
+	return exact
 }
 
 // hasTokenSuffix reports whether `want` is a trailing run of `have`. The final token must

@@ -152,7 +152,7 @@ Usage:
 
 Flags for "scan":
   -root <path>    Root folder of the project (default ".")
-  -output <file>  Output SQLite database path (default ".aracne/topology.db")
+  -output <file>  Output SQLite database path (default "<root>/.aracne/topology.db")
   --all           Re-scan all files (preserves descriptions)
   --hard          Force full rebuild from scratch (clears descriptions and bugs)
   --default       Force the incremental scan (what a bare "arac scan" already does)
@@ -269,7 +269,7 @@ Flags for "setup":
     arac viz serve
     arac serve --tool-profile descriptions-generation-executor
     arac descriptions generate
-    arac descriptions clear --target function,type
+    arac descriptions clear --target function,struct
     arac read internal/topology/golang.GoManager
     arac read internal/cli/read.go
     arac read internal/cli.RunRead internal/cli.parseReadArgs`

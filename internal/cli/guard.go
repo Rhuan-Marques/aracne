@@ -187,6 +187,24 @@ func runClaudeGuardHook(input io.Reader, output io.Writer) {
 		if event.ToolName == "Bash" {
 			if command, _ := event.ToolInput["command"].(string); command != "" {
 				if rewritten, ok := interceptCommand(command, dbPath, cfg); ok {
+					// A rewrite answers the segments aracne serves and says NOTHING about the
+					// rest of the command line. interceptCommand works segment-wise, so
+					// `grep foo . ; sed -i s/a/b/ main.go` came back rewritten and the edit
+					// ran under a config that denies edits -- blocked_tools silently bypassed
+					// by chaining anything after a search. Re-deciding on the REWRITTEN text
+					// draws the line exactly right: the served segments now read as
+					// `arac cmd -- ...`, which implicates no key, so anything still blocked
+					// belongs to a segment interception did not answer.
+					decided := make(map[string]interface{}, len(event.ToolInput))
+					for k, v := range event.ToolInput {
+						decided[k] = v
+					}
+					decided["command"] = rewritten
+					if d := decideGuard(event.ToolName, decided, blocked, exemptPiped, dbPath, cfg.Surface()); d.Deny {
+						logGuardDecision(guardDenied, event.ToolName, command)
+						emitPreToolDeny(output, d.Message)
+						return
+					}
 					// Recorded here rather than inferred downstream: the rewrite reaches the
 					// model as `updatedInput`, and the transcript keeps the command the model
 					// WROTE -- so this is the only place that knows a command was answered
@@ -733,12 +751,36 @@ func splitCommandSegments(command string) []commandSegment {
 		curRedirect = false
 		segStart = nextStart
 	}
+	// A backslash escapes the next character the way the shell reads it: anywhere outside
+	// quotes, inside `$'…'`, and before `"`, `\`, `$` or a backtick inside double quotes. The
+	// escaped character is kept as a literal and can neither end a quote nor separate commands:
+	// without this `echo \; grep x f` was cut at the `;` and the rewrite was spliced into what
+	// bash passes to echo as an argument. escapedAt is the index of the last escaped rune, for
+	// the look-backs below that must not read a literal `>` as half of an operator.
+	escapedAt := -1
+	ansiC := false // inside `$'…'`, where a backslash escapes even a single quote
+	dollarAt := -1 // index of the last unquoted, unescaped `$`, which may open `$'…'`
 	for i := 0; i < len(runes); i++ {
 		r := runes[i]
+		if r == '\\' && i+1 < len(runes) && (quote == 0 || ansiC ||
+			quote == '"' && strings.ContainsRune("\"\\$`\n", runes[i+1])) {
+			i++
+			escapedAt = i
+			switch next := runes[i]; {
+			case next == '\n' && !ansiC:
+				// A line continuation: the shell removes both characters.
+			case next == ' ' || next == '\t':
+				put(quotedSpace)
+			default:
+				put(next)
+			}
+			continue
+		}
 		if quote != 0 {
 			switch {
 			case r == quote:
 				quote = 0
+				ansiC = false
 			case r == ' ' || r == '\t':
 				// Hold a quoted run together as ONE field. The quote characters
 				// themselves are dropped (so `sed -n '1,20p' f` still classifies), but
@@ -754,6 +796,10 @@ func splitCommandSegments(command string) []commandSegment {
 		switch r {
 		case '\'', '"':
 			quote = r
+			ansiC = r == '\'' && dollarAt == i-1
+		case '$':
+			dollarAt = i
+			put(r)
 		case '|':
 			if i+1 < len(runes) && runes[i+1] == '|' {
 				flush(i, i+2, false, ';') // `||` is logical OR, not a pipe
@@ -765,7 +811,7 @@ func splitCommandSegments(command string) []commandSegment {
 			flush(i, i+1, false, ';')
 		case '&':
 			// `2>&1` and `&>log` are redirection operators; only a bare `&` separates.
-			if isRedirectAmpersand(runes, i) {
+			if isRedirectAmpersand(runes, i, escapedAt) {
 				put(r)
 				continue
 			}
@@ -794,7 +840,7 @@ func splitCommandSegments(command string) []commandSegment {
 		case '>':
 			curRedirs = append(curRedirs, curLen)
 			switch {
-			case i > 0 && runes[i-1] == '>':
+			case i > 0 && runes[i-1] == '>' && escapedAt != i-1:
 				// The second half of `>>`; the first half already decided.
 			case i+1 < len(runes) && runes[i+1] == '&':
 				// `2>&1`, `>&2` duplicate a descriptor, they do not write a file.
@@ -913,9 +959,10 @@ func withoutRedirections(seg commandSegment) string {
 //
 // The look-back is at the RAW runes rather than at the accumulated segment text, which has had
 // its quote characters dropped: `echo ">"&ls` really is a separator, and runes[i-1] there is
-// the quote, not the `>`.
-func isRedirectAmpersand(runes []rune, i int) bool {
-	if i > 0 && runes[i-1] == '>' {
+// the quote, not the `>`. For the same reason an escaped `\>` (escapedAt == i-1) is a literal
+// character and does not make the `&` after it part of an operator.
+func isRedirectAmpersand(runes []rune, i, escapedAt int) bool {
+	if i > 0 && runes[i-1] == '>' && escapedAt != i-1 {
 		return true
 	}
 	return i+1 < len(runes) && runes[i+1] == '>'

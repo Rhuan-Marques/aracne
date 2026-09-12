@@ -2,10 +2,11 @@ package mcp
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
-	"strings"
 
 	"github.com/Rhuan-Marques/aracne/internal/llm/tools"
 )
@@ -20,34 +21,140 @@ func NewServer(registry *tools.Registry) *Server {
 	return &Server{registry: registry}
 }
 
-// Starts the MCP server's stdio event loop. Reads JSON-RPC 2.0 messages line by line from stdin, dispatches them to the appropriate handler, and writes responses to stdout. Returns any scanner error encountered.
+// maxMessageBytes bounds one JSON-RPC message. A line over it is answered with an error and
+// skipped; the connection stays up.
+const maxMessageBytes = 10 * 1024 * 1024
+
+// Starts the MCP server's stdio event loop. Reads JSON-RPC 2.0 messages line by line from stdin, dispatches them to the appropriate handler, and writes responses to stdout. Returns any read error other than end of input.
 func (s *Server) Serve() error {
-	sc := bufio.NewScanner(os.Stdin)
-	sc.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024)
+	return s.serve(os.Stdin, os.Stdout)
+}
 
-	for sc.Scan() {
-		line := strings.TrimRight(sc.Text(), "\r")
-		if len(line) == 0 {
-			continue
+// serve is Serve over any stream pair, so the loop itself can be tested.
+//
+// It reads with a bufio.Reader, not a bufio.Scanner. A Scanner treats a line over its buffer
+// as a fatal error: one oversized request -- a runaway tool argument -- ended the loop, and the
+// server exited from under the harness, taking every later call with it. Here an oversized
+// line is drained, answered with an error, and the next message is read as usual.
+func (s *Server) serve(in io.Reader, out io.Writer) error {
+	r := bufio.NewReaderSize(in, 64*1024)
+	for {
+		line, tooLong, err := readMessage(r, maxMessageBytes)
+		var reply interface{}
+		if tooLong {
+			reply = s.errorResponse(nil, codeInvalidRequest,
+				fmt.Sprintf("Invalid Request: message exceeds %d bytes", maxMessageBytes))
+		} else {
+			reply = s.handleMessage(line)
 		}
-
-		var req Request
-		if err := json.Unmarshal([]byte(line), &req); err != nil {
-			s.writeError(nil, -32700, "Parse error")
-			continue
+		if reply != nil {
+			b, _ := json.Marshal(reply)
+			out.Write(b)
+			out.Write([]byte{'\n'})
 		}
-
-		resp := s.dispatch(&req)
-		if resp != nil {
-			b, _ := json.Marshal(resp)
-			os.Stdout.Write(b)
-			os.Stdout.Write([]byte{'\n'})
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
 		}
 	}
-	// A scanner error -- a line over the buffer, a read failure -- used to end Serve, so the
-	// server vanished from under the harness with nothing said. It is reported and the loop
-	// simply ends; the caller prints it.
-	return sc.Err()
+}
+
+// readMessage reads one newline-terminated message. When it runs past limit the rest of the
+// line is consumed and discarded, and tooLong reports it. err is io.EOF after the last line.
+func readMessage(r *bufio.Reader, limit int) (line []byte, tooLong bool, err error) {
+	for {
+		chunk, rerr := r.ReadSlice('\n')
+		if !tooLong {
+			if len(line)+len(chunk) > limit+1 { // +1: the newline itself
+				tooLong, line = true, nil
+			} else {
+				line = append(line, chunk...)
+			}
+		}
+		if rerr == bufio.ErrBufferFull {
+			continue
+		}
+		return line, tooLong, rerr
+	}
+}
+
+// JSON-RPC 2.0 error codes.
+const (
+	codeParseError     = -32700 // not valid JSON
+	codeInvalidRequest = -32600 // valid JSON, but not a Request object
+	codeMethodNotFound = -32601
+	codeInvalidParams  = -32602 // MCP uses it for an unknown tool too
+)
+
+// handleMessage answers one line: a single request, or a batch (a JSON array of requests), as
+// JSON-RPC 2.0 defines them. It returns nil when nothing is owed -- a notification, or a batch
+// of them.
+//
+// Each failure gets the code the spec gives it. Invalid JSON is a parse error; JSON that is not
+// a request -- a bare number, no method, a jsonrpc other than "2.0" -- is an invalid request.
+// A batch used to be decoded as one object, fail, and come back as a parse error with no id.
+func (s *Server) handleMessage(line []byte) interface{} {
+	msg := bytes.TrimSpace(line)
+	if len(msg) == 0 {
+		return nil
+	}
+	if !json.Valid(msg) {
+		return s.errorResponse(nil, codeParseError, "Parse error")
+	}
+	if msg[0] != '[' {
+		if resp := s.handleRequest(msg); resp != nil {
+			return resp
+		}
+		return nil
+	}
+	var batch []json.RawMessage
+	if err := json.Unmarshal(msg, &batch); err != nil || len(batch) == 0 {
+		return s.errorResponse(nil, codeInvalidRequest, "Invalid Request: empty batch")
+	}
+	var replies []*Response
+	for _, m := range batch {
+		if resp := s.handleRequest(m); resp != nil {
+			replies = append(replies, resp)
+		}
+	}
+	if len(replies) == 0 {
+		return nil
+	}
+	return replies
+}
+
+// handleRequest validates one Request object and dispatches it.
+func (s *Server) handleRequest(raw json.RawMessage) *Response {
+	var req struct {
+		Request
+		Result json.RawMessage `json:"result"`
+		Error  json.RawMessage `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return s.errorResponse(nil, codeInvalidRequest, "Invalid Request")
+	}
+	id := req.ID
+	if len(id) > 0 && !validID(id) {
+		return s.errorResponse(nil, codeInvalidRequest, "Invalid Request: id must be a string, number or null")
+	}
+	if req.Method == "" && (req.Result != nil || req.Error != nil) {
+		return nil // a client's response to a request this server never sends: nothing to answer
+	}
+	if req.JSONRPC != "2.0" || req.Method == "" {
+		return s.errorResponse(id, codeInvalidRequest, "Invalid Request")
+	}
+	return s.dispatch(&req.Request)
+}
+
+// validID reports whether a request id is one JSON-RPC allows: a string, a number or null.
+func validID(id json.RawMessage) bool {
+	switch id[0] {
+	case '{', '[', 't', 'f':
+		return false
+	}
+	return true
 }
 
 // Routes incoming MCP JSON-RPC requests to the appropriate handler based on method name (initialize, tools/list, tools/call).
@@ -68,7 +175,7 @@ func (s *Server) dispatch(req *Request) *Response {
 		return &Response{JSONRPC: "2.0", ID: req.ID, Result: struct{}{}}
 	default:
 		if req.ID != nil {
-			return s.errorResponse(req.ID, -32601, fmt.Sprintf("Method not found: %s", req.Method))
+			return s.errorResponse(req.ID, codeMethodNotFound, fmt.Sprintf("Method not found: %s", req.Method))
 		}
 		return nil
 	}
@@ -148,11 +255,11 @@ func (s *Server) handleCallTool(id json.RawMessage, params json.RawMessage) *Res
 	var call CallToolParams
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &call); err != nil {
-			return s.errorResponse(id, -32602, "Invalid params")
+			return s.errorResponse(id, codeInvalidParams, "Invalid params")
 		}
 	}
 	if call.Name == "" {
-		return s.errorResponse(id, -32602, "Invalid params: missing tool name")
+		return s.errorResponse(id, codeInvalidParams, "Invalid params: missing tool name")
 	}
 	// An absent `arguments` is an empty object. An explicit `null` already decodes to the
 	// four bytes `null`, which unmarshals into a struct cleanly, so only absence needs this.
@@ -162,7 +269,9 @@ func (s *Server) handleCallTool(id json.RawMessage, params json.RawMessage) *Res
 
 	t, ok := s.registry.Get(call.Name)
 	if !ok {
-		return s.errorResponse(id, -32601, fmt.Sprintf("Tool not found: %s", call.Name))
+		// -32602, not -32601: the METHOD (tools/call) exists; the tool is a bad parameter to it.
+		// That is the code the MCP spec gives an unknown tool.
+		return s.errorResponse(id, codeInvalidParams, fmt.Sprintf("Unknown tool: %s", call.Name))
 	}
 
 	result, err := t.Run(call.Arguments)
@@ -184,14 +293,6 @@ func (s *Server) handleCallTool(id json.RawMessage, params json.RawMessage) *Res
 			Content: []ContentBlock{{Type: "text", Text: result}},
 		},
 	}
-}
-
-// Writes a JSON-RPC error response to stdout. Constructs the error response from the request ID, error code, and message, then marshals and prints it.
-func (s *Server) writeError(id json.RawMessage, code int, message string) {
-	resp := s.errorResponse(id, code, message)
-	b, _ := json.Marshal(resp)
-	os.Stdout.Write(b)
-	os.Stdout.Write([]byte{'\n'})
 }
 
 // Constructs a JSON-RPC 2.0 error response with the given request ID, error code, and message. Returns a Response pointer containing the error payload.

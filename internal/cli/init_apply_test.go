@@ -121,8 +121,18 @@ func TestCommandWithModel(t *testing.T) {
 		{"claude -p --model sonnet", "haiku", "claude -p --model sonnet"},
 		{"codex exec", "haiku", "codex exec"},
 		{"./scripts/describe.sh", "haiku", "./scripts/describe.sh"},
-		{"claude -p --max-turns 1", "haiku", "claude -p --max-turns 1"},
 		{"claude -p", "", "claude -p"},
+		// DE-12: any Claude CLI in print mode takes the flag, whatever else it was given --
+		// `claude -p --max-turns 1` is the command the docs recommend.
+		{"claude -p --max-turns 1", "haiku", "claude -p --max-turns 1 --model haiku"},
+		{"claude --print --max-turns 1", "haiku", "claude --print --max-turns 1 --model haiku"},
+		{"claude --max-turns 1 -p", "haiku", "claude --max-turns 1 -p --model haiku"},
+		{"/usr/local/bin/claude -p", "haiku", "/usr/local/bin/claude -p --model haiku"},
+		// ...and it stays narrow about the program and its mode.
+		{"claude --max-turns 1", "haiku", "claude --max-turns 1"},
+		{"claude -p -- describe these", "haiku", "claude -p -- describe these"},
+		{"claudette -p", "haiku", "claudette -p"},
+		{"codex exec -p", "haiku", "codex exec -p"},
 	} {
 		if got := commandWithModel(tc.command, tc.model); got != tc.want {
 			t.Errorf("commandWithModel(%q, %q) = %q, want %q", tc.command, tc.model, got, tc.want)

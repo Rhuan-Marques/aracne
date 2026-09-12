@@ -207,11 +207,19 @@ func writeGroup(b *strings.Builder, st *renderstate.State, g fileGroup) {
 		b.WriteString(render(st.NewImports(imports), st.NewImports(deps)))
 	}
 
-	for i, u := range g.units {
+	wrote := false
+	for _, u := range g.units {
+		// A unit with no body is one whose source another unit in this response already
+		// prints (a method inside a class read alongside it). It still contributes context;
+		// it just has nothing to add here, not even a blank line.
+		if strings.TrimSpace(u.Body) == "" {
+			continue
+		}
 		// One blank line between siblings, matching how they are spaced in the file itself.
-		if i > 0 {
+		if wrote {
 			b.WriteString("\n")
 		}
+		wrote = true
 		st.MarkRendered(u.Body)
 		b.WriteString(strings.TrimRight(u.Body, "\n"))
 		b.WriteString("\n")

@@ -118,7 +118,7 @@ func (o *OpenAI) StreamChatContext(ctx context.Context, messages []llm.Message, 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+o.apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := providerHTTP.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("do request: %w", err)
 	}

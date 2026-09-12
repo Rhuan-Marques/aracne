@@ -716,3 +716,99 @@ func TestNodeSearchIsANoOpWithoutTopology(t *testing.T) {
 		t.Fatalf("no topology means no node rows: %+v", res.Matches)
 	}
 }
+
+// A span is applied during the scan, so the head limit is measured against the lines inside it.
+// Trimmed afterwards -- the old shape -- a resource below more than DefaultHeadLimit earlier
+// matches kept none of its own, and the trim reset Truncated, so nothing said a cap was involved.
+func TestSpanIsAppliedBeforeTheHeadLimit(t *testing.T) {
+	dir := t.TempDir()
+	var body strings.Builder
+	for i := 0; i < DefaultHeadLimit+50; i++ {
+		body.WriteString("needle early\n")
+	}
+	body.WriteString("func Target() {\n\tneedle A\n\tfiller\n\tneedle B\n}\n")
+	writeTree(t, dir, map[string]string{"big.go": body.String()})
+	from := DefaultHeadLimit + 51 // the `func Target` line
+	opt := Options{Pattern: "needle", Root: filepath.Join(dir, "big.go"), FromLine: from, ToLine: from + 4}
+
+	res, err := SearchWith(opt, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Matches) != 2 || res.Total != 2 || res.Truncated {
+		t.Fatalf("want the span's 2 matches, untruncated; got %d of %d truncated=%v",
+			len(res.Matches), res.Total, res.Truncated)
+	}
+	for _, m := range res.Matches {
+		if m.Line < from || m.Line > from+4 {
+			t.Errorf("line %d is outside the span %d-%d", m.Line, from, from+4)
+		}
+	}
+	if n := res.Counts[res.Matches[0].Path]; n != 2 {
+		t.Errorf("count = %d, want the span's own 2", n)
+	}
+
+	// A cap the span's own matches exceed is reported against them.
+	opt.HeadLimit = 1
+	res, err = SearchWith(opt, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Matches) != 1 || res.Total != 2 || !res.Truncated {
+		t.Fatalf("want 1 of 2 truncated, got %d of %d truncated=%v", len(res.Matches), res.Total, res.Truncated)
+	}
+	if out := FormatResult(res, opt); !strings.Contains(out, "showing 1 of 2") {
+		t.Errorf("the truncation trailer must count the span's matches:\n%s", out)
+	}
+}
+
+// Context renders as ONE line-ordered stream per file, with `--` only between groups that do not
+// touch: byte for byte what GNU grep prints, and each expected output below is GNU grep's own.
+// Each match's after-window used to be printed whole before the next match, so a match inside
+// it came out below its own following lines -- `2:` `4-` `5-` `3:` `6-` for `-n -A3`.
+func TestContextRendersLikeGNUGrep(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ctx.txt")
+	writeTree(t, dir, map[string]string{"ctx.txt": "alpha\nShape one\nShape two\ngamma\ndelta\n" +
+		"epsilon\nzeta\nShape three\neta\ntheta\niota\nShape four\nkappa\n"})
+
+	for _, tc := range []struct {
+		flags                  string
+		before, after, maxEach int
+		numbered               bool
+		want                   string
+	}{
+		{"-n -A3", 0, 3, 0, true, "2:Shape one\n3:Shape two\n4-gamma\n5-delta\n6-epsilon\n--\n" +
+			"8:Shape three\n9-eta\n10-theta\n11-iota\n12:Shape four\n13-kappa"},
+		{"-n -B2", 2, 0, 0, true, "1-alpha\n2:Shape one\n3:Shape two\n--\n6-epsilon\n7-zeta\n" +
+			"8:Shape three\n--\n10-theta\n11-iota\n12:Shape four"},
+		{"-n -C1", 1, 1, 0, true, "1-alpha\n2:Shape one\n3:Shape two\n4-gamma\n--\n7-zeta\n" +
+			"8:Shape three\n9-eta\n--\n11-iota\n12:Shape four\n13-kappa"},
+		{"-A3", 0, 3, 0, false, "Shape one\nShape two\ngamma\ndelta\nepsilon\n--\n" +
+			"Shape three\neta\ntheta\niota\nShape four\nkappa"},
+		// -m stops at N matches and prints the rest of the open window as CONTEXT, a matching
+		// line included -- and does not let that line re-open the window.
+		{"-n -m1 -A3", 0, 3, 1, true, "2:Shape one\n3-Shape two\n4-gamma\n5-delta"},
+		{"-n -m2 -A2", 0, 2, 2, true, "2:Shape one\n3:Shape two\n4-gamma\n5-delta"},
+	} {
+		opt := Options{Pattern: "Shape", Root: path, Before: tc.before, After: tc.after,
+			PerFileLimit: tc.maxEach, LineNumbers: tc.numbered, Terse: true, Plain: true}
+		res, err := SearchWith(opt, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := FormatResult(res, opt); got != tc.want {
+			t.Errorf("grep %s, plain:\n%s\nwant (GNU grep):\n%s", tc.flags, got, tc.want)
+		}
+		// The rendering a model reads is the same stream. With no topology it has no header
+		// to add, so it must match exactly too.
+		opt.Plain = false
+		res, err = SearchWith(opt, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := FormatResult(res, opt); got != tc.want {
+			t.Errorf("grep %s, annotated:\n%s\nwant (GNU grep):\n%s", tc.flags, got, tc.want)
+		}
+	}
+}

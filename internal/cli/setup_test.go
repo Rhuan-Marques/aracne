@@ -11,16 +11,9 @@ import (
 	"github.com/Rhuan-Marques/aracne/internal/toolspec"
 )
 
-func TestNativePermission(t *testing.T) {
-	if nativePermission(true) != "allow" {
-		t.Fatalf("nativePermission(true) = %q, want allow", nativePermission(true))
-	}
-	if nativePermission(false) != "deny" {
-		t.Fatalf("nativePermission(false) = %q, want deny", nativePermission(false))
-	}
-}
-
 func TestOpenCodePaths_Local(t *testing.T) {
+	// Hermetic: a project install is rooted at the project the working directory is in.
+	t.Chdir(t.TempDir())
 	configPath, configDir, agentsMdPath := opencodePaths(false)
 	if configPath != ".opencode/opencode.json" {
 		t.Fatalf("configPath = %q, want .opencode/opencode.json", configPath)
@@ -54,6 +47,7 @@ func TestOpenCodePaths_Global(t *testing.T) {
 }
 
 func TestClaudePaths_Local(t *testing.T) {
+	t.Chdir(t.TempDir())
 	mcpPath, commandsDir, agentsDir, claudeMdPath := claudePaths(false)
 	if mcpPath != ".mcp.json" {
 		t.Fatalf("mcpPath = %q, want .mcp.json", mcpPath)
@@ -347,11 +341,14 @@ func TestOpenCodePermissionsForAgent_DefaultMainAgent(t *testing.T) {
 	eff := mcpModeConfig().EffectiveAgent("opencode", "main")
 	perms := openCodePermissionsForAgent(eff)
 
-	// Warn-only default: no NATIVE tool is denied and bash needs no glob-pattern map.
-	// Projects opt into denial via llm.<harness>.main_agent.blocked_tools.
-	for _, allowed := range []string{"read: allow", "edit: allow", "bash: allow"} {
-		if !strings.Contains(perms, allowed) {
-			t.Fatalf("expected %q under the warn-only default:\n%s", allowed, perms)
+	// Warn-only default: no NATIVE tool is denied, so none is NAMED. A generated block is
+	// appended after the project's own rules and resolved last-match-wins, so writing
+	// "allow" for a tool aracne does not gate overrides the operator rather than deferring
+	// to them -- see openCodePermissionsForAgent. Projects opt into denial via
+	// llm.<harness>.main_agent.blocked_tools.
+	for _, key := range []string{"read", "edit", "bash"} {
+		if strings.Contains(perms, "  "+key+":") {
+			t.Fatalf("expected %q to stay unwritten under the warn-only default:\n%s", key, perms)
 		}
 	}
 	if strings.Contains(perms, `"head *": deny`) || strings.Contains(perms, `"grep *": deny`) {
@@ -362,8 +359,8 @@ func TestOpenCodePermissionsForAgent_DefaultMainAgent(t *testing.T) {
 	if !strings.Contains(perms, `"aracne_*": deny`) {
 		t.Fatalf("expected ungranted aracne tools to stay denied:\n%s", perms)
 	}
-	// Under warn-only, bash is a plain scalar allow: the glob-pattern map existed only to
-	// deny the direct shell read/grep forms, and nothing is denied any more.
+	// Under warn-only, bash is not written at all: the glob-pattern map existed only to deny
+	// the direct shell read/grep forms, and nothing is denied any more.
 	if !strings.Contains(perms, `"aracne_read": allow`) {
 		t.Fatalf("expected aracne_read: allow:\n%s", perms)
 	}
@@ -463,7 +460,7 @@ func TestClaudeAgentContent_ContainsFrontmatterAndPrompt(t *testing.T) {
 
 func TestOpenCodeAgentContent_ContainsPermissionsAndPrompt(t *testing.T) {
 	eff := helper.DefaultConfig().EffectiveAgent("opencode", "bug-hunter")
-	content := openCodeAgentContent("Test agent", eff, "This is the prompt")
+	content := openCodeAgentContent("Test agent", eff, "", "This is the prompt")
 
 	if !strings.Contains(content, "description: Test agent") {
 		t.Fatal("missing description in frontmatter")
@@ -505,8 +502,125 @@ func TestClaudeAgentContent_EmitsConfiguredModel(t *testing.T) {
 
 func TestOpenCodeAgentContent_EmitsConfiguredModel(t *testing.T) {
 	eff := helper.AgentConfig{Model: "anthropic/claude-opus-4-8", MCPTools: []string{"bug_list"}}
-	if content := openCodeAgentContent("Test", eff, "Prompt body"); !strings.Contains(content, "\nmodel: anthropic/claude-opus-4-8\n") {
+	if content := openCodeAgentContent("Test", eff, "", "Prompt body"); !strings.Contains(content, "\nmodel: anthropic/claude-opus-4-8\n") {
 		t.Fatalf("expected model frontmatter, got:\n%s", content)
+	}
+}
+
+// Claude Code runs an alias or a claude-* id, and nothing else. The wizard's OpenAI and DeepSeek
+// branches write gpt-5.4-mini / deepseek-v4-flash into llm.<any>, and that used to land in the
+// Claude sub-agent's `model:` verbatim.
+func TestClaudeAgentModel(t *testing.T) {
+	for model, want := range map[string]string{
+		"haiku":                      "haiku",
+		"Sonnet":                     "Sonnet",
+		"inherit":                    "inherit",
+		"claude-haiku-4-5":           "claude-haiku-4-5",
+		"anthropic/claude-haiku-4-5": "claude-haiku-4-5",
+		"gpt-5.4-mini":               "",
+		"deepseek-v4-flash":          "",
+		"openai/gpt-5.4-mini":        "",
+		"<inherits>":                 "",
+		"":                           "",
+	} {
+		if got := claudeAgentModel(model); got != want {
+			t.Errorf("claudeAgentModel(%q) = %q, want %q", model, got, want)
+		}
+	}
+}
+
+// OpenCode splits `model:` on its first "/": a bare gpt-5.4-mini resolved to provider
+// "gpt-5.4-mini" with an empty model id. A bare id is qualified with the descriptions provider,
+// or left out so the agent inherits the main model.
+func TestOpenCodeAgentModel(t *testing.T) {
+	for _, tc := range []struct{ model, provider, want string }{
+		{"gpt-5.4-mini", "openai", "openai/gpt-5.4-mini"},
+		{"deepseek-v4-flash", "deepseek", "deepseek/deepseek-v4-flash"},
+		{"claude-haiku-4-5", "anthropic", "anthropic/claude-haiku-4-5"},
+		{"anthropic/claude-opus-4-8", "", "anthropic/claude-opus-4-8"},
+		{"openrouter/some/model", "openai", "openrouter/some/model"},
+		{"gpt-5.4-mini", "", ""},
+		{"haiku", "anthropic", ""},
+		{"haiku", "", ""},
+		{"<inherits>", "openai", ""},
+		{"", "openai", ""},
+	} {
+		if got := openCodeAgentModel(tc.model, tc.provider); got != tc.want {
+			t.Errorf("openCodeAgentModel(%q, %q) = %q, want %q", tc.model, tc.provider, got, tc.want)
+		}
+	}
+}
+
+// The provider qualifies only where it is also OpenCode's provider: not for a CLI command, and
+// not behind a base_url, where `openai` is a gateway's wire format rather than OpenAI.
+func TestOpenCodeModelProvider(t *testing.T) {
+	for _, tc := range []struct{ provider, baseURL, want string }{
+		{helper.ProviderNameAnthropic, "", "anthropic"},
+		{helper.ProviderNameOpenAI, "", "openai"},
+		{helper.ProviderNameDeepSeek, "", "deepseek"},
+		{"OpenAI", "", "openai"},
+		{helper.ProviderNameCLI, "", ""},
+		{helper.ProviderNameOpenAI, "https://gateway.example/v1", ""},
+		{"", "", ""},
+	} {
+		cfg := helper.DefaultConfig()
+		cfg.Descriptions.Provider = tc.provider
+		cfg.Descriptions.BaseURL = tc.baseURL
+		if got := openCodeModelProvider(cfg); got != tc.want {
+			t.Errorf("provider %q base_url %q: got %q, want %q", tc.provider, tc.baseURL, got, tc.want)
+		}
+	}
+}
+
+// Every branch of the wizard, end to end: the config `arac init` writes, rendered by setup into
+// both harnesses' descriptions executor. Each harness gets a `model:` it can run, or none.
+func TestSetupRendersTheWizardModelEachHarnessCanRun(t *testing.T) {
+	for _, tc := range []struct {
+		name, provider, keyEnv, command, model string
+		wantClaude, wantOpenCode               string
+	}{
+		{"anthropic", helper.ProviderNameAnthropic, "ANTHROPIC_API_KEY", "", "claude-haiku-4-5", "claude-haiku-4-5", "anthropic/claude-haiku-4-5"},
+		{"openai", helper.ProviderNameOpenAI, "OPENAI_API_KEY", "", "gpt-5.4-mini", "", "openai/gpt-5.4-mini"},
+		{"deepseek", helper.ProviderNameDeepSeek, "DEEPSEEK_API_KEY", "", "deepseek-v4-flash", "", "deepseek/deepseek-v4-flash"},
+		{"cli", helper.ProviderNameCLI, "", "claude -p --model haiku", "haiku", "haiku", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Chdir(dir)
+			t.Setenv("HOME", filepath.Join(dir, "home"))
+			cfg := helper.DefaultConfig()
+			initAnswers{
+				Harness: harnessBoth, Mode: helper.ModeCLI, Verbosity: helper.ContractVerbosityLow,
+				Provider: tc.provider, APIKeyEnv: tc.keyEnv, CLICommand: tc.command, Model: tc.model,
+			}.apply(cfg)
+
+			initOpenCode(false, cfg, true, nil)
+			initClaudeCode(false, cfg, true, nil)
+
+			for path, want := range map[string]string{
+				".claude/agents/descriptions-generation-executor.md":   tc.wantClaude,
+				".opencode/agents/descriptions-generation-executor.md": tc.wantOpenCode,
+			} {
+				data, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatalf("read %s: %v", path, err)
+				}
+				frontmatter, _, _ := strings.Cut(strings.TrimPrefix(string(data), "---\n"), "\n---\n")
+				got := ""
+				for _, line := range strings.Split(frontmatter, "\n") {
+					if rest, ok := strings.CutPrefix(line, "model: "); ok {
+						got = rest
+					}
+				}
+				if got != want {
+					t.Errorf("%s: model = %q, want %q\n%s", path, got, want, frontmatter)
+				}
+			}
+			// The lazy fill and the sweep still describe with what the wizard chose.
+			if got := cfg.EffectiveLazyDescriptions(helper.DefaultLazyHarness).Model; got != tc.model {
+				t.Errorf("the description model became %q, want %q", got, tc.model)
+			}
+		})
 	}
 }
 
@@ -694,5 +808,39 @@ func TestWriteMarkdownIntegrationFile_ReplacesExistingSegment(t *testing.T) {
 	}
 	if strings.Contains(content, "old") {
 		t.Fatal("old content should be replaced")
+	}
+}
+
+// A GENERATED SUB-AGENT'S PERMISSION BLOCK MAY ONLY TIGHTEN, exactly as the main agent's does
+// (applyOpenCodeNativePermissions). OpenCode appends an agent's frontmatter rules AFTER the
+// global config's and resolves them last-match-wins, so an unconditional `read: allow` /
+// `bash: allow` is not a default -- it overrides every rule the operator wrote for that key,
+// including OpenCode's own `*.env` ask. The descriptions executor shipped with both.
+func TestOpenCodeAgentPermissionsOnlyTighten(t *testing.T) {
+	eff := mcpModeConfig().EffectiveAgent("opencode", "descriptions-generation-executor")
+	perms := openCodePermissionsForAgent(eff)
+	for _, blanket := range []string{"read: allow", "edit: allow", "bash: allow", `"*": allow`} {
+		if strings.Contains(perms, blanket) {
+			t.Fatalf("sub-agent block overrides the operator's own rules with %q:\n%s", blanket, perms)
+		}
+	}
+	// What it exists for is still there: the aracne namespace.
+	if !strings.Contains(perms, `"aracne_*": deny`) {
+		t.Fatalf("expected ungranted aracne tools to stay denied:\n%s", perms)
+	}
+	if !strings.Contains(perms, `"aracne_update_description": allow`) {
+		t.Fatalf("the executor must keep the one tool it exists to call:\n%s", perms)
+	}
+
+	// And a project that DOES block a native tool still gets its denial.
+	eff.BlockedTools = []string{"read", "grep"}
+	blockedPerms := openCodePermissionsForAgent(eff)
+	for _, want := range []string{"read: deny", `"grep *": deny`, `"head *": deny`} {
+		if !strings.Contains(blockedPerms, want) {
+			t.Fatalf("blocked_tools must still be written as %q:\n%s", want, blockedPerms)
+		}
+	}
+	if strings.Contains(blockedPerms, `"*": allow`) {
+		t.Fatalf("the bash deny patterns must not carry a blanket allow with them:\n%s", blockedPerms)
 	}
 }

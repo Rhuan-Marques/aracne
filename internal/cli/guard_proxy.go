@@ -85,7 +85,10 @@ func proxyRead(command, dbPath string) string {
 		// and the model got a bare pointer instead of the file: the two-turns-for-one-question
 		// failure this function exists to end, arriving intermittently. A denial is not the
 		// place to pay for description generation; the next ordinary read still fills them.
-		rd := universaltools.NewRead(mgr, cfg, false, nil).WithFiller(nil)
+		//
+		// The registry is passed so a file changed since it was indexed is re-parsed before
+		// the answer is cut from it, rather than answered from spans that no longer fit.
+		rd := universaltools.NewRead(mgr, cfg, false, NewScannerRegistry()).WithFiller(nil)
 		// read.kinds gates this surface like every other. The proxy is an ADDITION to a
 		// denial message, so a kind the project does not allow simply yields no proxy answer
 		// -- the denial still goes out, just without an aracne read attached to it.

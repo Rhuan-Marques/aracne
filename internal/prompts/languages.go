@@ -38,6 +38,11 @@ type languageProfile struct {
 	// `# CONTEXT:` section. Rendered only where those context entries really are keyed by
 	// ID -- in ModeInterceptLineRanges they are keyed by `path:start-end` and the shared
 	// span-keyed example is used instead.
+	//
+	// The `# CONTEXT:` half is fenced as well as the code. Unfenced, its `#`/`##` lines were
+	// real H1/H2 headings in CLAUDE.md -- and `arac setup` and `arac disable` bound a block whose
+	// closing line was edited away by the next top-level heading, so they stopped at the first
+	// `# CONTEXT:` and left the rest of the contract behind.
 	Output string
 	// Examples are two IDs in this language, spelled exactly as one would be typed. They
 	// stand in a command line in the contract, so a project never sees another language's
@@ -66,6 +71,7 @@ var languageProfiles = map[string]languageProfile{
 			"type ParentStruct struct {...}\n" +
 			"func (p *ParentStruct) Method(...) (...) {...}\n" +
 			"```\n\n" +
+			"```\n" +
 			"# CONTEXT:\n" +
 			"## pkg.InterfaceName: Description\n" +
 			"    pkg.ImplStruct: Description\n" +
@@ -73,7 +79,8 @@ var languageProfiles = map[string]languageProfile{
 			"## pkg.StructName: Description\n" +
 			"    pkg.(StructName).Method: Description\n" +
 			"## pkg.CalledFunc: Description\n" +
-			"## pkg.ExtVarName = value\n",
+			"## pkg.ExtVarName = value\n" +
+			"```\n",
 		Examples: [2]string{"internal/cli.RunGuard", "internal/topology.Manager"},
 		Semantics: "A method comes back with its receiver type when that type is small enough " +
 			"to inline. An interface lists the structs that satisfy it and their methods; a " +
@@ -95,12 +102,14 @@ var languageProfiles = map[string]languageProfile{
 			"class ParentClass: ...\n" +
 			"    def method(self, ...): ...\n" +
 			"```\n\n" +
+			"```\n" +
 			"# CONTEXT:\n" +
 			"## pkg.BaseClass (base class): Description [NEED TO IMPLEMENT: method_name]\n" +
 			"## pkg.ClassName: Description\n" +
 			"    pkg.ClassName.method: Description\n" +
 			"## pkg.CalledFunc: Description\n" +
-			"## pkg.VarName = value\n",
+			"## pkg.VarName = value\n" +
+			"```\n",
 		Examples: [2]string{"src/flask/app.Flask.register_blueprint", "parse_file"},
 		Semantics: "Classes are the primary unit of organization. ABC and Protocol classes " +
 			"define contracts, and a class read lists what it still has to implement. " +
@@ -121,12 +130,14 @@ var languageProfiles = map[string]languageProfile{
 			"class ParentClass { ... }\n\n" +
 			"function example(...) { ... }\n" +
 			"```\n\n" +
+			"```\n" +
 			"# CONTEXT:\n" +
 			"## BaseClass (base class): Description\n" +
 			"## ClassName: Description\n" +
 			"    ClassName.method: Description\n" +
 			"## calledFunc: Description\n" +
-			"## VarName = value\n",
+			"## VarName = value\n" +
+			"```\n",
 		Examples: [2]string{"parseFile", "Component.render"},
 		Semantics: "Each file is its own module scope, and modules expose symbols via ESM " +
 			"(import/export) or CommonJS (require/module.exports). Classes use `extends` for " +
@@ -148,13 +159,15 @@ var languageProfiles = map[string]languageProfile{
 			"    handle(req: Request): Response { ... }\n" +
 			"}\n" +
 			"```\n\n" +
+			"```\n" +
 			"# CONTEXT:\n" +
 			"## Contract (interface): Description\n" +
 			"    Handler: Description\n" +
 			"## Service: Description\n" +
 			"    Service.method: Description\n" +
 			"## calledFunc: Description\n" +
-			"## VarName = value\n",
+			"## VarName = value\n" +
+			"```\n",
 		Examples: [2]string{"Handler.handle", "Service"},
 		Semantics: "Each file is its own module scope, and modules expose symbols via ESM " +
 			"(import/export) or CommonJS (require/module.exports). Interfaces define " +
@@ -180,11 +193,13 @@ var languageProfiles = map[string]languageProfile{
 			"    fn area(&self) -> f64 { ... }\n" +
 			"}\n" +
 			"```\n\n" +
+			"```\n" +
 			"# CONTEXT:\n" +
 			"## mycrate::shapes::Circle: Description\n" +
 			"    mycrate::shapes::Circle::new (constructor): Description\n" +
 			"## mycrate::shapes::Shape (trait): Description\n" +
-			"## mycrate::factory::make_circle: Description\n",
+			"## mycrate::factory::make_circle: Description\n" +
+			"```\n",
 		Examples: [2]string{"mycrate::shapes::Circle::area", "mycrate::factory::make_circle"},
 		Semantics: "Each file is a module. Structs, enums and unions are all modeled as the " +
 			"struct kind, and methods and associated functions attach to a type through its " +
@@ -212,11 +227,13 @@ var languageProfiles = map[string]languageProfile{
 			"    public double area(int scale) { ... }\n" +
 			"}\n" +
 			"```\n\n" +
+			"```\n" +
 			"# CONTEXT:\n" +
 			"## com.aracne.shapes.Circle: Description\n" +
 			"    com.aracne.shapes.Circle.<init>(double) (constructor): Description\n" +
 			"## com.aracne.shapes.Shape (interface): Description\n" +
-			"## com.aracne.factory.Factory.makeCircle(double): Description\n",
+			"## com.aracne.factory.Factory.makeCircle(double): Description\n" +
+			"```\n",
 		Examples: [2]string{"com.aracne.shapes.Circle", "com.aracne.shapes.Circle.area(int)"},
 		Semantics: "Classes, enums, records and abstract/anonymous/local classes are all " +
 			"modeled as the struct kind (enums carry Variants, records carry Components); " +

@@ -25,13 +25,11 @@ func (m pythonMatcher) Match(env Env, callee domain.Resource, site CallSite) (Ve
 	if len(params) == 0 && site.N <= 0 {
 		return Unknown, ""
 	}
-	// The receiver is declared but never passed. Getting this wrong shifts every method
-	// call in the repository by one, so it is checked by name rather than by position:
-	// a module-level function whose first parameter happens to be called self is not a
-	// method, and a method always declares one.
-	if isMethodResource(callee) && len(params) > 0 && isReceiverName(params[0].Name) {
-		params = params[1:]
-	}
+	// The receiver is declared but never passed -- and it is the SCANNER that drops it,
+	// because only the scanner can tell a receiver from a real parameter. It knows the
+	// position (a receiver is always first) and the decorators (a @staticmethod has none).
+	// A name test here could not: it ate the second parameter of `register(self, cls)` and
+	// the first of a staticmethod, hiding calls the interpreter rejects.
 
 	// A starred call -- f(*xs) or f(**kw) -- supplies an unknown number of arguments under
 	// unknown names, so neither the count nor the keywords can be judged.
@@ -105,40 +103,26 @@ func requiredNotSupplied(params []Param, site CallSite) string {
 	return ""
 }
 
-// isMethodResource reports whether a callee is declared inside a class.
-func isMethodResource(res domain.Resource) bool {
-	if res.Kind == domain.ResourceMethod {
-		return true
-	}
-	if res.Properties == nil {
-		return false
-	}
-	if from, ok := res.Properties["method_from"].(string); ok && from != "" {
-		return true
-	}
-	return false
+// pythonScalarBuiltins are the only annotations a recorded argument can be compared with.
+//
+// A call site records a literal as the CLASS of that literal -- #int, #float, #string,
+// #bool, #nil -- and nothing else, so the comparison is only meaningful against a builtin
+// scalar. Every other annotation needs real type resolution to judge: an alias or a NewType
+// stands for something else, a generic or a union admits several things, a Protocol admits
+// anything shaped right, and a project class may define __init__ conversions. Guessing at
+// any of them produces a warning about correct code, which is the failure this package
+// exists to avoid.
+var pythonScalarBuiltins = map[string]bool{
+	"int": true, "float": true, "complex": true,
+	"str": true, "bool": true, "bytes": true,
+	"None": true, "NoneType": true,
 }
 
-func isReceiverName(name string) bool { return name == "self" || name == "cls" }
-
-// pythonTypeOpaque declines any position the annotation does not pin down. An unannotated
-// parameter says nothing at all, and Any is an explicit statement that it says nothing.
+// pythonTypeOpaque declines any position the annotation does not pin down to a builtin
+// scalar. An unannotated parameter says nothing at all, and Any is an explicit statement
+// that it says nothing.
 func pythonTypeOpaque(env Env, p Param) bool {
-	t := strings.TrimSpace(p.Typing)
-	switch t {
-	case "", "Any", "typing.Any", "object":
-		return true
-	}
-	if isLikelyTypeParam(t) {
-		return true
-	}
-	// Optional[X] and X | None accept None as well as X; unions accept several types.
-	// Judging those needs real type resolution, so decline rather than guess.
-	if strings.ContainsAny(t, "|[") || strings.HasPrefix(t, "Optional") ||
-		strings.HasPrefix(t, "Union") {
-		return true
-	}
-	return env.kindOf(p.TypingID) == domain.ResourceInterface
+	return !pythonScalarBuiltins[strings.TrimSpace(p.Typing)]
 }
 
 // pythonAccepts compares a literal against an annotation. Only literals reach here.

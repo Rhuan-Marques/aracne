@@ -19,15 +19,12 @@ the core model, and a tour of every subsystem.
 required — the JS/TS, Rust and Java scanners are tree-sitter, so you need `gcc`.
 [CONTRIBUTING.md](CONTRIBUTING.md) has the rest, including what to run before a PR.
 
-## Two things that will bite you
+## Things that will bite you
 
 - **`testing_ground/` is load-bearing and deliberately not gofmt-clean.** ~20 test files
   scan it and assert on resource IDs keyed to the literal `testing_ground/<lang>/…`
   prefix; reformatting it shifts line numbers those suites check. Never
   `gofmt -w .` at the repo root.
-- **Go resource IDs are module-path-prefixed.** They begin
-  `github.com/Rhuan-Marques/aracne/…`, pinned by `corpusModulePath` in
-  `tests/atscale_harness_test.go`, which must stay equal to `go.mod`'s module line.
 
 ## Note on the block above
 
@@ -47,25 +44,14 @@ this heading is aracne's own repo documentation, written by hand.
 
 # Aracne
 
-`.aracne/topology.db` holds a pre-analyzed graph of this repo: every function, type, interface and variable, where it is declared, a one-line description, and what it references.
+This repository supports Aracne: every function, type, interface and variable is indexed, with a description and unique id you can use to read it.
 
-## How it reaches you
+`arac read <id> <id> ...` returns declarations with their source, their imports and the context around them -- what they touch, AND what implements, subclasses or uses them -- several in one call. Very useful for exploring and navigating. Prefer it over reading whole files or line ranges.
 
-Aracne's capabilities arrive as MCP tools; each tool's own description says how to call it. **Prefer a symbol over a file:** reading a declaration returns its source, its imports, and a `# CONTEXT:` list of the neighbours it touches with their descriptions -- usually the answer, for a fraction of a file's tokens.
+**The bare name is usually enough** -- any unique trailing part of an id resolves, and an ambiguous or unknown one comes back with the matching candidates, so you can use it even if you only know the name of the function, struct or other resource you're looking for
 
-`grep` is answered from the topology however you run it, and additionally searches node names and stored descriptions -- so a plain-English query finds code that never says the word.
+Edits keep the graph current automatically; act on any topology warning that comes back.
 
-## Other
+Let descriptions guide you: only read files and resources you need to understand fully -- most times the descriptions are enough.
 
-- Your edits keep the graph current automatically; act on any topology warning that comes back.
-
-## Behavioral Rules
-
-1. **Be concise** -- report what you found and what you changed, not how you did it.
-2. **Trust the topology** -- it is the source of truth and re-syncs after every edit. Never parse
-   code by hand, and never ask for a re-scan.
-3. **Do not guess** -- report an empty result or an error as what it is; never invent code or
-   relationships.
-4. **Do not re-read** -- if it is already in your context, use it.
-
-Good Luck in your task.
+Parallelise multiple reads and edits in a single command when possible.

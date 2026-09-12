@@ -130,6 +130,8 @@ func (m *RustManager) ReadFunction(id string, opts ...topology.TopologyOption) (
 		}
 	}
 
+	m.filterFunctionContext(gt, ctx, opt.ContextFilter(), fn.ID)
+
 	return ctx, nil
 }
 
@@ -212,16 +214,19 @@ func (m *RustManager) ReadStruct(id string, opts ...topology.TopologyOption) (*R
 		}
 	}
 
+	m.filterStructContext(gt, ctx, opt.ContextFilter(), s.ID)
+
 	return ctx, nil
 }
 
 // ReadInterface retrieves a Rust trait (the interface kind) and its context: the
 // supertraits it inherits and the structs/enums that implement it.
 func (m *RustManager) ReadInterface(id string, opts ...topology.TopologyOption) (*RustInterfaceContext, error) {
-	// Options are accepted for API parity with the other Read* methods; a trait
-	// read always surfaces its supertraits and implementors.
+	// A trait read always surfaces its supertraits and implementors; the options only decide
+	// whether its incoming references ("# USED BY:") are collected.
+	opt := &topology.TopologyOptions{}
 	for _, o := range opts {
-		o(&topology.TopologyOptions{})
+		o(opt)
 	}
 
 	topo, err := m.generic.ReadAll()
@@ -252,6 +257,8 @@ func (m *RustManager) ReadInterface(id string, opts ...topology.TopologyOption) 
 			ctx.Implementors = append(ctx.Implementors, simplifyStruct(s))
 		}
 	}
+
+	m.filterInterfaceContext(gt, ctx, opt.ContextFilter(), t.ID)
 
 	return ctx, nil
 }

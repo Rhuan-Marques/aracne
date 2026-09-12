@@ -2,6 +2,7 @@ package helper
 
 import (
 	"database/sql"
+	"os"
 	"strings"
 
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
@@ -37,6 +38,22 @@ func placeholders(n int) string {
 		ps[i] = "?"
 	}
 	return strings.Join(ps, ", ")
+}
+
+// ReadStoredRoot returns the project root the topology was last scanned under, without loading
+// the graph. "" when there is no database or it records no root. The file is checked first:
+// opening a missing database would create an empty one.
+func ReadStoredRoot(dbPath string) string {
+	if info, err := os.Stat(dbPath); err != nil || info.IsDir() {
+		return ""
+	}
+	var root string
+	_ = withSQLiteRead(dbPath, func(db *sql.DB) error {
+		v, err := readInfoValue(db, "root")
+		root = v
+		return err
+	})
+	return root
 }
 
 // readInfoValue returns the value of a single info key, or "" if absent.

@@ -10,6 +10,7 @@ import (
 	"github.com/Rhuan-Marques/aracne/internal/helper"
 	"github.com/Rhuan-Marques/aracne/internal/topology"
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
+	"github.com/Rhuan-Marques/aracne/internal/topology/scanner"
 )
 
 // Dispatches scanner subcommands; routes to RunScannerRun for the "run" action.
@@ -86,30 +87,15 @@ func RunScannerRun(args []string) {
 		time.Sleep(time.Duration(frequency) * time.Millisecond)
 	}
 
-	diffChanged := func() (added, modified, deleted []string, err error) {
-		for _, ls := range reg.DetectAll(root) {
-			a, m, d, diffErr := helper.DiffScanFiles(root, ls.Name(), manifestPath)
-			if diffErr != nil {
-				return nil, nil, nil, diffErr
-			}
-			added = append(added, a...)
-			modified = append(modified, m...)
-			deleted = append(deleted, d...)
-		}
-		return added, modified, deleted, nil
-	}
-
 	// ONE GOROUTINE, SO NO LOCK. This loop used to take a sync.Mutex with TryLock and
 	// unlock it on every branch, but nothing else ever held it -- the watch loop is the only
 	// writer -- so the TryLock always succeeded and the contention branch was unreachable.
 	// Concurrent access from a SEPARATE PROCESS is real and is handled where it has to be, by
 	// the per-database locking and busy_timeout in internal/helper/sqlite.go.
 	for {
-		added, modified, deleted, diffErr := diffChanged()
-		if diffErr != nil {
-			fmt.Fprintf(os.Stderr, "[%s] Scan error: %v\n", time.Now().Format("15:04:05"), diffErr)
-			sleep()
-			continue
+		added, modified, deleted, diffErrs := watcherDiff(manager, reg, root, manifestPath)
+		for _, diffErr := range diffErrs {
+			fmt.Fprintf(os.Stderr, "[%s] Scan error: %s\n", time.Now().Format("15:04:05"), diffErr)
 		}
 		changed := len(added) + len(modified) + len(deleted)
 
@@ -168,4 +154,27 @@ func RunScannerRun(args []string) {
 
 		sleep()
 	}
+}
+
+// watcherDiff is the watch loop's change detection: one DiffScanFiles per language, over the
+// same language list and with the same treatment of a failing language as IncrementalScan.
+func watcherDiff(mgr *topology.TopologyManager, reg *scanner.Registry, root, manifestPath string) (added, modified, deleted []string, diffErrs []string) {
+	// The manifest's languages as well as the detected ones: a language whose last file was
+	// just deleted is no longer detected, and diffing detection alone never reported the
+	// deletion -- its nodes stayed in the graph through every tick while `arac check-updates`
+	// called the index stale. See TopologyManager.IncrementalLanguages.
+	for _, ls := range mgr.IncrementalLanguages(root, reg) {
+		a, m, d, diffErr := helper.DiffScanFiles(root, ls.Name(), manifestPath)
+		if diffErr != nil {
+			// SKIPPED, NOT FATAL, for the same reason IncrementalScan stopped treating it as
+			// fatal: returning here handed one language a veto over every other, so a single
+			// refused diff (the mass-deletion guard) froze the watcher over the whole project.
+			diffErrs = append(diffErrs, diffErr.Error())
+			continue
+		}
+		added = append(added, a...)
+		modified = append(modified, m...)
+		deleted = append(deleted, d...)
+	}
+	return added, modified, deleted, diffErrs
 }

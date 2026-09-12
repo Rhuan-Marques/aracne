@@ -54,6 +54,17 @@ func RunScan(args []string) {
 		*root = ProjectRootFor(*output)
 	}
 
+	// A NAMED ROOT KEEPS ITS DATABASE UNDER ITSELF. The default `-output` is relative, so
+	// `arac scan -root ./backend` wrote `<cwd>/.aracne/topology.db` while storing `<cwd>/backend`
+	// as the root -- and Relocation reads the project root off the database's own location, so
+	// the very next scan saw the two disagree, reported a move that never happened, and
+	// re-indexed the WHOLE cwd. The mismatch is what has to go, not the inference: a database
+	// somewhere else is how a genuine move is told from a subdirectory scan. Naming `-output`
+	// too still puts it exactly where the caller asked.
+	if explicitFlags["root"] && !explicitFlags["output"] {
+		*output = filepath.Join(*root, DefaultDBRelative)
+	}
+
 	manager := topology.New()
 	manager.Load(*output)
 	os.MkdirAll(filepath.Dir(*output), 0755)
@@ -136,6 +147,15 @@ func RunScan(args []string) {
 		}
 	default:
 		fmt.Println("Incremental scan: processing only changed files")
+		// A moved project cannot be diffed against a manifest of the old paths; IncrementalScan
+		// would rebuild it anyway, and this says why the scan is a full one.
+		if oldRoot, newRoot, moved := manager.Relocation(); moved {
+			fmt.Printf("Project moved from %s to %s: re-indexing under the new root\n", oldRoot, newRoot)
+			if _, err := manager.SyncRelocation(reg); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+		}
 		if *verbose {
 			var langs []string
 			for _, ls := range reg.DetectAll(*root) {

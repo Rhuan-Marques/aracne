@@ -1,6 +1,7 @@
 package pyscanner
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -8,20 +9,28 @@ import (
 )
 
 // pyImportTarget describes the module a single internal import points at,
-// computed purely from path math (no topology lookup). It powers both the
-// file->file import edges and cross-file symbol resolution now that Python IDs
-// are module-qualified.
+// computed from path math and the files on disk (no topology lookup). It powers
+// both the file->file import edges and cross-file symbol resolution now that
+// Python IDs are module-qualified.
 type pyImportTarget struct {
-	// ModulePath is the module-qualified ID prefix of the target file
-	// (e.g. "proj/pkg/shapes"), used to build canonical symbol IDs.
+	// ModulePath is the module-qualified ID prefix of the target module
+	// (e.g. "pkg/shapes"), used to build canonical symbol IDs. A package keys its
+	// resources under its __init__.py, so a target that is a package reads
+	// "pkg/__init__" (see stemModulePath).
 	ModulePath string
-	// FilePath is the candidate absolute path of the target module file
-	// (".../shapes.py"); existence is not verified at parse time.
+	// FilePath is the candidate absolute path of the target as a module file
+	// (".../shapes.py"); existence is not verified at parse time, and
+	// findModuleFile also tries the package form (".../shapes/__init__.py").
 	FilePath string
 	// Symbol is the imported name when the alias binds a member of the target
 	// module (`from .shapes import Circle` -> "Circle"); it is "" when the alias
 	// binds a module itself (`from . import shapes`, `import pkg.shapes`).
 	Symbol string
+	// SubModulePath is set for `from P import X` / `from .P import X` when X is a
+	// submodule of package P (P/X.py or P/X/__init__.py exists): the ID prefix of
+	// that submodule, since the alias then binds the module rather than a name
+	// defined in P/__init__.py. "" for every other import form.
+	SubModulePath string
 	// PkgModulePath/PkgSymbol describe the package-symbol fallback for a
 	// `from . import X` / `from .. import X` import: X is usually a submodule
 	// (ModulePath/FilePath above) but may instead be a name defined in the
@@ -29,6 +38,41 @@ type pyImportTarget struct {
 	// and PkgSymbol is X. Both are "" for every other import form.
 	PkgModulePath string
 	PkgSymbol     string
+}
+
+// pySymbolRef names a symbol by the module expected to define it.
+type pySymbolRef struct {
+	Module string
+	Name   string
+}
+
+// symbolRefs returns the symbols the alias itself may name, in the order Python
+// looks: the imported name in its module (`from pkg import helper` ->
+// pkg/__init__.helper), then, for `from . import X`, X in the package's __init__.py.
+func (t pyImportTarget) symbolRefs() []pySymbolRef {
+	var out []pySymbolRef
+	if t.Symbol != "" {
+		out = append(out, pySymbolRef{Module: t.ModulePath, Name: t.Symbol})
+	}
+	if t.PkgSymbol != "" {
+		out = append(out, pySymbolRef{Module: t.PkgModulePath, Name: t.PkgSymbol})
+	}
+	return out
+}
+
+// moduleRefs returns the ID prefixes of the modules the alias may bind, so that
+// `alias.name` is `name` inside one of them: the imported module itself
+// (`import pkg`, `from . import sub`), or the submodule a from-import names
+// (`from pkg import sub`).
+func (t pyImportTarget) moduleRefs() []string {
+	var out []string
+	if t.Symbol == "" && t.ModulePath != "" {
+		out = append(out, t.ModulePath)
+	}
+	if t.SubModulePath != "" {
+		out = append(out, t.SubModulePath)
+	}
+	return out
 }
 
 // resolveInternalImport maps one internal import to its target module using pure
@@ -60,9 +104,10 @@ func resolveInternalImport(imp pyImport, importerFile, moduleRoot string) (pyImp
 			}
 			symbol := strings.TrimPrefix(imp.Name, imp.Module+".")
 			return pyImportTarget{
-				ModulePath: pyModulePath(moduleRoot, stem+".py"),
-				FilePath:   stem + ".py",
-				Symbol:     symbol,
+				ModulePath:    stemModulePath(moduleRoot, stem),
+				FilePath:      stem + ".py",
+				Symbol:        symbol,
+				SubModulePath: submodulePath(moduleRoot, stem, symbol),
 			}, true
 		}
 
@@ -74,17 +119,23 @@ func resolveInternalImport(imp pyImport, importerFile, moduleRoot string) (pyImp
 			stem := filepath.Join(append([]string{baseDir}, strings.Split(imp.Name, ".")...)...)
 			pkgInit := filepath.Join(baseDir, "__init__.py")
 			return pyImportTarget{
-				ModulePath:    pyModulePath(moduleRoot, stem+".py"),
+				ModulePath:    stemModulePath(moduleRoot, stem),
 				FilePath:      stem + ".py",
 				PkgModulePath: pyModulePath(moduleRoot, pkgInit),
 				PkgSymbol:     imp.Name,
 			}, true
 		}
 
-		// `from [.]module import <symbol>`: the symbol lives in the module file.
+		// `from [.]module import <symbol>`: the symbol lives in the module file, or
+		// in the package's __init__.py -- or is a submodule of that package.
 		symbol := strings.TrimPrefix(imp.Name, imp.Module+".")
 		stem := filepath.Join(append([]string{baseDir}, modSegs...)...)
-		return pyImportTarget{ModulePath: pyModulePath(moduleRoot, stem+".py"), FilePath: stem + ".py", Symbol: symbol}, true
+		return pyImportTarget{
+			ModulePath:    stemModulePath(moduleRoot, stem),
+			FilePath:      stem + ".py",
+			Symbol:        symbol,
+			SubModulePath: submodulePath(moduleRoot, stem, symbol),
+		}, true
 	}
 
 	// Plain `import a.b.c`: Name is the dotted module; the alias binds the module.
@@ -92,7 +143,46 @@ func resolveInternalImport(imp pyImport, importerFile, moduleRoot string) (pyImp
 	if !ok {
 		return pyImportTarget{}, false
 	}
-	return pyImportTarget{ModulePath: pyModulePath(moduleRoot, stem+".py"), FilePath: stem + ".py"}, true
+	return pyImportTarget{ModulePath: stemModulePath(moduleRoot, stem), FilePath: stem + ".py"}, true
+}
+
+// stemModulePath is the ID prefix of the module at stem (an absolute path without
+// extension). A package keys its resources under its __init__.py, so when stem is a
+// package directory rather than a module file the prefix is "<stem>/__init__" --
+// `from pkg import helper` has to reach pkg/__init__.helper, not pkg.helper. The
+// module-file form wins when both exist, as in findModuleFile, and is kept when
+// neither exists yet so the candidate ID stays predictable.
+func stemModulePath(moduleRoot, stem string) string {
+	if !pathExists(stem + ".py") {
+		if pkgInit := filepath.Join(stem, "__init__.py"); pathExists(pkgInit) {
+			return pyModulePath(moduleRoot, pkgInit)
+		}
+	}
+	return pyModulePath(moduleRoot, stem+".py")
+}
+
+// submodulePath is the ID prefix of submodule name of the package at stem, or ""
+// when no such module exists on disk. It is what lets `from pkg import sub` bind
+// pkg/sub.py (or pkg/sub/__init__.py) when sub is not a name defined in
+// pkg/__init__.py.
+func submodulePath(moduleRoot, stem, name string) string {
+	if name == "" || name == "*" || strings.Contains(name, ".") {
+		return ""
+	}
+	sub := filepath.Join(stem, name)
+	if pathExists(sub + ".py") {
+		return pyModulePath(moduleRoot, sub+".py")
+	}
+	if pkgInit := filepath.Join(sub, "__init__.py"); pathExists(pkgInit) {
+		return pyModulePath(moduleRoot, pkgInit)
+	}
+	return ""
+}
+
+// pathExists reports whether p exists on disk.
+func pathExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }
 
 // findModuleFile resolves a module file stem (path without extension) to a

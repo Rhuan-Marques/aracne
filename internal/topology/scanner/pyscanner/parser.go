@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -52,14 +53,33 @@ type pyBodyCall struct {
 	ObjectName string `json:"object_name"`
 	MethodName string `json:"method_name"`
 	LineNo     int    `json:"lineno"`
-	// What the call passes. ArgC is -1 when a starred argument hides the real count.
+	// What the call passes. ArgC is -1 when a starred argument hides the real count, and
+	// also when the record carries no argument list at all -- see UnmarshalJSON.
 	// Recorded so a later scan can ask whether the call still fits its callee rather than
-	// whether the callee merely changed. Absent on the synthesized operator and decorator
-	// pseudo-calls, which have no argument list; those record no shape and stay unjudged.
+	// whether the callee merely changed.
 	ArgC     int      `json:"argc"`
 	ArgTypes []string `json:"argtypes"`
 	Starred  bool     `json:"starred"`
 	KwNames  []string `json:"kw_names"`
+	// Pattern marks a `case Cls(...)` class pattern: a use of the class, not a call, so it
+	// never stands for a call to the class's __init__.
+	Pattern bool `json:"pattern"`
+}
+
+// UnmarshalJSON decodes a call record, defaulting ArgC to -1.
+//
+// A pseudo-call the script synthesizes may carry no argument list, and the zero value Go
+// would otherwise supply says something quite different from "no shape recorded": it says
+// the call passes NOTHING, so every callee with a required parameter is reported as missing
+// it. -1 is the value the matcher already reads as "cannot judge the count".
+func (c *pyBodyCall) UnmarshalJSON(data []byte) error {
+	type raw pyBodyCall
+	aux := raw{ArgC: -1}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	*c = pyBodyCall(aux)
+	return nil
 }
 
 // Struct capturing an assignment statement in Python source: variable name, inferred value type, and line number.
@@ -147,7 +167,10 @@ func parsePythonFile(filePath string) (*pyFileResult, error) {
 	var cmdErr error
 	for _, exe := range pythonExes {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		cmd := exec.CommandContext(ctx, exe, "-c", pythonParseScript, absPath, dir)
+		cmd := exec.CommandContext(ctx, exe, pythonParseArgs(absPath, dir)...)
+		// A neutral working directory. -I already keeps the cwd off sys.path; this also
+		// keeps anything the interpreter resolves relative to cwd out of the project.
+		cmd.Dir = os.TempDir()
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout = &stdout
 		cmd.Stderr = &stderr
@@ -184,6 +207,19 @@ func parsePythonFile(filePath string) (*pyFileResult, error) {
 			strings.Join(pythonExes, ", "))
 	}
 	return nil, fmt.Errorf("python is required to scan %s: %w", absPath, cmdErr)
+}
+
+// pythonParseArgs is the interpreter argv for running the embedded parse script on file.
+//
+// -I (isolated mode, which implies -E and -s) is what keeps the script's own
+// `import json` / `import ast` from resolving to files in the project being scanned. With a
+// bare `-c`, sys.path[0] is the working directory -- the project root under `arac scan`
+// and under the guard's pre-tool scan -- so a project json.py or enum.py was imported,
+// that is EXECUTED, by every parse, and a stdlib-named file broke the scan outright. -S
+// skips the site module too: the script needs only the standard library, and site runs
+// .pth files. The file and root reach the script as argv, never through sys.path.
+func pythonParseArgs(file, root string) []string {
+	return []string{"-I", "-S", "-c", pythonParseScript, file, root}
 }
 
 // isExeNotFound reports whether a command failed because the binary is not on PATH, as
@@ -287,6 +323,15 @@ func ParseFile(filePath string, pkgPath python.PackagePath, moduleRoot string) (
 					if alias == "" {
 						alias = imp.Name
 					}
+					if first, _, dotted := strings.Cut(imp.Name, "."); dotted && imp.Module == "" && imp.Level == 0 && alias == first {
+						// `import a.b` binds `a` to the top package, and reaches the module
+						// only as `a.b`: key the module by its dotted name, and the alias by
+						// the package it really names.
+						pr.ImportTargets[imp.Name] = tgt
+						if top, ok := resolveInternalImport(pyImport{Name: first, Alias: first}, filePath, moduleRoot); ok {
+							tgt = top
+						}
+					}
 					pr.ImportTargets[alias] = tgt
 				}
 			}
@@ -341,6 +386,7 @@ func ParseFile(filePath string, pkgPath python.PackagePath, moduleRoot string) (
 // one); modulePath stays the real module path for type resolution.
 func (pr *ParseResult) addClassTree(cls pyClass, filePath, modulePath, idPrefix string) {
 	c := convertClass(cls, filePath, idPrefix)
+	c.BaseCandidates = baseCandidates(cls.Bases, pr)
 	pr.Classes = append(pr.Classes, c)
 
 	for _, cv := range cls.ClassVars {
@@ -430,6 +476,29 @@ func isMemberFieldClass(bases []string) bool {
 	return false
 }
 
+// isReceiverParam reports whether a parameter name is one of Python's two receiver
+// conventions.
+func isReceiverParam(name string) bool { return name == "self" || name == "cls" }
+
+// hasDecorator reports whether any decorator is `name`, ignoring how it was qualified
+// (@staticmethod and @builtins.staticmethod are the same decorator).
+func hasDecorator(decorators []string, name string) bool {
+	for _, d := range decorators {
+		if d[strings.LastIndex(d, ".")+1:] == name {
+			return true
+		}
+	}
+	return false
+}
+
+// isStaticMethod reports whether a method is decorated @staticmethod, which declares no
+// receiver at all -- so its first parameter, whatever it is named, is a real one.
+func isStaticMethod(decorators []string) bool { return hasDecorator(decorators, "staticmethod") }
+
+// isClassMethod reports whether a method is decorated @classmethod, whose cls is bound by
+// the attribute lookup and so is never written out at a call site.
+func isClassMethod(decorators []string) bool { return hasDecorator(decorators, "classmethod") }
+
 // isDataclass reports whether any decorator is the @dataclass decorator.
 func isDataclass(decorators []string) bool {
 	for _, d := range decorators {
@@ -464,8 +533,14 @@ func convertClass(cls pyClass, filePath string, modulePath string) python.Python
 // Converts a parsed Python function into a PythonFunction topology resource, resolving type hints and handling methods.
 func convertFunction(fn pyFunc, filePath string, modulePath string, classID *python.ClassID, importMap map[string]string, importTargets map[string]pyImportTarget) python.PythonFunction {
 	var input []python.VariableDefinition
-	for _, p := range fn.Params {
-		if p.Name == "self" || p.Name == "cls" {
+	for i, p := range fn.Params {
+		// The receiver is declared but never passed, so it is dropped from the signature
+		// -- but only where it IS the receiver: the FIRST parameter of a method that is
+		// not a staticmethod. Dropping it by name alone took `cls` out of a module-level
+		// `dumps(obj, cls=None)` (so a correct dumps(1, cls=int) was reported as naming a
+		// parameter that does not exist) and out of `register(self, cls)` (so a call the
+		// interpreter rejects was reported as fitting).
+		if i == 0 && classID != nil && isReceiverParam(p.Name) && !isStaticMethod(fn.Decorators) {
 			continue
 		}
 		input = append(input, python.VariableDefinition{

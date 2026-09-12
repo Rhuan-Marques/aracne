@@ -249,3 +249,70 @@ func TestPositionalArity(t *testing.T) {
 		})
 	}
 }
+
+// TestGoZeroParamCalleeIsJudgedTheSameInBothShapes: a function with no parameters arrives as
+// an empty list from a fresh parse and with no "input" property at all from SQLite. Both are
+// the same function, and a call that fits one fits the other.
+func TestGoZeroParamCalleeIsJudgedTheSameInBothShapes(t *testing.T) {
+	fresh := fn("Take")
+	persisted := domain.Resource{ID: "pkg.Take", Kind: domain.ResourceFunction, Name: "Take",
+		Language: "go", Properties: map[string]any{}}
+	nullInput := domain.Resource{ID: "pkg.Take", Kind: domain.ResourceFunction, Name: "Take",
+		Language: "go", Properties: map[string]any{"input": nil}}
+	for name, callee := range map[string]domain.Resource{
+		"fresh": fresh, "persisted": persisted, "null input": nullInput,
+	} {
+		if got, why := match(t, Env{}, callee, arity(0)); got != Match {
+			t.Errorf("%s: Take() against a zero-parameter Take: got %s (%s), want match", name, got, why)
+		}
+		// And the case that must keep warning: an argument the function no longer takes.
+		if got, _ := match(t, Env{}, callee, args(UntypedInt)); got != Mismatch {
+			t.Errorf("%s: Take(1) against a zero-parameter Take: got %s, want mismatch", name, got)
+		}
+	}
+}
+
+// A database written by an older aracne build holds that build's lossy renderings -- every
+// func type as "func(...)", every struct literal as "struct{...}", a directional channel as
+// "chan T". The first scan after an upgrade compares them against the full rendering, and
+// must not read the change of renderer as a change of type: otherwise every function taking a
+// callback warns at once. Rich text on both sides is compared literally, which is the point of
+// rendering it.
+func TestSameGoTypeTextToleratesOlderRenderings(t *testing.T) {
+	same := []struct{ old, cur string }{
+		{"func(...)", "func(string) error"},
+		{"func(...)", "func()"},
+		{"[]func(...)", "[]func(string, int) (bool, error)"},
+		{"map[string]func(...)", "map[string]func(int) int"},
+		{"struct{...}", "struct{A int; B string}"},
+		{"interface{}", "interface{Read(p []byte) (int, error)}"},
+		{"chan int", "chan<- int"},
+		{"chan int", "<-chan int"},
+		{"int", "int"},
+	}
+	for _, c := range same {
+		if !SameGoTypeText(c.old, c.cur) {
+			t.Errorf("SameGoTypeText(%q, %q) = false, want true (an upgrade must not warn about unchanged code)", c.old, c.cur)
+		}
+		if !SameGoTypeText(c.cur, c.old) {
+			t.Errorf("SameGoTypeText is not symmetric for %q / %q", c.cur, c.old)
+		}
+	}
+
+	// Two full renderings are compared as written -- this is the change GO-07 exists to see.
+	differ := [][2]string{
+		{"func(string) error", "func(string, int) error"},
+		{"func(string) error", "func(string) (int, error)"},
+		{"chan<- int", "<-chan int"},
+		{"struct{A int}", "struct{B string}"},
+		{"struct{}", "struct{A int}"},
+		{"interface{Close() error}", "interface{Close(n int) error}"},
+		{"int", "string"},
+		{"[]func(int) int", "[]func(string) int"},
+	}
+	for _, c := range differ {
+		if SameGoTypeText(c[0], c[1]) {
+			t.Errorf("SameGoTypeText(%q, %q) = true, want false", c[0], c[1])
+		}
+	}
+}

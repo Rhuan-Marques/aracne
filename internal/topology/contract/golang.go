@@ -16,10 +16,12 @@ type goMatcher struct{}
 func (goMatcher) Language() string { return "go" }
 
 func (m goMatcher) Match(env Env, callee domain.Resource, site CallSite) (Verdict, string) {
+	// No `params == nil` escape here. A Go function always has a parameter list, and "none"
+	// arrives in two shapes: an empty list from a fresh parse, and no "input" key at all from
+	// the same resource read back from SQLite. Treating the second as "cannot say" made
+	// f() against a callee reduced to zero parameters a Match on the full path and Unknown on
+	// the partial one -- so the warning an agent cleared by fixing the call stayed standing.
 	params := goParams(callee)
-	if params == nil && site.N <= 0 {
-		return Unknown, ""
-	}
 
 	// A spread call -- f(xs...) -- passes however many elements xs holds, which is not
 	// knowable from the syntax. The fixed arguments before the spread still have to fit,
@@ -98,7 +100,10 @@ func isLikelyTypeParam(t string) bool {
 func goAccepts(env Env, p Param, actual string) bool {
 	d, a := normalizeGoType(p.Typing), normalizeGoType(actual)
 	if !IsUntyped(a) {
-		return d == a
+		// SameGoTypeText, not ==: a call site recorded by an older build spells a forwarded
+		// func- or struct-typed parameter with that build's placeholder, and judging it
+		// against the full rendering would warn about a call that never changed.
+		return SameGoTypeText(d, a)
 	}
 	return goAcceptsUntyped(env, p, d, a)
 }
@@ -230,4 +235,121 @@ func typeMessage(p Param, pos int, actual string) string {
 		label = fmt.Sprintf("argument %d", pos+1)
 	}
 	return fmt.Sprintf("%s is declared %s, this call passes %s", label, p.Typing, actual)
+}
+
+// SameGoTypeText reports whether two rendered Go type texts name the same type.
+//
+// It exists for ONE reason: aracne used to render a type whose shape it could not write out
+// as a placeholder -- every func type as "func(...)", every struct literal as "struct{...}",
+// every interface literal as "interface{}", and a directional channel as the bidirectional
+// "chan T". Those strings are in every database written by an older build, in stored
+// signatures and in stored call sites alike, and they are compared against the full rendering
+// a current scan produces. A plain string compare would call every one of them a change, so
+// the first scan after the upgrade would warn about every function that takes a callback.
+//
+// A placeholder cannot say whether the shape changed, so it does not get to claim one did:
+// when one side is a string the collapse leaves alone -- which is what an older build wrote --
+// and the other collapses to exactly it, the two are treated as the same type. Rich text on
+// both sides is compared literally, which is the whole point of rendering it.
+//
+// The cost is two forms that are their own collapse and so stay ambiguous for good: a
+// bidirectional `chan T` gaining a direction, and a bare `interface{}` gaining a method. Both
+// were entirely invisible before, so neither is a regression.
+func SameGoTypeText(a, b string) bool {
+	if a == b {
+		return true
+	}
+	ca, cb := collapseGoShapes(a), collapseGoShapes(b)
+	return (ca == a || cb == b) && ca == cb
+}
+
+// collapseGoShapes rewrites a type text the way the older renderer would have written it:
+// func types, struct literals and interface literals become their placeholders, and a
+// channel loses its direction. Anything else is copied through.
+func collapseGoShapes(t string) string {
+	var out strings.Builder
+	for i := 0; i < len(t); {
+		switch {
+		case strings.HasPrefix(t[i:], "<-chan "), strings.HasPrefix(t[i:], "chan<- "):
+			out.WriteString("chan ")
+			i += len("<-chan ")
+		case strings.HasPrefix(t[i:], "struct{"):
+			out.WriteString("struct{...}")
+			i = closeBrace(t, i+len("struct{"))
+		case strings.HasPrefix(t[i:], "interface{"):
+			out.WriteString("interface{}")
+			i = closeBrace(t, i+len("interface{"))
+		case strings.HasPrefix(t[i:], "func("):
+			out.WriteString("func(...)")
+			i = endOfFuncType(t, i+len("func"))
+		default:
+			out.WriteByte(t[i])
+			i++
+		}
+	}
+	return out.String()
+}
+
+// closeBrace returns the index just past the '}' that closes the brace opened before `i`.
+func closeBrace(t string, i int) int {
+	depth := 1
+	for ; i < len(t); i++ {
+		switch t[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return i + 1
+			}
+		}
+	}
+	return len(t)
+}
+
+// endOfFuncType returns the index just past a func type whose parameter list opens at `i`,
+// results included. A single unnamed result is written bare, so it ends where the enclosing
+// list does: at a top-level separator or closer.
+func endOfFuncType(t string, i int) int {
+	i = closeParen(t, i+1)
+	if i >= len(t) || t[i] != ' ' {
+		return i
+	}
+	if i+1 < len(t) && t[i+1] == '(' {
+		return closeParen(t, i+2)
+	}
+	depth := 0
+	for j := i + 1; j < len(t); j++ {
+		switch t[j] {
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			if depth == 0 {
+				return j
+			}
+			depth--
+		case ',', ';':
+			if depth == 0 {
+				return j
+			}
+		}
+	}
+	return len(t)
+}
+
+// closeParen returns the index just past the ')' that closes the paren opened before `i`.
+func closeParen(t string, i int) int {
+	depth := 1
+	for ; i < len(t); i++ {
+		switch t[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return i + 1
+			}
+		}
+	}
+	return len(t)
 }

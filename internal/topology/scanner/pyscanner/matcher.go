@@ -2,6 +2,7 @@ package pyscanner
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/Rhuan-Marques/aracne/internal/topology/python"
 )
@@ -17,8 +18,12 @@ func matchClassInheritance(gt *python.PythonTopology) {
 		gt.Classes[id] = cls
 	}
 	for classID, cls := range gt.Classes {
-		for _, baseName := range cls.Bases {
-			parentID := resolveBaseClassID(baseName, cls, gt)
+		for i, baseName := range cls.Bases {
+			var cands []string
+			if i < len(cls.BaseCandidates) {
+				cands = cls.BaseCandidates[i]
+			}
+			parentID := resolveBaseClassID(baseName, cands, cls, gt)
 			if parentID == nil {
 				continue
 			}
@@ -160,8 +165,67 @@ func nominallyInherits(cls python.PythonClass, protoID python.ClassID) bool {
 	return false
 }
 
-// Resolves a base class name to its ClassID, checking same-package first, then deterministically matching a unique global class by name.
-func resolveBaseClassID(baseName string, cls python.PythonClass, gt *python.PythonTopology) *python.ClassID {
+// baseCandidates computes PythonClass.BaseCandidates for a class's bases from its file's
+// imports. A base bound by an internal import gets the IDs importRefs derives for it; one
+// bound by a third-party import gets that import's dotted path, which names no project class
+// and so keeps the base from being matched by name to an unrelated one. Returns nil when no
+// base is import-bound, leaving every base to the by-name rules.
+func baseCandidates(bases []string, pr *ParseResult) [][]string {
+	var out [][]string
+	bound := false
+	for _, base := range bases {
+		refs, members := importRefs(base, pr)
+		var cands []string
+		for _, r := range refs {
+			cands = append(cands, r.Module+"."+r.Name)
+		}
+		cands = append(cands, members...)
+		if len(cands) == 0 {
+			head, rest, _ := strings.Cut(base, ".")
+			if imp, ok := pr.ImportMap[head]; ok && imp != "" {
+				if rest != "" {
+					imp += "." + rest
+				}
+				cands = []string{imp}
+			}
+		}
+		if len(cands) > 0 {
+			bound = true
+		}
+		out = append(out, cands)
+	}
+	if !bound {
+		return nil
+	}
+	return out
+}
+
+// Resolves a base class name to its ClassID. An import-bound base (cands non-empty) resolves
+// only to what its import names -- directly, or through that module's own re-exports -- since
+// the file said which class it means. Otherwise: same module first, then a unique class of
+// that name anywhere.
+func resolveBaseClassID(baseName string, cands []string, cls python.PythonClass, gt *python.PythonTopology) *python.ClassID {
+	if len(cands) > 0 {
+		for _, c := range cands {
+			if cid := python.ClassID(c); classExists(cid, gt) {
+				return &cid
+			}
+		}
+		root := &ParseResult{ModuleRoot: gt.Root}
+		isClass := func(id string) bool { return classExists(python.ClassID(id), gt) }
+		for _, c := range cands {
+			i := strings.LastIndex(c, ".")
+			if i <= 0 {
+				continue
+			}
+			if id := followReexport(pySymbolRef{Module: c[:i], Name: c[i+1:]}, root, gt, isClass); id != "" {
+				cid := python.ClassID(id)
+				return &cid
+			}
+		}
+		return nil
+	}
+
 	samePkgID := python.ClassID(extractPkgFromID(string(cls.ID)) + "." + baseName)
 	if _, exists := gt.Classes[samePkgID]; exists {
 		return &samePkgID

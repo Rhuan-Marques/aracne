@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -57,6 +58,36 @@ func writeClaudeNativeEditHook(settingsPath, hooksDir string, global, autoYes bo
 	settings["hooks"] = hooks
 	writeJSONConfig(settingsPath, settings)
 	fmt.Printf("[Claude Code] Native edit hook configured in %s\n", settingsPath)
+}
+
+// removeClaudeNativeEditHook undoes writeClaudeNativeEditHook: its scripts, and its PostToolUse
+// entry, leaving the guard's entry and every user hook in place. A settings.json with nothing
+// of this hook in it is not rewritten (nor created).
+func removeClaudeNativeEditHook(settingsPath, hooksDir string) {
+	removeFiles(hooksDir, []string{"arac-update-file.sh", "arac-update-file.ps1"})
+
+	settings := readJSONConfig(settingsPath)
+	hooks, _ := settings["hooks"].(map[string]interface{})
+	entries, _ := hooks["PostToolUse"].([]interface{})
+	kept := make([]interface{}, 0, len(entries))
+	for _, e := range entries {
+		if !isEditSyncHookEntry(e) {
+			kept = append(kept, e)
+		}
+	}
+	if len(kept) == len(entries) {
+		return
+	}
+	if len(kept) == 0 {
+		delete(hooks, "PostToolUse")
+	} else {
+		hooks["PostToolUse"] = kept
+	}
+	if len(hooks) == 0 {
+		delete(settings, "hooks")
+	}
+	writeJSONConfig(settingsPath, settings)
+	fmt.Printf("[Claude Code] Removed the native edit hook from %s (edit-update-db-plugin is not listed)\n", settingsPath)
 }
 
 // guardHookMatcher is the tool matcher for the guard hook. It matches only the PascalCase
@@ -236,6 +267,76 @@ func writeClaudePermissions(settingsPath string, cfg *helper.Config) {
 	fmt.Printf("[Claude Code] MCP tool permissions configured in %s\n", settingsPath)
 }
 
+// The Claude Code setting that decides whether tool schemas reach the model up front or are
+// deferred behind its tool-search, and the one value aracne ever writes into it.
+//
+// "false" is the spelling that means "no tool search", i.e. everything loaded. Claude Code also
+// accepts "auto", "auto:N" and "force" -- none of which aracne writes, and all of which are
+// therefore an operator's own answer that setup and disable must leave alone.
+const (
+	claudeToolSearchEnvKey = "ENABLE_TOOL_SEARCH"
+	claudeToolSearchOff    = "false"
+)
+
+// writeClaudeToolSearchEnv applies `preload_mcp_tools` to settings.json, in both directions.
+//
+// BOTH DIRECTIONS IS THE POINT. Writing the variable when the answer is yes is the easy half;
+// the half that matters is withdrawing it when the answer stops being yes -- because the answer
+// can stop being yes without anybody re-answering the question. Switching the project out of
+// ModeMCP does it (PreloadMCPToolsEnabled folds the mode in), and so does re-running `arac init`
+// and picking the other row. Left behind, the variable would go on suppressing tool search for
+// every tool in the session on behalf of a server that no longer registers any -- the same stale
+// entry dropAracneMCPServer exists to prevent, one file over.
+//
+// It only ever removes ITS OWN value. An operator who set ENABLE_TOOL_SEARCH to "auto:40" for
+// reasons of their own has said something aracne did not say and does not get to un-say.
+func writeClaudeToolSearchEnv(settingsPath string, cfg *helper.Config) {
+	settings := readJSONConfig(settingsPath)
+	env, _ := settings["env"].(map[string]interface{})
+	current, _ := env[claudeToolSearchEnvKey].(string)
+
+	if cfg.PreloadMCPToolsEnabled() {
+		if current == claudeToolSearchOff {
+			return
+		}
+		if env == nil {
+			env = make(map[string]interface{})
+		}
+		env[claudeToolSearchEnvKey] = claudeToolSearchOff
+		settings["env"] = env
+		writeJSONConfig(settingsPath, settings)
+		fmt.Printf("[Claude Code] Tool schemas pinned in context in %s (%s=%s)\n",
+			settingsPath, claudeToolSearchEnvKey, claudeToolSearchOff)
+		return
+	}
+
+	if !dropAracneToolSearchEnv(settings) {
+		return
+	}
+	writeJSONConfig(settingsPath, settings)
+	fmt.Printf("[Claude Code] Removed %s from %s (mode: %s)\n",
+		claudeToolSearchEnvKey, settingsPath, cfg.EffectiveMode())
+}
+
+// dropAracneToolSearchEnv removes the tool-search opt-out aracne wrote from a decoded
+// settings.json, reporting whether anything changed. An `env` block left empty goes with it, so
+// switching away from the setting does not leave a bare `"env": {}` behind as residue.
+//
+// Shared by setup and by `arac disable` so the two cannot disagree about what aracne owns.
+func dropAracneToolSearchEnv(settings map[string]interface{}) bool {
+	env, _ := settings["env"].(map[string]interface{})
+	if current, _ := env[claudeToolSearchEnvKey].(string); current != claudeToolSearchOff {
+		return false
+	}
+	delete(env, claudeToolSearchEnvKey)
+	if len(env) == 0 {
+		delete(settings, "env")
+	} else {
+		settings["env"] = env
+	}
+	return true
+}
+
 // claudeMCPPermissionRules returns the Claude Code permission rules that allow
 // every aracne MCP tool, e.g. "mcp__aracne__grep". The full universe is
 // listed (not just the main agent's profile) so sub-agents — already restricted
@@ -349,32 +450,84 @@ func powershellHookCommand(path string) string { return "& " + quoteForPowerShel
 // install whose shell a GUI-launched editor does not inherit, a login PATH the harness does
 // not share -- each turned every tool call into a failing hook, not a quiet degradation.
 // interceptCommand already resolves os.Executable() for exactly this reason.
-func aracBinary() string {
-	exe, err := os.Executable()
+//
+// A VERSIONED path is not the same promise as an absolute one. EvalSymlinks turns a stable
+// `/usr/local/bin/arac` into the `Cellar/arac/1.0.0/bin/arac` behind it, and the next upgrade
+// deletes that file. The hook scripts and the OpenCode plugins survive it -- they fall back to
+// `arac` on PATH when the recorded path is gone -- but the three MCP entries setup writes
+// (.mcp.json, opencode.json, every generated agent's inline mcpServers) have no fallback at all:
+// a server that cannot start is silent in both harnesses, the tool list simply comes back short.
+// So when PATH holds a name for THE SAME FILE, that name is recorded instead. It keeps the
+// property the absolute path was for, and loses the version pin.
+func aracBinary() string { return aracBinaryFrom(os.Executable, exec.LookPath) }
+
+// aracBinaryFrom is aracBinary over its two lookups, so a test can stand at both.
+func aracBinaryFrom(executable func() (string, error), lookPath func(string) (string, error)) string {
+	exe, err := executable()
 	if err != nil || strings.TrimSpace(exe) == "" {
 		return "arac"
 	}
 	if resolved, err := filepath.EvalSymlinks(exe); err == nil && resolved != "" {
 		exe = resolved
 	}
+	// Same file, not same name: a stale `arac` earlier on PATH -- an older install, another
+	// checkout -- would otherwise be written into the config in place of the binary that is
+	// actually running this setup.
+	if onPath, err := lookPath("arac"); err == nil && filepath.IsAbs(onPath) && sameFileOnDisk(onPath, exe) {
+		return onPath
+	}
 	return exe
+}
+
+// sameFileOnDisk reports whether two paths name one file, following symlinks.
+func sameFileOnDisk(a, b string) bool {
+	infoA, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	infoB, err := os.Stat(b)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(infoA, infoB)
 }
 
 // Returns a shell script that invokes the arac guard tool as a Claude hook
 func claudeGuardHookShellScript() string {
-	return strings.Join([]string{
-		"#!/bin/sh",
-		"exec " + quoteForShell(aracBinary()) + " guard --claude-hook",
-		"",
-	}, "\n")
+	return shellHookScript(aracBinary(), "guard --claude-hook")
 }
 
 // Returns the PowerShell script for the native guard hook.
 func claudeGuardHookPowerShellScript() string {
+	return powerShellHookScript(aracBinary(), "guard --claude-hook")
+}
+
+// shellHookScript and powerShellHookScript are a hook script running `<arac> <args>`.
+//
+// The recorded ABSOLUTE path comes first (see aracBinary for why a bare name is a bet), and
+// `arac` on PATH only when that path is not there. The settings entry that points at the script
+// is deliberately portable -- ${CLAUDE_PROJECT_DIR} -- because settings.json is committed, and
+// the script sits beside it and is committed with it: so a teammate's checkout, or this machine
+// after the binary moved, ran `exec '/home/someone-else/go/bin/arac'` and failed every tool call
+// with exit 127. Where the recorded binary exists nothing changes; where neither does, the
+// failure is the same one it was.
+func shellHookScript(binary, args string) string {
+	return strings.Join([]string{
+		"#!/bin/sh",
+		"ARAC=" + quoteForShell(binary),
+		`[ -x "$ARAC" ] || ARAC=arac`,
+		`exec "$ARAC" ` + args,
+		"",
+	}, "\n")
+}
+
+func powerShellHookScript(binary, args string) string {
 	return strings.Join([]string{
 		"$inputJson = [Console]::In.ReadToEnd()",
 		"if ([string]::IsNullOrWhiteSpace($inputJson)) { exit 0 }",
-		"$inputJson | & " + quoteForPowerShell(aracBinary()) + " guard --claude-hook",
+		"$arac = " + quoteForPowerShell(binary),
+		"if (-not (Test-Path -LiteralPath $arac -PathType Leaf)) { $arac = 'arac' }",
+		"$inputJson | & $arac " + args,
 		"",
 	}, "\n")
 }
@@ -406,21 +559,12 @@ func claudeNativeEditHookForOS(goos, hooksDir string, global bool) claudeNativeE
 
 // Generates a PowerShell script that pipes stdin JSON to the arac update-file command with claude-hook flag
 func claudeUpdateFileHookPowerShellScript() string {
-	return strings.Join([]string{
-		"$inputJson = [Console]::In.ReadToEnd()",
-		"if ([string]::IsNullOrWhiteSpace($inputJson)) { exit 0 }",
-		"$inputJson | & " + quoteForPowerShell(aracBinary()) + " update-file --claude-hook",
-		"",
-	}, "\n")
+	return powerShellHookScript(aracBinary(), "update-file --claude-hook")
 }
 
 // Generates a shell script that invokes arac update-file with the claude-hook flag
 func claudeUpdateFileHookShellScript() string {
-	return strings.Join([]string{
-		"#!/bin/sh",
-		"exec " + quoteForShell(aracBinary()) + " update-file --claude-hook",
-		"",
-	}, "\n")
+	return shellHookScript(aracBinary(), "update-file --claude-hook")
 }
 
 // aracJSLiteral is aracBinary() as a JSON string literal, safe to paste into a generated
@@ -472,13 +616,16 @@ func writeOpenCodePreToolScanPlugin(pluginsDir string, autoYes bool) {
 func openCodePreToolScanPlugin() string {
 	return strings.TrimPrefix(`
 import { execFile } from "node:child_process"
+import { existsSync } from "node:fs"
 import { promisify } from "node:util"
 
 const run = promisify(execFile)
 
 // The absolute path of the aracne binary that generated this plugin, so a harness whose
-// PATH differs from the shell that ran "arac setup" still finds it.
-const ARAC = `+aracJSLiteral()+`
+// PATH differs from the shell that ran "arac setup" still finds it -- and "arac" on PATH when
+// that path is not there (another machine's checkout of this file, a moved binary).
+const RECORDED_ARAC = `+aracJSLiteral()+`
+const ARAC = existsSync(RECORDED_ARAC) ? RECORDED_ARAC : "arac"
 
 // The tools whose answer depends on the topology being current, matching the Claude Code
 // guard hook's matcher plus OpenCode's own spellings of a native edit.
@@ -497,8 +644,21 @@ const SCANNED_TOOLS = new Set([
 // The tools that can change source, and so earn the post-call drift check.
 const POST_TOOLS = new Set(["bash", "edit", "write", "patch", "apply_patch", "multi_edit", "multiedit"])
 
+// OpenCode hands a plugin the GIT worktree as "worktree", which is "/" for a project that is
+// not a repository and the enclosing repo's root for a project nested inside one -- neither is
+// where .aracne lives. "directory" is the instance directory OpenCode was opened in, which is
+// inside the project, and arac walks up from there to find the topology. Preferring worktree
+// ran every arac call from "/", where update-file found no project and scanned the whole
+// filesystem, with OpenCode's event loop waiting on it.
+function aracRoot(directory, worktree) {
+  for (const candidate of [directory, worktree]) {
+    if (typeof candidate === "string" && candidate !== "" && candidate !== "/") return candidate
+  }
+  return process.cwd()
+}
+
 export const AracPreToolScan = async ({ directory, worktree }) => {
-  const root = worktree ?? directory ?? process.cwd()
+  const root = aracRoot(directory, worktree)
   // The command each shell call was WRITTEN as, by call id, captured before the rewrite.
   const written = new Map()
 
@@ -567,13 +727,29 @@ func writeOpenCodeNativeEditPlugin(pluginsDir string, autoYes bool) {
 func openCodeNativeEditPlugin() string {
 	return strings.TrimPrefix(`
 import { execFileSync } from "node:child_process"
+import { existsSync } from "node:fs"
 import path from "node:path"
 
-// The absolute path of the aracne binary that generated this plugin; see arac-pre-tool-scan.
-const ARAC = `+aracJSLiteral()+`
+// The absolute path of the aracne binary that generated this plugin, or "arac" on PATH when it
+// is not there; see arac-pre-tool-scan.
+const RECORDED_ARAC = `+aracJSLiteral()+`
+const ARAC = existsSync(RECORDED_ARAC) ? RECORDED_ARAC : "arac"
+
+// OpenCode hands a plugin the GIT worktree as "worktree", which is "/" for a project that is
+// not a repository and the enclosing repo's root for a project nested inside one -- neither is
+// where .aracne lives. "directory" is the instance directory OpenCode was opened in, which is
+// inside the project, and arac walks up from there to find the topology. Preferring worktree
+// ran every arac call from "/", where update-file found no project and scanned the whole
+// filesystem, with OpenCode's event loop waiting on it.
+function aracRoot(directory, worktree) {
+  for (const candidate of [directory, worktree]) {
+    if (typeof candidate === "string" && candidate !== "" && candidate !== "/") return candidate
+  }
+  return process.cwd()
+}
 
 export const AracNativeEditSync = async ({ directory, worktree }) => {
-  const root = worktree ?? directory ?? process.cwd()
+  const root = aracRoot(directory, worktree)
 
   function normalizeFile(file) {
     if (!file) return ""
@@ -594,7 +770,9 @@ export const AracNativeEditSync = async ({ directory, worktree }) => {
     file = normalizeFile(file)
     if (!file || shouldSkip(file)) return ""
     try {
-      execFileSync(ARAC, ["update-file", file], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })
+      // Bounded like the pre-tool scan's execFile: this call is SYNCHRONOUS, so an arac that
+      // never returns would freeze every later OpenCode tool call, not just this edit.
+      execFileSync(ARAC, ["update-file", file], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 30000 })
       return ""
     } catch (error) {
       const text = `+"`"+`${error.stdout?.toString?.() ?? ""}${error.stderr?.toString?.() ?? ""}`+"`"+`

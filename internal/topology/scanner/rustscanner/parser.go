@@ -67,6 +67,9 @@ const (
 	ntReferenceType         = "reference_type"
 	ntGenericType           = "generic_type"
 	ntConstrainedTypeParam  = "constrained_type_parameter"
+	ntGenericFunction       = "generic_function"
+	ntLineComment           = "line_comment"
+	ntBlockComment          = "block_comment"
 )
 
 // rustBody holds the call/let/struct-literal/reference records extracted from a
@@ -80,12 +83,13 @@ type rustBody struct {
 
 // rustCall records one call expression form found in a body.
 type rustCall struct {
-	Func     string // direct call: `f()`
-	PathType string // path call `Type::name()`: the type segment
-	PathName string // path call: the trailing name
-	ObjName  string // method call `obj.method()`: the receiver text
-	Method   string // method call: the method name
-	IsSelf   bool   // receiver is `self`, or path head is `Self`
+	Func     string   // direct call: `f()`
+	PathType string   // path call `Type::name()`: the type segment
+	PathSegs []string // path call: the whole path before the name (`crate::factory` in `crate::factory::f()`)
+	PathName string   // path call: the trailing name
+	ObjName  string   // method call `obj.method()`: the receiver text
+	Method   string   // method call: the method name
+	IsSelf   bool     // receiver is `self`, or path head is `Self`
 	// Args is one token per argument written at the call site, "" where the argument's
 	// type could not be read. Recorded so a later scan can ask whether the call still fits
 	// its callee rather than whether the callee merely changed.
@@ -95,11 +99,13 @@ type rustCall struct {
 // rustLet records a `let pat = value;` binding whose value lets us type the var.
 type rustLet struct {
 	Name      string
-	CallType  string // value `Type::name()` -> Type
-	CallName  string // value `Type::name()` -> name
-	CallFunc  string // value `f()`
-	StructLit string // value `Type { .. }`
-	AliasOf   string // value is a bare identifier
+	CallType  string   // value `Type::name()` -> Type
+	CallPath  []string // value `a::b::name()` -> [a, b], the whole path before the name
+	CallName  string   // value `Type::name()` -> name
+	CallFunc  string   // value `f()`
+	StructLit string   // value `Type { .. }`
+	AliasOf   string   // value is a bare identifier
+	TypeAnn   string   // the annotation in `let c: Circle = ..`, which types the var outright
 }
 
 // rustRef records a value-position identifier/path reference (for const/static
@@ -109,9 +115,12 @@ type rustRef struct {
 }
 
 // FunctionParse pairs a parsed free function/macro resource with its body record.
+// Module is the module path the function is declared in: the file's own, or an inline
+// `mod x { .. }` inside it, which is the scope its body resolves names in.
 type FunctionParse struct {
 	Function rust.RustFunction
 	Body     *rustBody
+	Module   string
 }
 
 // implMethod is one method/associated function inside an impl block, with its
@@ -137,6 +146,7 @@ type implBlock struct {
 	TypeName  string
 	TraitName string
 	Methods   []implMethod
+	Module    string // the enclosing module path (see FunctionParse.Module)
 }
 
 // useLeaf is one flattened `use` import leaf: the local binding name and the full
@@ -145,6 +155,7 @@ type useLeaf struct {
 	LocalName string
 	Path      []string
 	IsGlob    bool
+	Module    string // the module path the `use` is written in (see FunctionParse.Module)
 }
 
 // rustImport binds a local name to either an internal resource ID or an external
@@ -158,9 +169,10 @@ type rustImport struct {
 // resolvedMethod carries a resolved impl method's final ID, its body, and its
 // receiver type ID, so body analysis can run after impl attachment.
 type resolvedMethod struct {
-	ID   string
-	Body *rustBody
-	Recv string
+	ID     string
+	Body   *rustBody
+	Recv   string
+	Module string // the impl's enclosing module path
 }
 
 // ParseResult is the per-file parse output. Use/impl resolution and body analysis
@@ -265,7 +277,9 @@ func (st *parseState) walkItems(container *sitter.Node, prefix string) {
 		case ntAttributeItem:
 			pending = append(pending, n)
 			continue
-		case ntInnerAttributeItem:
+		case ntInnerAttributeItem, ntLineComment, ntBlockComment:
+			// A comment (doc comments included) between an attribute and its item is
+			// not an item: the attributes still apply to what follows.
 			continue
 		}
 		attrs := pending
@@ -292,7 +306,7 @@ func (st *parseState) parseItem(n *sitter.Node, prefix string, attrs []*sitter.N
 	case ntFunctionItem, ntFunctionSignatureItem:
 		st.parseFreeFn(n, prefix)
 	case ntImplItem:
-		st.parseImpl(n)
+		st.parseImpl(n, prefix)
 	case ntModItem:
 		if body := n.ChildByFieldName("body"); body != nil {
 			name := nodeText(n.ChildByFieldName("name"), st.src)
@@ -309,7 +323,7 @@ func (st *parseState) parseItem(n *sitter.Node, prefix string, attrs []*sitter.N
 	case ntMacroDefinition:
 		st.parseMacro(n, prefix)
 	case ntUseDeclaration:
-		st.parseUse(n)
+		st.parseUse(n, prefix)
 	}
 }
 
@@ -493,18 +507,18 @@ func (st *parseState) parseFreeFn(n *sitter.Node, prefix string) {
 	if b := n.ChildByFieldName("body"); b != nil {
 		body = collectBody(b, st.src)
 	}
-	st.pr.Functions = append(st.pr.Functions, FunctionParse{Function: fn, Body: body})
+	st.pr.Functions = append(st.pr.Functions, FunctionParse{Function: fn, Body: body, Module: prefix})
 }
 
 // parseImpl parses an impl block into a raw implBlock (target/trait names +
 // methods); IDs are resolved later in attachImpls.
-func (st *parseState) parseImpl(n *sitter.Node) {
-	typeName := baseTypeName(n.ChildByFieldName("type"), st.src)
+func (st *parseState) parseImpl(n *sitter.Node, prefix string) {
+	typeName := typePath(n.ChildByFieldName("type"), st.src)
 	if typeName == "" {
 		return
 	}
-	traitName := baseTypeName(n.ChildByFieldName("trait"), st.src)
-	impl := implBlock{TypeName: typeName, TraitName: traitName}
+	traitName := typePath(n.ChildByFieldName("trait"), st.src)
+	impl := implBlock{TypeName: typeName, TraitName: traitName, Module: prefix}
 
 	body := n.ChildByFieldName("body")
 	if body == nil {
@@ -611,16 +625,20 @@ func (st *parseState) parseMacro(n *sitter.Node, prefix string) {
 		Visibility:  "private",
 		Exported:    false,
 	}
-	st.pr.Functions = append(st.pr.Functions, FunctionParse{Function: fn})
+	st.pr.Functions = append(st.pr.Functions, FunctionParse{Function: fn, Module: prefix})
 }
 
 // parseUse flattens a `use` declaration into per-leaf bindings.
-func (st *parseState) parseUse(n *sitter.Node) {
+func (st *parseState) parseUse(n *sitter.Node, prefix string) {
 	arg := n.ChildByFieldName("argument")
 	if arg == nil {
 		return
 	}
+	first := len(st.pr.Uses)
 	st.flattenUse(arg, nil)
+	for i := first; i < len(st.pr.Uses); i++ {
+		st.pr.Uses[i].Module = prefix
+	}
 }
 
 // flattenUse walks a use-tree node, expanding groups and recording each leaf.
@@ -633,11 +651,19 @@ func (st *parseState) flattenUse(node *sitter.Node, prefix []string) {
 		st.pr.Uses = append(st.pr.Uses, useLeaf{LocalName: name, Path: full})
 	case ntIdentifier, ntCrate, ntSelf, ntSuper, ntTypeIdentifier:
 		name := nodeText(node, st.src)
+		if node.Type() == ntSelf && len(prefix) > 0 {
+			// `use crate::shapes::{self}` binds the module `shapes` itself.
+			st.pr.Uses = append(st.pr.Uses, useLeaf{LocalName: prefix[len(prefix)-1], Path: append([]string{}, prefix...)})
+			return
+		}
 		st.pr.Uses = append(st.pr.Uses, useLeaf{LocalName: name, Path: append(append([]string{}, prefix...), name)})
 	case ntUseAsClause:
 		path := pathSegments(node.ChildByFieldName("path"), st.src)
 		alias := nodeText(node.ChildByFieldName("alias"), st.src)
 		full := append(append([]string{}, prefix...), path...)
+		if len(full) > 1 && full[len(full)-1] == "self" {
+			full = full[:len(full)-1] // `{self as s}` binds the module itself as `s`
+		}
 		st.pr.Uses = append(st.pr.Uses, useLeaf{LocalName: alias, Path: full})
 	case ntScopedUseList:
 		newPrefix := append(append([]string{}, prefix...), pathSegments(node.ChildByFieldName("path"), st.src)...)
@@ -651,7 +677,12 @@ func (st *parseState) flattenUse(node *sitter.Node, prefix []string) {
 			st.flattenUse(node.NamedChild(i), prefix)
 		}
 	case ntUseWildcard:
-		modPrefix := append(append([]string{}, prefix...), pathSegments(node.ChildByFieldName("path"), st.src)...)
+		// The grammar gives use_wildcard no `path` field: the glob's path is its (only)
+		// named child -- `crate::factory` in `use crate::factory::*`, absent in `{*}`.
+		modPrefix := append([]string{}, prefix...)
+		if node.NamedChildCount() > 0 {
+			modPrefix = append(modPrefix, pathSegments(node.NamedChild(0), st.src)...)
+		}
 		st.pr.Uses = append(st.pr.Uses, useLeaf{Path: modPrefix, IsGlob: true})
 	}
 }
@@ -774,12 +805,82 @@ func isTestAttr(attrs []*sitter.Node, src []byte) bool {
 			if tt == nil {
 				tt = childByType(at, ntTokenTree)
 			}
-			if tt != nil && strings.Contains(nodeText(tt, src), "test") {
+			if tt != nil && cfgRequiresTest(nodeText(tt, src)) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// cfgRequiresTest reports whether a `cfg(...)` predicate -- the parenthesised argument
+// text, `(test)` or `(all(test, feature = "x"))` -- can only hold in a test build, so the
+// item it gates never exists in the code being mapped. `not(test)`, `any(test, unix)` and
+// `feature = "contest"` gate code that does exist outside tests, so they do not.
+func cfgRequiresTest(pred string) bool {
+	pred = strings.TrimSpace(pred)
+	if strings.HasPrefix(pred, "(") && strings.HasSuffix(pred, ")") {
+		pred = strings.TrimSpace(pred[1 : len(pred)-1])
+	}
+	if pred == "test" {
+		return true
+	}
+	open := strings.IndexByte(pred, '(')
+	if open < 0 || !strings.HasSuffix(pred, ")") {
+		return false
+	}
+	op := strings.TrimSpace(pred[:open])
+	args := splitCfgArgs(pred[open+1 : len(pred)-1])
+	switch op {
+	case "all":
+		for _, a := range args {
+			if cfgRequiresTest(a) {
+				return true
+			}
+		}
+	case "any":
+		if len(args) == 0 {
+			return false
+		}
+		for _, a := range args {
+			if !cfgRequiresTest(a) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// splitCfgArgs splits a cfg predicate list at its top-level commas, leaving commas inside
+// nested parentheses and string literals alone.
+func splitCfgArgs(s string) []string {
+	var out []string
+	depth, start := 0, 0
+	inStr := false
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case inStr:
+			if c == '\\' {
+				i++
+			} else if c == '"' {
+				inStr = false
+			}
+		case c == '"':
+			inStr = true
+		case c == '(':
+			depth++
+		case c == ')':
+			depth--
+		case c == ',' && depth == 0:
+			out = append(out, strings.TrimSpace(s[start:i]))
+			start = i + 1
+		}
+	}
+	if last := strings.TrimSpace(s[start:]); last != "" {
+		out = append(out, last)
+	}
+	return out
 }
 
 // receiverFlavor inspects a method's parameters for a self_parameter, returning
@@ -792,6 +893,19 @@ func receiverFlavor(fnNode *sitter.Node) (string, bool) {
 	}
 	self := childByType(params, ntSelfParameter)
 	if self == nil {
+		// `self: Pin<&mut Self>` / `self: &Self` is a typed receiver: the grammar
+		// makes it an ordinary parameter whose pattern is `self`.
+		for i := 0; i < int(params.NamedChildCount()); i++ {
+			if c := params.NamedChild(i); isTypedSelfParam(c) {
+				if t := c.ChildByFieldName("type"); t != nil && t.Type() == ntReferenceType {
+					if childByType(t, ntMutableSpecifier) != nil {
+						return "ref_mut", false
+					}
+					return "ref", false
+				}
+				return "value", false // `self: Box<Self>`, `self: Pin<&mut Self>`
+			}
+		}
 		return "", true
 	}
 	if hasChildToken(self, "&") {
@@ -803,7 +917,17 @@ func receiverFlavor(fnNode *sitter.Node) (string, bool) {
 	return "value", false
 }
 
-// extractParams reads `parameter` nodes (skipping self_parameter) into defs.
+// isTypedSelfParam reports whether a parameter node is a typed receiver
+// (`self: Box<Self>`, `mut self: Pin<&mut Self>`): its pattern is `self`.
+func isTypedSelfParam(c *sitter.Node) bool {
+	if c == nil || c.Type() != ntParameter {
+		return false
+	}
+	pat := c.ChildByFieldName("pattern")
+	return pat != nil && pat.Type() == ntSelf
+}
+
+// extractParams reads `parameter` nodes (skipping the receiver, typed or not) into defs.
 func extractParams(fnNode *sitter.Node, src []byte) []rust.VariableDefinition {
 	p := fnNode.ChildByFieldName("parameters")
 	if p == nil {
@@ -812,7 +936,7 @@ func extractParams(fnNode *sitter.Node, src []byte) []rust.VariableDefinition {
 	var out []rust.VariableDefinition
 	for i := 0; i < int(p.NamedChildCount()); i++ {
 		c := p.NamedChild(i)
-		if c.Type() != ntParameter {
+		if c.Type() != ntParameter || isTypedSelfParam(c) {
 			continue
 		}
 		def := rust.VariableDefinition{}
@@ -875,7 +999,9 @@ func tupleFields(body *sitter.Node, src []byte) []rust.VariableDefinition {
 			if t := c.ChildByFieldName("type"); t != nil {
 				typ = strings.TrimSpace(nodeText(t, src))
 			}
-		case "block_comment", "line_comment":
+		case ntBlockComment, ntLineComment, ntVisibilityModifier, ntAttributeItem:
+			// `struct Meters(pub f64)`: the `pub` qualifies the field that follows; it is
+			// not a field of its own.
 			continue
 		}
 		out = append(out, rust.VariableDefinition{Name: itoa(idx), Typing: typ})
@@ -909,6 +1035,24 @@ func baseTypeName(n *sitter.Node, src []byte) string {
 	return normType(nodeText(n, src))
 }
 
+// typePath is baseTypeName that keeps a scoped path's qualifier -- `crate::b::Thing`
+// rather than `Thing` -- so resolution can follow the path the source wrote instead of
+// guessing from the bare name.
+func typePath(n *sitter.Node, src []byte) string {
+	if n == nil {
+		return ""
+	}
+	switch n.Type() {
+	case ntScopedTypeIdentifier, ntScopedIdentifier:
+		return strings.Join(pathSegments(n, src), "::")
+	case ntGenericType, ntReferenceType:
+		if t := n.ChildByFieldName("type"); t != nil {
+			return typePath(t, src)
+		}
+	}
+	return baseTypeName(n, src)
+}
+
 // collectBody walks a function/method body, recording calls, lets, struct
 // literals, and value-position references.
 func collectBody(body *sitter.Node, src []byte) *rustBody {
@@ -925,12 +1069,16 @@ func collectBody(body *sitter.Node, src []byte) *rustBody {
 				name = nodeText(pat, src)
 			}
 			if name != "" {
-				rb.Lets = append(rb.Lets, classifyLet(name, n.ChildByFieldName("value"), src))
+				l := classifyLet(name, n.ChildByFieldName("value"), src)
+				if t := n.ChildByFieldName("type"); t != nil {
+					l.TypeAnn = strings.TrimSpace(nodeText(t, src))
+				}
+				rb.Lets = append(rb.Lets, l)
 			}
 		case ntCallExpression:
 			recordCall(n, src, rb)
 		case ntStructExpression:
-			if name := baseTypeName(n.ChildByFieldName("name"), src); name != "" {
+			if name := typePath(n.ChildByFieldName("name"), src); name != "" {
 				rb.Structs = append(rb.Structs, name)
 			}
 		case ntScopedIdentifier:
@@ -952,7 +1100,7 @@ func collectBody(body *sitter.Node, src []byte) *rustBody {
 
 // recordCall classifies one call_expression into a rustCall.
 func recordCall(n *sitter.Node, src []byte, rb *rustBody) {
-	fn := n.ChildByFieldName("function")
+	fn := unwrapTurbofish(n.ChildByFieldName("function"))
 	if fn == nil {
 		return
 	}
@@ -965,7 +1113,7 @@ func recordCall(n *sitter.Node, src []byte, rb *rustBody) {
 		name := nodeText(fn.ChildByFieldName("name"), src)
 		head := lastPathSeg(path, src)
 		rb.Calls = append(rb.Calls, rustCall{
-			PathType: head, PathName: name, IsSelf: head == "Self", Args: args,
+			PathType: head, PathSegs: pathSegments(path, src), PathName: name, IsSelf: head == "Self", Args: args,
 		})
 	case ntFieldExpression:
 		val := fn.ChildByFieldName("value")
@@ -981,6 +1129,16 @@ func recordCall(n *sitter.Node, src []byte, rb *rustBody) {
 		}
 		rb.Calls = append(rb.Calls, c)
 	}
+}
+
+// unwrapTurbofish returns the callee expression of a call written with explicit type
+// arguments -- `generic_fn::<i32>()`, `x.collect::<Vec<_>>()` -- which the grammar wraps
+// in a generic_function node; any other node is returned unchanged.
+func unwrapTurbofish(fn *sitter.Node) *sitter.Node {
+	if fn != nil && fn.Type() == ntGenericFunction {
+		return fn.ChildByFieldName("function")
+	}
+	return fn
 }
 
 // callArgTokens reads one token per argument of a call.
@@ -1010,7 +1168,7 @@ func classifyLet(name string, val *sitter.Node, src []byte) rustLet {
 	}
 	switch val.Type() {
 	case ntCallExpression:
-		fn := val.ChildByFieldName("function")
+		fn := unwrapTurbofish(val.ChildByFieldName("function"))
 		if fn == nil {
 			return l
 		}
@@ -1019,10 +1177,11 @@ func classifyLet(name string, val *sitter.Node, src []byte) rustLet {
 			l.CallFunc = nodeText(fn, src)
 		case ntScopedIdentifier:
 			l.CallType = lastPathSeg(fn.ChildByFieldName("path"), src)
+			l.CallPath = pathSegments(fn.ChildByFieldName("path"), src)
 			l.CallName = nodeText(fn.ChildByFieldName("name"), src)
 		}
 	case ntStructExpression:
-		l.StructLit = baseTypeName(val.ChildByFieldName("name"), src)
+		l.StructLit = typePath(val.ChildByFieldName("name"), src)
 	case ntIdentifier:
 		l.AliasOf = nodeText(val, src)
 	}

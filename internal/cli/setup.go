@@ -50,9 +50,18 @@ func RunSetup(args []string) {
 // runSetup is the command without its flags, so `arac init` can finish its wizard by calling
 // it directly rather than by assembling an argv and parsing it again.
 func runSetup(claude, opencode, global, autoYes bool) {
-	dbPath := ProjectDBPath(DefaultDBRelative)
+	dbPath := setupDBPath()
 	configPath := helper.ConfigPath(dbPath)
-	cfg := helper.EnsureConfig(configPath)
+	// A --global install renders from the project it is run in when there is one -- that is
+	// how `arac init --global` carries its answers to user level -- but it does not MAKE one:
+	// EnsureConfig here left a stray .aracne/config.json in whatever directory the command
+	// happened to run from. With no project, the defaults are the config.
+	var cfg *helper.Config
+	if global && !fileExists(configPath) {
+		cfg = helper.DefaultConfig()
+	} else {
+		cfg = helper.EnsureConfig(configPath)
+	}
 	if err := cfg.Validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "Invalid .aracne/config.json: %v\n", err)
 		os.Exit(1)
@@ -64,6 +73,11 @@ func runSetup(claude, opencode, global, autoYes bool) {
 	// language-free form -- the next `arac setup` after a scan fills it in. (`arac init` scans
 	// before it gets here, so the wizard's first contract already names the languages.)
 	languages := TopologyLanguages(dbPath)
+	if global {
+		// A user-level contract is read in every project, so it cannot name this one's
+		// languages ("a graph of this Go project") -- it gets the language-free form.
+		languages = nil
+	}
 
 	if opencode {
 		initOpenCode(global, cfg, autoYes, languages)
@@ -76,6 +90,11 @@ func runSetup(claude, opencode, global, autoYes bool) {
 // Initializes OpenCode integration by configuring MCP servers, permissions, commands, agents, and plugins.
 func initOpenCode(global bool, cfg *helper.Config, autoYes bool, languages []string) {
 	configPath, configDir, agentsMdPath := opencodePaths(global)
+	// Before the first write, so the record can tell a file this run creates from one the
+	// operator already had -- which is what `arac disable` needs to know before it deletes one.
+	state, _ := loadSetupState(configPath)
+	noteConfigCreation(&state, configPath)
+	noteIntegrationCreation(&state, configDir, openCodeIntegrationDirs, agentsMdPath)
 	os.MkdirAll(configDir, 0755)
 	mainEff := cfg.EffectiveAgent("opencode", "main")
 
@@ -94,10 +113,7 @@ func initOpenCode(global bool, cfg *helper.Config, autoYes bool, languages []str
 		"enabled": true,
 	})
 
-	permissionMap, _ := config["permission"].(map[string]interface{})
-	if permissionMap == nil {
-		permissionMap = make(map[string]interface{})
-	}
+	permissionMap := openCodePermissionBlock(config, &state)
 	// OpenCode's permission block is the guard's blocked_tools decision spelled for a different
 	// harness, so it goes through the SAME filter the guard does (Config.BlockableInMode): nothing
 	// in the intercepting modes, and no `grep` outside ModeMCP. Denying something here that the
@@ -105,11 +121,24 @@ func initOpenCode(global bool, cfg *helper.Config, autoYes bool, languages []str
 	// operator notices is this one, because it refuses silently. Gating on the mode alone missed
 	// the second rule: `blocked_tools: ["grep"]` in ModeCLI was answered on Claude Code and
 	// refused outright here, under an AGENTS.md that (correctly) mentioned no restriction.
+	//
+	// And it only ever TIGHTENS. These three keys are the operator's before they are aracne's:
+	// they used to be assigned outright, so `"edit": "ask"` became "allow", a structured
+	// `read` policy denying `*.env` became "allow", and a key that was absent became an explicit
+	// "allow" that also overrode OpenCode's own `*.env` ask. Now a key aracne does not gate is
+	// left exactly as found, and one it must deny is written with the user's value remembered
+	// (applyOpenCodeNativePermissions), so `arac disable` puts back what was there.
 	blocked := openCodeMainBlocked(cfg)
-	permissionMap["read"] = nativePermission(!blocked["read"])
-	permissionMap["edit"] = nativePermission(!blocked["edit"] && !blocked["write"])
-	permissionMap["bash"] = openCodeBashPermission(blocked)
+	applyOpenCodeNativePermissions(permissionMap, blocked, &state)
 	delete(permissionMap, "write")
+	// Every aracne_* rule is re-derived from the config, the way upsertAracneAllowRules does on
+	// the Claude side: only adding them left a switch out of ModeMCP -- or a tool dropped from
+	// mcp_tools -- still allowing tools the contract no longer mentions.
+	for key := range permissionMap {
+		if strings.HasPrefix(key, "aracne_") {
+			delete(permissionMap, key)
+		}
+	}
 	permissionMap["aracne_*"] = "deny"
 	if cfg.MCPEnabled() {
 		for _, toolName := range toolspec.ResolveToolNames(mainEff.MCPTools, openCodeNativeRead) {
@@ -118,6 +147,7 @@ func initOpenCode(global bool, cfg *helper.Config, autoYes bool, languages []str
 	}
 	config["permission"] = permissionMap
 	writeJSONConfig(configPath, config)
+	saveSetupState(configPath, state)
 	fmt.Printf("[OpenCode] Config written to %s\n", configPath)
 
 	commandsDir := filepath.Join(configDir, "commands")
@@ -128,7 +158,7 @@ func initOpenCode(global bool, cfg *helper.Config, autoYes bool, languages []str
 	batchSize := cfg.AgentParam("opencode", "descriptions-generation-executor", "max-batch-size", helper.DefaultDescriptionBatchSize)
 	writeOpenCodePrimaryCommand(commandsDir, "descriptions-generate", "Generate descriptions for undocumented resources in the topology", "build", prompts.DescriptionsGenerateCommand("descriptions-generation-executor", batchSize), autoYes)
 	writeOpenCodeCommand(commandsDir, "descriptions_clear", "Clear stored topology descriptions", "build", prompts.DescriptionsClearCommand(), autoYes)
-	writeAgent(agentsDir, "descriptions-generation-executor", openCodeAgentContent("Generates descriptions for one assigned batch of undocumented topology resources", cfg.EffectiveAgent("opencode", "descriptions-generation-executor"), prompts.DescriptionsGenerationExecutorPrompt()), autoYes)
+	writeAgent(agentsDir, "descriptions-generation-executor", openCodeAgentContent("Generates descriptions for one assigned batch of undocumented topology resources", cfg.EffectiveAgent("opencode", "descriptions-generation-executor"), openCodeModelProvider(cfg), prompts.DescriptionsGenerationExecutorPrompt()), autoYes)
 
 	if cfg.BugManagementEnabled() {
 		// bug-hunter stays a subtask command: it does its own scanning and needs no fan-out.
@@ -139,9 +169,9 @@ func initOpenCode(global bool, cfg *helper.Config, autoYes bool, languages []str
 		writeOpenCodePrimaryCommand(commandsDir, "bug-judge", "Triage every pending bug by fanning out Bug Judge sub-agents in parallel", "build", bugJudgeCommandForAgent("bug-judge"), autoYes)
 		writeOpenCodePrimaryCommand(commandsDir, "bug-solver", "Fix acknowledged bugs by launching Bug Solver sub-agents", "build", bugSolverCommandForAgent("bug-solver"), autoYes)
 
-		writeAgent(agentsDir, "bug-hunter", openCodeAgentContent("Scans the entire project topology looking for bugs", cfg.EffectiveAgent("opencode", "bug-hunter"), prompts.BugHunterPrompt()), autoYes)
-		writeAgent(agentsDir, "bug-judge", openCodeAgentContent("Triages pending bugs by comparing against dismissed bug patterns", cfg.EffectiveAgent("opencode", "bug-judge"), prompts.BugJudgePrompt()), autoYes)
-		writeAgent(agentsDir, "bug-solver", openCodeAgentContent("Fixes acknowledged bugs in the codebase and removes them", cfg.EffectiveAgent("opencode", "bug-solver"), prompts.BugSolverPrompt()), autoYes)
+		writeAgent(agentsDir, "bug-hunter", openCodeAgentContent("Scans the entire project topology looking for bugs", cfg.EffectiveAgent("opencode", "bug-hunter"), "", prompts.BugHunterPrompt()), autoYes)
+		writeAgent(agentsDir, "bug-judge", openCodeAgentContent("Triages pending bugs by comparing against dismissed bug patterns", cfg.EffectiveAgent("opencode", "bug-judge"), "", prompts.BugJudgePrompt()), autoYes)
+		writeAgent(agentsDir, "bug-solver", openCodeAgentContent("Fixes acknowledged bugs in the codebase and removes them", cfg.EffectiveAgent("opencode", "bug-solver"), "", prompts.BugSolverPrompt()), autoYes)
 	} else {
 		pruneBugArtifacts(commandsDir, agentsDir, "OpenCode")
 	}
@@ -161,6 +191,19 @@ func initClaudeCode(global bool, cfg *helper.Config, autoYes bool, languages []s
 	claudeBaseDir := filepath.Dir(commandsDir)
 	mainEff := cfg.EffectiveAgent("claude_code", "main")
 
+	// settings.json is written by the three writers below, and the MCP config, the contract and
+	// the directories by the rest. Whether each existed before this run is the one fact `arac
+	// disable` needs before it may delete it -- so it is recorded before the first write.
+	settingsPath := filepath.Join(claudeBaseDir, "settings.json")
+	settingsState, _ := loadSetupState(settingsPath)
+	noteConfigCreation(&settingsState, settingsPath)
+	noteIntegrationCreation(&settingsState, claudeBaseDir, claudeIntegrationDirs, claudeMdPath)
+	if cfg.MCPEnabled() && !pathExists(mcpConfigPath) {
+		settingsState.MCPConfigCreated = true
+	}
+	os.MkdirAll(claudeBaseDir, 0755)
+	saveSetupState(settingsPath, settingsState)
+
 	if cfg.MCPEnabled() {
 		claudeConfig := readJSONConfig(mcpConfigPath)
 		if upsertMCPServer(claudeConfig, "mcpServers", map[string]interface{}{
@@ -177,8 +220,13 @@ func initClaudeCode(global bool, cfg *helper.Config, autoYes bool, languages []s
 		// longer mentions -- the model pays for their schemas on every request and is told
 		// nothing about them. Init has to be able to move a project BETWEEN surfaces, not
 		// only onto one.
-		fmt.Printf("[Claude Code] Removed the aracne MCP server from %s (integration.mode: %s)\n",
+		fmt.Printf("[Claude Code] Removed the aracne MCP server from %s (mode: %s)\n",
 			mcpConfigPath, cfg.EffectiveMode())
+		// And a file that is now `{}` goes too, when this setup made it -- the same rule
+		// `arac disable` applies, so switching surfaces and disabling leave the same shape.
+		if removeIfOnlyAracneWrote(mcpConfigPath, readJSONConfig(mcpConfigPath), settingsState.MCPConfigCreated) {
+			fmt.Printf("[Claude Code] Removed %s (aracne created it, and nothing is left in it)\n", mcpConfigPath)
+		}
 	}
 
 	os.MkdirAll(commandsDir, 0755)
@@ -216,6 +264,10 @@ func initClaudeCode(global bool, cfg *helper.Config, autoYes bool, languages []s
 	// do -- so skipping this left an intercepting project prompting on every
 	// `update_description` its descriptions executor made.
 	writeClaudePermissions(filepath.Join(claudeBaseDir, "settings.json"), cfg)
+	// And decide whether those tools arrive with their schemas or behind a lookup. Called in
+	// EVERY mode, unlike the question that sets it: the answer is recorded once and this is
+	// what withdraws it again when the project moves off ModeMCP.
+	writeClaudeToolSearchEnv(filepath.Join(claudeBaseDir, "settings.json"), cfg)
 	writeMarkdownIntegrationFile(claudeMdPath, "Claude Code CLAUDE.md", prompts.ClaudeMdForConfig(cfg, languages))
 	fmt.Println("[Claude Code] Restart Claude Code to activate the topology workflow.")
 }
@@ -264,11 +316,10 @@ func dropAracneMCPServer(mcpConfigPath string) bool {
 	if !removed {
 		return false
 	}
-	if len(servers) == 0 {
-		delete(config, "mcpServers")
-	} else {
-		config["mcpServers"] = servers
-	}
+	// Emptied, not deleted: Claude Code validates `.mcp.json` against a schema that requires
+	// `mcpServers`, so a file left as `{}` breaks every session in the project. The caller's
+	// removeIfOnlyAracneWrote still takes the whole file when aracne created it.
+	config["mcpServers"] = servers
 	writeJSONConfig(mcpConfigPath, config)
 	return true
 }
@@ -311,14 +362,6 @@ func openCodeMainBlocked(cfg *helper.Config) map[string]bool {
 	return cfg.BlockableInMode(toolNameSet(cfg.EffectiveAgent("opencode", "main").BlockedTools))
 }
 
-// Converts a boolean permission flag to a string ("allow" or "deny").
-func nativePermission(allowed bool) string {
-	if allowed {
-		return "allow"
-	}
-	return "deny"
-}
-
 // Converts a string slice of tool names into a set (map) for fast membership testing.
 func toolNameSet(names []string) map[string]bool {
 	set := make(map[string]bool, len(names))
@@ -339,7 +382,42 @@ func opencodePaths(global bool) (string, string, string) {
 		configDir := filepath.Join(home, ".config", "opencode")
 		return filepath.Join(configDir, "opencode.json"), configDir, filepath.Join(configDir, "AGENTS.md")
 	}
-	return ".opencode/opencode.json", ".opencode", "AGENTS.md"
+	root := localIntegrationRoot()
+	return filepath.Join(root, ".opencode", "opencode.json"), filepath.Join(root, ".opencode"), filepath.Join(root, "AGENTS.md")
+}
+
+// setupDBPath is the database -- and so the config and the project root -- `arac setup` and
+// `arac disable` work on: ProjectDBPath's upward walk, and failing that the nearest
+// .aracne/config.json above the working directory. A committed config with no scan yet (the
+// database is usually ignored) is still a project, and a setup run from inside it is for it.
+func setupDBPath() string {
+	dbPath := ProjectDBPath(DefaultDBRelative)
+	if dbPath != DefaultDBRelative || fileExists(dbPath) {
+		return dbPath
+	}
+	if wd, err := os.Getwd(); err == nil {
+		if cfg, ok := findUpward(wd, helper.ConfigPath(DefaultDBRelative)); ok {
+			return filepath.Join(filepath.Dir(cfg), filepath.Base(DefaultDBRelative))
+		}
+	}
+	return dbPath
+}
+
+// localIntegrationRoot is the directory a project install writes into: the root of the project
+// setupDBPath resolved, spelled "." when that is the working directory.
+//
+// The config and the database were already found by walking up, while every output path was
+// relative to the working directory -- so `arac setup` from `proj/shapes` rendered proj's config
+// into a second CLAUDE.md and .claude/ under shapes/, which a harness launched at the root never
+// reads, and left the real integration un-rendered. `arac disable` from there removed nothing.
+func localIntegrationRoot() string {
+	root := ProjectRootFor(setupDBPath())
+	if wd, err := os.Getwd(); err == nil {
+		if abs, err := filepath.Abs(root); err == nil && abs == wd {
+			return "."
+		}
+	}
+	return root
 }
 
 // Returns paths to Claude configuration files (.claude.json, commands, agents, CLAUDE.md) in either global home directory or local project directory
@@ -352,18 +430,21 @@ func claudePaths(global bool) (string, string, string, string) {
 		}
 		return filepath.Join(home, ".claude.json"), filepath.Join(home, ".claude", "commands"), filepath.Join(home, ".claude", "agents"), filepath.Join(home, ".claude", "CLAUDE.md")
 	}
-	return ".mcp.json", ".claude/commands", ".claude/agents", "CLAUDE.md"
+	root := localIntegrationRoot()
+	return filepath.Join(root, ".mcp.json"), filepath.Join(root, ".claude", "commands"), filepath.Join(root, ".claude", "agents"), filepath.Join(root, "CLAUDE.md")
 }
 
-// Reads and parses a JSON configuration file, exiting on parse errors or returning an empty map if the file is missing.
+// Reads and parses a JSON configuration file, exiting on parse errors or returning an empty map
+// if the file is missing. Comments and trailing commas are tolerated -- see parseJSONConfig.
 func readJSONConfig(path string) map[string]interface{} {
-	config := make(map[string]interface{})
 	data, err := os.ReadFile(path)
-	if err == nil && len(data) > 0 {
-		if err := json.Unmarshal(data, &config); err != nil {
-			fmt.Fprintf(os.Stderr, "Error parsing %s: %v\n  Please fix or remove the file and try again.\n", path, err)
-			os.Exit(1)
-		}
+	if err != nil {
+		return make(map[string]interface{})
+	}
+	config, err := parseJSONConfig(data)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing %s: %v\n  Please fix or remove the file and try again.\n", path, err)
+		os.Exit(1)
 	}
 	return config
 }
@@ -402,18 +483,20 @@ func jsonEqual(a, b interface{}) bool {
 	return errA == nil && errB == nil && bytes.Equal(left, right)
 }
 
-// Marshals a config map to indented JSON and writes it to a file with directory creation.
+// Writes a config map back to a file with directory creation, PATCHING the file that is there
+// rather than re-encoding it: the operator's key order and comments are load-bearing in a file
+// aracne only merges into. See jsonconfig.go.
 func writeJSONConfig(path string, config map[string]interface{}) {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", filepath.Dir(path), err)
 		os.Exit(1)
 	}
-	out, err := json.MarshalIndent(config, "", "  ")
+	original, _ := os.ReadFile(path)
+	out, err := encodeJSONConfig(original, config)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error encoding config: %v\n", err)
 		os.Exit(1)
 	}
-	out = append(out, '\n')
 	// ATOMIC. This writes .claude/settings.json and .opencode/opencode.json, files aracne
 	// does not own -- and readJSONConfig calls os.Exit(1) on a parse error, so a write torn
 	// between truncate and fill makes every later `arac setup` and `arac disable` fail hard,
@@ -482,13 +565,15 @@ func bugSolverCommandForAgent(agentRef string) string {
 // Generates Claude agent YAML frontmatter with tools and MCP server configuration.
 func claudeAgentContent(name, description string, eff helper.AgentConfig, prompt string) string {
 	body := prompts.WithToolsListing(prompt, eff.MCPTools, claudeNativeReadAvailable(eff))
-	return fmt.Sprintf("---\nname: %s\ndescription: %s\ntools: %s\n%s%s---\n\n%s\n", name, description, strings.Join(claudeToolsForAgent(eff), ", "), agentModelFrontmatter(eff.Model), claudeMCPServersFrontmatter(name), body)
+	return fmt.Sprintf("---\nname: %s\ndescription: %s\ntools: %s\n%s%s---\n\n%s\n", name, description, strings.Join(claudeToolsForAgent(eff), ", "), agentModelFrontmatter(claudeAgentModel(eff.Model)), claudeMCPServersFrontmatter(name), body)
 }
 
 // Formats agent YAML frontmatter with description, model config, permissions, and tool listings.
-func openCodeAgentContent(description string, eff helper.AgentConfig, prompt string) string {
+// modelProvider qualifies a bare model id into OpenCode's provider/model form; "" leaves a bare
+// id unrendered (see openCodeAgentModel).
+func openCodeAgentContent(description string, eff helper.AgentConfig, modelProvider, prompt string) string {
 	body := prompts.WithToolsListing(prompt, eff.MCPTools, openCodeNativeRead)
-	return fmt.Sprintf("---\ndescription: %s\nmode: subagent\n%spermission:\n%s---\n\n%s\n", description, agentModelFrontmatter(eff.Model), openCodePermissionsForAgent(eff), body)
+	return fmt.Sprintf("---\ndescription: %s\nmode: subagent\n%spermission:\n%s---\n\n%s\n", description, agentModelFrontmatter(openCodeAgentModel(eff.Model, modelProvider)), openCodePermissionsForAgent(eff), body)
 }
 
 // agentModelFrontmatter renders a `model:` frontmatter line for a generated
@@ -501,6 +586,76 @@ func agentModelFrontmatter(model string) string {
 		return ""
 	}
 	return fmt.Sprintf("model: %s\n", model)
+}
+
+// A MODEL CAN BE CONFIGURED AND STILL NOT BELONG IN A HARNESS'S FRONTMATTER.
+//
+// The descriptions executor's model is THE description model (EffectiveLazyDescriptions): `arac
+// init` writes whatever the describer answer called for -- gpt-5.4-mini on the OpenAI branch,
+// deepseek-v4-flash on DeepSeek's, `haiku` for the Claude CLI -- into llm.<any>, where every
+// harness reads it. That is right for the lazy fill and `arac descriptions generate`, which call
+// that provider themselves. Copied verbatim into a sub-agent's `model:` it named a model the
+// harness cannot run: Claude Code was handed gpt-5.4-mini, and OpenCode, which splits the value
+// on its first "/", resolved `gpt-5.4-mini` to provider "gpt-5.4-mini" with no model at all --
+// so /descriptions-generate failed on the wizard's happy path in both. The field is therefore
+// READ per harness rather than copied: what the harness can run is rendered, and anything else
+// leaves the line out, so the agent inherits the main model.
+
+// claudeAgentModelAliases are the names a Claude Code sub-agent's `model:` takes besides a full
+// claude-* id.
+var claudeAgentModelAliases = map[string]bool{"haiku": true, "sonnet": true, "opus": true, "inherit": true}
+
+// claudeAgentModel is the configured model as a Claude Code sub-agent can name it, or "" when
+// Claude Code cannot run it. An OpenCode-qualified `anthropic/claude-*` is unwrapped, since the
+// qualification is the only thing Claude Code would not understand about it.
+func claudeAgentModel(model string) string {
+	model = strings.TrimSpace(model)
+	if rest, ok := strings.CutPrefix(model, "anthropic/"); ok {
+		model = rest
+	}
+	lower := strings.ToLower(model)
+	if claudeAgentModelAliases[lower] || strings.HasPrefix(lower, "claude-") {
+		return model
+	}
+	return ""
+}
+
+// openCodeAgentModel is the configured model as an OpenCode agent must name it, `provider/model`,
+// or "" when there is no unambiguous way to spell it that way.
+//
+// A value that is already qualified is the operator's own and is kept. A bare id is qualified
+// only with modelProvider (see openCodeModelProvider). A Claude Code alias never is: "haiku" is a
+// Claude CLI name, not an id in any provider's catalogue.
+func openCodeAgentModel(model, modelProvider string) string {
+	model = strings.TrimSpace(model)
+	switch {
+	case model == "" || model == helper.InheritsModel:
+		return ""
+	case strings.Contains(model, "/"):
+		return model
+	case modelProvider == "" || claudeAgentModelAliases[strings.ToLower(model)]:
+		return ""
+	}
+	return modelProvider + "/" + model
+}
+
+// openCodeModelProvider is the OpenCode provider a bare DESCRIPTIONS model belongs to, or "" when
+// the configured transport does not say so unambiguously.
+//
+// The three API transports are named the way OpenCode names its providers, so an anthropic,
+// openai or deepseek project qualifies to anthropic/…, openai/…, deepseek/…. Two cases do not.
+// `cli`: the model is whatever that command calls it, and OpenCode may hold no credentials for
+// the vendor behind it. And any transport with a base_url: there `openai` names a wire format
+// some gateway speaks, and `openai/<model>` would send the agent to OpenAI itself.
+//
+// It is the descriptions transport, so it qualifies the descriptions executor only; another
+// agent's bare model says nothing about which provider it came from.
+func openCodeModelProvider(cfg *helper.Config) string {
+	resolved := cfg.EffectiveLazyDescriptions("opencode")
+	if resolved.BaseURL != "" || !helper.IsAPIProvider(resolved.Provider) {
+		return ""
+	}
+	return resolved.Provider
 }
 
 // Generates MCP server frontmatter YAML configuration for the arac serve tool with tool-profile and harness settings.
@@ -562,15 +717,28 @@ func claudeToolsForAgent(eff helper.AgentConfig) []string {
 	return result
 }
 
-// openCodePermissionsForAgent builds the OpenCode permission block: native
-// tools allowed unless blocked, all aracne tools denied except the agent's
-// MCP tools. When read/grep are blocked, bash gets glob deny-patterns for the
-// direct read/grep shell forms (see writeOpenCodeBashPermission).
+// openCodePermissionsForAgent builds a generated sub-agent's OpenCode permission block: every
+// aracne tool denied except the agent's own, plus a denial for each native tool its blocked_tools
+// refuses. When read/grep are blocked, bash gets glob deny-patterns for the direct read/grep
+// shell forms (see writeOpenCodeBashPermission).
+//
+// IT ONLY EVER TIGHTENS, for the same reason applyOpenCodeNativePermissions does on the main
+// agent's side. OpenCode appends an agent's frontmatter rules AFTER the ones its global config
+// produced and resolves the list last-match-wins, so an unconditional `read: allow` is not a
+// default that yields to the operator -- it is the final rule for that tool, overriding every
+// rule they wrote and OpenCode's own `*.env` ask with it. The block shipped with `read: allow`
+// and `bash: allow`, which is how the descriptions executor came to run any command and read any
+// secret in a project whose owner had asked to confirm both. A tool aracne does not gate is left
+// unwritten, so whatever the project decided still decides it.
 func openCodePermissionsForAgent(eff helper.AgentConfig) string {
 	blocked := toolNameSet(eff.BlockedTools)
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("  read: %s\n", nativePermission(!blocked["read"])))
-	b.WriteString(fmt.Sprintf("  edit: %s\n", nativePermission(!blocked["edit"] && !blocked["write"])))
+	if blocked["read"] {
+		b.WriteString("  read: deny\n")
+	}
+	if blocked["edit"] || blocked["write"] {
+		b.WriteString("  edit: deny\n")
+	}
 	writeOpenCodeBashPermission(&b, blocked)
 	b.WriteString("  \"aracne_*\": deny\n")
 	for _, toolName := range toolspec.ResolveToolNames(eff.MCPTools, openCodeNativeRead) {
@@ -614,19 +782,23 @@ func openCodeBashPermission(blocked map[string]bool) interface{} {
 	return rules
 }
 
-// writeOpenCodeBashPermission renders the same policy as openCodeBashPermission
-// into an agent YAML permission block, in a deterministic order.
+// writeOpenCodeBashPermission renders openCodeBashPermission's policy into an agent YAML
+// permission block, in a deterministic order -- and only its denials.
+//
+// The `"*": "allow"` the JSON form opens with is dropped here for the reason withBashDenyPatterns
+// drops it on the main agent's side: written into an agent's frontmatter it is the LAST rule
+// OpenCode resolves, so it turns every command the project wanted confirmed into one that runs
+// unasked. The deny patterns alone are the whole of what this agent has to add; anything they do
+// not name is still the operator's decision.
 func writeOpenCodeBashPermission(b *strings.Builder, blocked map[string]bool) {
 	if blocked["bash"] {
 		b.WriteString("  bash: deny\n")
 		return
 	}
 	if !blocked["read"] && !blocked["grep"] {
-		b.WriteString("  bash: allow\n")
 		return
 	}
 	b.WriteString("  bash:\n")
-	b.WriteString("    \"*\": allow\n")
 	if blocked["read"] {
 		for _, p := range openCodeReadDenyPatterns {
 			b.WriteString(fmt.Sprintf("    %q: deny\n", p))
@@ -943,15 +1115,27 @@ func updateMarkdownIntegrationSegment(existing, segment string) string {
 // nextTopLevelHeading returns the offset of the first "# " heading strictly after `from`, or
 // len(content) when there is none. It bounds a generated block whose closing line the reader
 // removed, so re-rendering replaces it instead of stacking a second copy above it.
+//
+// A `#` line inside a fenced code block is not a heading -- a shell comment, or the high
+// contract's own `# CONTEXT:` example -- and taking one for a heading cut the block short at its
+// first example, orphaning the rest of the contract below the replacement.
 func nextTopLevelHeading(content string, from int) int {
 	pos := from
 	if _, next := nextMarkdownLine(content, pos); next > pos {
 		pos = next // skip the opening heading itself
 	}
+	fence := "" // the open fence's marker, "" outside one
 	for pos < len(content) {
 		line, next := nextMarkdownLine(content, pos)
 		trimmed := strings.TrimLeft(line, " \t")
-		if strings.HasPrefix(trimmed, "# ") || strings.TrimRight(trimmed, "\r\n") == "#" {
+		switch {
+		case fence == "" && (strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~")):
+			fence = trimmed[:3]
+		case fence != "":
+			if strings.HasPrefix(trimmed, fence) {
+				fence = ""
+			}
+		case strings.HasPrefix(trimmed, "# ") || strings.TrimRight(trimmed, "\r\n") == "#":
 			return pos
 		}
 		pos = next

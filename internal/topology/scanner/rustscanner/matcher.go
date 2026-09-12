@@ -1,6 +1,7 @@
 package rustscanner
 
 import (
+	"sort"
 	"strings"
 
 	rust "github.com/Rhuan-Marques/aracne/internal/topology/rust"
@@ -29,17 +30,21 @@ const implRecordSep = "=>>"
 // each `impl Trait for Type` is persisted as a module impl-record (the
 // implements/implemented_by edges themselves are rebuilt whole-graph in
 // rebuildImplements). Methods are deduped by ID (last write wins) and edge lists
-// are uniqued, since a duplicate edge would abort the file's DB write.
-func attachImpls(gt *rust.RustTopology, pr *ParseResult) {
+// are uniqued, since a duplicate edge would abort the file's DB write. The target
+// type and trait resolve in the impl's own scope -- its module (an inline `mod` when
+// the impl sits in one) and that module's `use` bindings -- so `use crate::b::Thing;
+// impl Thing {..}` attaches to b::Thing even when another module also declares a Thing.
+func attachImpls(gt *rust.RustTopology, pr *ParseResult, ix *rustIndex) {
 	pr.MethodFns = nil
 	for _, impl := range pr.Impls {
-		sid := resolveTypeID(impl.TypeName, pr.ModulePath, nil, gt)
+		sc := ix.scope(pr.FileID, declModule(impl.Module, pr))
+		sid := sc.typeID(impl.TypeName)
 		if sid == "" {
 			continue // impl on an external/unresolved type
 		}
 		var traitID string
 		if impl.TraitName != "" {
-			traitID = resolveTraitID(impl.TraitName, pr.ModulePath, gt)
+			traitID = sc.traitID(impl.TraitName)
 		}
 		mod := gt.Modules[pr.FileID]
 		if mod.Connections == nil {
@@ -66,7 +71,7 @@ func attachImpls(gt *rust.RustTopology, pr *ParseResult) {
 			}
 			gt.Functions[mid] = fn
 			mod.Connections[rust.ConnHasFunc] = append(mod.Connections[rust.ConnHasFunc], mid)
-			pr.MethodFns = append(pr.MethodFns, resolvedMethod{ID: mid, Body: m.Body, Recv: sid})
+			pr.MethodFns = append(pr.MethodFns, resolvedMethod{ID: mid, Body: m.Body, Recv: sid, Module: impl.Module})
 		}
 		if traitID != "" {
 			mod.Connections[connImplRecords] = append(mod.Connections[connImplRecords], sid+implRecordSep+traitID)
@@ -85,25 +90,6 @@ func decodeImplRecord(rec string) (string, string, bool) {
 	return rec[:i], rec[i+len(implRecordSep):], true
 }
 
-// resolveTraitID resolves a trait name to a trait ID: same module first, then
-// by-name across the graph. Returns "" for external/unknown traits.
-func resolveTraitID(name, modulePath string, gt *rust.RustTopology) string {
-	n := normType(name)
-	if n == "" {
-		return ""
-	}
-	local := modulePath + "::" + n
-	if _, ok := gt.Traits[local]; ok {
-		return local
-	}
-	for id := range gt.Traits {
-		if lastSeg(id) == n {
-			return id
-		}
-	}
-	return ""
-}
-
 // rebuildImplements rebuilds implements/implemented_by across the WHOLE graph
 // (clear-then-rebuild), so the relationship is never stale on an incremental
 // update. Sources, in priority order:
@@ -114,8 +100,10 @@ func resolveTraitID(name, modulePath string, gt *rust.RustTopology) string {
 //
 // Because it reads only round-tripping data (module connections + struct
 // derives), a full scan and an incremental update produce identical edges, and a
-// removed cross-file impl drops out the moment its file is re-parsed.
-func rebuildImplements(gt *rust.RustTopology) {
+// removed cross-file impl drops out the moment its file is re-parsed. A derive
+// resolves in the struct's declaring scope (its module and its file's persisted
+// `use` bindings), never by picking one of several same-named traits.
+func rebuildImplements(gt *rust.RustTopology, ix *rustIndex) {
 	for id, st := range gt.Structs {
 		delete(st.Connections, rust.ConnImplements)
 		gt.Structs[id] = st
@@ -146,20 +134,32 @@ func rebuildImplements(gt *rust.RustTopology) {
 		gt.Traits[tid] = t
 	}
 
-	for _, mod := range gt.Modules {
-		for _, rec := range mod.Connections[connImplRecords] {
+	for _, fid := range sortedKeys(gt.Modules) {
+		for _, rec := range gt.Modules[fid].Connections[connImplRecords] {
 			if sid, tid, ok := decodeImplRecord(rec); ok {
 				addEdge(sid, tid)
 			}
 		}
 	}
-	for sid, st := range gt.Structs {
-		for _, d := range st.Derives {
-			if tid := resolveTraitID(d, modulePrefixOf(sid), gt); tid != "" {
+	for _, sid := range sortedKeys(gt.Structs) {
+		sc := ix.declScope(sid)
+		for _, d := range gt.Structs[sid].Derives {
+			if tid := sc.traitID(d); tid != "" {
 				addEdge(sid, tid)
 			}
 		}
 	}
+}
+
+// sortedKeys returns a map's keys in sorted order, for passes whose output order must
+// not follow map iteration.
+func sortedKeys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // appendUnique appends v to list unless already present.
@@ -197,19 +197,22 @@ func populateStructMethods(gt *rust.RustTopology) {
 }
 
 // matchSupertraits rebuilds trait inherits/inherited_by edges from each trait's
-// Bounds (`trait A: B`), by name (whole-graph, idempotent).
-func matchSupertraits(gt *rust.RustTopology) {
+// Bounds (`trait A: B`), each resolved in the trait's declaring scope (whole-graph,
+// idempotent).
+func matchSupertraits(gt *rust.RustTopology, ix *rustIndex) {
 	for id, t := range gt.Traits {
 		delete(t.Connections, rust.ConnInherits)
 		delete(t.Connections, rust.ConnInheritedBy)
 		gt.Traits[id] = t
 	}
-	for tid, t := range gt.Traits {
-		for _, b := range t.Bounds {
-			pid := resolveTraitID(b, modulePrefixOf(tid), gt)
+	for _, tid := range sortedKeys(gt.Traits) {
+		sc := ix.declScope(tid)
+		for _, b := range gt.Traits[tid].Bounds {
+			pid := sc.traitID(b)
 			if pid == "" || pid == tid {
 				continue
 			}
+			t := gt.Traits[tid]
 			if t.Connections == nil {
 				t.Connections = map[rust.ConnectionKind][]string{}
 			}

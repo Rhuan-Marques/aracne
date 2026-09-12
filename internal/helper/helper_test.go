@@ -481,6 +481,48 @@ func TestUpdateDescription(t *testing.T) {
 	}
 }
 
+// A function-or-method write lands on the one resource its id names, whichever of the two
+// kinds the caller guessed. The scanners store a function with a receiver or a declaring class
+// as `method`, and every language tool mapped "Method" (Java also "Constructor") to `function`,
+// so each such write was refused with "no function resource with id ...". Any other kind is
+// still enforced.
+func TestUpdateDescriptionAcceptsEitherCallableKind(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "topology.db")
+	topo := &domain.Topology{
+		Resources: map[string]domain.Resource{
+			"com.a.Marked.compute()": {ID: "com.a.Marked.compute()", Kind: domain.ResourceMethod, Name: "compute"},
+			"com.a.helper()":         {ID: "com.a.helper()", Kind: domain.ResourceFunction, Name: "helper"},
+		},
+	}
+	if err := WriteDb(topo, path); err != nil {
+		t.Fatalf("WriteDb: %v", err)
+	}
+
+	if err := UpdateDescription(path, domain.ResourceFunction, "com.a.Marked.compute()", "computes"); err != nil {
+		t.Fatalf("function write on a method id: %v", err)
+	}
+	if err := UpdateDescription(path, domain.ResourceMethod, "com.a.helper()", "helps"); err != nil {
+		t.Fatalf("method write on a function id: %v", err)
+	}
+	if err := UpdateDescription(path, domain.ResourceStruct, "com.a.helper()", "wrong"); err == nil {
+		t.Fatal("a struct write on a function id must still be refused")
+	}
+	if err := UpdateDescription(path, domain.ResourceMethod, "com.a.Missing.m()", "none"); err == nil {
+		t.Fatal("a write to an id that does not exist must still fail")
+	}
+
+	read, err := ReadDb(path)
+	if err != nil {
+		t.Fatalf("ReadDb: %v", err)
+	}
+	if got := read.Resources["com.a.Marked.compute()"].Description; got != "computes" {
+		t.Errorf("method description = %q", got)
+	}
+	if got := read.Resources["com.a.helper()"].Description; got != "helps" {
+		t.Errorf("function description = %q", got)
+	}
+}
+
 func TestClearDescriptionsFiltersTargets(t *testing.T) {
 	path := "test_cleardesc.db"
 	defer os.Remove(path)

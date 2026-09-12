@@ -34,7 +34,7 @@ make test-minimal # the suite under -tags minimal
 `make test-minimal` matters: the Basic build is a real shipped artifact, and it is the one
 a default `go test ./...` does not exercise.
 
-## Two things that will bite you
+## Things that will bite you
 
 **`testing_ground/` is load-bearing, and deliberately not gofmt-clean.** It is a
 hand-built multi-language corpus of edge cases, and about twenty test files scan it and
@@ -42,9 +42,6 @@ assert on resource IDs keyed to the literal `testing_ground/<lang>/…` prefix. 
 it shifts line numbers the at-scale suites check. `make fmt` skips it on purpose — please
 don't run `gofmt -w .` at the repo root.
 
-**Go resource IDs carry the module path.** They begin `github.com/Rhuan-Marques/aracne/…`.
-The at-scale harness pins this with `corpusModulePath` in `tests/atscale_harness_test.go`,
-which must stay equal to the module line in `go.mod`. If you ever change one, change both.
 
 ## Layout
 

@@ -159,10 +159,13 @@ func buildTestTopology(t *testing.T, modulePath, pkgPath string) *golang.GolangT
 }
 
 // parseGoExpr parses a Go expression or small block and returns an ast.Node.
+//
+// It resolves objects, as ParseFile does: analyzeFunctionBody reads which names the body binds
+// from that resolution.
 func parseGoExpr(t *testing.T, src string) ast.Node {
 	t.Helper()
 	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, "", "package p; func _() {\n"+src+"\n}", parser.SkipObjectResolution)
+	f, err := parser.ParseFile(fset, "", "package p; func _() {\n"+src+"\n}", 0)
 	if err != nil {
 		t.Fatalf("parse error: %v\nsource:\n%s", err, src)
 	}

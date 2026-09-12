@@ -20,6 +20,8 @@ type javaCtx struct {
 	depCoord      map[string]string // dep group prefix -> "group:artifact"
 	declared      map[string]string // type FQN -> abs file
 	packageOfFile map[string]string
+	packages      map[string]bool     // every package that declares at least one type
+	byTail        map[string][]string // typeTail -> declared type FQNs (last-resort lookup)
 	typeByFQN     map[string]bool
 	methodIndex   map[string]map[string][]string // owner -> simple name -> []method ID
 }
@@ -33,6 +35,8 @@ func buildJavaModel(absRoot string) *javaCtx {
 		depCoord:      map[string]string{},
 		declared:      map[string]string{},
 		packageOfFile: map[string]string{},
+		packages:      map[string]bool{},
+		byTail:        map[string][]string{},
 		typeByFQN:     map[string]bool{},
 		methodIndex:   map[string]map[string][]string{},
 	}
@@ -54,21 +58,39 @@ func parseBuildDeps(root string, ctx *javaCtx) {
 	}
 }
 
-// parsePomDeps extracts <groupId>/<artifactId> pairs from a pom.xml body.
+// parsePomDeps extracts the <groupId>/<artifactId> pair of every <dependency> in a
+// pom.xml body. The project's own coordinates, its <parent>, plugins and a
+// dependency's <exclusion>s also carry such pairs but are not dependencies: the
+// project's own group, taken as one, turned every unresolved reference under the
+// project's packages into a dependency on the project itself.
 func parsePomDeps(data string, ctx *javaCtx) {
-	group := ""
+	group, artifact := "", ""
+	inDep, inExcl := false, false
 	for _, raw := range strings.Split(data, "\n") {
 		line := strings.TrimSpace(raw)
-		if g, ok := xmlTag(line, "groupId"); ok {
-			group = g
-			continue
+		if strings.Contains(line, "<dependency>") {
+			inDep, group, artifact = true, "", ""
 		}
-		if a, ok := xmlTag(line, "artifactId"); ok {
-			if group != "" {
-				ctx.depCoord[group] = group + ":" + a
-				ctx.externalRoots[firstSeg(group)] = true
-				group = ""
+		if strings.Contains(line, "<exclusion>") {
+			inExcl = true
+		}
+		if inDep && !inExcl {
+			if g, ok := xmlTag(line, "groupId"); ok {
+				group = g
 			}
+			if a, ok := xmlTag(line, "artifactId"); ok {
+				artifact = a
+			}
+		}
+		if strings.Contains(line, "</exclusion>") {
+			inExcl = false
+		}
+		if strings.Contains(line, "</dependency>") {
+			if group != "" && artifact != "" {
+				ctx.depCoord[group] = group + ":" + artifact
+				ctx.externalRoots[firstSeg(group)] = true
+			}
+			inDep = false
 		}
 	}
 }
@@ -122,6 +144,26 @@ func firstSeg(s string) string {
 	return s
 }
 
+// javaBuildFiles are the files that mark a directory as a Maven/Gradle module
+// root -- the only place besides the project root where target/build/out/bin is
+// build output rather than a package directory.
+var javaBuildFiles = []string{"pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"}
+
+// isBuildModuleDir reports whether dir is the project root or a build module
+// root. Only stat'd for the handful of directories whose basename collides with
+// a build-output name, so the walk stays cheap.
+func isBuildModuleDir(dir, root string) bool {
+	if dir == root {
+		return true
+	}
+	for _, n := range javaBuildFiles {
+		if _, err := os.Stat(filepath.Join(dir, n)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
 // collectJavaFiles walks a project root collecting .java files, skipping build
 // output, test directories, and *Test/*Tests/*IT test files.
 func collectJavaFiles(root string) []string {
@@ -139,8 +181,25 @@ func collectJavaFiles(root string) []string {
 			}
 			name := d.Name()
 			switch name {
-			case "target", "build", ".gradle", "out", "bin", "node_modules", ".git", "test", "tests":
+			case ".gradle", "node_modules", ".git":
 				return filepath.SkipDir
+			case "target", "build", "out", "bin":
+				// Build output only where a build actually writes it: directly under
+				// the project root or under a module root. Deeper down these names are
+				// ordinary package segments -- a hexagonal `...port.out`, a
+				// `com.google.devtools.build...` -- and pruning them by basename alone
+				// deleted whole packages from the graph with no error, after which the
+				// project's own package prefix surfaced as an external dependency.
+				if isBuildModuleDir(filepath.Dir(path), root) {
+					return filepath.SkipDir
+				}
+			case "test", "tests":
+				// `src/test`(/java) is the Maven/Gradle test root and a root-level
+				// `tests/` its hand-rolled equivalent; anywhere else `test` is a
+				// package name (`com.acme.test.support`).
+				if parent := filepath.Dir(path); parent == root || filepath.Base(parent) == "src" {
+					return filepath.SkipDir
+				}
 			}
 			if strings.HasPrefix(name, ".") && name != "." {
 				return filepath.SkipDir
@@ -173,24 +232,72 @@ func collectJavaFiles(root string) []string {
 func (ctx *javaCtx) indexDeclarations(gt *java.JavaTopology) {
 	ctx.declared = map[string]string{}
 	ctx.packageOfFile = map[string]string{}
+	ctx.packages = map[string]bool{}
+	ctx.byTail = map[string][]string{}
 	ctx.typeByFQN = map[string]bool{}
+	owners := map[string][]string{}
 	for id, mod := range gt.Modules {
 		ctx.packageOfFile[id] = mod.Package
+		ctx.packages[mod.Package] = true
 		for _, sid := range mod.Structs() {
-			ctx.declared[sid] = id
-			ctx.typeByFQN[sid] = true
+			owners[sid] = append(owners[sid], id)
 		}
 		for _, iid := range mod.Interfaces() {
-			ctx.declared[iid] = id
-			ctx.typeByFQN[iid] = true
+			owners[iid] = append(owners[iid], id)
 		}
+	}
+	for fqn, files := range owners {
+		ctx.declared[fqn] = declaringFile(gt, fqn, files)
+		ctx.typeByFQN[fqn] = true
+	}
+	for fqn := range ctx.declared {
+		tail := typeTail(fqn)
+		ctx.byTail[tail] = append(ctx.byTail[tail], fqn)
 	}
 }
 
-// typeFQN resolves a raw type name to an internal type FQN in the context of the
-// given parse result (its package + import map + wildcards), or "" for
-// external/unresolved types.
-func (ctx *javaCtx) typeFQN(rawName string, pr *ParseResult) string {
+// declaringFile picks the file a type declared by several files is attributed to,
+// not whichever module the map yields last: the file holding the copy the graph
+// keeps (the last in path order, see coOwners), unless that file is gone -- an
+// incremental scan resolves importers before it removes a deleted file, and the
+// surviving copy is the one they must import -- and then the last surviving one.
+func declaringFile(gt *java.JavaTopology, fqn string, files []string) string {
+	if len(files) == 1 {
+		return files[0]
+	}
+	kept := ""
+	if c, ok := gt.Classes[fqn]; ok {
+		kept = c.Loc.Path
+	} else if t, ok := gt.Interfaces[fqn]; ok {
+		kept = t.Loc.Path
+	}
+	sort.Strings(files)
+	var live []string
+	for _, f := range files {
+		if _, err := os.Stat(f); err == nil {
+			live = append(live, f)
+		}
+	}
+	if len(live) == 0 {
+		live = files
+	}
+	for _, f := range live {
+		if f == kept {
+			return f
+		}
+	}
+	return live[len(live)-1]
+}
+
+// typeFQN resolves a raw type name to an internal type FQN, or "" for an
+// external/unresolved type. scope is the type the reference occurs in (its
+// member types and local classes are visible), or "" when there is none.
+//
+// A dotted name resolves head-first: `Map.Entry` resolves `Map` and then looks up
+// its member type, so the qualifier decides the owner rather than the last
+// segment. A dotted name whose head is not a type is a fully qualified name,
+// and every internal FQN is in ctx.declared, so a miss there is external.
+func (ctx *javaCtx) typeFQN(rawName string, pr *ParseResult, scope string) string {
 	qualified := stripTypeText(rawName)
 	if qualified == "" {
 		return ""
@@ -198,33 +305,134 @@ func (ctx *javaCtx) typeFQN(rawName string, pr *ParseResult) string {
 	if _, ok := ctx.declared[qualified]; ok {
 		return qualified
 	}
-	n := simpleNameOf(qualified)
-	if imp, ok := pr.ImportMap[n]; ok && imp.Internal {
-		if _, ok := ctx.declared[imp.FQN]; ok {
+	head, rest, dotted := strings.Cut(qualified, ".")
+	owner := ctx.simpleTypeFQN(head, pr, scope)
+	if !dotted {
+		return owner
+	}
+	if owner == "" {
+		return ""
+	}
+	if cand := owner + "." + rest; ctx.declared[cand] != "" {
+		return cand
+	}
+	return ""
+}
+
+// simpleTypeFQN resolves an unqualified type name in Java's order: the enclosing
+// types (innermost first, with their member and local classes), single-type
+// imports, the same package, on-demand imports, then implicit java.lang. A name
+// any of those binds to an external type resolves to "" — never to an internal
+// type that merely shares the simple name. Only a name nothing binds falls back
+// to the by-name index, and only when exactly one internal type has that name.
+func (ctx *javaCtx) simpleTypeFQN(n string, pr *ParseResult, scope string) string {
+	for s := scope; ctx.declared[s] != ""; s = enclosingType(s) {
+		if typeTail(s) == n {
+			return s
+		}
+		if cand := s + "." + n; ctx.declared[cand] != "" {
+			return cand
+		}
+		if cand := s + "$" + n; ctx.declared[cand] != "" {
+			return cand
+		}
+	}
+	if imp, ok := pr.ImportMap[n]; ok {
+		if imp.Internal && ctx.declared[imp.FQN] != "" {
 			return imp.FQN
 		}
+		return ""
 	}
-	if pr.Package != "" {
-		if cand := pr.Package + "." + n; ctx.declared[cand] != "" {
-			return cand
-		}
-	} else if ctx.declared[n] != "" {
-		return n
+	if cand := qualify(pr.Package, n); ctx.declared[cand] != "" {
+		return cand
 	}
+	found, externalWildcard := "", false
 	for _, wp := range pr.Wildcards {
 		if cand := wp + "." + n; ctx.declared[cand] != "" {
-			return cand
-		}
-	}
-	best := ""
-	for fqn := range ctx.declared {
-		if typeTail(fqn) == n {
-			if best == "" || fqn < best {
-				best = fqn
+			if found != "" && found != cand {
+				return "" // ambiguous between two on-demand imports
 			}
+			found = cand
+		} else if !ctx.packages[wp] && ctx.declared[wp] == "" {
+			externalWildcard = true
 		}
 	}
-	return best
+	if found != "" {
+		return found
+	}
+	// An external on-demand import (java.util.*) or java.lang may be what binds
+	// the name; its contents are unknown, so there is nothing safe to fall back to.
+	if javaLangTypes[n] || externalWildcard {
+		return ""
+	}
+	if cands := ctx.byTail[n]; len(cands) == 1 {
+		return cands[0]
+	}
+	return ""
+}
+
+// enclosingType drops the final '.'- or '$'-separated segment of a type FQN (the
+// declaring type of a member, local or anonymous class; a package for a
+// top-level type).
+func enclosingType(fqn string) string {
+	if i := strings.LastIndexAny(fqn, ".$"); i >= 0 {
+		return fqn[:i]
+	}
+	return ""
+}
+
+// holderScope returns the type a holder's references are resolved in: a
+// method's declaring type, or the holder type itself.
+func holderScope(gt *java.JavaTopology, holderID string) string {
+	if m, ok := gt.Methods[holderID]; ok && m.MethodFrom != nil {
+		return *m.MethodFrom
+	}
+	return holderID
+}
+
+// javaLangTypes are the public top-level types of java.lang, which every
+// compilation unit imports on demand.
+var javaLangTypes = map[string]bool{
+	"Appendable": true, "AutoCloseable": true, "Boolean": true, "Byte": true,
+	"CharSequence": true, "Character": true, "Class": true, "ClassLoader": true,
+	"ClassValue": true, "Cloneable": true, "Comparable": true, "Deprecated": true,
+	"Double": true, "Enum": true, "Float": true, "FunctionalInterface": true,
+	"InheritableThreadLocal": true, "Integer": true, "Iterable": true, "Long": true,
+	"Math": true, "Module": true, "ModuleLayer": true, "Number": true, "Object": true,
+	"Override": true, "Package": true, "Process": true, "ProcessBuilder": true,
+	"ProcessHandle": true, "Readable": true, "Record": true, "Runnable": true,
+	"Runtime": true, "RuntimePermission": true, "SafeVarargs": true,
+	"SecurityManager": true, "Short": true, "StackTraceElement": true,
+	"StackWalker": true, "StrictMath": true, "String": true, "StringBuffer": true,
+	"StringBuilder": true, "SuppressWarnings": true, "System": true, "Thread": true,
+	"ThreadGroup": true, "ThreadLocal": true, "Throwable": true, "Void": true,
+
+	"ArithmeticException": true, "ArrayIndexOutOfBoundsException": true,
+	"ArrayStoreException": true, "ClassCastException": true,
+	"ClassNotFoundException": true, "CloneNotSupportedException": true,
+	"EnumConstantNotPresentException": true, "Exception": true,
+	"IllegalAccessException": true, "IllegalArgumentException": true,
+	"IllegalCallerException": true, "IllegalMonitorStateException": true,
+	"IllegalStateException": true, "IllegalThreadStateException": true,
+	"IndexOutOfBoundsException": true, "InstantiationException": true,
+	"InterruptedException": true, "LayerInstantiationException": true,
+	"MatchException": true, "NegativeArraySizeException": true,
+	"NoSuchFieldException": true, "NoSuchMethodException": true,
+	"NullPointerException": true, "NumberFormatException": true,
+	"ReflectiveOperationException": true, "RuntimeException": true,
+	"SecurityException": true, "StringIndexOutOfBoundsException": true,
+	"TypeNotPresentException": true, "UnsupportedOperationException": true,
+	"WrongThreadException": true,
+
+	"AbstractMethodError": true, "AssertionError": true, "BootstrapMethodError": true,
+	"ClassCircularityError": true, "ClassFormatError": true, "Error": true,
+	"ExceptionInInitializerError": true, "IllegalAccessError": true,
+	"IncompatibleClassChangeError": true, "InstantiationError": true,
+	"InternalError": true, "LinkageError": true, "NoClassDefFoundError": true,
+	"NoSuchFieldError": true, "NoSuchMethodError": true, "OutOfMemoryError": true,
+	"StackOverflowError": true, "ThreadDeath": true, "UnknownError": true,
+	"UnsatisfiedLinkError": true, "UnsupportedClassVersionError": true,
+	"VerifyError": true, "VirtualMachineError": true,
 }
 
 // depFor maps an external type/package FQN to a stable dependency coordinate,
@@ -270,13 +478,26 @@ func (ctx *javaCtx) depFor(fqn string) string {
 // the module, and applies type-use / annotation-use edges.
 func resolveImports(pr *ParseResult, ctx *javaCtx, gt *java.JavaTopology) {
 	imap := map[string]javaImport{}
-	var wildcards []string
+	var wildcards, staticWildcards []string
 	static := map[string]string{}
 	modFiles := map[string]bool{}
 	deps := map[string]bool{}
 
 	for _, imp := range pr.Imports {
 		switch {
+		case imp.Static && imp.Wildcard:
+			// `import static a.Util.*` names a TYPE, not a package: it imports Util's
+			// static members, and its member types, which is why it also joins the
+			// on-demand list type names are resolved through.
+			wildcards = append(wildcards, imp.FQN)
+			if file, ok := ctx.declared[imp.FQN]; ok {
+				if file != pr.FileID {
+					modFiles[file] = true
+				}
+				staticWildcards = append(staticWildcards, imp.FQN)
+			} else if d := ctx.depFor(imp.FQN); d != "" {
+				deps[d] = true
+			}
 		case imp.Wildcard:
 			wildcards = append(wildcards, imp.FQN)
 			matched := false
@@ -293,11 +514,14 @@ func resolveImports(pr *ParseResult, ctx *javaCtx, gt *java.JavaTopology) {
 				}
 			}
 		case imp.Static:
+			// Recorded even when the owner is external: a single-static import
+			// shadows every static import on demand, so an external one must still
+			// stop the name from resolving through an internal `import static T.*`.
+			static[imp.Member] = imp.FQN
 			if file, ok := ctx.declared[imp.FQN]; ok {
 				if file != pr.FileID {
 					modFiles[file] = true
 				}
-				static[imp.Member] = imp.FQN
 			} else if d := ctx.depFor(imp.FQN); d != "" {
 				deps[d] = true
 			}
@@ -320,6 +544,7 @@ func resolveImports(pr *ParseResult, ctx *javaCtx, gt *java.JavaTopology) {
 	pr.ImportMap = imap
 	pr.Wildcards = wildcards
 	pr.StaticMembers = static
+	pr.StaticWildcards = staticWildcards
 
 	mod := gt.Modules[pr.FileID]
 	if mod.Connections == nil {
@@ -339,7 +564,9 @@ func resolveImports(pr *ParseResult, ctx *javaCtx, gt *java.JavaTopology) {
 	// Resolve deferred hierarchy records to parent FQNs and persist them on the
 	// module (whole-graph rebuild reads these every scan).
 	for _, hr := range pr.HierRecords {
-		parent := ctx.typeFQN(hr.ParentName, pr)
+		// A supertype clause is outside the child's body: resolve it in the
+		// declaring scope, where the child's own member types are not visible.
+		parent := ctx.typeFQN(hr.ParentName, pr, enclosingType(hr.ChildID))
 		if parent == "" {
 			continue
 		}
@@ -363,13 +590,13 @@ func resolveImports(pr *ParseResult, ctx *javaCtx, gt *java.JavaTopology) {
 
 	// Type-use edges (field types, generic bounds, record components).
 	for _, tu := range pr.TypeUses {
-		if id := ctx.typeFQN(tu.TypeName, pr); id != "" {
+		if id := ctx.typeFQN(tu.TypeName, pr, holderScope(gt, tu.HolderID)); id != "" {
 			addUsesType(gt, tu.HolderID, id)
 		}
 	}
 	// Annotation-use edges (always uses_interface to an internal annotation type).
 	for _, au := range pr.AnnoUses {
-		if id := ctx.typeFQN(au.TypeName, pr); id != "" {
+		if id := ctx.typeFQN(au.TypeName, pr, holderScope(gt, au.HolderID)); id != "" {
 			if _, ok := gt.Interfaces[id]; ok {
 				addConn(gt, au.HolderID, java.ConnUsesTrait, id)
 			}
@@ -435,14 +662,15 @@ func resolveMethodTypingIDs(gt *java.JavaTopology, results []*ParseResult, ctx *
 				continue
 			}
 			changed := false
+			scope := holderScope(gt, mp.Method.ID)
 			for i := range m.Output {
-				if id := ctx.typeFQN(m.Output[i].Typing, pr); id != "" && m.Output[i].TypingID != id {
+				if id := ctx.typeFQN(m.Output[i].Typing, pr, scope); id != "" && m.Output[i].TypingID != id {
 					m.Output[i].TypingID = id
 					changed = true
 				}
 			}
 			for i := range m.Input {
-				if id := ctx.typeFQN(m.Input[i].Typing, pr); id != "" && m.Input[i].TypingID != id {
+				if id := ctx.typeFQN(m.Input[i].Typing, pr, scope); id != "" && m.Input[i].TypingID != id {
 					m.Input[i].TypingID = id
 					changed = true
 				}
@@ -464,7 +692,7 @@ func analyzeBodies(gt *java.JavaTopology, pr *ParseResult, ctx *javaCtx) {
 		if !ok || m.MethodFrom == nil {
 			continue
 		}
-		conns := analyzeFunctionBody(gt, ctx, pr, mp.Body, *m.MethodFrom)
+		conns := analyzeFunctionBody(gt, ctx, pr, mp.Body, *m.MethodFrom, m.Input)
 		if m.Connections == nil {
 			m.Connections = map[java.ConnectionKind][]string{}
 		}
@@ -478,9 +706,9 @@ func analyzeBodies(gt *java.JavaTopology, pr *ParseResult, ctx *javaCtx) {
 }
 
 // analyzeFunctionBody resolves a body's lets/news/calls into edges, using the
-// owner's fields/inheritance for receiver typing and the overload-aware method
-// index for call targets.
-func analyzeFunctionBody(gt *java.JavaTopology, ctx *javaCtx, pr *ParseResult, body *javaBody, ownerSID string) map[java.ConnectionKind][]string {
+// owner's fields, the method's parameters and the owner's inheritance for
+// receiver typing and the overload-aware method index for call targets.
+func analyzeFunctionBody(gt *java.JavaTopology, ctx *javaCtx, pr *ParseResult, body *javaBody, ownerSID string, params []java.VariableDefinition) map[java.ConnectionKind][]string {
 	conn := map[java.ConnectionKind][]string{}
 	add := func(kind java.ConnectionKind, id string) {
 		if id == "" {
@@ -527,12 +755,12 @@ func analyzeFunctionBody(gt *java.JavaTopology, ctx *javaCtx, pr *ParseResult, b
 	varType := map[string]string{}
 	if oc, ok := gt.Classes[ownerSID]; ok {
 		for _, f := range oc.Fields {
-			if id := ctx.typeFQN(f.Typing, pr); id != "" {
+			if id := ctx.typeFQN(f.Typing, pr, ownerSID); id != "" {
 				varType[f.Name] = id
 			}
 		}
 		for _, c := range oc.Components {
-			if id := ctx.typeFQN(c.Typing, pr); id != "" {
+			if id := ctx.typeFQN(c.Typing, pr, ownerSID); id != "" {
 				varType[c.Name] = id
 			}
 		}
@@ -541,30 +769,34 @@ func analyzeFunctionBody(gt *java.JavaTopology, ctx *javaCtx, pr *ParseResult, b
 	for k, v := range varType {
 		fieldType[k] = v
 	}
-
-	parentSID := ""
-	if oc, ok := gt.Classes[ownerSID]; ok {
-		if inh := oc.Inherits(); len(inh) > 0 {
-			parentSID = inh[0]
+	// A parameter shadows a field of the same name (`this.x` still reads fieldType);
+	// one of an external type is recorded as "", known but not callable into.
+	for _, p := range params {
+		if p.Name != "" {
+			varType[p.Name] = ctx.typeFQN(p.Typing, pr, ownerSID)
 		}
 	}
 
+	parentSID := superclassOf(gt, ownerSID)
+
 	for _, l := range body.Lets {
 		if l.DeclType != "" {
-			if id := ctx.typeFQN(l.DeclType, pr); id != "" {
+			if id := ctx.typeFQN(l.DeclType, pr, ownerSID); id != "" {
 				varType[l.Name] = id
-				addUses(id)
+				if !l.Param {
+					addUses(id)
+				}
 				continue
 			}
 		}
 		if l.Cast != "" {
-			if id := ctx.typeFQN(l.Cast, pr); id != "" {
+			if id := ctx.typeFQN(l.Cast, pr, ownerSID); id != "" {
 				varType[l.Name] = id
 				continue
 			}
 		}
 		if l.NewType != "" {
-			if id := ctx.typeFQN(l.NewType, pr); id != "" {
+			if id := ctx.typeFQN(l.NewType, pr, ownerSID); id != "" {
 				varType[l.Name] = id
 				continue
 			}
@@ -573,7 +805,7 @@ func analyzeFunctionBody(gt *java.JavaTopology, ctx *javaCtx, pr *ParseResult, b
 			ownerOfCall := ""
 			if t, ok := varType[l.CallObj]; ok {
 				ownerOfCall = t
-			} else if t := ctx.typeFQN(l.CallObj, pr); t != "" {
+			} else if t := ctx.typeFQN(l.CallObj, pr, ownerSID); t != "" {
 				ownerOfCall = t
 			}
 			if rid := returnTypeID(gt, ctx, ownerOfCall, l.CallMeth, l.CallArgs); rid != "" {
@@ -583,7 +815,7 @@ func analyzeFunctionBody(gt *java.JavaTopology, ctx *javaCtx, pr *ParseResult, b
 	}
 
 	for _, n := range body.News {
-		fqn := ctx.typeFQN(n.Type, pr)
+		fqn := ctx.typeFQN(n.Type, pr, ownerSID)
 		if fqn != "" {
 			addUses(fqn)
 			addCalls(matchMethods(ctx, fqn, "<init>", n.ArgCount), n.ArgCount, nil)
@@ -593,6 +825,10 @@ func analyzeFunctionBody(gt *java.JavaTopology, ctx *javaCtx, pr *ParseResult, b
 	}
 
 	for _, c := range body.Calls {
+		if c.Implicit {
+			addCalls(resolveImplicitCall(gt, ctx, pr, ownerSID, c.Method, c.ArgCount), c.ArgCount, nil)
+			continue
+		}
 		sid := ""
 		switch {
 		case c.IsSelf:
@@ -600,7 +836,7 @@ func analyzeFunctionBody(gt *java.JavaTopology, ctx *javaCtx, pr *ParseResult, b
 		case c.IsSuper:
 			sid = parentSID
 		case c.CastType != "":
-			sid = ctx.typeFQN(c.CastType, pr)
+			sid = ctx.typeFQN(c.CastType, pr, ownerSID)
 			addUses(sid)
 		case c.FieldRecv != "":
 			sid = fieldType[c.FieldRecv]
@@ -609,25 +845,18 @@ func analyzeFunctionBody(gt *java.JavaTopology, ctx *javaCtx, pr *ParseResult, b
 				sid = t
 			} else if t, ok := fieldType[c.Object]; ok {
 				sid = t
-			} else if t := ctx.typeFQN(c.Object, pr); t != "" {
+			} else if t := ctx.typeFQN(c.Object, pr, ownerSID); t != "" {
 				sid = t
 				addUses(t)
 			}
 		}
 		if sid != "" {
-			addCalls(matchMethods(ctx, sid, c.Method, c.ArgCount), c.ArgCount, nil)
+			addCalls(matchInHierarchy(gt, ctx, sid, c.Method, c.ArgCount), c.ArgCount, nil)
 		} else if c.Object != "" {
+			// An unresolved receiver says nothing about which method is meant; only an
+			// external type it names contributes its dependency.
 			if imp, ok := pr.ImportMap[c.Object]; ok && !imp.Internal && imp.Dep != "" {
 				add(java.ConnUsesDep, imp.Dep)
-			} else if owner, ok := pr.StaticMembers[c.Method]; ok {
-				ofqn := ctx.typeFQN(owner, pr)
-				addCalls(matchMethods(ctx, ofqn, c.Method, c.ArgCount), c.ArgCount, nil)
-			}
-		} else if c.IsSelf {
-			// implicit-this static import call: defaultGlobal() with no receiver
-			if owner, ok := pr.StaticMembers[c.Method]; ok {
-				ofqn := ctx.typeFQN(owner, pr)
-				addCalls(matchMethods(ctx, ofqn, c.Method, c.ArgCount), c.ArgCount, nil)
 			}
 		}
 	}
@@ -668,6 +897,131 @@ func matchMethods(ctx *javaCtx, owner, name string, argCount int) []string {
 	return matched
 }
 
+// matchInHierarchy resolves owner.name against owner and every internal type it
+// inherits from, nearest first (see hierarchyOrder). The nearest type declaring an
+// overload of the right arity wins, so an override shadows the method it overrides;
+// when no type has that arity, it falls back to every overload of the nearest type
+// declaring the name, as matchMethods does. Constructors are not inherited and
+// resolve against owner alone.
+func matchInHierarchy(gt *java.JavaTopology, ctx *javaCtx, owner, name string, argCount int) []string {
+	if name == "<init>" {
+		return matchMethods(ctx, owner, name, argCount)
+	}
+	var fallback []string
+	for _, t := range hierarchyOrder(gt, owner) {
+		ids := matchMethods(ctx, t, name, argCount)
+		if len(ids) == 0 {
+			continue
+		}
+		if javaArityExact(ids, argCount) {
+			return ids
+		}
+		if fallback == nil {
+			fallback = ids
+		}
+	}
+	return fallback
+}
+
+// hierarchyOrder lists start, its superclass chain, then the interfaces those
+// classes implement and their superinterfaces (breadth-first, each level sorted so
+// the order does not depend on how the edges were stored). A class method always
+// precedes an interface default, as in Java. Only internal types are known; the
+// chain ends at the first external supertype.
+func hierarchyOrder(gt *java.JavaTopology, start string) []string {
+	seen := map[string]bool{}
+	var order, ifaces []string
+	for t := start; t != "" && !seen[t]; t = superclassOf(gt, t) {
+		seen[t] = true
+		order = append(order, t)
+		if c, ok := gt.Classes[t]; ok {
+			ifaces = append(ifaces, sortedCopy(c.Implements())...)
+		} else if i, ok := gt.Interfaces[t]; ok {
+			ifaces = append(ifaces, sortedCopy(i.Inherits())...)
+		}
+	}
+	for n := 0; n < len(ifaces); n++ {
+		t := ifaces[n]
+		if seen[t] {
+			continue
+		}
+		seen[t] = true
+		order = append(order, t)
+		if i, ok := gt.Interfaces[t]; ok {
+			ifaces = append(ifaces, sortedCopy(i.Inherits())...)
+		}
+	}
+	return order
+}
+
+// superclassOf returns a class's internal superclass, or "" (an interface, a class
+// extending nothing internal, or an unknown ID).
+func superclassOf(gt *java.JavaTopology, id string) string {
+	if c, ok := gt.Classes[id]; ok {
+		if inh := sortedCopy(c.Inherits()); len(inh) > 0 {
+			return inh[0]
+		}
+	}
+	return ""
+}
+
+func sortedCopy(ids []string) []string {
+	out := append([]string(nil), ids...)
+	sort.Strings(out)
+	return out
+}
+
+// resolveImplicitCall binds a call written with no receiver (`helper(1)`) in
+// Java's order: the innermost lexically enclosing type whose members -- its own or
+// inherited -- include a method of that name decides; only when none does, a
+// single-static import of the name, and then the static imports on demand.
+func resolveImplicitCall(gt *java.JavaTopology, ctx *javaCtx, pr *ParseResult, ownerSID, name string, argCount int) []string {
+	for t := ownerSID; isJavaType(gt, t); t = lexicalParent(pr, t) {
+		if ids := matchInHierarchy(gt, ctx, t, name, argCount); len(ids) > 0 {
+			return ids
+		}
+	}
+	if owner, ok := pr.StaticMembers[name]; ok {
+		// An external owner resolves to nothing, and still shadows the on-demand imports.
+		return matchInHierarchy(gt, ctx, owner, name, argCount)
+	}
+	var found [][]string
+	for _, owner := range pr.StaticWildcards {
+		if ids := matchInHierarchy(gt, ctx, owner, name, argCount); len(ids) > 0 {
+			found = append(found, ids)
+		}
+	}
+	if len(found) == 1 {
+		return found[0]
+	}
+	// Several on-demand imports offer the name: keep only the overloads that fit.
+	var exact []string
+	for _, ids := range found {
+		if javaArityExact(ids, argCount) {
+			exact = append(exact, ids...)
+		}
+	}
+	return exact
+}
+
+// isJavaType reports whether id is an internal class or interface.
+func isJavaType(gt *java.JavaTopology, id string) bool {
+	if _, ok := gt.Classes[id]; ok {
+		return true
+	}
+	_, ok := gt.Interfaces[id]
+	return ok
+}
+
+// lexicalParent returns the type whose code encloses t: recorded for an anonymous
+// class, and otherwise its ID minus the last segment (a member or local class).
+func lexicalParent(pr *ParseResult, t string) string {
+	if p, ok := pr.AnonEnclosing[t]; ok {
+		return p
+	}
+	return enclosingType(t)
+}
+
 // methodArity counts the parameters encoded in a method ID's "(...)" signature.
 func methodArity(id string) int {
 	i := strings.LastIndex(id, "(")
@@ -682,9 +1036,10 @@ func methodArity(id string) int {
 	return strings.Count(inner, ",") + 1
 }
 
-// returnTypeID resolves owner.name (by arity) to its first output's TypingID.
+// returnTypeID resolves owner.name (by arity, inherited methods included) to its
+// first output's TypingID.
 func returnTypeID(gt *java.JavaTopology, ctx *javaCtx, owner, name string, argCount int) string {
-	for _, mid := range matchMethods(ctx, owner, name, argCount) {
+	for _, mid := range matchInHierarchy(gt, ctx, owner, name, argCount) {
 		if m, ok := gt.Methods[mid]; ok && len(m.Output) > 0 && m.Output[0].TypingID != "" {
 			return m.Output[0].TypingID
 		}

@@ -1,8 +1,10 @@
 package jsscanner
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
@@ -10,6 +12,7 @@ import (
 	tstsx "github.com/smacker/go-tree-sitter/typescript/tsx"
 	tstypescript "github.com/smacker/go-tree-sitter/typescript/typescript"
 
+	"github.com/Rhuan-Marques/aracne/internal/helper"
 	"github.com/Rhuan-Marques/aracne/internal/topology/contract"
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 	js "github.com/Rhuan-Marques/aracne/internal/topology/javascript"
@@ -92,6 +95,7 @@ const (
 	ntTypeArguments         = "type_arguments"
 	ntArrayType             = "array_type"
 	ntUnionType             = "union_type"
+	ntPredefinedType        = "predefined_type"
 	ntNestedTypeIdentifier  = "nested_type_identifier"
 	ntAccessibilityModifier = "accessibility_modifier"
 	ntDecorator             = "decorator"
@@ -170,6 +174,11 @@ type jsBodyAssign struct {
 type FunctionParse struct {
 	Function js.JavaScriptFunction
 	Body     *jsFunc
+	// Overload marks a bodiless TypeScript overload declaration. Every declaration of an
+	// overload set mints the same id as the implementation, so applyParsedFile needs to
+	// know which of the collisions is the implementation and which are the signatures to
+	// fold into it.
+	Overload bool
 }
 
 // Contains the parsed structure of a JavaScript/TypeScript file including functions, classes, imports, exports, and type definitions.
@@ -196,6 +205,38 @@ type ParseResult struct {
 	ExternalVars  []js.JavaScriptExternalVar
 	Interfaces    []js.JavaScriptInterface
 	NamedTypes    []js.JavaScriptNamedType
+	// SyntaxError is set when the parser had to recover from a part of the file it could not
+	// read. The recovered declarations are kept, but may be incomplete or misplaced -- a
+	// function after an unclosed class body can land inside the class -- so the scan records
+	// it as a file error instead of presenting the structure as sound.
+	SyntaxError string
+	// namespaces holds the scopes opened by a `namespace`/`module` block, so name resolution
+	// can walk out through them and only them (an object literal's `obj.m` prefix is not a
+	// scope a bare name can see into).
+	namespaces map[string]bool
+	// heritageQualifiers maps a class ID to the qualifier of each base written as a member
+	// (`extends React.Component` -> Component: React), which Bases does not keep.
+	heritageQualifiers map[string]map[string]string
+	// aliases is the file's tsconfig/jsconfig module mapping, loaded on first use.
+	aliases       *pathAliases
+	aliasesLoaded bool
+}
+
+// internalSpecifier decides whether an import specifier names a file of this project, and
+// returns it in the form resolveSpecifier takes: a relative specifier as written, and a
+// tsconfig/jsconfig alias (`@app/models/shape`, a baseUrl-relative `models/shape`) as the
+// absolute module path it maps to. Anything else is a package.
+func (pr *ParseResult) internalSpecifier(source string) (string, bool) {
+	if isRelativeSpecifier(source) {
+		return source, true
+	}
+	if !pr.aliasesLoaded {
+		pr.aliases, pr.aliasesLoaded = loadPathAliases(pr.ModuleRoot, filepath.Dir(pr.FileID)), true
+	}
+	if abs, ok := pr.aliases.resolve(pr.ModuleRoot, source); ok {
+		return abs, true
+	}
+	return source, false
 }
 
 // Extracts the text content of a tree-sitter node from source bytes.
@@ -291,7 +332,7 @@ func ParseFile(filePath string, pkgPath js.PackagePath, moduleRoot string) (*Par
 		FileID:     filePath,
 		PkgPath:    pkgPath,
 		ModuleRoot: moduleRoot,
-		ModulePath: jsModulePath(moduleRoot, filePath),
+		ModulePath: jsModulePathFor(moduleRoot, filePath),
 		ImportMap:  make(map[string]importInfo),
 		Exports:    make(map[string]string),
 	}
@@ -299,8 +340,139 @@ func ParseFile(filePath string, pkgPath js.PackagePath, moduleRoot string) (*Par
 	for i := 0; i < int(root.NamedChildCount()); i++ {
 		parseTopLevel(root.NamedChild(i), false, src, pr)
 	}
+	mergeAccessorPairs(pr)
+	recordHeritageImports(pr)
+	recordLocalExportAliases(pr)
+	if root.HasError() {
+		pr.SyntaxError = fmt.Sprintf("parse error at line %d: part of this file could not be parsed, "+
+			"so the declarations recovered from it may be incomplete or misplaced", firstErrorLine(root))
+	}
 
 	return pr, nil
+}
+
+// firstErrorLine returns the 1-based line of the first node the parser could not read:
+// an ERROR node, or a token it had to invent (MISSING). An ERROR node can open with
+// declarations that parsed cleanly (it may even be the whole file), so the line reported is
+// that of its first child that did not.
+func firstErrorLine(n *sitter.Node) int {
+	if n.IsMissing() {
+		return startLine(n)
+	}
+	for i := 0; i < int(n.ChildCount()); i++ {
+		c := n.Child(i)
+		if c.HasError() || c.IsMissing() {
+			return firstErrorLine(c)
+		}
+		if n.IsError() && !c.IsNamed() {
+			return startLine(c)
+		}
+	}
+	return startLine(n)
+}
+
+// mergeAccessorPairs folds a getter and a setter of the same name into one resource. Both
+// mint `Class.name`, so the later declaration used to replace the earlier one and the
+// resource read as the setter alone. The merged resource spans both declarations and carries
+// both bodies' references; its signature is the getter's, the shape a read of the property
+// has.
+func mergeAccessorPairs(pr *ParseResult) {
+	isAccessor := func(kind string) bool { return kind == "getter" || kind == "setter" }
+	first := make(map[string]int)
+	out := pr.Functions[:0]
+	for _, fp := range pr.Functions {
+		f := fp.Function
+		if !isAccessor(f.Kind) {
+			out = append(out, fp)
+			continue
+		}
+		i, seen := first[f.ID]
+		if !seen || out[i].Function.Kind == f.Kind {
+			first[f.ID] = len(out)
+			out = append(out, fp)
+			continue
+		}
+		prim, other := out[i], fp
+		if prim.Function.Kind != "getter" {
+			prim, other = other, prim
+		}
+		prim.Function.Loc.StartsAt = min(prim.Function.Loc.StartsAt, other.Function.Loc.StartsAt)
+		prim.Function.Loc.EndsAt = max(prim.Function.Loc.EndsAt, other.Function.Loc.EndsAt)
+		prim.Function.Decorators = append(prim.Function.Decorators, other.Function.Decorators...)
+		if prim.Body != nil && other.Body != nil {
+			body := *prim.Body
+			body.BodyCalls = append(append([]jsBodyCall(nil), body.BodyCalls...), other.Body.BodyCalls...)
+			body.BodyAssigns = append(append([]jsBodyAssign(nil), body.BodyAssigns...), other.Body.BodyAssigns...)
+			prim.Body = &body
+		}
+		out[i] = prim
+	}
+	pr.Functions = out
+}
+
+// recordHeritageImports records, for every class and interface, the imports behind the names
+// in its `extends`/`implements` clauses. The inheritance passes resolve those names over the
+// whole topology, where this file's import map no longer exists.
+func recordHeritageImports(pr *ParseResult) {
+	collect := func(qualifiers map[string]string, names ...[]string) map[string]js.HeritageImport {
+		var out map[string]js.HeritageImport
+		for _, list := range names {
+			for _, name := range list {
+				imp, ok := js.HeritageImport{}, false
+				if q, qualified := qualifiers[name]; qualified {
+					// `extends shapes.Base` of `import * as shapes`, or `extends React.Component`
+					// of a package: a member of that module.
+					if info, bound := pr.ImportMap[q]; bound && (info.Namespace || !info.Internal) {
+						imp, ok = js.HeritageImport{Source: info.Source, Name: name}, true
+					}
+				} else if info, bound := pr.ImportMap[name]; bound {
+					imp, ok = js.HeritageImport{Source: info.Source, Name: info.ImportedName}, true
+				}
+				if !ok {
+					continue
+				}
+				if out == nil {
+					out = make(map[string]js.HeritageImport)
+				}
+				out[name] = imp
+			}
+		}
+		return out
+	}
+	for i := range pr.Classes {
+		c := &pr.Classes[i]
+		c.HeritageImports = collect(pr.heritageQualifiers[c.ID], c.Bases, c.ImplementsRaw)
+	}
+	for i := range pr.Interfaces {
+		pr.Interfaces[i].HeritageImports = collect(nil, pr.Interfaces[i].Bases)
+	}
+}
+
+// recordLocalExportAliases turns an export that is not simply a declaration under its own
+// name into a named re-export an importer can follow: `export {impl as renamed}` and
+// CommonJS `module.exports = {renamed: impl}` point `renamed` at this module's `impl`, and
+// `export {x}` of an imported x points at the module x came from. Resolution looks names up
+// by ID, and neither `lib.renamed` nor `lib.x` exists.
+func recordLocalExportAliases(pr *ParseResult) {
+	names := make([]string, 0, len(pr.Exports))
+	for exported := range pr.Exports {
+		names = append(names, exported)
+	}
+	sort.Strings(names) // deterministic ReExportNamed order
+	for _, exported := range names {
+		local := pr.Exports[exported]
+		if exported == "default" || local == "" {
+			continue
+		}
+		if info, ok := pr.ImportMap[local]; ok && info.Internal && !info.Namespace {
+			pr.ReExportNamed = append(pr.ReExportNamed, namedReExport{Exported: exported, Original: info.ImportedName, Source: info.Source})
+			continue
+		}
+		if local != exported {
+			// Source "" is this module itself.
+			pr.ReExportNamed = append(pr.ReExportNamed, namedReExport{Exported: exported, Original: local})
+		}
+	}
 }
 
 // Dispatches top-level JavaScript/TypeScript declarations (imports, exports, functions, classes, interfaces, enums, etc.) to their respective parsers.
@@ -342,6 +514,11 @@ func parseTopLevel(node *sitter.Node, exported bool, src []byte, pr *ParseResult
 		if assign := childByType(node, ntAssignmentExpression); assign != nil {
 			parseCommonJSExport(assign, src, pr)
 		}
+		// A top-level `namespace A { ... }` that is not exported parses as an expression
+		// statement wrapping the namespace, not as a declaration.
+		if ns := childByType(node, ntInternalModule); ns != nil {
+			parseNamespace(ns, src, pr)
+		}
 	}
 }
 
@@ -371,7 +548,7 @@ func parseImport(node *sitter.Node, src []byte, pr *ParseResult) {
 	if source == "" {
 		return
 	}
-	internal := isRelativeSpecifier(source)
+	source, internal := pr.internalSpecifier(source)
 	if internal {
 		pr.InternalImports = append(pr.InternalImports, source)
 	} else {
@@ -412,6 +589,16 @@ func parseImport(node *sitter.Node, src []byte, pr *ParseResult) {
 
 // Processes ES6 export statements, handling declarations, defaults, and named export specifiers.
 func parseExport(node *sitter.Node, src []byte, pr *ParseResult) {
+	// `@Component({...}) export class Widget {}`: the decorators belong to the
+	// export statement, not to the class declaration inside it.
+	classesBefore := len(pr.Classes)
+	defer func() {
+		if decs := extractDecorators(node, src); len(decs) > 0 && len(pr.Classes) > classesBefore {
+			cls := &pr.Classes[classesBefore]
+			cls.Decorators = append(decs, cls.Decorators...)
+			cls.Loc.StartsAt = min(cls.Loc.StartsAt, startLine(node))
+		}
+	}()
 	if decl := node.ChildByFieldName("declaration"); decl != nil {
 		parseTopLevel(decl, true, src, pr)
 		recordDeclExports(decl, src, pr, hasChildToken(node, "default"))
@@ -443,6 +630,9 @@ func parseExport(node *sitter.Node, src []byte, pr *ParseResult) {
 	// A `from "./src"` source turns an export clause / `*` into a re-export that
 	// forwards to another module's bindings instead of binding local names.
 	source := trimSpecifier(nodeText(node.ChildByFieldName("source"), src))
+	if source != "" {
+		source, _ = pr.internalSpecifier(source)
+	}
 	if clause := childByType(node, ntExportClause); clause != nil {
 		for i := 0; i < int(clause.NamedChildCount()); i++ {
 			spec := clause.NamedChild(i)
@@ -471,10 +661,29 @@ func parseExport(node *sitter.Node, src []byte, pr *ParseResult) {
 	// module's namespace, so it is a whole-module re-export. `export * as ns
 	// from "./src"` instead binds a single namespace object; its members are not
 	// flattened, so it must NOT become a whole-module re-export edge.
-	if source != "" && childByType(node, ntNamespaceExport) == nil {
+	if source == "" {
+		return
+	}
+	nsExport := childByType(node, ntNamespaceExport)
+	if nsExport == nil {
 		pr.ReExportAll = append(pr.ReExportAll, source)
+		return
+	}
+	// `export * as ns from "./src"`: one binding standing for a whole module. Recorded as a
+	// named re-export whose original name is the wholeModuleReExport marker, because that is
+	// what an importer of `ns` needs to follow -- `ns.f()` is a name in ./src, not a name
+	// here. Until this was recorded at all, such a barrel simply lost every symbol behind it.
+	if alias := nsExport.NamedChild(0); alias != nil {
+		if name := nodeText(alias, src); name != "" {
+			pr.ReExportNamed = append(pr.ReExportNamed,
+				namedReExport{Exported: name, Original: wholeModuleReExport, Source: source})
+		}
 	}
 }
+
+// wholeModuleReExport is the Original a namespace re-export (`export * as ns from "./src"`)
+// records: the binding stands for the module itself rather than for one of its symbols.
+const wholeModuleReExport = "*"
 
 // Records exported declarations (functions, classes, variables, types) and maps default exports to their target.
 func recordDeclExports(decl *sitter.Node, src []byte, pr *ParseResult, isDefault bool) {
@@ -548,6 +757,25 @@ func parseCommonJSExport(assign *sitter.Node, src []byte, pr *ParseResult) {
 				return
 			}
 			pr.Exports["default"] = name
+		case ntClass:
+			// `module.exports = class Widget {...}`: the class IS the module's
+			// value, i.e. its default export. An anonymous class is named
+			// "default", like an anonymous `export default class {}`.
+			parseClass(right, src, pr, true, "default", "")
+			clsName := nodeText(right.ChildByFieldName("name"), src)
+			if clsName == "" {
+				clsName = "default"
+			}
+			pr.Exports["default"] = clsName
+		case ntFunctionExpression, ntGeneratorFunction, ntArrowFunction:
+			// `module.exports = function build(){}` / `= () => ...`: likewise the
+			// default export, named after the function or "default" when anonymous.
+			name := nodeText(right.ChildByFieldName("name"), src)
+			if name == "" {
+				name = "default"
+			}
+			pr.Functions = append(pr.Functions, parseFunctionValue(name, right, src, pr, true))
+			pr.Exports["default"] = name
 		case ntObject:
 			for i := 0; i < int(right.NamedChildCount()); i++ {
 				p := right.NamedChild(i)
@@ -596,7 +824,7 @@ func parseFunctionDecl(node *sitter.Node, src []byte, pr *ParseResult, exported 
 	fn := js.JavaScriptFunction{
 		ID:          pr.ModulePath + "." + name,
 		Name:        name,
-		Input:       raw.Params,
+		Input:       signatureParams(raw.Params),
 		Output:      raw.Output,
 		Loc:         domain.Location{Path: pr.FileID, StartsAt: startLine(node), EndsAt: endLine(node)},
 		Connections: make(map[js.ConnectionKind][]string),
@@ -605,7 +833,7 @@ func parseFunctionDecl(node *sitter.Node, src []byte, pr *ParseResult, exported 
 		Kind:        "function",
 		Exported:    exported,
 	}
-	return FunctionParse{Function: fn, Body: raw}
+	return FunctionParse{Function: fn, Body: raw, Overload: node.Type() == ntFunctionSignature}
 }
 
 // Parses a class declaration node, extracting class metadata, methods, and base classes, then appends to ParseResult.
@@ -622,6 +850,12 @@ func parseClass(node *sitter.Node, src []byte, pr *ParseResult, exported bool, d
 	}
 	classID := pr.ModulePath + "." + name
 	bases, impls := extractHeritage(node, src)
+	if q := heritageQualifiers(node, src); len(q) > 0 {
+		if pr.heritageQualifiers == nil {
+			pr.heritageQualifiers = make(map[string]map[string]string)
+		}
+		pr.heritageQualifiers[classID] = q
+	}
 
 	cls := js.JavaScriptClass{
 		ID:            classID,
@@ -640,15 +874,80 @@ func parseClass(node *sitter.Node, src []byte, pr *ParseResult, exported bool, d
 	if body == nil || body.Type() != ntClassBody {
 		return
 	}
+	// The TypeScript grammar puts a method's decorators BEFORE it, as siblings in the class
+	// body (JavaScript's nests them inside the method); pending collects them for the member
+	// they precede.
+	var pending []*sitter.Node
 	for i := 0; i < int(body.NamedChildCount()); i++ {
 		m := body.NamedChild(i)
+		var fp FunctionParse
 		switch m.Type() {
+		case ntDecorator:
+			pending = append(pending, m)
+			continue
 		case ntMethodDefinition:
-			pr.Functions = append(pr.Functions, parseMethod(m, src, pr, classID, false))
+			fp = parseMethod(m, src, pr, classID, false)
 		case ntAbstractMethodSig:
-			pr.Functions = append(pr.Functions, parseMethod(m, src, pr, classID, true))
+			fp = parseMethod(m, src, pr, classID, true)
+		case ntFieldDefinition, ntPublicFieldDefinition:
+			var ok bool
+			if fp, ok = parseFieldFunction(m, src, pr, classID); !ok {
+				pending = nil
+				continue
+			}
+		default:
+			pending = nil
+			continue
 		}
+		if len(pending) > 0 {
+			var decs []string
+			for _, d := range pending {
+				if t := decoratorName(d, src); t != "" {
+					decs = append(decs, t)
+				}
+			}
+			fp.Function.Decorators = append(decs, fp.Function.Decorators...)
+			fp.Function.Loc.StartsAt = startLine(pending[0])
+			pending = nil
+		}
+		pr.Functions = append(pr.Functions, fp)
 	}
+}
+
+// parseFieldFunction extracts a class field whose value is a function (`handle = (e) => {…}`,
+// `static make = function () {…}`) as a method of the class: it is called like one, and it
+// satisfies an interface method like one. A field holding anything else is not a resource.
+// The span is the whole field, so a read shows the name it is called by.
+func parseFieldFunction(field *sitter.Node, src []byte, pr *ParseResult, classID string) (FunctionParse, bool) {
+	value := field.ChildByFieldName("value")
+	if value == nil {
+		return FunctionParse{}, false
+	}
+	switch value.Type() {
+	case ntArrowFunction, ntFunctionExpression, ntGeneratorFunction:
+	default:
+		return FunctionParse{}, false
+	}
+	nameNode := field.ChildByFieldName("name") // TypeScript
+	if nameNode == nil {
+		nameNode = field.ChildByFieldName("property") // JavaScript
+	}
+	name := memberName(nameNode, src)
+	if name == "" {
+		return FunctionParse{}, false
+	}
+	fp := parseFunctionValue(name, value, src, pr, false)
+	cid := js.ClassID(classID)
+	fp.Function.ID = classID + "." + name
+	fp.Function.MethodFrom = &cid
+	fp.Function.IsStatic = hasChildToken(field, "static")
+	fp.Function.Decorators = extractDecorators(field, src)
+	if am := childByType(field, ntAccessibilityModifier); am != nil {
+		fp.Function.Accessibility = nodeText(am, src)
+	}
+	fp.Function.Loc.StartsAt = startLine(field)
+	fp.Function.Loc.EndsAt = endLine(field)
+	return fp, true
 }
 
 // Parses a class method definition, extracting name, parameters, return type, modifiers (async, static, getter/setter), and body calls/assignments.
@@ -682,7 +981,7 @@ func parseMethod(node *sitter.Node, src []byte, pr *ParseResult, classID string,
 	fn := js.JavaScriptFunction{
 		ID:            classID + "." + name,
 		Name:          name,
-		Input:         raw.Params,
+		Input:         signatureParams(raw.Params),
 		Output:        raw.Output,
 		Loc:           domain.Location{Path: pr.FileID, StartsAt: startLine(node), EndsAt: endLine(node)},
 		Connections:   make(map[js.ConnectionKind][]string),
@@ -699,6 +998,34 @@ func parseMethod(node *sitter.Node, src []byte, pr *ParseResult, classID string,
 }
 
 // Parses a TypeScript interface declaration into a JavaScriptInterface, extracting name, base types, methods, and properties.
+// typeParamNames reads the declared type-parameter names of a generic declaration
+// (`interface Repo<T, K>` -> ["T", "K"]). Conformance needs them to tell a position written
+// against the interface's own parameter from one written against a concrete type.
+func typeParamNames(n *sitter.Node, src []byte) []string {
+	tp := n.ChildByFieldName("type_parameters")
+	if tp == nil {
+		tp = childByType(n, "type_parameters")
+	}
+	if tp == nil {
+		return nil
+	}
+	var out []string
+	for i := 0; i < int(tp.NamedChildCount()); i++ {
+		c := tp.NamedChild(i)
+		if c.Type() != "type_parameter" {
+			continue
+		}
+		name := c.ChildByFieldName("name")
+		if name == nil {
+			name = childByType(c, ntTypeIdentifier)
+		}
+		if text := nodeText(name, src); text != "" {
+			out = append(out, text)
+		}
+	}
+	return out
+}
+
 func parseInterface(node *sitter.Node, src []byte, pr *ParseResult) {
 	name := nodeText(node.ChildByFieldName("name"), src)
 	if name == "" {
@@ -707,6 +1034,7 @@ func parseInterface(node *sitter.Node, src []byte, pr *ParseResult) {
 	iface := js.JavaScriptInterface{
 		ID:          pr.ModulePath + "." + name,
 		Name:        name,
+		Generics:    typeParamNames(node, src),
 		Loc:         domain.Location{Path: pr.FileID, StartsAt: startLine(node), EndsAt: endLine(node)},
 		Connections: make(map[js.ConnectionKind][]string),
 	}
@@ -733,9 +1061,10 @@ func parseInterface(node *sitter.Node, src []byte, pr *ParseResult) {
 			switch m.Type() {
 			case ntMethodSignature:
 				iface.Methods = append(iface.Methods, js.FunctionDefinition{
-					Name:   nodeText(m.ChildByFieldName("name"), src),
-					Input:  extractParams(m, src),
-					Output: returnTypeDefs(m, src),
+					Name:     nodeText(m.ChildByFieldName("name"), src),
+					Input:    signatureParams(extractParams(m, src)),
+					Output:   returnTypeDefs(m, src),
+					Optional: hasChildToken(m, "?"),
 				})
 			case ntPropertySignature:
 				typing := ""
@@ -814,6 +1143,13 @@ func parseNamespace(node *sitter.Node, src []byte, pr *ParseResult) {
 	}
 	saved := pr.ModulePath
 	pr.ModulePath = saved + "." + nsName
+	if pr.namespaces == nil {
+		pr.namespaces = make(map[string]bool)
+	}
+	// `namespace A.B {}` opens A as well as A.B.
+	for scope := pr.ModulePath; len(scope) > len(saved); scope = scope[:strings.LastIndex(scope, ".")] {
+		pr.namespaces[scope] = true
+	}
 	for i := 0; i < int(body.NamedChildCount()); i++ {
 		parseTopLevel(body.NamedChild(i), false, src, pr)
 	}
@@ -892,7 +1228,7 @@ func parseVarDeclaration(node *sitter.Node, src []byte, pr *ParseResult, exporte
 
 // Processes CommonJS require binding patterns, mapping imported names (including destructured properties) to their source module.
 func parseRequireBinding(nameNode *sitter.Node, source string, src []byte, pr *ParseResult) {
-	internal := isRelativeSpecifier(source)
+	source, internal := pr.internalSpecifier(source)
 	if internal {
 		pr.InternalImports = append(pr.InternalImports, source)
 	} else {
@@ -947,7 +1283,7 @@ func parseFunctionValue(name string, value *sitter.Node, src []byte, pr *ParseRe
 	fn := js.JavaScriptFunction{
 		ID:          pr.ModulePath + "." + name,
 		Name:        name,
-		Input:       raw.Params,
+		Input:       signatureParams(raw.Params),
 		Output:      raw.Output,
 		Loc:         domain.Location{Path: pr.FileID, StartsAt: startLine(value), EndsAt: endLine(value)},
 		Connections: make(map[js.ConnectionKind][]string),
@@ -1028,7 +1364,7 @@ func parseObjectMember(objVar, name string, fn *sitter.Node, src []byte, pr *Par
 	jf := js.JavaScriptFunction{
 		ID:          pr.ModulePath + "." + objVar + "." + name,
 		Name:        name,
-		Input:       raw.Params,
+		Input:       signatureParams(raw.Params),
 		Output:      raw.Output,
 		Loc:         domain.Location{Path: pr.FileID, StartsAt: startLine(fn), EndsAt: endLine(fn)},
 		Connections: make(map[js.ConnectionKind][]string),
@@ -1056,6 +1392,17 @@ func extractParams(fnNode *sitter.Node, src []byte) []js.VariableDefinition {
 	return params
 }
 
+// signatureParams is a parameter list as a caller sees it. TypeScript's `this` parameter
+// (`m(this: C, x: number)`) only types the receiver and is never passed, so counting it made
+// every correct call look one argument short. The body analysis keeps the full list: the
+// annotation still types `this` inside the body.
+func signatureParams(params []js.VariableDefinition) []js.VariableDefinition {
+	if len(params) > 0 && params[0].Name == "this" {
+		return params[1:]
+	}
+	return params
+}
+
 // Parses a parameter node into a VariableDefinition, extracting name and optional type annotation.
 func paramDef(c *sitter.Node, src []byte) js.VariableDefinition {
 	switch c.Type() {
@@ -1067,7 +1414,8 @@ func paramDef(c *sitter.Node, src []byte) js.VariableDefinition {
 			def.Name = nodeText(pat, src)
 		}
 		if ta := c.ChildByFieldName("type"); ta != nil {
-			def.Typing = typeAnnotationName(ta, src)
+			def.Typing = declaredTypeName(ta, src)
+			def.Annotation = annotationText(ta, src)
 		}
 		// "b?: string" and "b: string = x" may both be omitted at the call site. The
 		// grammar gives the first its own node type; the second keeps a value child.
@@ -1094,10 +1442,88 @@ func returnTypeDefs(node *sitter.Node, src []byte) []js.VariableDefinition {
 	if rt == nil {
 		return nil
 	}
-	if t := typeAnnotationName(rt, src); t != "" {
-		return []js.VariableDefinition{{Typing: t}}
+	if t := declaredTypeName(rt, src); t != "" {
+		return []js.VariableDefinition{{Typing: t, Annotation: annotationText(rt, src)}}
 	}
 	return nil
+}
+
+// annotationText is the declared type as written -- "Item[]", "Map<string, Item[]>",
+// "Item | null" -- normalised for whitespace, alongside the base name declaredTypeName
+// reduces it to.
+//
+// The reduction is not a shortcoming of declaredTypeName: Typing exists to resolve to a
+// topology resource, and `Item[]` resolves to Item. But a signature is compared for
+// equality, and on that text `items: Item` and `items: Item[]` are the same declaration --
+// so the edit between them, which breaks every caller, used to pass as no change at all.
+//
+// Capped like a type alias's underlying text: an inline object type can run to hundreds of
+// characters, and the field is only ever compared, never re-parsed.
+func annotationText(ta *sitter.Node, src []byte) string {
+	if ta == nil {
+		return ""
+	}
+	n := ta
+	if ta.NamedChildCount() > 0 {
+		n = ta.NamedChild(0) // drop the ":" the type_annotation node carries
+	}
+	t := normalizeTypeText(nodeText(n, src))
+	if len(t) > 200 {
+		t = t[:200]
+	}
+	return t
+}
+
+// normalizeTypeText drops the whitespace a type annotation's spelling is free to vary in,
+// keeping only the space that separates two words (`readonly string[]`). Without this,
+// reformatting `Map<string, Item>` to `Map<string,Item>` would read as a signature change
+// and warn every caller about an edit that changed nothing.
+func normalizeTypeText(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if !isTypeSpace(s[i]) {
+			b.WriteByte(s[i])
+			continue
+		}
+		for i+1 < len(s) && isTypeSpace(s[i+1]) {
+			i++
+		}
+		var prev, next byte
+		if b.Len() > 0 {
+			prev = b.String()[b.Len()-1]
+		}
+		if i+1 < len(s) {
+			next = s[i+1]
+		}
+		if isWordByte(prev) && isWordByte(next) {
+			b.WriteByte(' ')
+		}
+	}
+	return b.String()
+}
+
+func isTypeSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' }
+
+func isWordByte(c byte) bool {
+	return c == '_' || c == '$' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
+}
+
+// declaredTypeName is typeAnnotationName for a parameter or return type, falling back to a
+// predefined type's own text -- number, string, boolean, void. typeAnnotationName yields only
+// names that can resolve to a resource, which is right for following a value's type and wrong
+// for a signature: without the fallback `x: number` and `x: string` are the same declaration,
+// so neither the signature-change check nor the call-site check can tell them apart.
+func declaredTypeName(ta *sitter.Node, src []byte) string {
+	if t := typeAnnotationName(ta, src); t != "" {
+		return t
+	}
+	if ta.NamedChildCount() > 0 {
+		if n := ta.NamedChild(0); n.Type() == ntPredefinedType {
+			return nodeText(n, src)
+		}
+	}
+	return ""
 }
 
 // typeAnnotationName returns the resolvable user type name inside a type_annotation, or "".
@@ -1204,6 +1630,34 @@ func extractHeritage(classNode *sitter.Node, src []byte) (bases, impls []string)
 	return
 }
 
+// heritageQualifiers maps each base written as a member expression (`extends React.Component`)
+// to its qualifier (`React`), for the ones extractHeritage records under the member name.
+func heritageQualifiers(classNode *sitter.Node, src []byte) map[string]string {
+	var out map[string]string
+	var visit func(n *sitter.Node)
+	visit = func(n *sitter.Node) {
+		for i := 0; i < int(n.NamedChildCount()); i++ {
+			c := n.NamedChild(i)
+			switch c.Type() {
+			case ntExtendsClause, ntImplementsClause:
+				visit(c)
+			case ntMemberExpression:
+				obj, prop := c.ChildByFieldName("object"), c.ChildByFieldName("property")
+				if obj != nil && prop != nil && obj.Type() == ntIdentifier {
+					if out == nil {
+						out = make(map[string]string)
+					}
+					out[nodeText(prop, src)] = nodeText(obj, src)
+				}
+			}
+		}
+	}
+	if h := childByType(classNode, ntClassHeritage); h != nil {
+		visit(h)
+	}
+	return out
+}
+
 // Recursively extracts the base identifier name from an expression node, unwrapping generics and member access.
 func baseNameFromExpr(n *sitter.Node, src []byte) string {
 	if n == nil {
@@ -1283,15 +1737,20 @@ func extractDecorators(node *sitter.Node, src []byte) []string {
 		if c.Type() != ntDecorator {
 			continue
 		}
-		t := strings.TrimPrefix(strings.TrimSpace(nodeText(c, src)), "@")
-		if idx := strings.IndexAny(t, "("); idx >= 0 {
-			t = t[:idx]
-		}
-		if t != "" {
+		if t := decoratorName(c, src); t != "" {
 			decs = append(decs, t)
 		}
 	}
 	return decs
+}
+
+// decoratorName returns a decorator's name without the `@` and any call arguments.
+func decoratorName(dec *sitter.Node, src []byte) string {
+	t := strings.TrimPrefix(strings.TrimSpace(nodeText(dec, src)), "@")
+	if idx := strings.IndexAny(t, "("); idx >= 0 {
+		t = t[:idx]
+	}
+	return t
 }
 
 // jsCallArgs reads the argument count and one token per argument of a call.
@@ -1568,4 +2027,40 @@ func jsModulePath(root, file string) string {
 		return ""
 	}
 	return rel
+}
+
+// moduleExtOrder ranks the ECMAScript extensions the way an extension-less import picks
+// between files sharing a stem (resolveSpecifier's order; TypeScript's own resolution
+// prefers .ts over the .js compiled next to it).
+var moduleExtOrder = []string{".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"}
+
+// jsModulePathFor is the ID namespace a file's declarations are minted under: jsModulePath,
+// unless another source file in the same directory shares the stem and ranks before this
+// one in moduleExtOrder -- `util.js` beside `util.cjs`, a compiled `util.js` beside
+// `util.ts`. Stripping the extension gave both the same namespace, so they minted the same
+// IDs and one silently replaced the other. The lower-ranked file keeps its extension
+// (`util.cjs.fmt`); the file an extension-less import reaches keeps the plain path, and a
+// file with no such sibling is unaffected.
+//
+// Decided from the files on disk, so a full scan and an incremental update agree. A
+// TypeScript sibling counts for a JavaScript file although another scanner owns it: both
+// languages' IDs share one graph.
+func jsModulePathFor(root, file string) string {
+	base := jsModulePath(root, file)
+	ext := filepath.Ext(file)
+	stem := strings.TrimSuffix(file, ext)
+	for i, e := range moduleExtOrder {
+		if e == ext {
+			break
+		}
+		sibling := stem + e
+		lang := "typescript"
+		if i >= 4 { // past .cts
+			lang = "javascript"
+		}
+		if info, err := os.Stat(sibling); err == nil && info.Mode().IsRegular() && helper.IsSourceFile(root, sibling, lang) {
+			return base + ext
+		}
+	}
+	return base
 }

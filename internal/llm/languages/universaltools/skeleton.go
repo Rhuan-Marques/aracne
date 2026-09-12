@@ -1,12 +1,12 @@
 package universaltools
 
 import (
+	"fmt"
 	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/Rhuan-Marques/aracne/internal/llm/languages/readunit"
-	"github.com/Rhuan-Marques/aracne/internal/llm/languages/renderstate"
 	"github.com/Rhuan-Marques/aracne/internal/topology"
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
@@ -250,8 +250,20 @@ func abridgeSymbolBody(u readunit.Unit, maxLines int) string {
 	if !strings.HasSuffix(head, "\n") {
 		head += "\n"
 	}
-	return lead + head + renderstate.ElisionMarker(u.ID,
-		pluralLines(elided)+" of body over the read.max_symbol_lines cap; pass full: true for the exact bytes")
+	return lead + head + abridgedMarker(u.ID, elided)
+}
+
+// abridgedMarker stands in for the body a symbol read left out over the line cap.
+//
+// Not renderstate.ElisionMarker: that one ends "read <id> for its source", which is the right
+// instruction for source this response merely chose to put elsewhere and a dead end here --
+// reading the same id again returns the same abridged body. The way back to the exact bytes is
+// the `full` flag, so that is the only thing this marker names. It keeps the leading U+22EF,
+// which opens no comment in any language aracne scans.
+func abridgedMarker(id string, elided int) string {
+	return fmt.Sprintf("⋯ %s of %s not shown (over the read.max_symbol_lines cap) — read it again "+
+		"with full: true (`arac read --full` on the command line) for the exact bytes ⋯\n\n",
+		pluralLines(elided), id)
 }
 
 // declStart matches the first token of a declaration in the languages aracne scans. Leading

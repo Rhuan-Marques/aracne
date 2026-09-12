@@ -8,7 +8,7 @@ import (
 	"github.com/Rhuan-Marques/aracne/internal/tui"
 )
 
-// The six questions `arac init` asks, and the rules that turn their answers into a config.
+// The seven questions `arac init` asks, and the rules that turn their answers into a config.
 //
 // They live apart from the flow in init.go for one reason: the flow needs a terminal and the
 // rules do not. Everything here is a value in and a value out -- which harness, which mode,
@@ -45,6 +45,12 @@ type initAnswers struct {
 	// sweeps the repository, and nothing records it. Lazy generation is already on by
 	// default, so "lazily" is not a mode being chosen -- it is this sweep being dropped.
 	DescribeNow bool
+	// PreloadTools is question seven, and it is only MEANINGFUL when asksPreloadTools is
+	// true -- a plain bool rather than a *bool because the two answers that decide whether
+	// it was asked (Harness and Mode) are already in this struct, so a second field saying
+	// "and we did ask" would be a fact derivable from the other two and free to disagree
+	// with them.
+	PreloadTools bool
 }
 
 // The harness answers. "both" is what a bare `arac init` used to do unconditionally, and it is
@@ -66,6 +72,19 @@ func (a initAnswers) writesOpenCode() bool {
 	return a.Harness == harnessOpenCode || a.Harness == harnessBoth
 }
 
+// asksPreloadTools reports whether question seven applies to these answers.
+//
+// BOTH halves are required, and each on its own would be a question with no effect. The
+// variable is a key in .claude/settings.json, so an OpenCode-only project has nowhere to put
+// it; and it is about the schemas of MCP tools, which outside ModeMCP the main agent is served
+// none of. "Both" counts as Claude Code -- the Claude tree is written either way.
+//
+// The flow and apply share this so the two cannot drift: a question the wizard skipped must
+// also be a key apply does not write, or a cli-mode run would stamp an answer nobody gave.
+func (a initAnswers) asksPreloadTools() bool {
+	return a.writesClaude() && a.Mode == helper.ModeMCP
+}
+
 // apply writes the answers into cfg. It is the only function that mutates a config here, and
 // it runs once, after the last question.
 func (a initAnswers) apply(cfg *helper.Config) {
@@ -83,6 +102,15 @@ func (a initAnswers) apply(cfg *helper.Config) {
 		cfg.Descriptions.CLIProviderCommand = ""
 	}
 	setDescriptionsExecutorModel(cfg, a.Model)
+	// Left ALONE when the question did not apply, rather than written false. nil is
+	// "aracne does not manage ENABLE_TOOL_SEARCH" and false is "aracne manages it, and
+	// withdraws it" -- so stamping false on a cli-mode run would hand aracne ownership of a
+	// variable the operator may have set for their own reasons, and the next setup would
+	// delete it. A re-run that skips the question keeps whatever the previous one recorded.
+	if a.asksPreloadTools() {
+		preload := a.PreloadTools
+		cfg.PreloadMCPTools = &preload
+	}
 }
 
 // setDescriptionsExecutorModel pins the model both description entry points use.
@@ -170,16 +198,29 @@ func modelInCommand(command string) string {
 // Appending the flag makes the answer real for the one CLI whose flag we actually know.
 // `codex exec` and a hand-written script are left untouched: guessing a flag onto someone
 // else's program is how a wizard turns a working command into one that exits 2.
+//
+// Narrow about the PROGRAM, not about its other flags. This used to demand exactly two argv
+// words, so `claude -p --max-turns 1` -- the command the docs recommend -- and
+// `/usr/local/bin/claude -p` came back unchanged and the model answer silently did nothing.
+// Any `claude` in print mode takes the flag; a `--` is where its options stop, so a command
+// with one is left alone rather than given a --model that would read as a prompt word.
 func commandWithModel(command, model string) string {
 	model = strings.TrimSpace(model)
 	if model == "" || modelInCommand(command) != "" {
 		return command
 	}
 	argv, err := helper.SplitCommand(command)
-	if err != nil || len(argv) != 2 || argv[0] != "claude" {
+	if err != nil || len(argv) < 2 || baseName(argv[0]) != "claude" {
 		return command
 	}
-	if argv[1] != "-p" && argv[1] != "--print" {
+	printMode := false
+	for _, arg := range argv[1:] {
+		if arg == "--" {
+			return command
+		}
+		printMode = printMode || arg == "-p" || arg == "--print"
+	}
+	if !printMode {
 		return command
 	}
 	return command + " --model " + model
@@ -189,11 +230,16 @@ func commandWithModel(command, model string) string {
 // The questions
 // ---------------------------------------------------------------------------
 
-// totalInitSteps is the denominator of the "(n/6)" counter. It counts the questions a run can
-// ask, not the ones it does: the API and CLI branches ask a different fourth question, and one
-// of them sometimes skips the fifth, but a counter that changed its denominator halfway
-// through would read as the wizard growing while you answer it.
-const totalInitSteps = 6
+// totalInitSteps is the denominator of the "(n/7)" counter. It counts the questions a run can
+// ask, not the ones it does: the API and CLI branches ask a different fourth question, one of
+// them sometimes skips the fifth, and the seventh is asked only on the one combination it
+// means anything on -- but a counter that changed its denominator halfway through would read
+// as the wizard growing while you answer it.
+//
+// The conditional question is LAST for this reason. Anywhere else it would leave a visible
+// hole in the middle of the sequence on every run that skips it; at the end, a run that does
+// not ask it simply stops at 6/7.
+const totalInitSteps = 7
 
 func harnessQuestion() tui.Question {
 	return tui.Question{
@@ -222,7 +268,7 @@ func harnessQuestion() tui.Question {
 				Value:   harnessOpenCode,
 				Summary: "Writes the OpenCode integration.",
 				Detail: []string{
-					"  .opencode/opencode.json   permissions, and the MCP server in mcp mode",
+					"  .opencode/opencode.json   the MCP server and permissions",
 					"  .opencode/commands/       the descriptions commands",
 					"  .opencode/agents/         the description executor",
 					"  .opencode/plugins/        the pre-tool scan plugin",
@@ -565,6 +611,70 @@ func verbosityQuestion() tui.Question {
 					"Ideal for lower-end models, like Haikus, DeepSeeks or GPT minis. These " +
 						"models are cheap and Aracne can make them more capable, but the " +
 						"contract has to spell things out for them.",
+				},
+			},
+		},
+	}
+}
+
+// The two answers to question seven. They are spelled as words rather than as "yes"/"no"
+// because the question's title can be read either way round -- "load them up front?" and
+// "leave the search on?" are the same question with opposite polarity -- and a stored "yes"
+// would not say which one it was answering.
+const (
+	preloadToolsEager    = "preload"
+	preloadToolsDeferred = "defer"
+)
+
+// preloadToolsQuestion is asked only in ModeMCP, and only when a Claude Code tree is being
+// written. See initAnswers.asksPreloadTools.
+//
+// WHY THIS IS A QUESTION AND NOT A DEFAULT. Claude Code defers tool schemas past a size
+// threshold: a deferred tool arrives as a bare name, with no parameters and no description,
+// and using it costs a schema lookup before the first call. That is a tax on exactly the tools
+// this mode exists to serve, paid against a `grep` that is sitting right there fully
+// described -- and the cheaper-looking option wins more often than it should. Turning the
+// deferral off removes the asymmetry.
+//
+// It is not free, and the copy has to say so: the switch is Claude Code's, not aracne's, so it
+// applies to EVERY tool the session has. A project with several other MCP servers pays for all
+// of their schemas on every request to stop paying the lookup on ours.
+func preloadToolsQuestion() tui.Question {
+	return tui.Question{
+		Title: "Keep aracne's tools loaded in context?",
+		Step:  "7/" + strconv.Itoa(totalInitSteps),
+		Intro: []string{
+			"Claude Code hides tool schemas behind a search once a session has enough of " +
+				"them. A hidden tool reaches the model as a name and nothing else, and " +
+				"has to be looked up before it can be called.",
+		},
+		Options: []tui.Option{
+			{
+				Label:   "Load them up front",
+				Value:   preloadToolsEager,
+				Summary: "Writes ENABLE_TOOL_SEARCH=false into .claude/settings.json.",
+				Detail: []string{
+					"Aracne's tools arrive with their descriptions, like every native " +
+						"tool, so reaching for one is never the more expensive move.",
+					"",
+					"The switch belongs to Claude Code and is not per-server: every " +
+						"tool in the session is loaded up front, including any from " +
+						"other MCP servers. On a session with a lot of them that is " +
+						"real context spent on every request.",
+					"",
+					"Takes effect when Claude Code next starts.",
+				},
+			},
+			{
+				Label:   "Leave the search on",
+				Value:   preloadToolsDeferred,
+				Summary: "Claude Code's own default. Nothing is written.",
+				Detail: []string{
+					"The cheaper baseline, and the right answer if this project already " +
+						"runs several MCP servers.",
+					"",
+					"An ENABLE_TOOL_SEARCH you set yourself is left alone either way -- " +
+						"aracne only ever removes the value it wrote.",
 				},
 			},
 		},

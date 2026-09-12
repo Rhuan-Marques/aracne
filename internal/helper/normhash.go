@@ -531,14 +531,24 @@ func StampBodyHashesSlice(upserts []domain.Resource) {
 // not already carry, re-fingerprint the source at that span and, when it differs from what is
 // stored, add the row back with corrected hashes. A resource whose span DID move is already in
 // the delta (starts_at and ends_at are in the signature) and is stamped there.
-func RestampUnchangedRows(dbPath, absPath string, upserts []domain.Resource) []domain.Resource {
+//
+// A ROW THE DELTA DELETES IS NOT A ROW TO REPAIR. The stored rows are read from the database,
+// which still holds whatever this edit removed -- and a removed declaration's old span now
+// covers whatever code slid up into it, so its hash always differs. Re-appending it put the
+// deleted row back in the upserts beside its own delete, and the write kept it: deleting
+// `func (r Rect) Area()` left `(Rect).Area` in the graph with its edges, and a later body edit
+// re-attached it to Rect and matched Rect to interfaces it no longer satisfied.
+func RestampUnchangedRows(dbPath, absPath string, upserts []domain.Resource, deletes []string) []domain.Resource {
 	stored, err := ReadResourcesByFile(dbPath, absPath)
 	if err != nil || len(stored) == 0 {
 		return upserts
 	}
-	inDelta := make(map[string]bool, len(upserts))
+	inDelta := make(map[string]bool, len(upserts)+len(deletes))
 	for _, u := range upserts {
 		inDelta[u.ID] = true
+	}
+	for _, id := range deletes {
+		inDelta[id] = true
 	}
 	cache := newLineCache()
 	for id, res := range stored {

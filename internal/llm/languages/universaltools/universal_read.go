@@ -310,6 +310,14 @@ func (r *Read) ReadWindow(path string, from, to int, opt ReadIDsOptions) (string
 	if err != nil {
 		return "", err
 	}
+	// The window is mapped to ids through recorded spans, so a file changed outside the
+	// session would name whatever used to sit there. ReadIDs re-checks the files it cuts,
+	// but by then the ids are already chosen.
+	if fileID, ok := r.resolveFileID(topo, path); ok && r.freshen([]string{fileID}) {
+		if topo, err = r.mgr.ReadAll(); err != nil {
+			return "", err
+		}
+	}
 	ids := nodesSpanning(topo, path, from, to)
 	if len(ids) == 0 {
 		return "", nil

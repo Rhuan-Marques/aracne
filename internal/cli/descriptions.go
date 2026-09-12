@@ -21,6 +21,7 @@ import (
 	"github.com/Rhuan-Marques/aracne/internal/topology"
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 	"github.com/Rhuan-Marques/aracne/internal/topology/scanner"
+	"golang.org/x/term"
 )
 
 const (
@@ -89,13 +90,7 @@ func RunGenerateDescriptions(args []string) {
 	// both paths read, is the end of that split: the sweep now also reaches the CLI
 	// transports, which it had no way to express at all.
 	descCfg := cfg.EffectiveLazyDescriptions(helper.DefaultLazyHarness)
-	if cliFlag.set {
-		if err := applyCLIOverride(&descCfg, cliFlag.command, *autoYes); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-	}
-	runner, describedWith, err := newDescriptionRunner(manager, reg, cfg, descCfg)
+	runner, describedWith, err := sweepDescriptionRunner(manager, reg, cfg, descCfg, cliFlag, *autoYes)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
@@ -324,8 +319,8 @@ To skip this question, name the command yourself: --cli "%s"
 	fmt.Fprintf(os.Stderr, "Describe this repository with `%s`? [y/N] ", command)
 	answer, err := bufio.NewReader(promptReader).ReadString('\n')
 	if err != nil && strings.TrimSpace(answer) == "" {
-		// stdinIsTerminal only asks whether stdin is a character device, and `< /dev/null`
-		// is one. Reading nothing at all is the other half of that check.
+		// A terminal can still hand back EOF -- a closed pty, a Ctrl-D. Reading nothing at
+		// all is not a yes either.
 		return unattended
 	}
 	switch strings.TrimSpace(strings.ToLower(answer)) {
@@ -339,9 +334,14 @@ To skip this question, name the command yourself: --cli "%s"
 // Production code never assigns either.
 var (
 	// stdinIsTerminal reports whether there is someone there to answer.
+	//
+	// term.IsTerminal, the same question tui.Available asks, and NOT `mode&os.ModeCharDevice`:
+	// /dev/null is a character device, so the old test called a CI step, a cron job and an
+	// agent shell -- every `arac <cmd> < /dev/null` -- a terminal, took the interactive branch,
+	// and read the EOF that followed as the user's answer. It was "no" for `arac disable`,
+	// which then skipped the config edits while removing everything else.
 	stdinIsTerminal = func() bool {
-		fi, err := os.Stdin.Stat()
-		return err == nil && (fi.Mode()&os.ModeCharDevice) != 0
+		return term.IsTerminal(int(os.Stdin.Fd()))
 	}
 	// promptReader is where the answer is read from.
 	promptReader io.Reader = os.Stdin
@@ -360,6 +360,24 @@ var (
 // re-list-and-retry loop, the same budget check on the write. Only the call is different.
 type descriptionRunner interface {
 	Run(batch []descriptionResource, topo *domain.Topology, exemplarLimit int) (string, error)
+}
+
+// sweepDescriptionRunner builds the sweep's runner with `--cli` applied.
+//
+// The flag replaces the configured provider for the run outright, so the configured one is
+// not validated either: a typo or a retired name in a provider this run never calls must not
+// stop it. That is what "--cli overrides whatever descriptions.provider says" promises, and
+// the validation used to run on the config after the override had already replaced it.
+func sweepDescriptionRunner(manager *topology.TopologyManager, reg *scanner.Registry, cfg *helper.Config, descCfg helper.ResolvedLazyDescriptions, cli *cliCommandFlag, autoYes bool) (descriptionRunner, string, error) {
+	if cli == nil || !cli.set {
+		return newDescriptionRunner(manager, reg, cfg, descCfg)
+	}
+	if err := applyCLIOverride(&descCfg, cli.command, autoYes); err != nil {
+		return nil, "", err
+	}
+	// nil config: nothing configured is consulted for a CLI run -- see newDescriptionRunner,
+	// which reads cfg only to validate the provider and to build the API runner.
+	return newDescriptionRunner(manager, reg, nil, descCfg)
 }
 
 // newDescriptionRunner builds the runner the configured provider implies, and the label the
@@ -759,7 +777,7 @@ func RunClearDescriptions(args []string) {
 			fmt.Fprintln(os.Stderr, "Usage: arac descriptions clear [--target <kinds>]")
 			os.Exit(1)
 		}
-		targetValue = strings.TrimSpace(targetValue + " " + strings.Join(fs.Args(), " "))
+		targetValue = joinClearTargetArgs(targetValue, fs.Args())
 	}
 
 	targets, err := parseClearDescriptionTargets(targetValue)
@@ -802,6 +820,21 @@ func RunClearDescriptions(args []string) {
 		return
 	}
 	fmt.Printf("Cleared %d description(s)\n", count)
+}
+
+// joinClearTargetArgs folds the words the shell split off `--target` back into one
+// comma-separated list: `--target function method` is two kinds, and so is the spilled
+// `--target [function, method]`. They used to be joined with a space, which the comma-splitting
+// parser read as one kind named "function method". Each word's own separating commas are
+// trimmed so `function, method` does not become an empty kind between two commas.
+func joinClearTargetArgs(target string, extra []string) string {
+	parts := []string{strings.TrimRight(strings.TrimSpace(target), ",")}
+	for _, arg := range extra {
+		if arg = strings.Trim(strings.TrimSpace(arg), ","); arg != "" {
+			parts = append(parts, arg)
+		}
+	}
+	return strings.Join(parts, ",")
 }
 
 // Parses a comma-separated list of resource kinds to clear descriptions for.

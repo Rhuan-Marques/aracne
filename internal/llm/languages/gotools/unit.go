@@ -123,15 +123,23 @@ func FunctionUnit(ctx *golang.GoFunctionContext, st *renderstate.State) readunit
 }
 
 // StructUnit decomposes a struct read. The constructor rides along in the body for the same
-// reason a method's receiver does: it is the type's front door.
-func StructUnit(ctx *golang.GoStructContext) readunit.Unit {
+// reason a method's receiver does: it is the type's front door. st is the batch's render state,
+// shared with the member units (nil for a single-unit caller).
+func StructUnit(ctx *golang.GoStructContext, st *renderstate.State) readunit.Unit {
 	u := baseUnit(string(ctx.Struct.ID), domain.ResourceStruct, ctx.Struct.Loc,
 		importTokens(ctx.PackagesUsed), importTokens(ctx.Dependencies))
 
 	var body strings.Builder
-	body.WriteString(ctx.Struct.Cut)
+	// Registered with the batch's ledger at BUILD time, so a method of this struct later in the
+	// batch elides the declaration rather than inlining it a second time; a method earlier in
+	// the batch that already inlined it leaves nothing of it to print here.
+	if !st.ParentSeen(ctx.Struct.Cut) {
+		body.WriteString(ctx.Struct.Cut)
+	}
 	if ctx.Constructor != nil {
-		body.WriteString("\n\n")
+		if body.Len() > 0 {
+			body.WriteString("\n\n")
+		}
 		body.WriteString(ctx.Constructor.Cut)
 	}
 	u.Body = body.String()

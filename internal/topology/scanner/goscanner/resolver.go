@@ -20,9 +20,21 @@ type bodyAnalyzer struct {
 	varTypeMap   map[string]golang.StructID
 	varIfaceMap  map[string]golang.InterfaceID
 	varMethodMap map[string]golang.FunctionID
-	callerID     golang.FunctionID
-	warnings     *map[string]domain.TopologyWarning
-	knownNames   map[string]bool
+	// varNamedTypeMap holds the locals typed with a non-struct named type (`type Celsius
+	// float64`). Such a type has a method set and takes part in interface matching like any
+	// other, but the body analyzer used to track struct- and interface-typed variables only,
+	// so a call through one recorded no calls edge and its method could change shape without
+	// warning anybody.
+	varNamedTypeMap map[string]golang.NamedTypeID
+	callerID        golang.FunctionID
+	warnings        *map[string]domain.TopologyWarning
+	// knownNames are names bound for the whole body without a syntax tree to say so: the
+	// builtins, and the parameters, receiver and type parameters the caller hands in. Every
+	// other binding is read from the syntax tree by isLocal, which knows its scope.
+	knownNames map[string]bool
+	// body is the function body being analyzed; isLocal uses it to tell a local declaration
+	// from a package-level one.
+	body *ast.BlockStmt
 
 	// currentCall is the call expression being resolved, or nil outside one. Every
 	// ConnCalls edge in this file is emitted from resolveCallExpr, directly or through
@@ -44,16 +56,17 @@ type bodyAnalyzer struct {
 // Creates a bodyAnalyzer instance initialized with function parameters, receiver, and known names for code body traversal.
 func newBodyAnalyzer(pr *ParseResult, gt *golang.GolangTopology, funcInput []golang.VariableDefinition, receiverName string, receiverStruct *golang.StructID, callerID golang.FunctionID, extraKnownNames []string) *bodyAnalyzer {
 	ba := &bodyAnalyzer{
-		pr:           pr,
-		gt:           gt,
-		conn:         make(map[golang.ConnectionKind][]string),
-		varTypeMap:   make(map[string]golang.StructID),
-		varIfaceMap:  make(map[string]golang.InterfaceID),
-		varMethodMap: make(map[string]golang.FunctionID),
-		callerID:     callerID,
-		warnings:     &gt.Warnings,
-		knownNames:   make(map[string]bool),
-		paramTypes:   make(map[string]string),
+		pr:              pr,
+		gt:              gt,
+		conn:            make(map[golang.ConnectionKind][]string),
+		varTypeMap:      make(map[string]golang.StructID),
+		varIfaceMap:     make(map[string]golang.InterfaceID),
+		varMethodMap:    make(map[string]golang.FunctionID),
+		varNamedTypeMap: make(map[string]golang.NamedTypeID),
+		callerID:        callerID,
+		warnings:        &gt.Warnings,
+		knownNames:      make(map[string]bool),
+		paramTypes:      make(map[string]string),
 	}
 
 	for name := range goBuiltins {
@@ -80,6 +93,13 @@ func newBodyAnalyzer(pr *ParseResult, gt *golang.GolangTopology, funcInput []gol
 		ifaceID := golang.InterfaceID(string(*receiverStruct))
 		if _, ok := gt.Interfaces[ifaceID]; ok {
 			ba.varIfaceMap[receiverName] = ifaceID
+		}
+		// A method of a non-struct named type carries its receiver type in the same field;
+		// without this, one method of Celsius calling another through the receiver resolved
+		// to nothing.
+		ntID := golang.NamedTypeID(string(*receiverStruct))
+		if _, ok := gt.NamedTypes[ntID]; ok {
+			ba.varNamedTypeMap[receiverName] = ntID
 		}
 	}
 
@@ -109,6 +129,21 @@ func paramTypeNameToInterface(typing string, pkgPath golang.PackagePath, importM
 	return nil
 }
 
+// paramTypeNameToNamedType resolves a type string to a non-struct named type the topology
+// holds, the way paramTypeNameToInterface does for interfaces. Only a plain named type
+// qualifies: a composite written around one ([]Celsius, map[string]Celsius) is not that type
+// and has none of its methods.
+func paramTypeNameToNamedType(typing string, pkgPath golang.PackagePath, importMap map[string]string, gt *golang.GolangTopology) *golang.NamedTypeID {
+	id := golang.NamedTypeID(canonicalTypeID(typing, pkgPath, importMap))
+	if id == "" {
+		return nil
+	}
+	if _, ok := gt.NamedTypes[id]; !ok {
+		return nil
+	}
+	return &id
+}
+
 // Resolves a type string to a struct ID using the package path and import map, without topology lookup.
 func paramTypeNameToStruct(typing string, pkgPath golang.PackagePath, importMap map[string]string, modulePath string) *golang.StructID {
 	t := strings.TrimPrefix(typing, "*")
@@ -135,7 +170,7 @@ func paramTypeNameToStruct(typing string, pkgPath golang.PackagePath, importMap 
 // missing-node signal). This is computed at parse time so cross-package consumers
 // don't need the defining file's import context to resolve the type.
 func canonicalTypeID(typing string, pkgPath golang.PackagePath, importMap map[string]string) string {
-	t := strings.TrimPrefix(typing, "*")
+	t := stripTypeArgs(strings.TrimPrefix(typing, "*"))
 	if t == "" || strings.ContainsAny(t, " \t*[]{}()<>") {
 		return ""
 	}
@@ -151,6 +186,35 @@ func canonicalTypeID(typing string, pkgPath golang.PackagePath, importMap map[st
 		return ""
 	}
 	return string(pkgPath) + "." + t
+}
+
+// stripTypeArgs reduces an instantiated generic type (Box[T], g.Pair[K, V]) to the generic type
+// it instantiates, whose resource and methods are the ones an instantiation has. Anything else
+// -- a slice, an array, a map, or a type-argument list that does not close at the end -- comes
+// back unchanged.
+func stripTypeArgs(t string) string {
+	open := strings.IndexByte(t, '[')
+	if open <= 0 || !strings.HasSuffix(t, "]") || t[:open] == "map" {
+		return t
+	}
+	for _, r := range t[:open] {
+		if r != '.' && r != '_' && !('a' <= r && r <= 'z') && !('A' <= r && r <= 'Z') && !('0' <= r && r <= '9') && r < 0x80 {
+			return t
+		}
+	}
+	depth := 0
+	for i := open; i < len(t); i++ {
+		switch t[i] {
+		case '[':
+			depth++
+		case ']':
+			depth--
+			if depth == 0 && i != len(t)-1 {
+				return t
+			}
+		}
+	}
+	return t[:open]
 }
 
 // resolveVarType records the struct/interface type of variable `name` from a
@@ -170,6 +234,10 @@ func (ba *bodyAnalyzer) resolveVarType(name string, vd golang.VariableDefinition
 			ba.varIfaceMap[name] = golang.InterfaceID(vd.TypingID)
 			return
 		}
+		if _, ok := ba.gt.NamedTypes[golang.NamedTypeID(vd.TypingID)]; ok {
+			ba.varNamedTypeMap[name] = golang.NamedTypeID(vd.TypingID)
+			return
+		}
 	}
 	if vd.Typing == "" {
 		return
@@ -182,6 +250,10 @@ func (ba *bodyAnalyzer) resolveVarType(name string, vd golang.VariableDefinition
 	}
 	if iid := paramTypeNameToInterface(vd.Typing, ba.pr.PkgPath, ba.pr.ImportMap, ba.pr.ModulePath, ba.gt); iid != nil {
 		ba.varIfaceMap[name] = *iid
+		return
+	}
+	if nid := paramTypeNameToNamedType(vd.Typing, ba.pr.PkgPath, ba.pr.ImportMap, ba.gt); nid != nil {
+		ba.varNamedTypeMap[name] = *nid
 	}
 }
 
@@ -297,26 +369,74 @@ func (ba *bodyAnalyzer) addWarning(kind domain.WarningKind, targetID string, mes
 }
 
 // Analyzes function body AST to resolve calls, type references, and variable usage into topology connections.
+//
+// body must come from a parse that resolved objects, as ParseFile's does: which names the
+// function binds itself, and in which scope, is read from that resolution (see isLocal).
 func analyzeFunctionBody(body *ast.BlockStmt, pr *ParseResult, gt *golang.GolangTopology, funcInput []golang.VariableDefinition, receiverName string, receiverStruct *golang.StructID, callerID golang.FunctionID, typeParamNames []string) map[golang.ConnectionKind][]string {
-	localTypeNames := collectLocalTypeNames(body)
 	localVarNames := collectLocalVarNames(body)
-	extraKnownNames := make([]string, 0, len(typeParamNames)+len(localTypeNames)+len(localVarNames))
-	extraKnownNames = append(extraKnownNames, typeParamNames...)
-	extraKnownNames = append(extraKnownNames, localTypeNames...)
-	extraKnownNames = append(extraKnownNames, localVarNames...)
-	ba := newBodyAnalyzer(pr, gt, funcInput, receiverName, receiverStruct, callerID, extraKnownNames)
+	ba := newBodyAnalyzer(pr, gt, funcInput, receiverName, receiverStruct, callerID, typeParamNames)
+	ba.body = body
 	ba.shadowed = make(map[string]bool, len(localVarNames))
 	for _, n := range localVarNames {
 		ba.shadowed[n] = true
 	}
 
 	var visit func(n ast.Node) bool
+	var walkLit func(lit *ast.CompositeLit, implied ast.Expr)
+	// walkElt walks one element or key of a composite literal. An element literal with its
+	// type elided ([]T{{...}}, map[K]V{k: {...}}) takes its type from the enclosing literal,
+	// which is what decides whether its own keys are field names.
+	walkElt := func(e, implied ast.Expr) {
+		if cl, ok := e.(*ast.CompositeLit); ok && cl.Type == nil {
+			walkLit(cl, implied)
+			return
+		}
+		ast.Inspect(e, visit)
+	}
+	walkLit = func(lit *ast.CompositeLit, implied ast.Expr) {
+		ba.resolveCompositeLit(lit)
+		typ := implied
+		if lit.Type != nil {
+			ast.Inspect(lit.Type, visit)
+			typ = lit.Type
+		}
+		keyType, eltType, fieldKeys := ba.literalShape(typ)
+		for _, elt := range lit.Elts {
+			kv, ok := elt.(*ast.KeyValueExpr)
+			if !ok {
+				walkElt(elt, eltType)
+				continue
+			}
+			// In a struct literal the key is a field name, not a reference to anything in
+			// scope: &http.Client{Timeout: d} does not use this package's Timeout.
+			if _, isIdent := kv.Key.(*ast.Ident); !isIdent || !fieldKeys {
+				walkElt(kv.Key, keyType)
+			}
+			walkElt(kv.Value, eltType)
+		}
+	}
+
 	visit = func(n ast.Node) bool {
 		switch node := n.(type) {
 		case *ast.CallExpr:
 			ba.resolveCallExpr(node)
 		case *ast.CompositeLit:
-			ba.resolveCompositeLit(node)
+			walkLit(node, nil)
+			return false
+		case *ast.SelectorExpr:
+			// Sel is a field or method name, or the name inside a qualified identifier -- never
+			// a reference to this package's scope, so only X is walked. The one thing the pair
+			// itself names is another package's var or const, which the walk down X cannot see.
+			ba.resolveQualifiedVarRef(node)
+			ast.Inspect(node.X, visit)
+			return false
+		case *ast.Field:
+			// A field's names declare (a closure's parameter or result, a struct field, an
+			// interface method); only its type refers to anything.
+			if node.Type != nil {
+				ast.Inspect(node.Type, visit)
+			}
+			return false
 		case *ast.Ident:
 			ba.resolveIdentRef(node)
 		case *ast.AssignStmt:
@@ -363,17 +483,74 @@ var goBuiltins = map[string]bool{
 	"uintptr": true, "nil": true, "true": true, "false": true, "iota": true,
 }
 
-// Extracts the names of locally defined types from an AST block statement.
-func collectLocalTypeNames(body *ast.BlockStmt) []string {
-	var names []string
-	ast.Inspect(body, func(n ast.Node) bool {
-		if ts, ok := n.(*ast.TypeSpec); ok && ts.Name != nil {
-			names = append(names, ts.Name.Name)
-			return false
-		}
+// isLocal reports whether id names something the function binds itself -- a parameter,
+// result, receiver, type parameter, or a local variable, constant, type or label, its closures'
+// included -- rather than a package-level declaration or an imported package.
+//
+// The answer comes from go/parser's object resolution, which applies the spec's block scoping:
+// an identifier bound inside the function carries the object it resolves to, one naming a
+// package-level declaration of THIS file carries that top-level declaration, and one declared in
+// another file, a builtin or an import name carries nothing. Collecting every name the body
+// declares, as this used to, let a local declared anywhere hide the package function it
+// shadows only in its own block (process(); for _, process := range hs {...}), and let a
+// parameter named like an import be resolved as the package.
+func (ba *bodyAnalyzer) isLocal(id *ast.Ident) bool {
+	if ba.knownNames[id.Name] {
 		return true
-	})
-	return names
+	}
+	if id.Obj == nil {
+		return false
+	}
+	switch d := id.Obj.Decl.(type) {
+	case *ast.FuncDecl:
+		return false
+	case *ast.ValueSpec:
+		return ba.declaredInBody(d)
+	case *ast.TypeSpec:
+		return ba.declaredInBody(d)
+	}
+	// A signature *ast.Field, a := or range *ast.AssignStmt, a label, a receiver type
+	// parameter: all bindings of this function or of a closure inside it.
+	return true
+}
+
+// declaredInBody reports whether a var, const or type declaration sits inside the body being
+// analyzed rather than at package level.
+func (ba *bodyAnalyzer) declaredInBody(n ast.Node) bool {
+	return ba.body != nil && ba.body.Lbrace <= n.Pos() && n.Pos() < ba.body.Rbrace
+}
+
+// literalShape reads a composite literal's type: the implied type of its keys and of its
+// elements, for element literals that elide theirs, and whether an identifier key is a field
+// name. Only a map or an array/slice literal -- spelled out, or a named type of this package
+// declared as one -- has keys that are expressions; any other type is taken as a struct.
+func (ba *bodyAnalyzer) literalShape(typ ast.Expr) (keyType, eltType ast.Expr, fieldKeys bool) {
+	for {
+		switch t := typ.(type) {
+		case *ast.StarExpr:
+			typ = t.X
+		case *ast.ParenExpr:
+			typ = t.X
+		case *ast.IndexExpr:
+			typ = t.X
+		case *ast.IndexListExpr:
+			typ = t.X
+		case *ast.ArrayType:
+			return nil, t.Elt, false
+		case *ast.MapType:
+			return t.Key, t.Value, false
+		case *ast.Ident:
+			if !ba.isLocal(t) {
+				if nt, ok := ba.gt.NamedTypes[golang.NamedTypeID(string(ba.pr.PkgPath)+"."+t.Name)]; ok &&
+					(strings.HasPrefix(nt.Underlying, "map[") || strings.HasPrefix(nt.Underlying, "[")) {
+					return nil, nil, false
+				}
+			}
+			return nil, nil, true
+		default:
+			return nil, nil, true
+		}
+	}
 }
 
 // Collects locally-defined variable names from a function body via assignment and range statements.
@@ -415,19 +592,14 @@ func (ba *bodyAnalyzer) resolveCallExpr(call *ast.CallExpr) {
 	ba.currentCall = call
 	defer func() { ba.currentCall = nil }()
 
-	fun := call.Fun
-	if ile, ok := fun.(*ast.IndexListExpr); ok {
-		fun = ile.X
-	}
-	switch fun := fun.(type) {
+	switch fun := ba.calleeExpr(call.Fun).(type) {
 	case *ast.Ident:
-		// A local bound to a method value (f := d.Sound) or method expression
-		// (g := Dog.Sound) and then invoked resolves to the underlying method.
-		if mid, ok := ba.varMethodMap[fun.Name]; ok {
-			ba.add(golang.ConnCalls, string(mid))
-			return
-		}
-		if ba.knownNames[fun.Name] {
+		if ba.isLocal(fun) {
+			// A local bound to a method value (f := d.Sound) or method expression
+			// (g := Dog.Sound) and then invoked resolves to the underlying method.
+			if mid, ok := ba.varMethodMap[fun.Name]; ok {
+				ba.add(golang.ConnCalls, string(mid))
+			}
 			return
 		}
 
@@ -477,15 +649,86 @@ func (ba *bodyAnalyzer) resolveCallExpr(call *ast.CallExpr) {
 			return
 		}
 
+		// Iface(x) converts to an interface of this package: a use of it, as the qualified
+		// pkg.Iface(x) already is in resolveQualifiedCall, not a call to a missing function.
+		pkgIfaceID := golang.InterfaceID(string(ba.pr.PkgPath) + "." + fun.Name)
+		if _, exists := ba.gt.Interfaces[pkgIfaceID]; exists {
+			ba.add(golang.ConnUsesIface, string(pkgIfaceID))
+			ba.addExternalPkg(ba.pr.PkgPath)
+			return
+		}
+
 		ba.addWarning(domain.WarnUseMissingNode, string(pkgFuncID),
 			fmt.Sprintf("function %s calls %s which does not exist in package %s", ba.callerID, pkgFuncID, ba.pr.PkgPath))
 
 	case *ast.SelectorExpr:
 		switch x := fun.X.(type) {
 		case *ast.Ident:
-			ba.resolveQualifiedCall(x.Name, fun.Sel.Name)
+			ba.resolveQualifiedCall(x, fun.Sel.Name)
 		}
 	}
+}
+
+// calleeExpr strips an explicit instantiation off a call's function expression: F[int](x)
+// calls F, as F[int, string](x) does.
+//
+// Two or more type arguments parse as an *ast.IndexListExpr, which can be nothing else. ONE
+// parses as an *ast.IndexExpr, which is also how an element of a slice or map of functions is
+// called (handlers[i](x)) -- so that form is unwrapped only when its operand names a function or
+// type this topology has, and a call through an indexed variable stays unresolved as before.
+func (ba *bodyAnalyzer) calleeExpr(fun ast.Expr) ast.Expr {
+	switch f := fun.(type) {
+	case *ast.IndexListExpr:
+		return f.X
+	case *ast.IndexExpr:
+		if ba.namesGeneric(f.X) {
+			return f.X
+		}
+	}
+	return fun
+}
+
+// namesGeneric reports whether x -- the operand of an index expression in call position -- names
+// a function or a type rather than a value: a package-level one of this package, or one reached
+// through an import.
+func (ba *bodyAnalyzer) namesGeneric(x ast.Expr) bool {
+	var pkg, name string
+	switch e := x.(type) {
+	case *ast.Ident:
+		if ba.isLocal(e) {
+			return false
+		}
+		for _, f := range ba.pr.Functions {
+			if f.Function.Name == e.Name && f.Function.MethodFrom == nil {
+				return true
+			}
+		}
+		pkg, name = string(ba.pr.PkgPath), e.Name
+	case *ast.SelectorExpr:
+		id, ok := e.X.(*ast.Ident)
+		if !ok || ba.isLocal(id) {
+			return false
+		}
+		impPath, ok := ba.pr.ImportMap[id.Name]
+		if !ok {
+			return false
+		}
+		pkg, name = impPath, e.Sel.Name
+	default:
+		return false
+	}
+	target := pkg + "." + name
+	if _, ok := ba.gt.Functions[golang.FunctionID(target)]; ok {
+		return true
+	}
+	if _, ok := ba.gt.Structs[golang.StructID(target)]; ok {
+		return true
+	}
+	if _, ok := ba.gt.NamedTypes[golang.NamedTypeID(target)]; ok {
+		return true
+	}
+	_, ok := ba.gt.Interfaces[golang.InterfaceID(target)]
+	return ok
 }
 
 // addExternalPkg records a uses_package edge only when the package is not the caller's own.
@@ -505,8 +748,15 @@ func (ba *bodyAnalyzer) addExternalPkg(pkg golang.PackagePath) {
 }
 
 // Resolves qualified calls (X.sel) to functions, methods, or interfaces based on import map, variable type map, and struct/interface definitions.
-func (ba *bodyAnalyzer) resolveQualifiedCall(xName, selName string) {
-	if impPath, ok := ba.pr.ImportMap[xName]; ok {
+//
+// A name the function binds itself is never the package an import of the same name would be:
+// func Handle(user *user.User) { user.Save() } calls the parameter's method. So the import map
+// is consulted only for a name that is not local, and the variable maps -- which hold nothing
+// but locals -- only for one that is.
+func (ba *bodyAnalyzer) resolveQualifiedCall(x *ast.Ident, selName string) {
+	xName := x.Name
+	local := ba.isLocal(x)
+	if impPath, ok := ba.pr.ImportMap[xName]; ok && !local {
 		internalPkg := golang.PackagePath(impPath)
 
 		fnTargetID := golang.FunctionID(string(internalPkg) + "." + selName)
@@ -550,14 +800,14 @@ func (ba *bodyAnalyzer) resolveQualifiedCall(xName, selName string) {
 			return
 		}
 
-		if isInternalImport(impPath, ba.pr.ModulePath) {
+		if ba.pr.internalImport(impPath) {
 			ba.addWarning(domain.WarnUseMissingNode, string(fnTargetID),
 				fmt.Sprintf("function %s calls %s which does not exist", ba.callerID, fnTargetID))
 		}
 		return
 	}
 
-	if structID, ok := ba.varTypeMap[xName]; ok {
+	if structID, ok := ba.varTypeMap[xName]; ok && local {
 		// A concrete struct-typed variable resolves to the concrete method only.
 		// We deliberately do NOT consult interface.ImplementedBy() here: a cold
 		// Scan runs body analysis BEFORE matchStructsToInterfaces, so those edges
@@ -566,20 +816,15 @@ func (ba *bodyAnalyzer) resolveQualifiedCall(xName, selName string) {
 		// so reading them would add a ghost uses_interface edge that the cold scan
 		// never produces (see atscale GhostUsesInterfaceOnReparse). Keeping this
 		// resolution ImplementedBy-independent makes the two paths agree.
-		if str, ok := ba.gt.Structs[structID]; ok {
-			for _, mid := range str.Methods() {
-				m, ok := ba.gt.Functions[mid]
-				if ok && m.Name == selName {
-					ba.add(golang.ConnCalls, string(mid))
-					ba.add(golang.ConnUsesStruct, string(structID))
-					break
-				}
-			}
+		// structMethodID includes the methods promoted from embedded structs.
+		if mid, ok := ba.structMethodID(structID, selName); ok {
+			ba.add(golang.ConnCalls, string(mid))
+			ba.add(golang.ConnUsesStruct, string(structID))
 		}
 		return
 	}
 
-	if ifaceID, ok := ba.varIfaceMap[xName]; ok {
+	if ifaceID, ok := ba.varIfaceMap[xName]; ok && local {
 		// An interface-typed variable records only the interface usage. As above,
 		// we do NOT fan out to iface.ImplementedBy() implementers' methods: those
 		// edges are empty during a cold Scan's body analysis, so adding them on the
@@ -596,16 +841,27 @@ func (ba *bodyAnalyzer) resolveQualifiedCall(xName, selName string) {
 		return
 	}
 
-	structID := golang.StructID(string(ba.pr.PkgPath) + "." + xName)
-	if str, ok := ba.gt.Structs[structID]; ok {
-		for _, mid := range str.Methods() {
-			m, ok := ba.gt.Functions[mid]
-			if ok && m.Name == selName {
-				ba.add(golang.ConnCalls, string(mid))
-				ba.add(golang.ConnUsesStruct, string(structID))
-				return
-			}
+	if ntID, ok := ba.varNamedTypeMap[xName]; ok && local {
+		// A variable of a non-struct named type (`type Celsius float64`): its method set is
+		// the type's own, with no embedding to promote through.
+		if mid, ok := ba.namedTypeMethodID(ntID, selName); ok {
+			ba.add(golang.ConnCalls, string(mid))
+			ba.add(golang.ConnUsesNamedType, string(ntID))
 		}
+		return
+	}
+
+	structID := golang.StructID(string(ba.pr.PkgPath) + "." + xName)
+	if mid, ok := ba.structMethodID(structID, selName); ok {
+		ba.add(golang.ConnCalls, string(mid))
+		ba.add(golang.ConnUsesStruct, string(structID))
+		return
+	}
+	// A method EXPRESSION on a named type declared in this package: Celsius.String(c).
+	ntID := golang.NamedTypeID(string(ba.pr.PkgPath) + "." + xName)
+	if mid, ok := ba.namedTypeMethodID(ntID, selName); ok {
+		ba.add(golang.ConnCalls, string(mid))
+		ba.add(golang.ConnUsesNamedType, string(ntID))
 	}
 }
 
@@ -617,7 +873,7 @@ func (ba *bodyAnalyzer) resolveCompositeLit(lit *ast.CompositeLit) {
 	}
 	switch t := typ.(type) {
 	case *ast.Ident:
-		if ba.knownNames[t.Name] {
+		if ba.isLocal(t) {
 			return
 		}
 		structID := golang.StructID(string(ba.pr.PkgPath) + "." + t.Name)
@@ -640,7 +896,7 @@ func (ba *bodyAnalyzer) resolveCompositeLit(lit *ast.CompositeLit) {
 			fmt.Sprintf("function %s references struct %s which does not exist", ba.callerID, structID))
 	case *ast.SelectorExpr:
 		if x, ok := t.X.(*ast.Ident); ok {
-			if impPath, ok := ba.pr.ImportMap[x.Name]; ok && isInternalImport(impPath, ba.pr.ModulePath) {
+			if impPath, ok := ba.pr.ImportMap[x.Name]; ok && ba.pr.internalImport(impPath) {
 				internalPkg := golang.PackagePath(impPath)
 				structID := golang.StructID(string(internalPkg) + "." + t.Sel.Name)
 				if _, exists := ba.gt.Structs[structID]; exists {
@@ -661,9 +917,37 @@ func (ba *bodyAnalyzer) resolveCompositeLit(lit *ast.CompositeLit) {
 	}
 }
 
+// resolveQualifiedVarRef records the use of another package's var or const written as
+// `pkg.Name` outside call position -- `a.Count++`, `return a.MaxRetries`. resolveIdentRef only
+// ever looks in the CALLER's package, and the selector walk descends into X alone, so such a
+// reference recorded nothing at all while the identical reference inside the declaring package
+// recorded uses_extvar -- and deleting the declaration then warned nobody.
+//
+// No uses_package edge, deliberately: resolveQualifiedCall's extvar branch and
+// resolveUseMissingWarning both omit it, and the incremental path re-resolves through the
+// latter, so adding one here would make the two paths disagree.
+func (ba *bodyAnalyzer) resolveQualifiedVarRef(sel *ast.SelectorExpr) {
+	x, ok := sel.X.(*ast.Ident)
+	if !ok || ba.isLocal(x) {
+		return
+	}
+	impPath, ok := ba.pr.ImportMap[x.Name]
+	if !ok {
+		return
+	}
+	varID := golang.ExternalVarID(impPath + "." + sel.Sel.Name)
+	if _, exists := ba.gt.ExternalVars[varID]; exists {
+		ba.add(golang.ConnUsesExtVar, string(varID))
+	}
+}
+
 // Records usage edges for identifiers that reference external variables, structs, or named types in the current package scope.
+//
+// The walk hands it only identifiers in reference position: a selector's Sel, a struct
+// literal's key and a field's names are skipped by analyzeFunctionBody, and a declaration's own
+// name is local to isLocal.
 func (ba *bodyAnalyzer) resolveIdentRef(ident *ast.Ident) {
-	if ident.Name == "_" || ba.knownNames[ident.Name] {
+	if ident.Name == "_" || ba.isLocal(ident) {
 		return
 	}
 	varID := golang.ExternalVarID(string(ba.pr.PkgPath) + "." + ident.Name)
@@ -706,7 +990,6 @@ func (ba *bodyAnalyzer) resolveAssignStmt(stmt *ast.AssignStmt) {
 		if !ok || ident.Name == "_" {
 			continue
 		}
-		ba.knownNames[ident.Name] = true
 
 		if i >= len(stmt.Rhs) {
 			continue
@@ -757,19 +1040,94 @@ func (ba *bodyAnalyzer) resolveMethodRefAssign(name string, sel *ast.SelectorExp
 	}
 }
 
-// structMethodID returns the FunctionID of the method named `methodName` on the
-// struct `structID`, if such a method exists in the topology.
+// maxPromotionDepth bounds how many levels of embedding structMethodID searches.
+const maxPromotionDepth = 8
+
+// structMethodID returns the FunctionID of the method named `methodName` in the method set of
+// the struct `structID`, if the topology has it: the struct's own method, or one promoted from a
+// struct it embeds.
+//
+// Promotion follows Go's rule: the shallowest depth wins, and a field of that name at a
+// shallower depth hides a deeper method. o.Hello() on type Outer struct{ Base } calls
+// Base.Hello, and before this resolved to nothing -- no calls edge and no call site, so a
+// signature change to Base.Hello never warned the code calling it through Outer.
 func (ba *bodyAnalyzer) structMethodID(structID golang.StructID, methodName string) (golang.FunctionID, bool) {
-	str, ok := ba.gt.Structs[structID]
+	level := []golang.StructID{structID}
+	seen := map[golang.StructID]bool{structID: true}
+	for depth := 0; depth < maxPromotionDepth && len(level) > 0; depth++ {
+		var next []golang.StructID
+		shadowed := false
+		for _, sid := range level {
+			str, ok := ba.gt.Structs[sid]
+			if !ok {
+				continue
+			}
+			for _, mid := range str.Methods() {
+				if m, ok := ba.gt.Functions[mid]; ok && m.Name == methodName {
+					return mid, true
+				}
+			}
+			for _, p := range str.Params {
+				if p.Name == methodName {
+					shadowed = true
+				}
+				if emb, ok := ba.embeddedStruct(sid, p); ok && !seen[emb] {
+					seen[emb] = true
+					next = append(next, emb)
+				}
+			}
+		}
+		if shadowed {
+			return "", false
+		}
+		level = next
+	}
+	return "", false
+}
+
+// namedTypeMethodID returns the FunctionID of the method named `methodName` in the method set
+// of the named type `ntID`. A non-struct named type embeds nothing, so unlike structMethodID
+// there is no promotion chain to walk.
+func (ba *bodyAnalyzer) namedTypeMethodID(ntID golang.NamedTypeID, methodName string) (golang.FunctionID, bool) {
+	nt, ok := ba.gt.NamedTypes[ntID]
 	if !ok {
 		return "", false
 	}
-	for _, mid := range str.Methods() {
-		if m, ok := ba.gt.Functions[mid]; ok && m.Name == methodName {
-			return mid, true
+	for _, mid := range nt.Connections[golang.ConnHasMethod] {
+		if m, ok := ba.gt.Functions[golang.FunctionID(mid)]; ok && m.Name == methodName {
+			return golang.FunctionID(mid), true
 		}
 	}
 	return "", false
+}
+
+// embeddedStruct returns the struct an embedded field of owner names, when p is one and the
+// topology has it. An embedded field is recorded with its type expression as its name
+// (processStruct); its TypingID is the type's canonical id, resolved in the declaring file, and
+// a field recorded without one falls back to a plain type name in owner's own package.
+func (ba *bodyAnalyzer) embeddedStruct(owner golang.StructID, p golang.VariableDefinition) (golang.StructID, bool) {
+	return embeddedStructOf(ba.gt, owner, p)
+}
+
+// embeddedStructOf is embeddedStruct against a topology rather than a body analyzer, so the
+// interface matcher -- which runs with no body in hand -- can walk the same embedding chain.
+func embeddedStructOf(gt *golang.GolangTopology, owner golang.StructID, p golang.VariableDefinition) (golang.StructID, bool) {
+	if p.Name == "" || p.Name != p.Typing {
+		return "", false
+	}
+	id := p.TypingID
+	if id == "" {
+		name := stripTypeArgs(strings.TrimPrefix(p.Typing, "*"))
+		dot := strings.LastIndex(string(owner), ".")
+		if strings.Contains(name, ".") || dot < 0 {
+			return "", false
+		}
+		id = string(owner)[:dot] + "." + name
+	}
+	if _, ok := gt.Structs[golang.StructID(id)]; !ok {
+		return "", false
+	}
+	return golang.StructID(id), true
 }
 
 // Records the type of a variable assigned from a composite literal, mapping it to its struct or interface type.
@@ -780,7 +1138,7 @@ func (ba *bodyAnalyzer) resolveCompositeLitAssign(name string, lit *ast.Composit
 	}
 	switch t := typ.(type) {
 	case *ast.Ident:
-		if ba.knownNames[t.Name] {
+		if ba.isLocal(t) {
 			return
 		}
 		structID := golang.StructID(string(ba.pr.PkgPath) + "." + t.Name)
@@ -839,32 +1197,34 @@ func (ba *bodyAnalyzer) selectorCalleeID(sel *ast.SelectorExpr) (golang.Function
 	if !ok {
 		return "", false
 	}
-	if impPath, ok := ba.pr.ImportMap[x.Name]; ok {
+	local := ba.isLocal(x)
+	if impPath, ok := ba.pr.ImportMap[x.Name]; ok && !local {
 		// A candidate id: the caller verifies it against gt.Functions, as every branch here
 		// is verified downstream.
 		return golang.FunctionID(impPath + "." + sel.Sel.Name), true
 	}
-	if structID, ok := ba.varTypeMap[x.Name]; ok {
+	if structID, ok := ba.varTypeMap[x.Name]; ok && local {
 		return ba.structMethodID(structID, sel.Sel.Name)
 	}
-	if _, ok := ba.varIfaceMap[x.Name]; ok {
+	if _, ok := ba.varIfaceMap[x.Name]; ok && local {
 		return "", false
 	}
+	if ntID, ok := ba.varNamedTypeMap[x.Name]; ok && local {
+		return ba.namedTypeMethodID(ntID, sel.Sel.Name)
+	}
 	// A method EXPRESSION on a type declared in this package: Dog.Sound(d).
-	return ba.structMethodID(golang.StructID(string(ba.pr.PkgPath)+"."+x.Name), sel.Sel.Name)
+	if mid, ok := ba.structMethodID(golang.StructID(string(ba.pr.PkgPath)+"."+x.Name), sel.Sel.Name); ok {
+		return mid, true
+	}
+	return ba.namedTypeMethodID(golang.NamedTypeID(string(ba.pr.PkgPath)+"."+x.Name), sel.Sel.Name)
 }
 
 // Infers the type of a variable assigned from a function call by looking up the function's return type.
 func (ba *bodyAnalyzer) resolveCallExprAssign(name string, call *ast.CallExpr) {
-	fun := call.Fun
-	if ile, ok := fun.(*ast.IndexListExpr); ok {
-		fun = ile.X
-	}
-
 	var funcID golang.FunctionID
-	switch fn := fun.(type) {
+	switch fn := ba.calleeExpr(call.Fun).(type) {
 	case *ast.Ident:
-		if ba.knownNames[fn.Name] {
+		if ba.isLocal(fn) {
 			return
 		}
 		funcID = golang.FunctionID(string(ba.pr.PkgPath) + "." + fn.Name)
@@ -903,20 +1263,12 @@ func (ba *bodyAnalyzer) resolveCallExprAssign(name string, call *ast.CallExpr) {
 // change to Thing's callee raised no signature_changed warning at all: a function whose only
 // callers reach it this way was invisible to the whole warning path. See selectorCalleeID.
 func (ba *bodyAnalyzer) resolveMultiValueCallAssign(lhs []ast.Expr, call *ast.CallExpr) {
-	for _, l := range lhs {
-		if ident, ok := l.(*ast.Ident); ok && ident.Name != "_" {
-			ba.knownNames[ident.Name] = true
-		}
-	}
-
-	fun := call.Fun
-	if ile, ok := fun.(*ast.IndexListExpr); ok {
-		fun = ile.X
-	}
-
 	var funcID golang.FunctionID
-	switch fn := fun.(type) {
+	switch fn := ba.calleeExpr(call.Fun).(type) {
 	case *ast.Ident:
+		if ba.isLocal(fn) {
+			return
+		}
 		funcID = golang.FunctionID(string(ba.pr.PkgPath) + "." + fn.Name)
 	case *ast.SelectorExpr:
 		id, ok := ba.selectorCalleeID(fn)
@@ -952,11 +1304,6 @@ func (ba *bodyAnalyzer) resolveMultiValueCallAssign(lhs []ast.Expr, call *ast.Ca
 // it marks every LHS name as known and binds the first name to the asserted
 // concrete type T so a later method call on it resolves.
 func (ba *bodyAnalyzer) resolveTypeAssertAssign(lhs []ast.Expr, assert *ast.TypeAssertExpr) {
-	for _, l := range lhs {
-		if ident, ok := l.(*ast.Ident); ok && ident.Name != "_" {
-			ba.knownNames[ident.Name] = true
-		}
-	}
 	if assert.Type == nil || len(lhs) == 0 {
 		return
 	}
@@ -993,6 +1340,7 @@ func (ba *bodyAnalyzer) resolveTypeSwitchStmt(stmt *ast.TypeSwitchStmt, visit fu
 
 	prevStruct, hadStruct := ba.varTypeMap[varName]
 	prevIface, hadIface := ba.varIfaceMap[varName]
+	prevNamed, hadNamed := ba.varNamedTypeMap[varName]
 
 	for _, clause := range stmt.Body.List {
 		cc, ok := clause.(*ast.CaseClause)
@@ -1002,6 +1350,7 @@ func (ba *bodyAnalyzer) resolveTypeSwitchStmt(stmt *ast.TypeSwitchStmt, visit fu
 		if varName != "" {
 			delete(ba.varTypeMap, varName)
 			delete(ba.varIfaceMap, varName)
+			delete(ba.varNamedTypeMap, varName)
 			// A single concrete type per case gives the variable that type.
 			if len(cc.List) == 1 {
 				ba.bindConcreteType(varName, cc.List[0])
@@ -1015,11 +1364,15 @@ func (ba *bodyAnalyzer) resolveTypeSwitchStmt(stmt *ast.TypeSwitchStmt, visit fu
 	if varName != "" {
 		delete(ba.varTypeMap, varName)
 		delete(ba.varIfaceMap, varName)
+		delete(ba.varNamedTypeMap, varName)
 		if hadStruct {
 			ba.varTypeMap[varName] = prevStruct
 		}
 		if hadIface {
 			ba.varIfaceMap[varName] = prevIface
+		}
+		if hadNamed {
+			ba.varNamedTypeMap[varName] = prevNamed
 		}
 	}
 }
@@ -1041,6 +1394,10 @@ func (ba *bodyAnalyzer) bindConcreteType(name string, typeExpr ast.Expr) {
 	}
 	if iid := paramTypeNameToInterface(typeStr, ba.pr.PkgPath, ba.pr.ImportMap, ba.pr.ModulePath, ba.gt); iid != nil {
 		ba.varIfaceMap[name] = *iid
+		return
+	}
+	if nid := paramTypeNameToNamedType(typeStr, ba.pr.PkgPath, ba.pr.ImportMap, ba.gt); nid != nil {
+		ba.varNamedTypeMap[name] = *nid
 	}
 }
 
@@ -1063,7 +1420,6 @@ func (ba *bodyAnalyzer) resolveDeclStmt(decl *ast.DeclStmt) {
 			if name.Name == "_" || ba.knownNames[name.Name] {
 				continue
 			}
-			ba.knownNames[name.Name] = true
 
 			if sid := paramTypeNameToStruct(typeStr, ba.pr.PkgPath, ba.pr.ImportMap, ba.pr.ModulePath); sid != nil {
 				if _, ok := ba.gt.Structs[*sid]; ok {
@@ -1073,6 +1429,10 @@ func (ba *bodyAnalyzer) resolveDeclStmt(decl *ast.DeclStmt) {
 			}
 			if iid := paramTypeNameToInterface(typeStr, ba.pr.PkgPath, ba.pr.ImportMap, ba.pr.ModulePath, ba.gt); iid != nil {
 				ba.varIfaceMap[name.Name] = *iid
+				continue
+			}
+			if nid := paramTypeNameToNamedType(typeStr, ba.pr.PkgPath, ba.pr.ImportMap, ba.gt); nid != nil {
+				ba.varNamedTypeMap[name.Name] = *nid
 			}
 		}
 	}

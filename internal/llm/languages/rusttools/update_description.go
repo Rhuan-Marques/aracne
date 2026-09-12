@@ -36,7 +36,7 @@ func (u *UpdateDescriptionTool) Description() string {
 func (u *UpdateDescriptionTool) Parameters() []Parameter {
 	return []Parameter{
 		{Name: "id", Type: "string", Description: "Resource ID", Required: true},
-		{Name: "resource_name", Type: "string", Description: "Resource kind: Function, Struct(Enum/Type), Trait, NamedType, Variable, File", Required: true},
+		{Name: "resource_name", Type: "string", Description: "Resource kind: Function, Method, Struct(Enum/Type), Trait, NamedType, Variable, File", Required: true},
 		{Name: "description", Type: "string", Description: "The new description text", Required: true},
 	}
 }
@@ -55,8 +55,11 @@ func (u *UpdateDescriptionTool) Run(args json.RawMessage) (string, error) {
 
 	kind := domain.ResourceKind(strings.ToLower(params.ResourceName))
 	switch params.ResourceName {
-	case "Function", "Method":
+	case "Function":
 		kind = domain.ResourceFunction
+	// An impl-block fn is stored as kind `method`, and the write filters on kind.
+	case "Method":
+		kind = domain.ResourceMethod
 	case "Struct", "Enum", "Union", "Type", "Class":
 		kind = domain.ResourceStruct
 	case "Trait", "Interface":

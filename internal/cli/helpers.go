@@ -106,8 +106,26 @@ func InitRegistry(dbPath string) (*topology.TopologyManager, *scanner.Registry) 
 		fmt.Fprintf(os.Stderr, "Topology built in %s\n", time.Since(start).Round(time.Millisecond))
 	} else {
 		mgr.Load(dbPath)
+		// A project moved since its last scan answers every read from paths that are gone; see
+		// TopologyManager.Relocation. Every read verb (read, serve, grep, check-updates, edit,
+		// write) opens the topology here, so it is rebuilt once, under the new root, here.
+		syncRelocation(mgr, reg)
 	}
 	return mgr, reg
+}
+
+// syncRelocation rebuilds a moved project's topology under its current root, saying so on
+// stderr. Stdout is left alone: it is the answer the caller asked for, and for `arac serve` it
+// is the protocol stream.
+func syncRelocation(mgr *topology.TopologyManager, reg *scanner.Registry) {
+	oldRoot, newRoot, moved := mgr.Relocation()
+	if !moved {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "aracne: project moved from %s to %s; re-indexing under the new root...\n", oldRoot, newRoot)
+	if _, err := mgr.SyncRelocation(reg); err != nil {
+		fmt.Fprintf(os.Stderr, "aracne: re-index after the move failed: %v\n", err)
+	}
 }
 
 // Normalizes and maps a string name to the corresponding domain ResourceKind enum value.

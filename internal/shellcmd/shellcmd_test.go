@@ -294,6 +294,10 @@ func TestPathlessSearchFollowsTheToolsOwnDefault(t *testing.T) {
 // either backwards returns a confident answer to a different question, which is the one
 // failure mode interception may never have.
 func TestGrepBREPatternsAreTranslatedForRE2(t *testing.T) {
+	// The POSIX classes follow LC_CTYPE (see asciiCtype), so the expectations below pin it
+	// rather than inheriting whatever locale the machine running the tests has.
+	t.Setenv("LC_ALL", "C.UTF-8")
+
 	for _, tc := range []struct{ cmd, want string }{
 		// BRE's escaped operators lose the backslash.
 		{`grep a\|b .`, `a|b`},
@@ -326,7 +330,7 @@ func TestGrepBREPatternsAreTranslatedForRE2(t *testing.T) {
 		// A bracket expression is copied through: POSIX and RE2 read its contents alike,
 		// so the `+` inside stays ordinary without any help.
 		{`grep [a+b] .`, `[a+b]`},
-		{`grep [[:alpha:]]+ .`, `[[:alpha:]]\+`},
+		{`grep [[:alpha:]]+ .`, `[\p{L}]\+`},
 
 		// The other dialects are already RE2 or already literal, and are left alone.
 		{`grep -E a|b .`, `a|b`},

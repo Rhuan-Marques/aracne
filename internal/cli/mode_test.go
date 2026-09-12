@@ -299,3 +299,70 @@ func TestSwitchingAwayFromMCPRemovesAStaleServerEntry(t *testing.T) {
 		t.Error("dropAracneMCPServer reported a change on a config it had already cleaned")
 	}
 }
+
+// A `.mcp.json` aracne may not delete must never be left as `{}`. Claude Code validates a
+// project MCP config against a schema that requires `mcpServers`, so the key-deleting cleanup
+// that ran when the last server went turned a working repo into one where every session opens
+// with `mcpServers: Invalid input` -- and, the file being pre-existing, setup was not allowed to
+// delete the broken file it had just written.
+func TestDroppingTheLastServerLeavesASchemaValidConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".mcp.json")
+	writeJSONConfig(path, map[string]interface{}{
+		"mcpServers": map[string]interface{}{
+			"aracne": map[string]interface{}{"command": "arac"},
+		},
+	})
+
+	if !dropAracneMCPServer(path) {
+		t.Fatal("dropAracneMCPServer reported no change")
+	}
+	config := readJSONConfig(path)
+	servers, ok := config["mcpServers"].(map[string]interface{})
+	if !ok {
+		data, _ := os.ReadFile(path)
+		t.Fatalf("mcpServers key is gone -- Claude Code rejects this file: %s", data)
+	}
+	if len(servers) != 0 {
+		t.Errorf("expected no servers left, got %v", servers)
+	}
+}
+
+// The other half of the same rule: emptying the file must not cost aracne the right to delete
+// it outright when aracne is what created it. Otherwise the fix above trades an invalid file
+// for a residue file that `arac disable` promised to take away.
+func TestASpentMCPConfigAracneCreatedIsStillDeleted(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".mcp.json")
+	writeJSONConfig(path, map[string]interface{}{
+		"mcpServers": map[string]interface{}{
+			"aracne": map[string]interface{}{"command": "arac"},
+		},
+	})
+	dropAracneMCPServer(path)
+
+	if !removeIfOnlyAracneWrote(path, readJSONConfig(path), true) {
+		t.Fatal("an emptied config aracne created should have been removed")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("file survived: %v", err)
+	}
+}
+
+// And a file holding anything of the operator's is still untouchable, empty `mcpServers` or not.
+func TestASpentMCPConfigKeepsUnrelatedKeys(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".mcp.json")
+	writeJSONConfig(path, map[string]interface{}{
+		"mcpServers": map[string]interface{}{"aracne": map[string]interface{}{"command": "arac"}},
+		"$schema":    "https://example.invalid/mcp.json",
+	})
+	dropAracneMCPServer(path)
+
+	if removeIfOnlyAracneWrote(path, readJSONConfig(path), true) {
+		t.Fatal("a config still holding an operator key must not be deleted")
+	}
+	if got := readJSONConfig(path)["$schema"]; got != "https://example.invalid/mcp.json" {
+		t.Errorf("operator key lost: %v", got)
+	}
+}

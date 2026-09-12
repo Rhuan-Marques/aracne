@@ -40,17 +40,17 @@ func (s *GoScanner) UpdateFilePartial(dbPath, root, absPath string) (upserts []d
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	modulePath, err := readModulePath(rootPath)
+	layout, err := loadModuleLayout(rootPath)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
-	dir := filepath.Dir(absPath)
-	pkgPath := getPackagePath(rootPath, dir, modulePath)
+	mod := layout.forDir(filepath.Dir(absPath))
+	pkgPath := mod.pkgPath
 
 	// Parse the changed file up front so we know which internal packages it
 	// imports (their members are forward-resolution targets).
-	pr, parseErr := ParseFile(absPath, pkgPath, modulePath, rootPath)
+	pr, parseErr := ParseFile(absPath, pkgPath, mod.modulePath, rootPath, mod.siblings...)
 
 	// Build the working-set topology from the DB.
 	gt, loadErr := s.loadWorkingSet(dbPath, rootPath, absPath, pkgPath, pr)
@@ -65,6 +65,16 @@ func (s *GoScanner) UpdateFilePartial(dbPath, root, absPath string) (upserts []d
 	beforeIDs := make(map[string]bool, len(beforeTopo.Resources))
 	for id := range beforeTopo.Resources {
 		beforeIDs[id] = true
+	}
+	var oldDeps []string
+	if oldFile, ok := gt.Files[golang.FileID(absPath)]; ok {
+		oldDeps = append(oldDeps, oldFile.Connections[golang.ConnImportsDep]...)
+	}
+	own := map[string]bool{absPath: true}
+	for id, res := range beforeTopo.Resources {
+		if res.Location.Path == absPath {
+			own[id] = true
+		}
 	}
 
 	if parseErr != nil {
@@ -100,6 +110,11 @@ func (s *GoScanner) UpdateFilePartial(dbPath, root, absPath string) (upserts []d
 	// or its signature changed; a delete is an old working-set ID now gone.
 	for id, res := range afterTopo.Resources {
 		if beforeSigs[id] != helper.ResourceSignatureOf(res) {
+			if res.Properties == nil {
+				// What every other write path stores for a resource without properties
+				// (a package): "{}", not "null".
+				res.Properties = map[string]any{}
+			}
 			upserts = append(upserts, res)
 		}
 	}
@@ -108,8 +123,55 @@ func (s *GoScanner) UpdateFilePartial(dbPath, root, absPath string) (upserts []d
 			deletes = append(deletes, id)
 		}
 	}
+	newFile := gt.Files[golang.FileID(absPath)]
+	orphans, err := orphanedDependencies(dbPath, own, oldDeps, newFile.DependenciesImported())
+	if err != nil {
+		return nil, nil, nil, errPartialFallback
+	}
+	deletes = append(deletes, orphans...)
 
 	return upserts, deletes, gt.Warnings, nil
+}
+
+// orphanedDependencies returns the dependency nodes this update left without an importer:
+// ones the file's old version imported and its new one does not, which nothing outside the
+// file (own: the file and its old members) references either. A cold scan derives the
+// dependency set from the files' imports and never writes such a node; the working set never
+// loaded it, so the before/after diff above cannot see it go.
+func orphanedDependencies(dbPath string, own map[string]bool, oldDeps []string, newDeps []golang.Dependancy) ([]string, error) {
+	still := make(map[string]bool, len(newDeps))
+	for _, d := range newDeps {
+		still[string(d.PackagePath)] = true
+	}
+	var dropped []string
+	for _, d := range oldDeps {
+		if !still[d] {
+			dropped = append(dropped, d)
+		}
+	}
+	if len(dropped) == 0 {
+		return nil, nil
+	}
+	// Every edge kind, from every language: a dependency node is shared, and anything outside
+	// this file still pointing at it keeps it.
+	referrers, err := helper.ReadReverseConnections(dbPath, dropped, "")
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, d := range dropped {
+		orphan := true
+		for _, src := range referrers[d] {
+			if !own[src] {
+				orphan = false
+				break
+			}
+		}
+		if orphan {
+			out = append(out, d)
+		}
+	}
+	return out, nil
 }
 
 // loadWorkingSet assembles the partial GolangTopology the incremental update
@@ -160,8 +222,11 @@ func (s *GoScanner) loadWorkingSet(dbPath, rootPath, absPath string, pkgPath gol
 			frontier[string(ip)] = true
 		}
 	}
-	const maxPkgExpansions = 8
-	for round := 0; round < maxPkgExpansions && len(frontier) > 0; round++ {
+	// Until the fixpoint, with no round cap. A cap of 8 used to stop here with the frontier
+	// still full, so a call chain whose types crossed more than eight packages resolved
+	// differently from a cold scan past the eighth hop. Every round only adds packages not yet
+	// loaded, so this terminates, at worst after loading every package a cold scan reads.
+	for len(frontier) > 0 {
 		pkgIDs := make([]string, 0, len(frontier))
 		for id := range frontier {
 			pkgIDs = append(pkgIDs, id)
@@ -284,7 +349,7 @@ func typingPackagesOf(resources map[string]domain.Resource, pr *ParseResult) []s
 		if pkg == "" || seen[pkg] {
 			return
 		}
-		if modulePath != "" && !strings.HasPrefix(pkg, modulePath) {
+		if modulePath != "" && !strings.HasPrefix(pkg, modulePath) && !pr.inSiblingModule(pkg) {
 			return
 		}
 		seen[pkg] = true
@@ -344,8 +409,12 @@ type gtPasses struct {
 	getCallers      func(gt *golang.GolangTopology, targetID, connType string) []string
 	structMethods   func(gt *golang.GolangTopology, pr *ParseResult)
 	constructors    func(gt *golang.GolangTopology, pr *ParseResult)
-	matchInterfaces func(gt *golang.GolangTopology, pr *ParseResult, removedStructs map[golang.StructID]golang.GolangStruct, removedFuncs map[golang.FunctionID]golang.GolangFunction)
+	matchInterfaces func(gt *golang.GolangTopology, pr *ParseResult, removedStructs map[golang.StructID]golang.GolangStruct, removedFuncs map[golang.FunctionID]golang.GolangFunction, removedNamedTypes map[golang.NamedTypeID]golang.GolangNamedType)
 	collectDeps     func(gt *golang.GolangTopology)
+	// refresh brings resources in OTHER files up to date with this update: fns are functions
+	// whose missing target reappeared, added the declarations this update introduced. See
+	// refreshOutsideFile. A non-nil error aborts the update.
+	refresh func(gt *golang.GolangTopology, pr *ParseResult, fns []golang.FunctionID, added addedDecls) error
 }
 
 // incrementalPasses returns passes scoped to the changed file. getCallers uses
@@ -363,23 +432,67 @@ func (s *GoScanner) incrementalPasses(dbPath string) gtPasses {
 		constructors:    detectConstructorsIncremental,
 		matchInterfaces: matchStructsToInterfacesIncremental,
 		collectDeps:     collectDependenciesIncremental,
+		refresh: func(gt *golang.GolangTopology, pr *ParseResult, fns []golang.FunctionID, added addedDecls) error {
+			return partialRefresh(dbPath, gt, pr, fns, added)
+		},
 	}
 }
 
-// populateStructMethodsIncremental rebuilds ConnHasMethod only for structs in the
-// changed file's package: it clears the method list on those structs, then
-// re-derives from every method whose receiver is one of them. Structs in other
+// partialRefresh is the partial path's answer to refreshOutsideFile: it cannot re-resolve a
+// file it did not load against a graph it only partly holds, so whenever that work exists it
+// hands the update to the full path. Both triggers stay narrow next to the edit this path is
+// for -- a call to something that did not exist being fixed, and a declaration this update
+// introduces whose name a sibling or importing file already spells -- and the full path is
+// correct for them.
+func partialRefresh(dbPath string, gt *golang.GolangTopology, pr *ParseResult, fns []golang.FunctionID, added addedDecls) error {
+	if len(fns) > 0 {
+		return errPartialFallback
+	}
+	if added.empty() {
+		return nil
+	}
+	candidates := make(map[string]bool)
+	pkg := gt.Packages[pr.PkgPath]
+	for _, f := range pkg.Files() {
+		candidates[f] = true
+	}
+	importers, err := helper.ReadReverseConnections(dbPath, []string{string(pr.PkgPath)}, string(golang.ConnImportsPkg))
+	if err != nil {
+		return errPartialFallback
+	}
+	for _, f := range importers[string(pr.PkgPath)] {
+		candidates[f] = true
+	}
+	delete(candidates, pr.FileID)
+	for f := range candidates {
+		if fileMentionsAnyName(f, added) {
+			return errPartialFallback
+		}
+	}
+	return nil
+}
+
+// populateStructMethodsIncremental rebuilds ConnHasMethod only for the types (structs and
+// named types) in the changed file's package: it clears the method list on those types, then
+// re-derives from every method whose receiver is one of them. Types in other
 // packages keep their stored method edges untouched. (Methods always live in the
-// same package as their receiver struct.)
+// same package as their receiver type.)
 func populateStructMethodsIncremental(gt *golang.GolangTopology, pr *ParseResult) {
 	pkg := pr.PkgPath
-	// Identify the structs of the changed package present in the working set.
+	// Identify the receiver types of the changed package present in the working set.
 	scoped := make(map[golang.StructID]bool)
 	for sid, str := range gt.Structs {
 		if structPkg(sid, str) == pkg {
 			scoped[sid] = true
 			delete(str.Connections, golang.ConnHasMethod)
 			gt.Structs[sid] = str
+		}
+	}
+	for nid, nt := range gt.NamedTypes {
+		if golang.PackagePath(trimLastDotSegment(string(nid))) == pkg {
+			scoped[golang.StructID(nid)] = true
+			delete(nt.Connections, golang.ConnHasMethod)
+			gt.NamedTypes[nid] = nt
 		}
 	}
 	for _, f := range gt.Functions {
@@ -389,25 +502,25 @@ func populateStructMethodsIncremental(gt *golang.GolangTopology, pr *ParseResult
 		if !scoped[*f.MethodFrom] {
 			continue
 		}
-		str := gt.Structs[*f.MethodFrom]
-		if str.Connections == nil {
-			str.Connections = make(map[golang.ConnectionKind][]string)
-		}
-		str.Connections[golang.ConnHasMethod] = append(str.Connections[golang.ConnHasMethod], string(f.ID))
-		gt.Structs[*f.MethodFrom] = str
+		attachMethod(gt, f)
 	}
 	// Dedup (a method could appear twice if the working set overlaps).
 	for sid := range scoped {
-		str := gt.Structs[sid]
-		str.Connections = uniqueConns(str.Connections)
-		gt.Structs[sid] = str
+		if str, ok := gt.Structs[sid]; ok {
+			str.Connections = uniqueConns(str.Connections)
+			gt.Structs[sid] = str
+		}
+		if nt, ok := gt.NamedTypes[golang.NamedTypeID(sid)]; ok {
+			nt.Connections = uniqueConns(nt.Connections)
+			gt.NamedTypes[golang.NamedTypeID(sid)] = nt
+		}
 	}
 }
 
 // detectConstructorsIncremental scopes constructor detection to the changed
 // file's package. It first clears any stale Constructor on the package's structs
 // (so a removed constructor is forgotten), then re-detects from the package's
-// New* functions.
+// New* functions, with the same ordering rule as detectConstructors.
 func detectConstructorsIncremental(gt *golang.GolangTopology, pr *ParseResult) {
 	pkgPath := pr.PkgPath
 	scoped := make(map[golang.StructID]bool)
@@ -420,41 +533,11 @@ func detectConstructorsIncremental(gt *golang.GolangTopology, pr *ParseResult) {
 			}
 		}
 	}
-	for fid, f := range gt.Functions {
-		if f.MethodFrom != nil {
-			continue
-		}
-		if funcPkg(fid, f) != pkgPath {
-			continue
-		}
-		if !strings.HasPrefix(f.Name, "New") {
-			continue
-		}
-		if len(f.Output) == 0 {
-			continue
-		}
-		returnType := f.Output[0].Typing
-		if returnType == "" {
-			continue
-		}
-		structID := golang.StructID(string(pkgPath) + "." + returnType)
-		if scoped[structID] {
-			str := gt.Structs[structID]
-			fid := f.ID
-			str.Constructor = &fid
-			gt.Structs[structID] = str
-			continue
-		}
-		if strings.HasPrefix(returnType, "*") {
-			structID = golang.StructID(string(pkgPath) + "." + returnType[1:])
-			if scoped[structID] {
-				str := gt.Structs[structID]
-				fid := f.ID
-				str.Constructor = &fid
-				gt.Structs[structID] = str
-			}
-		}
+	funcIDs := make([]golang.FunctionID, 0, len(gt.Functions))
+	for fid := range gt.Functions {
+		funcIDs = append(funcIDs, fid)
 	}
+	assignConstructors(gt, pkgPath, funcIDs, func(sid golang.StructID) bool { return scoped[sid] })
 }
 
 // matchStructsToInterfacesIncremental updates struct<->interface edges for only
@@ -465,10 +548,20 @@ func detectConstructorsIncremental(gt *golang.GolangTopology, pr *ParseResult) {
 // file plus structs in the changed package whose method set changed (receivers
 // of added or removed methods). Interface changes are routed to the full path
 // (see canPartial), so the "changed interface" branch is unnecessary here.
-func matchStructsToInterfacesIncremental(gt *golang.GolangTopology, pr *ParseResult, removedStructs map[golang.StructID]golang.GolangStruct, removedFuncs map[golang.FunctionID]golang.GolangFunction) {
+func matchStructsToInterfacesIncremental(gt *golang.GolangTopology, pr *ParseResult, removedStructs map[golang.StructID]golang.GolangStruct, removedFuncs map[golang.FunctionID]golang.GolangFunction, removedNamedTypes map[golang.NamedTypeID]golang.GolangNamedType) {
 	affected := make(map[golang.StructID]bool)
 	for _, si := range pr.Structs {
 		affected[si.ID] = true
+	}
+	for _, nt := range pr.NamedTypes {
+		affected[golang.StructID(nt.ID)] = true
+	}
+	for nid := range removedNamedTypes {
+		for iid, iface := range gt.Interfaces {
+			if removeIfPresent(&iface.Connections, golang.ConnImplBy, string(nid)) {
+				gt.Interfaces[iid] = iface
+			}
+		}
 	}
 	for _, fi := range pr.Functions {
 		if fi.Function.MethodFrom != nil {
@@ -491,6 +584,19 @@ func matchStructsToInterfacesIncremental(gt *golang.GolangTopology, pr *ParseRes
 	}
 
 	for sid := range affected {
+		if nt, isNamed := gt.NamedTypes[golang.NamedTypeID(sid)]; isNamed {
+			// A named type's method set, re-matched the same way as a struct's below.
+			delete(nt.Connections, golang.ConnImplements)
+			gt.NamedTypes[golang.NamedTypeID(sid)] = nt
+			for iid, iface := range gt.Interfaces {
+				if removeIfPresent(&iface.Connections, golang.ConnImplBy, string(sid)) {
+					gt.Interfaces[iid] = iface
+				}
+			}
+			for iid := range gt.Interfaces {
+				linkNamedTypeIfImplements(gt, golang.NamedTypeID(sid), iid)
+			}
+		}
 		str, exists := gt.Structs[sid]
 		if !exists {
 			continue

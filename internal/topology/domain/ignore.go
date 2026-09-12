@@ -24,7 +24,8 @@ type ignoreRule struct {
 // from the config. Patterns behave like a simplified .gitignore:
 //
 //   - "*" matches within a single path segment, "**" matches across segments,
-//     "?" matches a single non-slash character;
+//     "?" matches a single non-slash character, "[...]" a bracket class ("[!...]"
+//     negates), and "\" escapes the next character;
 //   - a trailing "/" restricts the pattern to directories (their whole subtree
 //     is excluded);
 //   - a pattern with a leading or internal "/" is anchored to the topology root;
@@ -56,18 +57,23 @@ func BuildIgnoreMatcher(root string, patterns []string) *IgnoreMatcher {
 		}
 		p = filepath.ToSlash(p)
 		dirOnly := false
+		anchored := false
 		// `X/**` means "everything under X", which is what a directory rule already
 		// means -- and spelling it as a regex instead left MatchDir unable to prune X
 		// itself, so a walk descended into an ignored tree to reject it file by file.
+		//
+		// The slash before `**` is a MIDDLE slash, and in .gitignore a middle slash anchors
+		// the pattern to the root. It has to be counted before it is stripped: `foo/**`
+		// became the floating `foo/`, which ignored every nested directory named foo.
 		if strings.HasSuffix(p, "/**") {
 			dirOnly = true
+			anchored = true
 			p = strings.TrimSuffix(p, "/**")
 		}
 		if strings.HasSuffix(p, "/") {
 			dirOnly = true
 			p = strings.TrimRight(p, "/")
 		}
-		anchored := false
 		if strings.HasPrefix(p, "/") {
 			anchored = true
 			p = strings.TrimPrefix(p, "/")
@@ -87,8 +93,8 @@ func BuildIgnoreMatcher(root string, patterns []string) *IgnoreMatcher {
 	return &IgnoreMatcher{root: absRoot, rules: rules}
 }
 
-// GlobToRegexp converts a glob pattern (with *, **, ?) to a compiled, fully anchored regexp.
-// "**" spans path separators, "*" and "?" do not.
+// GlobToRegexp converts a glob pattern (with *, **, ?, [...] and \ escapes) to a compiled, fully
+// anchored regexp. "**" spans path separators, "*", "?" and a bracket class do not.
 //
 // A "**" FOLLOWED BY A SLASH MATCHES ZERO DIRECTORIES, which is what `.gitignore` means by
 // it and what the configuration reference promises. Compiling `**/` to `.*/` instead required
@@ -119,7 +125,25 @@ func GlobToRegexp(pattern string) (*regexp.Regexp, error) {
 			}
 		case '?':
 			b.WriteString("[^/]")
-		case '.', '+', '(', ')', '|', '[', ']', '{', '}', '^', '$', '\\':
+		case '[':
+			// A bracket expression, as in .gitignore and every shell glob: `s[12].go`,
+			// `[a-c]*`, `[!0-9]`. Treated as a literal "[" when it never closes.
+			if class, next, ok := bracketClass(pattern, i); ok {
+				b.WriteString(class)
+				i = next
+				continue
+			}
+			b.WriteString(`\[`)
+		case '\\':
+			// An escape, as in .gitignore: `\[id\].js` names a file with literal brackets,
+			// which bracket classes would otherwise read as a set.
+			if i+1 < len(pattern) {
+				i++
+				b.WriteString(regexp.QuoteMeta(pattern[i : i+1]))
+				continue
+			}
+			b.WriteString(`\\`)
+		case '.', '+', '(', ')', '|', ']', '{', '}', '^', '$':
 			b.WriteByte('\\')
 			b.WriteByte(ch)
 		default:
@@ -128,6 +152,91 @@ func GlobToRegexp(pattern string) (*regexp.Regexp, error) {
 	}
 	b.WriteString("$")
 	return regexp.Compile(b.String())
+}
+
+// bracketClass compiles the glob bracket expression that opens at pattern[open] into a regexp
+// character class, returning it and the index of its closing "]". ok is false when the bracket
+// never closes.
+//
+// The syntax is the one .gitignore (git's wildmatch) and fnmatch share: a leading "!" or "^"
+// negates, a "]" right after the opening (or after the negation) is a literal member, "a-z" is
+// a range, "\" escapes the next character, and "[:alpha:]"-style POSIX classes are passed
+// through. A class never matches "/", negated or not, since a glob character matches within
+// one path segment; a literal "/" member is dropped for the same reason.
+func bracketClass(pattern string, open int) (class string, closeIdx int, ok bool) {
+	j := open + 1
+	negate := false
+	if j < len(pattern) && (pattern[j] == '!' || pattern[j] == '^') {
+		negate = true
+		j++
+	}
+	start := j
+	if j < len(pattern) && pattern[j] == ']' {
+		j++
+	}
+	for j < len(pattern) && pattern[j] != ']' {
+		if pattern[j] == '\\' && j+1 < len(pattern) {
+			j += 2
+		} else if end := posixClassEnd(pattern, j); end > j {
+			j = end
+		} else {
+			j++
+		}
+	}
+	if j >= len(pattern) {
+		return "", 0, false
+	}
+	body := pattern[start:j]
+	var b strings.Builder
+	b.WriteString("[")
+	if negate {
+		b.WriteString("^/")
+	}
+	for k := 0; k < len(body); k++ {
+		ch := body[k]
+		switch {
+		case ch == '\\' && k+1 < len(body):
+			k++
+			writeClassByte(&b, body[k])
+		case posixClassEnd(body, k) > k:
+			end := posixClassEnd(body, k)
+			b.WriteString(body[k:end])
+			k = end - 1
+		case ch == '-' && k > 0 && k+1 < len(body):
+			b.WriteByte('-') // a range operator between two members
+		default:
+			writeClassByte(&b, ch)
+		}
+	}
+	b.WriteString("]")
+	return b.String(), j, true
+}
+
+// posixClassEnd returns the index just past a "[:name:]" POSIX class starting at s[i], or i when
+// none starts there.
+func posixClassEnd(s string, i int) int {
+	if !strings.HasPrefix(s[i:], "[:") {
+		return i
+	}
+	end := strings.Index(s[i+2:], ":]")
+	if end < 0 {
+		return i
+	}
+	return i + 2 + end + 2
+}
+
+// writeClassByte writes one member byte of a bracket expression as a literal inside a regexp
+// class: ASCII punctuation is backslash-escaped, "/" is dropped (see bracketClass), and letters,
+// digits and the bytes of a multi-byte character are written as they are.
+func writeClassByte(b *strings.Builder, ch byte) {
+	switch {
+	case ch == '/':
+	case ch < 0x80 && !('a' <= ch && ch <= 'z' || 'A' <= ch && ch <= 'Z' || '0' <= ch && ch <= '9'):
+		b.WriteByte('\\')
+		b.WriteByte(ch)
+	default:
+		b.WriteByte(ch)
+	}
 }
 
 // relPath returns p expressed relative to the matcher's root in forward-slash

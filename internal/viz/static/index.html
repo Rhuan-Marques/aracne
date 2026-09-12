@@ -18,7 +18,7 @@
         <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M4 12h5"/><path d="M15 12h5"/><path d="m6 6 4 4"/><path d="m14 14 4 4"/><path d="m18 6-4 4"/><path d="m10 14-4 4"/></svg>
         <span>Visualization</span>
       </a>
-      <a id="navChat" href="/chat" data-route="/chat" class="navItem">
+      <a id="navChat" href="/chat" data-route="/chat" class="navItem" data-feature="chat" hidden>
         <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg>
         <span>Chat</span>
       </a>
@@ -240,7 +240,8 @@
       <div class="simplePage settingsPanel">
         <p class="eyebrow">Configuration</p>
         <h2>Settings</h2>
-        <p class="settingsIntro">Configure your LLM providers and default models for codebase interaction.</p>
+        <p class="settingsIntro" data-feature="chat" hidden>Configure your LLM providers and default models for codebase interaction.</p>
+        <p id="settingsError" class="settingsError" role="alert" hidden></p>
         <div class="settingsSection">
           <div class="settingsSectionHeader">
             <h3>Need Description</h3>
@@ -259,7 +260,7 @@
           </select>
           <p id="needDescriptionStatus" class="fieldHint"></p>
         </div>
-        <div class="settingsSection">
+        <div class="settingsSection" data-feature="chat" hidden>
           <div class="settingsSectionHeader">
             <h3>Provider Settings</h3>
             <button id="addProvider" type="button">Add Provider</button>
@@ -314,7 +315,7 @@
             </div>
           </div>
         </div>
-        <div id="modelDefaults" class="settingsSection hidden">
+        <div id="modelDefaults" class="settingsSection hidden" data-feature="chat" hidden>
           <div class="settingsSectionHeader">
             <h3>Model Defaults</h3>
           </div>

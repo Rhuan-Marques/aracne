@@ -157,6 +157,41 @@ func TestJavaSignatureAndNestedForms(t *testing.T) {
 	mustResolve(t, topo, "Outer.Helper", "com.t.nested.Outer$Helper", TierSuffix)
 }
 
+// RD-2: the contract teaches the overload-precise Java form and promises a unique trailing part
+// is enough. `M.area(int)` used to come back ambiguous between `area()` and `area(int)`,
+// because the signature -- the only token telling the overloads apart -- was dropped before
+// matching and never consulted again.
+func TestJavaSignatureDisambiguatesOverloads(t *testing.T) {
+	topo := topoOf(
+		method("com.t.M.area()", "area"),
+		method("com.t.M.area(int)", "area"),
+		method("com.t.M.put(int,String)", "put"),
+		method("com.t.M.put(String)", "put"),
+	)
+	mustResolve(t, topo, "M.area(int)", "com.t.M.area(int)", TierSuffix)
+	mustResolve(t, topo, "M.area()", "com.t.M.area()", TierSuffix)
+	mustResolve(t, topo, "area(int)", "com.t.M.area(int)", TierSuffix)
+	// Whitespace inside a signature is not identity.
+	mustResolve(t, topo, "M.put(int, String)", "com.t.M.put(int,String)", TierSuffix)
+}
+
+// The signature narrows; it never widens or invents. An unsigned query over overloads stays
+// ambiguous, and a signature no overload carries is no worse off than an unsigned query.
+func TestJavaSignatureDoesNotOverreach(t *testing.T) {
+	topo := topoOf(
+		method("com.t.M.area()", "area"),
+		method("com.t.M.area(int)", "area"),
+	)
+	for _, q := range []string{"M.area", "M.area(String)"} {
+		got := Resolve(topo, q, Options{})
+		if got.Tier != TierAmbiguous || len(got.Candidates) != 2 {
+			t.Fatalf("%q: tier %s, %d candidates; want ambiguous with 2", q, got.Tier, len(got.Candidates))
+		}
+	}
+	// A lone overload still resolves from a mismatched signature, as it always has.
+	mustResolve(t, topoOf(method("com.t.N.run()", "run")), "N.run(int)", "com.t.N.run()", TierSuffix)
+}
+
 func TestPartialIdentifierDoesNotMatch(t *testing.T) {
 	// "blueprint" must NOT resolve "register_blueprint": a suffix that ends mid-identifier
 	// would attach callers to arbitrary resources.

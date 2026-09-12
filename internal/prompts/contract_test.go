@@ -358,11 +358,87 @@ func TestOnlyTheMCPContractTeachesTheDescriptionWorkflow(t *testing.T) {
 	for _, mode := range allModes {
 		for _, verbosity := range allVerbosities {
 			got := contractForAt(mode, verbosity)
-			for _, tool := range []string{"node_list_no_description", "update_description"} {
-				named := strings.Contains(got, tool)
-				want := mode == helper.ModeMCP && verbosity == helper.ContractVerbosityHigh
-				if named != want {
-					t.Errorf("mode %q at %q: names %q = %v, want %v", mode, verbosity, tool, named, want)
+			has := strings.Contains(got, "## Writing descriptions")
+			want := mode == helper.ModeMCP && verbosity == helper.ContractVerbosityHigh
+			if has != want {
+				t.Errorf("mode %q at %q: has the description workflow = %v, want %v", mode, verbosity, has, want)
+			}
+		}
+	}
+}
+
+// SU-5. Even in ModeMCP the workflow may only name a tool the MAIN agent is served. The default
+// main profile is read + warnings_list -- node_list_no_description and update_description are
+// the descriptions executor's -- so the default contract sent the model to a first step it had
+// no tool for, and to a `description_batch_size` key no config has.
+func TestTheDescriptionWorkflowNamesOnlyTheMainAgentsTools(t *testing.T) {
+	render := func(cfg *helper.Config) string {
+		cfg.Mode = helper.ModeMCP
+		cfg.ContractVerbosity = helper.ContractVerbosityHigh
+		return ContractContent(cfg, testLanguages)
+	}
+
+	got := render(helper.DefaultConfig())
+	for _, tool := range []string{"node_list_no_description", "update_description", "description_batch_size"} {
+		if strings.Contains(got, tool) {
+			t.Errorf("the default main agent has no %q, but the contract names it:\n%s", tool, got)
+		}
+	}
+	for _, want := range []string{"arac resource list --no-description", "arac update-description", "max-batch-size"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("without the tools the workflow should name %q:\n%s", want, got)
+		}
+	}
+
+	// A main agent that IS served them on both harnesses is told to use them.
+	served := helper.DefaultConfig()
+	served.LLM.Any.MainAgent.MCPTools = []string{"read", "warnings_list", "node_list_no_description", "update_description"}
+	got = render(served)
+	for _, want := range []string{"`node_list_no_description`", "`update_description`"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("a main agent served %s should be told to use it:\n%s", want, got)
+		}
+	}
+
+	// One contract goes to both CLAUDE.md and AGENTS.md: a tool only Claude Code's main agent
+	// has is not one it may promise.
+	oneHarness := helper.DefaultConfig()
+	oneHarness.LLM.ClaudeCode.MainAgent.MCPTools = []string{"read", "node_list_no_description", "update_description"}
+	if got := render(oneHarness); strings.Contains(got, "`node_list_no_description`") {
+		t.Errorf("OpenCode's main agent has no node_list_no_description, yet the contract names it:\n%s", got)
+	}
+}
+
+// SU-7. `# Aracne` is the contract's ONLY top-level heading outside a code fence, in every mode,
+// at either verbosity, for every language. `arac setup` and `arac disable` bound a block whose
+// closing line was edited away by the next top-level heading; the high contract's `# CONTEXT:`
+// examples sat outside their fences, so both stopped at the first one and orphaned the rest --
+// and the examples rendered as real H1/H2 headings in CLAUDE.md besides.
+func TestTheContractHasNoTopLevelHeadingButItsOwn(t *testing.T) {
+	languageSets := [][]string{nil, testLanguages}
+	for lang := range languageProfiles {
+		languageSets = append(languageSets, []string{lang})
+	}
+	for _, mode := range allModes {
+		for _, verbosity := range allVerbosities {
+			for _, languages := range languageSets {
+				cfg := helper.DefaultConfig()
+				cfg.Mode, cfg.ContractVerbosity = mode, verbosity
+				fenced := false
+				for i, line := range strings.Split(ContractContent(cfg, languages), "\n") {
+					if strings.HasPrefix(strings.TrimSpace(line), "```") {
+						fenced = !fenced
+						continue
+					}
+					trimmed := strings.TrimLeft(line, " \t")
+					if fenced || i == 0 || !(strings.HasPrefix(trimmed, "# ") || trimmed == "#") {
+						continue
+					}
+					t.Errorf("mode %q at %q, languages %v: line %d is a top-level heading outside a fence: %q",
+						mode, verbosity, languages, i+1, line)
+				}
+				if fenced {
+					t.Errorf("mode %q at %q, languages %v: a code fence is never closed", mode, verbosity, languages)
 				}
 			}
 		}

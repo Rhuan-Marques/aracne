@@ -26,13 +26,17 @@ package topogrep
 
 import (
 	"bufio"
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
@@ -174,8 +178,20 @@ type Options struct {
 	// index of the whole tree, and answering it with one hit in total is a different and
 	// much smaller answer. 0 means no per-file cap.
 	PerFileLimit int
-	Before       int // context lines before each hit
-	After        int // context lines after each hit
+	// FromLine and ToLine confine the search to an inclusive span of lines -- the body of one
+	// resource, for `grep pat pkg.Func`. Zero leaves that side unbounded. A line outside the
+	// span is not a match, not context and not a declaration this search reports.
+	//
+	// THE SPAN IS APPLIED DURING THE SCAN, NOT TO A FINISHED RESULT. Trimming the result kept
+	// only rows that had already survived the head limit, so a resource at the bottom of a file
+	// with more than 200 earlier matches lost every one of its own: the answer was empty with
+	// exit 1, `-c` on the same operand said 2, and the trim reset Truncated, so nothing said a
+	// cap had been involved. Scanned inside the span, the cap and its trailer are measured
+	// against the resource's own matches.
+	FromLine int
+	ToLine   int
+	Before   int // context lines before each hit
+	After    int // context lines after each hit
 	// WithFilename and LineNumbers are grep's `-H` and `-n`, and they are honoured ONLY under
 	// Terse -- the intercepted shell surface, the one caller that has flags to honour. Every
 	// other caller (the MCP tool, `arac grep`) addresses rows by path and line unconditionally
@@ -218,9 +234,13 @@ type Options struct {
 	// matches in a deterministic order rather than the N the local filesystem happened to
 	// enumerate first.
 	Plain bool
-	// Ignore applies the project's scan.ignore rules. Build it with
-	// domain.BuildIgnoreMatcher(root, cfg.Scan.Ignore); nil disables the check.
-	Ignore *domain.IgnoreMatcher
+	// NoIgnore searches the trees .gitignore excludes, as `rg --no-ignore` does. The
+	// pruning it switches off is the ignore hierarchy only: the version control metadata
+	// in prunedDirs is skipped either way, being no part of any search.
+	NoIgnore bool
+	// git is the ignore hierarchy for the root being walked, installed by walkSearch.
+	// It is not a caller's to set: it depends on which root is in hand.
+	git *gitIgnores
 	// LineRange names each annotated hit by "path:start-end" instead of by resource id.
 	// See helper.IdentifyLineRange: the id is aracne's vocabulary, the span is the shell's,
 	// and a search result is precisely where the caller decides what to read next.
@@ -230,7 +250,61 @@ type Options struct {
 	// DefaultDescriptionKinds(); an explicit empty slice disables description
 	// matching entirely. Titles are never gated -- a name match is precise.
 	DescriptionKinds []domain.ResourceKind
+	// GrepFilters applies the filename filters the way GNU grep does, for the shell surface
+	// standing in for it. NameFilters -- its --include and --exclude, in command-line order --
+	// replace Globs and ExcludeGlobs: the LAST filter whose glob matches decides, and a file no
+	// filter matches is searched unless the first filter is an --include. A walked file is
+	// matched by its base name. An operand is held to them too, a file to NameFilters and a
+	// directory to ExcludeDirs, matched against the operand and every suffix of it that starts
+	// after a slash, as grep matches it.
+	GrepFilters bool
+	NameFilters []NameFilter
+	// FollowLinks is grep's -R: a symbolic link met during the walk is followed. Without it
+	// only a link named as a root is, which is -r's rule and ripgrep's.
+	FollowLinks bool
+	// Only, when set, is the exact list of files the real tool would search, spelled the way it
+	// prints them -- ripgrep's, from `rg --files`, which alone knows its .gitignore, .ignore,
+	// hidden-file and glob rules. The walk visits nothing else and prints each file under that
+	// spelling; Globs, ExcludeGlobs and Type are the tool's to apply, so the caller leaves them
+	// empty. Binary files follow ripgrep's rules too: one met in the walk is skipped, and one
+	// named that matches makes the search ErrUnmodelled (see searchFile).
+	Only []string
+	// CountZeros is a tool that prints `path:0` for every file it searched -- grep does, rg does
+	// not. The count of a single named file is printed whenever it is set; the zero rows of a
+	// wider search only under Plain, which promises the real command's rows.
+	CountZeros bool
+	// UnicodeWords is a real tool that counts non-ASCII letters as word characters -- GNU grep
+	// in a UTF-8 locale, ripgrep always -- where Go's `\b` and `\w` know only ASCII. For a
+	// pattern with a word test (-w, `\b`, `\B`, `\w`, `\W`), a line where the test could land
+	// next to a non-ASCII byte is one the two may disagree about -- `grep -w Radius` does not
+	// match `éRadius`, and Go's `\b` does -- so the search is ErrUnmodelled. A pattern with no
+	// word test, and a line of plain ASCII, are answered as before.
+	UnicodeWords bool
+
+	// implicitRoot is a search that named no path at all: rows are relative to the working
+	// directory with no `./`, the way `grep -r pat` prints them.
+	implicitRoot bool
+	// only is Only keyed by canonical path, and onlyDirs every directory that leads to one.
+	only     map[string]string
+	onlyDirs map[string]bool
+	// wordTest is the pattern with its word tests loosened, for UnicodeWords; see
+	// loosenWordTests. words reports that the pattern has a word test at all.
+	wordTest *regexp.Regexp
+	words    bool
 }
+
+// NameFilter is one --include (Exclude false) or --exclude (Exclude true). See
+// Options.NameFilters.
+type NameFilter struct {
+	Glob    string
+	Exclude bool
+}
+
+// ErrUnmodelled means the search reached something whose real output this package does not
+// reproduce -- a duplicate operand under Plain, a binary or mis-encoded file whose rows the real
+// tool would suppress, a symbolic-link loop, a word test beside a non-ASCII letter -- and gave up
+// rather than guess. The shell surface answers it by running the real command.
+var ErrUnmodelled = errors.New("the real command's answer is not modelled here")
 
 // Result carries the hits plus enough accounting to tell the caller what it did not see.
 type Result struct {
@@ -270,12 +344,21 @@ type Result struct {
 	// RootIsFile records that the caller named exactly one file. `grep -c pat file` prints
 	// a bare number and `grep -rc pat dir` prints path:count; the difference is this.
 	RootIsFile bool
-	// SkippedDirs are the directories this walk pruned by aracne's OWN rules -- the dependency
-	// and build trees in prunedDirs, and scan.ignore -- that a plain grep would have searched.
-	// FormatResult names them: a search that found nothing because it never looked in
-	// node_modules must not read as "nothing uses this". Empty under Plain, which prunes
-	// nothing a real grep would not, and never lists what the caller excluded itself.
-	SkippedDirs []string
+	// Searched is every file the search opened, match or not: grep -c prints `path:0` for
+	// the rest. See Options.CountZeros.
+	Searched []string
+
+	// rootOf is the index of the root each displayed path was reached through. The real
+	// command answers its operands in the order it was given them, so paths sort by it first.
+	rootOf map[string]int
+}
+
+// pathLess orders two displayed paths: by the operand they came from, then by name.
+func (r *Result) pathLess(a, b string) bool {
+	if ra, rb := r.rootOf[a], r.rootOf[b]; ra != rb {
+		return ra < rb
+	}
+	return a < b
 }
 
 // Found reports whether the search has anything to show, in the mode it was run in.
@@ -316,7 +399,18 @@ func SearchWith(opt Options, topo *domain.Topology) (*Result, error) {
 		return nil, fmt.Errorf("pattern is required")
 	}
 	if opt.Root == "" {
+		opt.implicitRoot = len(opt.Roots) == 0
 		opt.Root = "."
+	}
+	if opt.Only != nil {
+		opt.only, opt.onlyDirs = map[string]string{}, map[string]bool{}
+		for _, spelled := range opt.Only {
+			key := canonicalPath(spelled)
+			opt.only[key] = spelled
+			for dir := filepath.Dir(key); !opt.onlyDirs[dir]; dir = filepath.Dir(dir) {
+				opt.onlyDirs[dir] = true
+			}
+		}
 	}
 	if opt.Mode == "" {
 		opt.Mode = OutputContent
@@ -328,6 +422,14 @@ func SearchWith(opt Options, topo *domain.Topology) (*Result, error) {
 	re, err := regexp.Compile(pattern)
 	if err != nil {
 		return nil, fmt.Errorf("compile pattern: %w", err)
+	}
+	if opt.UnicodeWords {
+		var loose string
+		if loose, opt.words = loosenWordTests(pattern); opt.words {
+			// A loosened pattern that does not compile leaves wordTest nil, and then every
+			// non-ASCII line is treated as one the tools may disagree about.
+			opt.wordTest, _ = regexp.Compile(loose)
+		}
 	}
 	exts, err := typeExtensions(opt.Type)
 	if err != nil {
@@ -341,19 +443,24 @@ func SearchWith(opt Options, topo *domain.Topology) (*Result, error) {
 		Limit:      effectiveLimit(opt),
 		Context:    map[string]map[int]string{},
 		RootIsFile: rootIsSingleFile(opt),
+		rootOf:     map[string]int{},
 	}
 
 	// binaryCounts is kept apart from `all` on purpose: a binary file's matches are real
 	// and belong in Counts, but its LINES may never be rendered, so they must not sit in
 	// the list the head limit slices and the formatter prints.
 	binaryCounts := map[string]int{}
-	skippedDirs := map[string]bool{}
 	var all []Match
-	if err := walkSearch(opt, exts, func(path string) error {
-		found, err := searchFile(path, re, index, tiers, opt)
+	if err := walkSearch(opt, exts, func(path, display string, root int, named bool) error {
+		found, err := searchFile(path, display, named, re, index, tiers, opt)
 		if err != nil {
 			return err
 		}
+		if !found.opened {
+			return nil
+		}
+		out.Searched = append(out.Searched, found.display)
+		out.rootOf[found.display] = root
 		if found.binary {
 			if found.count > 0 {
 				binaryCounts[found.display] = found.count
@@ -366,17 +473,10 @@ func SearchWith(opt Options, topo *domain.Topology) (*Result, error) {
 			out.Context[found.display] = found.context
 		}
 		return nil
-	}, func(dir string) {
-		skippedDirs[displayPath(dir, echoRoot(opt))] = true
 	}); err != nil {
 		return nil, err
 	}
-	sort.Strings(out.BinaryFiles)
-	for dir := range skippedDirs {
-		out.SkippedDirs = append(out.SkippedDirs, dir)
-	}
-	sort.Strings(out.SkippedDirs)
-
+	sort.Slice(out.BinaryFiles, func(i, j int) bool { return out.pathLess(out.BinaryFiles[i], out.BinaryFiles[j]) })
 	// Priority first, then the familiar path/line order within a tier. Tier is a
 	// property of the resource, so one resource's rows never straddle two tiers and
 	// FormatResult's one-header-per-run grouping still holds.
@@ -385,7 +485,7 @@ func SearchWith(opt Options, topo *domain.Topology) (*Result, error) {
 			return all[i].MatchedOn < all[j].MatchedOn
 		}
 		if all[i].Path != all[j].Path {
-			return all[i].Path < all[j].Path
+			return out.pathLess(all[i].Path, all[j].Path)
 		}
 		return all[i].Line < all[j].Line
 	})
@@ -427,7 +527,7 @@ func SearchWith(opt Options, topo *domain.Topology) (*Result, error) {
 	for path := range out.Counts {
 		out.Files = append(out.Files, path)
 	}
-	sort.Strings(out.Files)
+	sort.Slice(out.Files, func(i, j int) bool { return out.pathLess(out.Files[i], out.Files[j]) })
 
 	// Cap only what is rendered; Total and Counts keep the honest numbers so the trailer
 	// can say how much was withheld.
@@ -596,30 +696,16 @@ func Format(matches []Match) string {
 	}, Options{Mode: OutputContent})
 }
 
-// FormatResult renders a result for the requested mode, followed by a one-line note naming the
-// trees aracne chose not to search (see Result.SkippedDirs). The note is prose for a reader, so
-// it never appears under Plain, and it is the whole output when nothing matched -- which is the
-// case it matters most for.
+// FormatResult renders a result for the requested mode.
+//
+// IT NO LONGER NAMES WHAT THE WALK PRUNED. That note existed because aracne pruned trees of
+// its own choosing -- dependency and build directories off a hardcoded list, plus the
+// scanner's scan.ignore -- and a search that skipped them silently could read as "nothing
+// uses this". Now that the only rule is the project's own .gitignore, the note explains a
+// decision the project already made and the reader already knows, on every result forever.
+// ripgrep prunes the same trees and says nothing; so does this.
 func FormatResult(res *Result, opt Options) string {
-	out := formatBody(res, opt)
-	if res == nil || opt.Plain || len(res.SkippedDirs) == 0 {
-		return out
-	}
-	if out == "" {
-		return skippedNote(res.SkippedDirs)
-	}
-	return out + "\n" + skippedNote(res.SkippedDirs)
-}
-
-// skippedNote names the pruned trees, capped so a scan.ignore matching dozens of directories
-// costs one line rather than a paragraph.
-func skippedNote(dirs []string) string {
-	shown, more := dirs, ""
-	if len(shown) > 3 {
-		shown, more = shown[:3], fmt.Sprintf(" and %d more", len(shown)-3)
-	}
-	return "… skipped " + strings.Join(shown, ", ") + more +
-		" (aracne does not search dependency, build or scan.ignore trees); name one as a path to search it."
+	return formatBody(res, opt)
 }
 
 // formatBody renders a result for the requested mode, without the skipped-directory note.
@@ -660,7 +746,7 @@ func formatBody(res *Result, opt Options) string {
 		rows = append([]Match(nil), rows...)
 		sort.Slice(rows, func(i, j int) bool {
 			if rows[i].Path != rows[j].Path {
-				return rows[i].Path < rows[j].Path
+				return res.pathLess(rows[i].Path, rows[j].Path)
 			}
 			return rows[i].Line < rows[j].Line
 		})
@@ -668,9 +754,17 @@ func formatBody(res *Result, opt Options) string {
 
 	var b strings.Builder
 	printed := map[string]map[int]bool{}
-	lastHeader := ""
+	// written is the header in force -- the last one printed -- and pending the one owed to the
+	// next row that prints. A header is written only when a row follows it: a node row whose
+	// line an earlier match already printed as context used to leave its header standing alone,
+	// naming a resource with nothing under it.
+	written, pending := "", ""
 	lastPath, lastLine := "", 0
 	first := true
+	// headed marks a resource header as the last thing written. A header already separates
+	// the rows under it from the rows above, so it stands in for grep's `--`.
+	headed := false
+	contextual := opt.Before > 0 || opt.After > 0
 
 	// grep names the file only when it searched more than one, so one named file prints
 	// `line:text` and `line-text`. That is the same distinction formatCounts makes for `-c`,
@@ -693,10 +787,25 @@ func formatBody(res *Result, opt Options) string {
 			return
 		}
 		printed[path][line] = true
+		if pending != "" {
+			if !first {
+				b.WriteByte('\n')
+			}
+			first = false
+			b.WriteString(pending)
+			written, pending, headed = pending, "", true
+		}
 		if !first {
 			b.WriteByte('\n')
+			// grep separates non-contiguous groups with `--`, and only when context was asked
+			// for; without it a jump from line 40 to line 900 reads as one block. The test is
+			// adjacency to the row printed LAST, which is grep's own rule. Asked per match, of
+			// the match's window, it could not see a window an earlier match had half printed.
+			if contextual && !headed && (path != lastPath || line != lastLine+1) {
+				b.WriteString("--\n")
+			}
 		}
-		first = false
+		first, headed = false, false
 		switch {
 		case bare && !numbered:
 			fmt.Fprintf(&b, "%s", text)
@@ -716,23 +825,17 @@ func formatBody(res *Result, opt Options) string {
 		lastPath, lastLine = path, line
 	}
 
-	for _, m := range rows {
+	for i, m := range rows {
 		header := rowHeader(m, opt, annotate)
-		if header != "" && header != lastHeader {
-			if !first {
-				b.WriteByte('\n')
-			}
-			first = false
-			b.WriteString(header)
+		// A row printed bare still reads as part of the last header above it. Once one has been
+		// written, a bare row gets the header a line outside every declaration gets -- its file --
+		// so a line is never attributed to a resource it is not in.
+		if header == "" && written != "" {
+			header = "# " + m.Path
 		}
-		lastHeader = header
-
-		// grep separates non-contiguous context groups with `--`, and only when context was
-		// asked for. Without it a jump from line 40 to line 900 reads as one block. A header
-		// already separates this run from the previous one, so it stands in for the `--`.
-		if (opt.Before > 0 || opt.After > 0) && !first && header == "" &&
-			(m.Path != lastPath || m.Line-opt.Before > lastLine+1) {
-			b.WriteString("\n--")
+		pending = ""
+		if header != written {
+			pending = header
 		}
 
 		ctx := res.Context[m.Path]
@@ -742,7 +845,15 @@ func formatBody(res *Result, opt Options) string {
 			}
 		}
 		emit(m.Path, m.Line, m.Text, true)
-		for line := m.Line + 1; line <= m.Line+opt.After; line++ {
+		// The after-window stops short of the next row in the same file. That row is printed
+		// next, and its own window reaches further than this one, so whatever lies between it
+		// and the end of this window is printed after it -- in file order. Printing the whole
+		// window here is what put `33-` and `34-` above the match on line 32.
+		end := m.Line + opt.After
+		if i+1 < len(rows) && rows[i+1].Path == m.Path && rows[i+1].Line <= end {
+			end = rows[i+1].Line - 1
+		}
+		for line := m.Line + 1; line <= end; line++ {
 			if text, ok := ctx[line]; ok {
 				emit(m.Path, line, text, false)
 			}
@@ -803,8 +914,9 @@ func rowHeader(m Match, opt Options, annotate bool) string {
 		return "# " + m.Path
 	}
 	header := "# " + resourceLabel(m, opt)
-	if m.Description != "" {
-		header += " — " + m.Description
+	// One line: a stored newline would end the header and let the rest pose as structure.
+	if d := strings.Join(strings.Fields(m.Description), " "); d != "" {
+		header += " — " + d
 	}
 	return header
 }
@@ -814,24 +926,37 @@ func rowHeader(m Match, opt Options, annotate bool) string {
 // `grep -c pat file` prints a bare number and `grep -rc pat dir` prints one path:count per
 // file. That is not a cosmetic difference: a bare count is the whole reason a caller reaches
 // for -c instead of piping to `wc -l`, and prefixing the path moves the field they read.
+//
+// `-H` puts the path back on a single file's count, as it does on its rows. And grep prints a
+// count for every file it searched, `path:0` included: a single named file always gets one, and
+// a wider search gets the zero rows under Plain, where `grep -c X *.go | grep ':0$'` -- "which
+// files never mention X" -- reads them. The annotated answer leaves them out as noise.
 func formatCounts(res *Result, opt Options) string {
-	if len(res.Counts) == 0 {
-		if opt.Terse && res.RootIsFile {
-			return "0"
-		}
-		return noMatches(opt)
-	}
+	bare := opt.Terse && res.RootIsFile && !opt.WithFilename
 	paths := make([]string, 0, len(res.Counts))
 	for p := range res.Counts {
 		paths = append(paths, p)
 	}
-	sort.Strings(paths)
+	if opt.CountZeros && (opt.Plain || res.RootIsFile) {
+		for _, p := range res.Searched {
+			if _, counted := res.Counts[p]; !counted {
+				paths = append(paths, p)
+			}
+		}
+	}
+	if len(paths) == 0 {
+		if bare && opt.CountZeros {
+			return "0"
+		}
+		return noMatches(opt)
+	}
+	sort.Slice(paths, func(i, j int) bool { return res.pathLess(paths[i], paths[j]) })
 	var b strings.Builder
 	for i, p := range paths {
 		if i > 0 {
 			b.WriteByte('\n')
 		}
-		if opt.Terse && res.RootIsFile {
+		if bare {
 			fmt.Fprintf(&b, "%d", res.Counts[p])
 			continue
 		}
@@ -926,22 +1051,35 @@ func rootIsSingleFile(opt Options) bool {
 	return err == nil && !info.IsDir()
 }
 
-// walkSearch visits every candidate file under each search root.
+// walkSearch visits every candidate file under each search root, handing each one over with
+// the spelling the result prints it under and the index of the root it was reached through.
 //
 // A file reached through two roots is visited once: `grep pat . src` would otherwise report
-// every hit under src twice, and the caps would be measured against a doubled total.
-func walkSearch(opt Options, exts map[string]bool, visit func(path string) error, skipped func(dir string)) error {
+// every hit under src twice, and the caps would be measured against a doubled total. That is the
+// annotated answer's choice, not the real command's -- grep and rg both search such a file twice
+// -- so under Plain, which promises the real command's rows, a second visit is ErrUnmodelled.
+func walkSearch(opt Options, exts map[string]bool, visit func(path, display string, root int, named bool) error) error {
 	seen := map[string]bool{}
-	once := func(path string) error {
-		key := canonicalPath(path)
-		if seen[key] {
-			return nil
+	for i, root := range searchRoots(opt) {
+		// One matcher per root, anchored at the repository that encloses it, so a root
+		// given as `../other-repo` is judged by ITS .gitignore and not by this one's.
+		opt := opt
+		opt.git = newGitIgnores(root)
+		if !opt.implicitRoot {
+			opt.git.exempt(root)
 		}
-		seen[key] = true
-		return visit(path)
-	}
-	for _, root := range searchRoots(opt) {
-		if err := walkOneRoot(root, opt, exts, once, skipped); err != nil {
+		once := func(path string) error {
+			key := canonicalPath(path)
+			if seen[key] {
+				if opt.Plain {
+					return ErrUnmodelled
+				}
+				return nil
+			}
+			seen[key] = true
+			return visit(path, rowPath(root, path, opt), i, path == root)
+		}
+		if err := walkOneRoot(root, opt, exts, once); err != nil {
 			return err
 		}
 	}
@@ -949,123 +1087,267 @@ func walkSearch(opt Options, exts map[string]bool, visit func(path string) error
 }
 
 // walkOneRoot visits the candidate files under a single root.
-func walkOneRoot(root string, opt Options, exts map[string]bool, visit func(path string) error,
-	skipped func(dir string)) error {
+func walkOneRoot(root string, opt Options, exts map[string]bool, visit func(path string) error) error {
 	info, err := os.Stat(root)
 	if err != nil {
 		return fmt.Errorf("stat path: %w", err)
 	}
 	if !info.IsDir() {
-		// A file named outright is searched whatever the filters say. `grep pat vendor/x.go`
-		// asked for that file; answering "no matches" because a filter would have skipped it
-		// during a walk answers a different question.
+		// A file named outright is searched whatever aracne's OWN filters say. `grep pat
+		// vendor/x.go` asked for that file; answering "no matches" because a filter would have
+		// skipped it during a walk answers a different question. The caller's filters are the
+		// caller's: see namedFileWanted.
+		if !namedFileWanted(root, opt) {
+			return nil
+		}
 		return visit(root)
 	}
-	return filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() {
-			// The search root is never pruned by its own name: searching inside
-			// ~/.dotfiles must work.
-			if path != root {
-				if skip, report := shouldSkipDir(path, d.Name(), opt); skip {
-					if report && skipped != nil {
-						skipped(path)
-					}
-					return filepath.SkipDir
-				}
-			}
-			return nil
-		}
-		if d.Type()&os.ModeType != 0 {
-			return nil
-		}
-		if !wantFile(path, d.Name(), exts, opt) {
-			return nil
-		}
-		return visit(path)
-	})
+	if namedDirExcluded(root, opt) {
+		return nil
+	}
+	// A root that is a symbolic link to a directory is walked: the link was named, and grep -r
+	// and rg both follow one named on the command line. WalkDir does not follow its root, so it
+	// is handed the link with a trailing separator, which the OS resolves -- and the paths below
+	// keep the link's name, as the real commands print them.
+	start := root
+	if li, lerr := os.Lstat(root); lerr == nil && li.Mode()&os.ModeSymlink != 0 {
+		start = root + string(filepath.Separator)
+	}
+	return walkTree(start, opt, exts, visit)
 }
 
-// echoRoot reports whether a result row should carry the `./` a real grep echoes.
+// walkTree walks one directory. Without FollowLinks a symbolic link met on the way is skipped,
+// which is grep -r's rule (and ripgrep's). With it -- grep -R -- every link is followed, a
+// linked directory walked the same way.
 //
-// grep prints back the operand it walked, so `grep -rn x .` reports `./pkg/f.go` while
-// `grep -rn x pkg` reports `pkg/f.go`. filepath.Join swallows a leading `./` during the walk,
-// so it has to be put back -- and only on the surface that stands in for the real command.
-// `arac grep` and the MCP tool address rows by path and line unconditionally and are not
-// imitating anything, so their spelling is left alone.
-func echoRoot(opt Options) bool {
-	if !opt.Terse {
+// Following links can loop, and grep -R names each loop in a warning and walks on, while a
+// dangling link is an error that sets its exit status to 2. Neither is modelled: both are
+// ErrUnmodelled, and the real command answers.
+func walkTree(start string, opt Options, exts map[string]bool, visit func(path string) error) error {
+	// Every directory entered, by logical path, so a directory can be checked against the ones
+	// above it. Only kept when links are followed; without that there is no way back up.
+	entered := map[string]os.FileInfo{}
+	var walk func(start string) error
+	walk = func(start string) error {
+		return filepath.WalkDir(start, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+			if opt.FollowLinks && d.Type()&os.ModeSymlink != 0 {
+				target, statErr := os.Stat(path)
+				if statErr != nil {
+					return ErrUnmodelled
+				}
+				if target.IsDir() {
+					if shouldSkipDir(path, d.Name(), opt) {
+						return nil
+					}
+					return walk(path + string(filepath.Separator))
+				}
+				if !target.Mode().IsRegular() || !wantFile(path, d.Name(), exts, opt) {
+					return nil
+				}
+				return visit(path)
+			}
+			if d.IsDir() {
+				// The search root is never pruned by its own name: searching inside
+				// ~/.dotfiles must work.
+				if path != start {
+					if shouldSkipDir(path, d.Name(), opt) {
+						return filepath.SkipDir
+					}
+				}
+				if opt.FollowLinks {
+					info, infoErr := d.Info()
+					if infoErr != nil {
+						return filepath.SkipDir
+					}
+					here := filepath.Clean(path)
+					for up := filepath.Dir(here); up != here; here, up = up, filepath.Dir(up) {
+						above, ok := entered[up]
+						if !ok {
+							break
+						}
+						if os.SameFile(above, info) {
+							return ErrUnmodelled
+						}
+					}
+					entered[filepath.Clean(path)] = info
+				}
+				return nil
+			}
+			if d.Type()&os.ModeType != 0 {
+				return nil
+			}
+			if !wantFile(path, d.Name(), exts, opt) {
+				return nil
+			}
+			return visit(path)
+		})
+	}
+	return walk(start)
+}
+
+// rowPath spells a file -- or a pruned directory -- the walk reached from root, the way the
+// result prints it.
+//
+// On the shell surface that is the real command's spelling, and the real command echoes the
+// operand it was given: `grep -rn x ./go` prints `./go/f.go`, `grep x go/../go/f.go b.go` prints
+// the first path exactly as typed, and `grep -r x` with no operand at all prints `f.go` -- the
+// `./` there was never the caller's. Each root keeps its own spelling: one `./go` among the
+// operands used to put a `./` on the rows of every other. grep drops a directory operand's
+// trailing slashes before joining; ripgrep keeps them, and its spelling comes from its own list
+// (see Options.Only). `arac grep` and the MCP tool address rows by path and line and imitate
+// nothing, so they get the cleaned relative path.
+func rowPath(root, path string, opt Options) string {
+	if opt.only != nil {
+		if spelled, ok := opt.only[canonicalPath(path)]; ok {
+			return spelled
+		}
+	}
+	if !opt.Terse || opt.implicitRoot {
+		return displayPath(path, false)
+	}
+	if path == root {
+		return filepath.ToSlash(root)
+	}
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
+	if err != nil {
+		return displayPath(path, false)
+	}
+	return filepath.ToSlash(strings.TrimRight(root, `/`+string(filepath.Separator)) + "/" + rel)
+}
+
+// namedFileWanted reports whether a file named as an operand is searched. aracne's own filters
+// never skip one; the caller's do, the way the real command applies them. ripgrep's list says
+// whether it searches the file. grep holds it to --include and --exclude, matched against the
+// operand and each suffix of it -- `--exclude=*_test.go` skips a named `pkg/a_test.go` too.
+func namedFileWanted(root string, opt Options) bool {
+	if opt.only != nil {
+		_, ok := opt.only[canonicalPath(root)]
+		return ok
+	}
+	if !opt.GrepFilters || len(opt.NameFilters) == 0 {
+		return true
+	}
+	return admitted(opt.NameFilters, func(glob string) bool { return matchesNameSuffix(glob, root) })
+}
+
+// namedDirExcluded is grep's --exclude-dir held against a directory operand, matched as a named
+// file is. A search that named no directory is never excluded: grep does not skip the `.` it
+// walks for a bare `grep -r`.
+func namedDirExcluded(root string, opt Options) bool {
+	if !opt.GrepFilters || opt.implicitRoot {
 		return false
 	}
-	for _, root := range searchRoots(opt) {
-		if root == "." || strings.HasPrefix(root, "./") {
+	for _, ex := range opt.ExcludeDirs {
+		if matchesNameSuffix(ex, root) {
 			return true
 		}
 	}
 	return false
 }
 
-// prunedDirs are the directories no search descends into: version-control metadata,
-// aracne's own store, and the dependency and build trees whose size is the reason nobody
-// greps them on purpose.
+// admitted is GNU grep's rule for a run of --include and --exclude: the last filter whose glob
+// matches decides, and a file none matches is searched unless the first filter was an
+// --include. `--exclude='*_test.go' --include='*.go'` therefore searches a_test.go (the include
+// came last) and README.md (nothing matched, and the first filter excluded).
+func admitted(filters []NameFilter, matches func(glob string) bool) bool {
+	for i := len(filters) - 1; i >= 0; i-- {
+		if matches(filters[i].Glob) {
+			return !filters[i].Exclude
+		}
+	}
+	return filters[0].Exclude
+}
+
+// matchesNameSuffix is how grep matches an operand against a filter: the whole name, or any
+// trailing part of it that starts right after a slash.
+func matchesNameSuffix(glob, name string) bool {
+	name = filepath.ToSlash(name)
+	if globMatch(glob, name) {
+		return true
+	}
+	for i := 0; i < len(name); i++ {
+		if name[i] == '/' && (i+1 == len(name) || name[i+1] != '/') && globMatch(glob, name[i+1:]) {
+			return true
+		}
+	}
+	return false
+}
+
+// globMatch is fnmatch as grep calls it, bar one spelling filepath.Match lacks: `[!...]`
+// negates a bracket the way `[^...]` does.
+func globMatch(glob, name string) bool {
+	ok, err := filepath.Match(strings.ReplaceAll(glob, "[!", "[^"), name)
+	return err == nil && ok
+}
+
+// prunedDirs are the only directories pruned by name: version-control metadata and aracne's
+// own store. Nothing in them is source, no search is ever about them, and ripgrep skips all
+// four as hidden -- so this stays a strict subset of what rg prunes, which is the budget the
+// rest of the walk is held to (see gitignore.go).
 //
 // IT IS A LIST AND NOT A DOT-PREFIX RULE. Skipping every name beginning with "." was one
 // line and cost the search `.github`, which is where an agent looks for CI configuration --
-// `grep -rn runs-on .` came back empty and read as "this project has no CI". Whatever else
-// a given project wants skipped is what scan.ignore is for.
-var prunedDirs = map[string]bool{
-	".git": true, ".hg": true, ".svn": true, ".aracne": true,
-	"node_modules": true, "vendor": true,
-	".venv": true, "venv": true, ".tox": true,
-	".mypy_cache": true, ".pytest_cache": true, ".ruff_cache": true,
-	".gradle": true, ".terraform": true, ".next": true, ".nuxt": true,
-}
-
-// silentlyPruned are the pruned directories no search is ABOUT -- version-control metadata and
-// aracne's own store -- so skipping them is not worth a line of output. The rest hold code
-// someone else wrote, and a search that skipped them says so; see Result.SkippedDirs.
-var silentlyPruned = map[string]bool{".git": true, ".hg": true, ".svn": true, ".aracne": true}
-
-// shouldSkipDir reports whether to prune a directory, and whether the pruning is worth naming.
+// `grep -rn runs-on .` came back empty and read as "this project has no CI".
 //
-// Beyond the always-noise set it applies the caller's own --exclude-dir and the project's
-// scan.ignore rules, which were previously not wired in here at all -- so a search happily
-// descended into build output the scanner itself had been told to skip.
+// The dependency and build trees that used to sit here -- node_modules, vendor, .venv, the
+// cache and output directories -- are gone. They are pruned now exactly when .gitignore
+// excludes them, which is the same answer for a project that ignores them and the right one
+// for a project that does not: a vendored Go repository greps its own vendor/ tree.
+var prunedDirs = map[string]bool{".git": true, ".hg": true, ".svn": true, ".aracne": true}
+
+// shouldSkipDir reports whether to prune a directory.
+//
+// Beyond the always-noise set it applies the caller's own --exclude-dir and the .gitignore
+// hierarchy, and it says nothing about either. A search that prunes what the project itself
+// ignores is doing what every other search in a repository does, and a line of output
+// explaining it on every result is a line the reader did not ask for.
 //
 // UNDER Plain ONLY THE CALLER'S OWN EXCLUSIONS APPLY. A plain search is what an intercepted
 // command renders when a pipeline reads it, and its promise is the rows the real command would
-// have printed; the real `grep -r` descends into node_modules and vendor, so pruning them there
-// silently returned a smaller set -- `grep -rn X . | head` lost every dependency hit with nothing
-// to show it had.
-func shouldSkipDir(path, name string, opt Options) (skip, report bool) {
+// have printed; the real `grep -r` descends into every one of these, so pruning them there
+// returned a smaller set -- `grep -rn X . | head` lost every ignored hit with nothing to show
+// for it.
+func shouldSkipDir(path, name string, opt Options) bool {
 	if name == "." {
-		return false, false
+		return false
+	}
+	// Nothing below it is on the real tool's list: a directory it never enters, quietly.
+	if opt.only != nil && !opt.onlyDirs[canonicalPath(path)] {
+		return true
 	}
 	for _, ex := range opt.ExcludeDirs {
 		if ok, err := filepath.Match(ex, name); err == nil && ok {
-			return true, false // the caller asked for this; they know
+			return true // the caller asked for this; they know
 		}
 	}
 	if opt.Plain {
-		return false, false
+		return false
 	}
 	if prunedDirs[name] {
-		return true, !silentlyPruned[name]
+		return true
 	}
-	if opt.Ignore.MatchDir(path) {
-		return true, true
-	}
-	return false, false
+	return !opt.NoIgnore && opt.git.Match(path, true)
 }
 
 // wantFile applies the glob and type filters, the exclusions and the ignore rules.
 func wantFile(path, name string, exts map[string]bool, opt Options) bool {
-	// scan.ignore is aracne's rule, not the caller's, and a plain search makes no additions
-	// or omissions of its own; see shouldSkipDir.
-	if !opt.Plain && opt.Ignore.Match(path) {
+	if opt.only != nil {
+		if _, listed := opt.only[canonicalPath(path)]; !listed {
+			return false
+		}
+	}
+	// The ignore hierarchy is the project's rule, not the caller's, and a plain search makes
+	// no additions or omissions of its own; see shouldSkipDir.
+	if !opt.Plain && !opt.NoIgnore && opt.git.Match(path, false) {
 		return false
+	}
+	// grep matches --include and --exclude against the base name, in order; see GrepFilters.
+	if opt.GrepFilters && len(opt.NameFilters) > 0 {
+		return admitted(opt.NameFilters, func(glob string) bool { return globMatch(glob, name) }) &&
+			(len(exts) == 0 || exts[strings.ToLower(filepath.Ext(name))])
 	}
 	for _, ex := range opt.ExcludeGlobs {
 		if matchGlob(ex, path, name) {
@@ -1120,15 +1402,15 @@ func typeExtensions(t string) (map[string]bool, error) {
 		"go":         {".go"},
 		"py":         {".py", ".pyi"},
 		"python":     {".py", ".pyi"},
-		"js":         {".js", ".jsx", ".mjs", ".cjs"},
-		"javascript": {".js", ".jsx", ".mjs", ".cjs"},
+		"js":         {".js", ".jsx", ".mjs", ".cjs", ".vue"},
+		"javascript": {".js", ".jsx", ".mjs", ".cjs", ".vue"},
 		"ts":         {".ts", ".tsx", ".mts", ".cts"},
 		"typescript": {".ts", ".tsx", ".mts", ".cts"},
 		"rust":       {".rs"},
 		"rs":         {".rs"},
 		"java":       {".java"},
 		"c":          {".c", ".h"},
-		"cpp":        {".cc", ".cpp", ".cxx", ".hpp", ".hh"},
+		"cpp":        {".cc", ".cpp", ".cxx", ".hpp", ".hh", ".h", ".hxx", ".inl"},
 		"md":         {".md", ".markdown"},
 		"json":       {".json"},
 		"yaml":       {".yaml", ".yml"},
@@ -1162,6 +1444,8 @@ type fileResult struct {
 	// never rendered, which is what grep does and for the same reason.
 	binary bool
 	count  int
+	// opened is a file the search could read, and so one grep -c prints a count for.
+	opened bool
 }
 
 // binarySniffBytes is how much of a file is inspected for NUL before deciding it is not
@@ -1183,25 +1467,60 @@ func looksBinary(f *os.File) bool {
 	return false
 }
 
+// farSniffBytes is how far past binarySniffBytes a strict search looks for a NUL. It covers the
+// first buffer grep and ripgrep read before deciding a file is binary; see searchFile.
+const farSniffBytes = 256 * 1024
+
+// holdsNUL reports whether the file's first n bytes hold a NUL, restoring the file offset.
+func holdsNUL(f *os.File, n int) bool {
+	defer f.Seek(0, 0)
+	buf, _ := io.ReadAll(io.LimitReader(f, int64(n)))
+	return bytes.IndexByte(buf, 0) >= 0
+}
+
 // searchFile scans one file.
 //
 // On a scanner error it returns the matches found SO FAR rather than discarding them. The
 // previous `return nil, nil` meant one over-long line (a minified bundle, a generated
 // table) silently erased every hit in that file -- a search that looked successful and
 // simply lied.
-func searchFile(path string, re *regexp.Regexp, index map[string][]resourceLocation, tiers map[string]MatchSource, opt Options) (fileResult, error) {
-	out := fileResult{display: displayPath(path, echoRoot(opt))}
+//
+// A STRICT search -- Plain, or one whose files ripgrep chose (Options.Only) -- promises what the
+// real tool would print, and some files' output depends on rules this package does not
+// reproduce. It returns ErrUnmodelled for a file that matches and holds such bytes, and the real
+// command answers instead:
+//
+//   - a NUL past the first binarySniffBytes: grep decides "binary" from a first buffer of its own
+//     size, and on meeting a NUL later stops printing mid-file; ripgrep does the same with its
+//     own buffer and a warning. Where the rows stop is their buffer arithmetic.
+//   - under Plain, a line that is not valid UTF-8: grep in a UTF-8 locale suppresses every such
+//     row it would print (and `.` never matches its bad bytes), where Go reads them as U+FFFD.
+//   - a binary file ripgrep was named: it describes one with a message grep does not print. One
+//     it met in a walk it skips outright -- its first buffer holds the NUL, so it reports
+//     nothing, not even the matches above it -- and so does this search.
+func searchFile(path, display string, named bool, re *regexp.Regexp, index map[string][]resourceLocation, tiers map[string]MatchSource, opt Options) (fileResult, error) {
+	out := fileResult{display: display}
 	f, err := os.Open(path)
 	if err != nil {
 		return out, nil
 	}
 	defer f.Close()
+	out.opened = true
+	strict := opt.Plain || opt.only != nil
 
 	if looksBinary(f) {
+		if opt.only != nil && !named {
+			return out, nil
+		}
 		out.binary = true
 		out.count = countBinaryMatches(f, re, opt)
+		if opt.only != nil && out.count > 0 {
+			return out, ErrUnmodelled
+		}
 		return out, nil
 	}
+	lateNUL := strict && holdsNUL(f, farSniffBytes)
+	badEncoding := false
 
 	canonical := canonicalPath(path)
 	resources := index[canonical]
@@ -1217,8 +1536,11 @@ func searchFile(path string, re *regexp.Regexp, index map[string][]resourceLocat
 	// silently dropped, and the description tier -- the half a plain grep cannot reach -- is
 	// exactly what went missing, with nothing in the trailer to say so.
 	pendingDeclarations := 0
-	for _, idxs := range wanted {
-		pendingDeclarations += len(idxs)
+	for line, idxs := range wanted {
+		// A declaration outside the span is never captured, so it is never owed either.
+		if inSpan(opt, line) {
+			pendingDeclarations += len(idxs)
+		}
 	}
 	capped := false
 	lineHit := map[string]bool{} // resource id -> the body contained a match
@@ -1231,14 +1553,37 @@ func searchFile(path string, re *regexp.Regexp, index map[string][]resourceLocat
 
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxLineBytes)
+	if opt.Plain {
+		scanner.Split(scanRawLines)
+	}
 	lineNo := 0
 	for scanner.Scan() {
 		lineNo++
+		// The span ends the scan outright: nothing past it is a match, context or a declaration
+		// this search reports. Lines before it are skipped before anything reads them, so the
+		// before-window of the span's first match cannot reach above the resource either.
+		if opt.ToLine > 0 && lineNo > opt.ToLine {
+			break
+		}
+		if lineNo < opt.FromLine {
+			continue
+		}
 		// A trailing CR is a line terminator artifact, not content: it is dropped from what
 		// is matched AND from what is reported, so a CRLF checkout does not lose every `$`
 		// anchored pattern. Leading whitespace is the opposite -- it IS content, it is what
 		// a Python block is made of, and it is what an edit has to reproduce, so it stays.
-		line := strings.TrimRight(scanner.Text(), "\r")
+		//
+		// Not under Plain. A pipeline reads the real command's bytes, and grep and rg both keep
+		// the CR: `retry$` does not match a CRLF line, and the row they print ends in one. See
+		// scanRawLines.
+		line := scanner.Text()
+		if !opt.Plain {
+			line = strings.TrimRight(line, "\r")
+		}
+		if strict {
+			lateNUL = lateNUL || strings.IndexByte(line, 0) >= 0
+			badEncoding = badEncoding || (opt.Plain && !utf8.ValidString(line))
+		}
 
 		if pendingAfter > 0 {
 			context[lineNo] = line
@@ -1258,7 +1603,14 @@ func searchFile(path string, re *regexp.Regexp, index map[string][]resourceLocat
 			continue
 		}
 
-		if re.MatchString(line) {
+		// Once -m has its N matches, a line inside the after-window the last one opened is
+		// CONTEXT, whatever it holds: `grep -m1 -A3` over two adjacent matches prints the second
+		// as `32-`, not `32:`. Reading it as a match counted past N and re-opened the window, so
+		// the answer ran on past where grep stops. The window stored the line just above.
+		if wordTestUnsure(line, opt) {
+			return out, ErrUnmodelled
+		}
+		if (opt.PerFileLimit == 0 || hits < opt.PerFileLimit) && re.MatchString(line) {
 			matched[lineNo] = true
 			m := Match{Path: out.display, Line: lineNo, Text: line, MatchedOn: MatchContent}
 			if resource := bestResource(resources, lineNo); resource != nil {
@@ -1302,6 +1654,9 @@ func searchFile(path string, re *regexp.Regexp, index map[string][]resourceLocat
 	// Deliberately swallow the scanner error: whatever was found before the failure is
 	// real, and returning it beats erasing a whole file's hits because one line was long.
 	_ = scanner.Err()
+	if hits > 0 && (lateNUL || badEncoding) {
+		return out, ErrUnmodelled
+	}
 
 	// A line that matched is rendered as a match, never also as its neighbour's context.
 	for line := range matched {
@@ -1331,13 +1686,137 @@ func searchFile(path string, re *regexp.Regexp, index map[string][]resourceLocat
 	return out, nil
 }
 
+// loosenWordTests rewrites an RE2 pattern so it matches wherever the pattern could match under
+// EITHER reading of a word character -- Go's ASCII one or the Unicode one grep and rg use -- and
+// reports whether it had a word test at all. `\b` and `\B` are dropped, and `\w` and `\W` also
+// accept any non-ASCII character. A `\w` inside a bracket, where widening a negated class would
+// narrow it, loosens to the empty pattern, which matches everywhere. Where the loosened pattern
+// matches near a non-ASCII byte, the real tool's answer for that line is not one this package can
+// vouch for; see Options.UnicodeWords.
+func loosenWordTests(pattern string) (string, bool) {
+	var b strings.Builder
+	found, inClass, anywhere := false, false, false
+	for i := 0; i < len(pattern); i++ {
+		c := pattern[i]
+		switch {
+		case c == '\\' && i+1 < len(pattern):
+			i++
+			switch d := pattern[i]; d {
+			case 'b', 'B':
+				found = true
+			case 'w', 'W':
+				found, anywhere = true, anywhere || inClass
+				b.WriteString(`(?:\` + string(d) + `|[^\x00-\x7F])`)
+			default:
+				b.WriteByte('\\')
+				b.WriteByte(d)
+			}
+		case c == '[' && !inClass:
+			inClass = true
+			b.WriteByte(c)
+			// A `]` first in a class (after any `^`) is a literal, not its end.
+			if i+1 < len(pattern) && pattern[i+1] == '^' {
+				i++
+				b.WriteByte('^')
+			}
+			if i+1 < len(pattern) && pattern[i+1] == ']' {
+				i++
+				b.WriteByte(']')
+			}
+		case c == '[' && inClass && i+1 < len(pattern) && pattern[i+1] == ':':
+			// A POSIX class, `[:alpha:]`, copied whole so its `]` does not end the class.
+			end := strings.Index(pattern[i+2:], ":]")
+			if end < 0 {
+				b.WriteByte(c)
+				continue
+			}
+			b.WriteString(pattern[i : i+2+end+2])
+			i += 2 + end + 1
+		case c == ']' && inClass:
+			inClass = false
+			b.WriteByte(c)
+		default:
+			b.WriteByte(c)
+		}
+	}
+	if anywhere {
+		return "", true
+	}
+	return b.String(), found
+}
+
+// wordTestUnsure reports whether the pattern's word test could decide this line differently for
+// the real tool: the loosened pattern matches it with a non-ASCII byte inside the match or next
+// to either end of it.
+func wordTestUnsure(line string, opt Options) bool {
+	if !opt.words {
+		return false
+	}
+	ascii := true
+	for i := 0; i < len(line); i++ {
+		if line[i] >= utf8.RuneSelf {
+			ascii = false
+			break
+		}
+	}
+	if ascii {
+		return false
+	}
+	if opt.wordTest == nil {
+		return true
+	}
+	for _, loc := range opt.wordTest.FindAllStringIndex(line, -1) {
+		for i := max(0, loc[0]-1); i < min(len(line), loc[1]+1); i++ {
+			if line[i] >= utf8.RuneSelf {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// scanRawLines splits at '\n' and nothing else. bufio.ScanLines also drops a CR before the
+// newline, which is the CRLF line Plain has to keep.
+func scanRawLines(data []byte, atEOF bool) (int, []byte, error) {
+	if i := bytes.IndexByte(data, '\n'); i >= 0 {
+		return i + 1, data[:i], nil
+	}
+	if atEOF && len(data) > 0 {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
+}
+
+// scanBinaryLines splits at a newline or a NUL, the line ends grep reads in a binary file.
+func scanBinaryLines(data []byte, atEOF bool) (int, []byte, error) {
+	if i := bytes.IndexAny(data, "\n\x00"); i >= 0 {
+		return i + 1, data[:i], nil
+	}
+	if atEOF && len(data) > 0 {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
+}
+
 // countBinaryMatches counts a binary file's matching lines without keeping any of them.
 // The count is real -- `grep -c` reports it -- and the bytes never leave this function.
+//
+// A "line" is what grep counts in a binary file: once it has seen a NUL it reads every NUL as a
+// line end too, so `-c` over one counts the matching runs between newlines AND NULs.
 func countBinaryMatches(f *os.File, re *regexp.Regexp, opt Options) int {
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxLineBytes)
-	n := 0
+	scanner.Split(scanBinaryLines)
+	n, lineNo := 0, 0
 	for scanner.Scan() {
+		lineNo++
+		// The span bounds a count as it bounds the rows; see Options.FromLine.
+		if opt.ToLine > 0 && lineNo > opt.ToLine {
+			break
+		}
+		if lineNo < opt.FromLine {
+			continue
+		}
 		if re.Match(scanner.Bytes()) {
 			n++
 			if opt.PerFileLimit > 0 && n >= opt.PerFileLimit {
@@ -1347,6 +1826,12 @@ func countBinaryMatches(f *os.File, re *regexp.Regexp, opt Options) int {
 	}
 	_ = scanner.Err()
 	return n
+}
+
+// inSpan reports whether a line lies inside Options.FromLine..ToLine, either side of which
+// may be unbounded.
+func inSpan(opt Options, line int) bool {
+	return line >= opt.FromLine && (opt.ToLine <= 0 || line <= opt.ToLine)
 }
 
 // declarationLines maps a line number to the resources whose declaration starts there,

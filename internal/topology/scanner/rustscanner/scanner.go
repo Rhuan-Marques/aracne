@@ -227,6 +227,9 @@ func applyParsedFile(gt *rust.RustTopology, pr *ParseResult) {
 		gt.Variables[v.ID] = v
 		mod.Connections[rust.ConnHasVar] = append(mod.Connections[rust.ConnHasVar], v.ID)
 	}
+	if recs := useBindingRecords(pr.Uses, pr.ModulePath); len(recs) > 0 {
+		mod.Connections[connUseBindings] = recs
+	}
 	gt.Modules[pr.FileID] = mod
 }
 
@@ -235,8 +238,11 @@ func applyParsedFile(gt *rust.RustTopology, pr *ParseResult) {
 // use resolution, type-ID resolution, and body analysis run for the supplied
 // parse results (all files on a full scan, the changed file on an update).
 func resolveTopology(gt *rust.RustTopology, results []*ParseResult, ctx *crateCtx) {
+	// Every file of the pass is applied, so the struct/trait tables and each module's
+	// `use` bindings are final: the index name resolution consults is built once, here.
+	ix := newRustIndex(gt)
 	for _, pr := range results {
-		attachImpls(gt, pr)
+		attachImpls(gt, pr, ix)
 	}
 	for _, pr := range results {
 		imap, modFiles, deps := scannerSingleton.resolveUses(pr, ctx, gt)
@@ -258,14 +264,14 @@ func resolveTopology(gt *rust.RustTopology, results []*ParseResult, ctx *crateCt
 	}
 
 	populateStructMethods(gt)
-	rebuildImplements(gt)
-	matchSupertraits(gt)
+	rebuildImplements(gt, ix)
+	matchSupertraits(gt, ix)
 
-	resolveFunctionTypingIDs(gt, results)
+	resolveFunctionTypingIDs(gt, results, ix)
 	detectConstructors(gt)
 
 	for _, pr := range results {
-		analyzeBodies(gt, pr, ctx)
+		analyzeBodies(gt, pr, ctx, ix)
 	}
 
 	collectDependencies(gt)
@@ -317,21 +323,50 @@ func snapshotModule(gt *rust.RustTopology, mod rust.RustModule) (
 	return funcs, structs, traits, named, vars
 }
 
-// removeModule deletes a module and all symbols it owns from the topology.
+// removeModule deletes a module and the symbols it owns from the topology, EXCEPT any
+// symbol that is no longer located in this module's file.
+//
+// An impl method's ID is `<typeID>::<name>`, which names the type it hangs off, not the
+// file the `impl` block was written in -- so while an impl is being moved from one file
+// to another, both files own the same ID, and the graph holds the one copy the newer file
+// parsed. Deleting every ID the departing file used to list would take that live copy
+// with it: nothing re-parses the file the impl moved to, so the method, its callers'
+// `calls` edges and the trait obligation it satisfies would all disappear (and a bogus
+// interface_conflict appear) until the next `--hard` scan. Location is the tie-break
+// because it is rewritten by whichever file last declared the symbol; an empty one
+// predates the check, so it is removed as before.
 func removeModule(gt *rust.RustTopology, mod rust.RustModule) {
+	elsewhere := func(loc domain.Location) bool {
+		return loc.Path != "" && loc.Path != mod.ID
+	}
 	for _, id := range mod.Functions() {
+		if f, ok := gt.Functions[id]; ok && elsewhere(f.Loc) {
+			continue
+		}
 		delete(gt.Functions, id)
 	}
 	for _, id := range mod.Structs() {
+		if st, ok := gt.Structs[id]; ok && elsewhere(st.Loc) {
+			continue
+		}
 		delete(gt.Structs, id)
 	}
 	for _, id := range mod.Traits() {
+		if t, ok := gt.Traits[id]; ok && elsewhere(t.Loc) {
+			continue
+		}
 		delete(gt.Traits, id)
 	}
 	for _, id := range mod.NamedTypes() {
+		if n, ok := gt.NamedTypes[id]; ok && elsewhere(n.Loc) {
+			continue
+		}
 		delete(gt.NamedTypes, id)
 	}
 	for _, id := range mod.Variables() {
+		if v, ok := gt.Variables[id]; ok && elsewhere(v.Location) {
+			continue
+		}
 		delete(gt.Variables, id)
 	}
 	delete(gt.Modules, mod.ID)
@@ -435,14 +470,22 @@ func diffFuncWarnings(oldFuncs map[string]rust.RustFunction, pr *ParseResult, st
 	return warnings
 }
 
-// signaturesEqual compares two Rust functions by parameter names and
-// async/unsafe/const flags.
+// signaturesEqual compares two Rust functions by parameter names and types, return
+// types, and async/unsafe/const flags. Types are the point: Rust has no defaults
+// and no overloads, so `a: i32` becoming `a: String` is a changed contract even
+// though the count and the names held. The contract matcher then retires the
+// warning for every call that still fits.
 func signaturesEqual(a, b rust.RustFunction) bool {
-	if len(a.Input) != len(b.Input) {
+	if len(a.Input) != len(b.Input) || len(a.Output) != len(b.Output) {
 		return false
 	}
 	for i := range a.Input {
-		if a.Input[i].Name != b.Input[i].Name {
+		if a.Input[i].Name != b.Input[i].Name || a.Input[i].Typing != b.Input[i].Typing {
+			return false
+		}
+	}
+	for i := range a.Output {
+		if a.Output[i].Typing != b.Output[i].Typing {
 			return false
 		}
 	}

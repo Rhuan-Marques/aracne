@@ -65,7 +65,7 @@ func TestLazyFillDoesNotFallBack(t *testing.T) {
 	t.Setenv("DEEPSEEK_API_KEY", "k")
 
 	cfg := helper.ResolvedLazyDescriptions{Provider: "anthropic"}
-	if _, _, ok := resolveProvider(cfg); ok {
+	if _, _, ok := resolveProvider(cfg, false); ok {
 		t.Fatal("a lazy fill must not silently switch to a provider the project did not name")
 	}
 }

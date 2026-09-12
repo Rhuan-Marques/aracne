@@ -76,6 +76,7 @@ func FunctionUnit(ctx *rust.RustFunctionContext, st *renderstate.State) readunit
 		body.WriteString(ctx.Function.Cut)
 	}
 	u.Body = body.String()
+	u.Incoming = ctx.Incoming
 
 	u.Context = func(b *strings.Builder, st *renderstate.State) {
 		if ctx.ParentStruct != nil {
@@ -84,92 +85,96 @@ func FunctionUnit(ctx *rust.RustFunctionContext, st *renderstate.State) readunit
 		if p := ctx.OversizedParent; p != nil && st.Renderable(string(p.ID)) {
 			fmt.Fprintf(b, "## %s (enclosing type): %s\n", p.ID, desc(p.Description))
 		}
+		// The manager already applied read.context_filter: hidden neighbours are gone, and each
+		// remaining one carries Normal or Full. Full entries render first, as source cuts.
 		g := st.Guard(b)
-		for _, su := range ctx.StructsUsed {
-			if !st.Renderable(string(su.ID)) || !g.More() {
-				continue
-			}
-			fmt.Fprintf(b, "## %s: %s\n", su.ID, desc(su.Description))
-			for _, m := range su.Methods {
-				if st.Renderable(string(m.ID)) {
-					fmt.Fprintf(b, "\t%s: %s\n", m.ID, desc(m.Description))
+		for _, full := range []bool{true, false} {
+			for _, su := range ctx.StructsUsed {
+				if wantVis(su.Visibility, full) && st.Renderable(string(su.ID)) && g.More() {
+					renderStructUsage(b, st, su)
 				}
 			}
-		}
-		for _, tu := range ctx.TraitsUsed {
-			if g.More() {
-				line(b, st, string(tu.ID), " (trait)", tu.Description)
+			for _, tu := range ctx.TraitsUsed {
+				if wantVis(tu.Visibility, full) && st.Renderable(string(tu.ID)) && g.More() {
+					fmt.Fprintf(b, "## %s (trait): %s\n", tu.ID, desc(tu.Description))
+				}
 			}
-		}
-		for _, nt := range ctx.NamedTypesUsed {
-			if g.More() {
-				line(b, st, string(nt.ID), " (type)", nt.Description)
+			for _, nt := range ctx.NamedTypesUsed {
+				if wantVis(nt.Visibility, full) && st.Renderable(string(nt.ID)) && g.More() {
+					fmt.Fprintf(b, "## %s (type): %s\n", nt.ID, desc(nt.Description))
+				}
 			}
-		}
-		for _, cf := range ctx.CalledFunctions {
-			if g.More() {
-				line(b, st, string(cf.ID), "", cf.Description)
+			for _, cf := range ctx.CalledFunctions {
+				if wantVis(cf.Visibility, full) && st.Renderable(string(cf.ID)) && g.More() {
+					renderFunc(b, st, "## ", cf)
+				}
 			}
-		}
-		for _, v := range ctx.VarsUsed {
-			if !st.Renderable(string(v.ID)) || !g.More() {
-				continue
+			for _, v := range ctx.VarsUsed {
+				if wantVis(v.Visibility, full) && st.Renderable(string(v.ID)) && g.More() {
+					renderVar(b, st, v)
+				}
 			}
-			valStr := ""
-			if v.Value != "" {
-				valStr = fmt.Sprintf(" = %s", v.Value)
-			}
-			fmt.Fprintf(b, "## %s%s: %s\n", v.ID, valStr, desc(v.Description))
 		}
 	}
 	return u
 }
 
-// StructUnit decomposes a Rust struct/enum/union read.
-func StructUnit(ctx *rust.RustStructContext) readunit.Unit {
+// StructUnit decomposes a Rust struct/enum/union read. st is the batch's render state, shared
+// with the member units (nil for a single-unit caller).
+func StructUnit(ctx *rust.RustStructContext, st *renderstate.State) readunit.Unit {
 	u := readunit.Unit{
 		ID:          string(ctx.Struct.ID),
 		Kind:        domain.ResourceStruct,
 		Path:        ctx.Struct.Loc.Path,
 		Line:        ctx.Struct.Loc.StartsAt,
 		Fence:       "rust",
-		Body:        ctx.Struct.Cut,
 		Deps:        importTokens(ctx.Dependencies),
 		ImportBlock: rustImportBlock,
 	}
+	// Registered with the batch's ledger at BUILD time, so a method of this type later in the
+	// batch elides the declaration rather than inlining it a second time; a method earlier in
+	// the batch that already inlined it leaves nothing of it to print here.
+	if !st.ParentSeen(ctx.Struct.Cut) {
+		u.Body = ctx.Struct.Cut
+	}
+	u.Incoming = ctx.Incoming
 	u.Context = func(b *strings.Builder, st *renderstate.State) {
 		st.MarkRendered(ctx.Struct.Cut)
 		g := st.Guard(b)
+		// The relationship lines -- variants, constructor, implemented traits -- carry structure
+		// and render whatever read.context_filter says, as a Python base class or a Go struct's
+		// interfaces do. The constructor goes first so that, listed again among the methods, it
+		// keeps its "(constructor)" label rather than a Full cut.
 		if ctx.IsEnum && len(ctx.Variants) > 0 {
 			fmt.Fprintf(b, "## variants: %s\n", strings.Join(ctx.Variants, ", "))
 		}
 		if ctx.Constructor != nil {
 			line(b, st, string(ctx.Constructor.ID), " (constructor)", ctx.Constructor.Description)
 		}
-		for _, t := range ctx.Implements {
-			if g.More() {
-				line(b, st, string(t.ID), " (implements)", t.Description)
-			}
-		}
-		for _, m := range ctx.Methods {
-			if g.More() {
-				line(b, st, string(m.ID), "", m.Description)
-			}
-		}
-		for _, su := range ctx.StructsUsed {
-			if !st.Renderable(string(su.ID)) || !g.More() {
-				continue
-			}
-			fmt.Fprintf(b, "## %s: %s\n", su.ID, desc(su.Description))
-			for _, mm := range su.Methods {
-				if st.Renderable(string(mm.ID)) {
-					fmt.Fprintf(b, "\t%s: %s\n", mm.ID, desc(mm.Description))
+		// Methods and used types went through the filter in the manager: Full ones render
+		// first, as source cuts; hidden ones are already gone.
+		for _, full := range []bool{true, false} {
+			if !full {
+				for _, t := range ctx.Implements {
+					if g.More() {
+						line(b, st, string(t.ID), " (implements)", t.Description)
+					}
 				}
 			}
-		}
-		for _, nt := range ctx.NamedTypesUsed {
-			if g.More() {
-				line(b, st, string(nt.ID), " (type)", nt.Description)
+			for _, m := range ctx.Methods {
+				if wantVis(m.Visibility, full) && st.Renderable(string(m.ID)) && g.More() {
+					renderFunc(b, st, "## ", m)
+				}
+			}
+			for _, su := range ctx.StructsUsed {
+				if wantVis(su.Visibility, full) && st.Renderable(string(su.ID)) && g.More() {
+					renderStructUsage(b, st, su)
+				}
+			}
+			for _, nt := range ctx.NamedTypesUsed {
+				if wantVis(nt.Visibility, full) && st.Renderable(string(nt.ID)) && g.More() {
+					fmt.Fprintf(b, "## %s (type): %s\n", nt.ID, desc(nt.Description))
+				}
 			}
 		}
 	}
@@ -186,6 +191,7 @@ func InterfaceUnit(ctx *rust.RustInterfaceContext) readunit.Unit {
 		Fence: "rust",
 		Body:  ctx.Trait.Cut,
 	}
+	u.Incoming = ctx.Incoming
 	u.Context = func(b *strings.Builder, st *renderstate.State) {
 		st.MarkRendered(ctx.Trait.Cut)
 		g := st.Guard(b)

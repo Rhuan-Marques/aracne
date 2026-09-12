@@ -235,10 +235,10 @@ func TestSetupBackToTerminalRemovesTheServer(t *testing.T) {
 	}
 	mustRun(t, dir, "setup", "-y", "--claude")
 
-	raw := readFile(t, dir, ".mcp.json")
-	if strings.Contains(raw, "aracne") {
-		t.Fatalf("the aracne server survived the switch away from mcp: %s", raw)
-	}
+	// Setup created the file and the switch left nothing in it, so it goes rather than
+	// staying behind as `{}` (SU-9). One holding the operator's own servers would only lose
+	// aracne's entry.
+	assertNotExists(t, dir, ".mcp.json")
 	body := readFile(t, dir, "CLAUDE.md")
 	if strings.Contains(body, "arrive as MCP tools") {
 		t.Errorf("CLAUDE.md is still the mcp contract:\n%s", body)
@@ -373,18 +373,19 @@ func TestInitOpenCodeConfig_Structure(t *testing.T) {
 		t.Fatal("opencode.json missing 'permission' section")
 	}
 	// WARN-ONLY is the shipped default: the guard names the matching aracne tool but
-	// denies nothing, so native read/edit stay allowed and bash needs no glob map. Denying
-	// them cost a wasted turn per denial and pushed the agent off a more capable native
-	// grep; the `arac update-file` PostToolUse hook keeps the topology in sync after a
-	// native edit either way. Projects opt into denial via blocked_tools.
-	if cfg.Permission["read"] != "allow" {
-		t.Fatalf("permission.read = %q, want allow (warn-only default)", cfg.Permission["read"])
-	}
-	if cfg.Permission["edit"] != "allow" {
-		t.Fatalf("permission.edit = %q, want allow (warn-only default)", cfg.Permission["edit"])
-	}
-	if cfg.Permission["bash"] != "allow" {
-		t.Fatalf("permission.bash = %v, want a scalar allow (nothing is denied)", cfg.Permission["bash"])
+	// denies nothing, so native read/edit/bash are not gated. Denying them cost a wasted
+	// turn per denial and pushed the agent off a more capable native grep; the
+	// `arac update-file` PostToolUse hook keeps the topology in sync after a native edit
+	// either way. Projects opt into denial via blocked_tools.
+	//
+	// Not gated means NOT WRITTEN. These keys are the operator's: setup used to write an
+	// explicit "allow" into each, which in a project that had its own values replaced them,
+	// and in one that had none overrode OpenCode's own default for `read` (which asks before
+	// opening `*.env`). OpenCode's default for all three is already "allow".
+	for _, key := range []string{"read", "edit", "bash"} {
+		if value, present := cfg.Permission[key]; present {
+			t.Fatalf("permission.%s = %v, want it left unwritten (nothing is denied)", key, value)
+		}
 	}
 	// The aracne_* wildcard deny stays: it withholds MCP tools the profile does not grant,
 	// which is unrelated to native-tool blocking.

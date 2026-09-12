@@ -60,6 +60,9 @@ func FromGeneric(topo *domain.Topology) *JavaScriptTopology {
 			if dec, ok := res.Properties["decorators"]; ok {
 				jsonConvert(dec, &f.Decorators)
 			}
+			if ov, ok := res.Properties["overloads"]; ok {
+				jsonConvert(ov, &f.Overloads)
+			}
 			if acc, ok := res.Properties["accessibility"]; ok && acc != nil {
 				f.Accessibility, _ = acc.(string)
 			}
@@ -114,6 +117,9 @@ func FromGeneric(topo *domain.Topology) *JavaScriptTopology {
 			if props, ok := res.Properties["properties"]; ok {
 				jsonConvert(props, &c.MergedInterfaceProperties)
 			}
+			if hi, ok := res.Properties["heritage_imports"]; ok && hi != nil {
+				jsonConvert(hi, &c.HeritageImports)
+			}
 			gt.Classes[c.ID] = c
 
 		case domain.ResourceInterface:
@@ -132,6 +138,9 @@ func FromGeneric(topo *domain.Topology) *JavaScriptTopology {
 			}
 			if bases, ok := res.Properties["bases"]; ok {
 				jsonConvert(bases, &iface.Bases)
+			}
+			if hi, ok := res.Properties["heritage_imports"]; ok && hi != nil {
+				jsonConvert(hi, &iface.HeritageImports)
 			}
 			gt.Interfaces[iface.ID] = iface
 
@@ -190,6 +199,9 @@ func FromGeneric(topo *domain.Topology) *JavaScriptTopology {
 			if rn, ok := res.Properties["re_exports_named"]; ok && rn != nil {
 				jsonConvert(rn, &mod.ReExportsNamed)
 			}
+			if mp, ok := res.Properties["module_path"]; ok && mp != nil {
+				mod.ModulePath, _ = mp.(string)
+			}
 			gt.Modules[mod.ID] = mod
 
 		case domain.ResourceDependency:
@@ -228,6 +240,11 @@ func ToGeneric(gt *JavaScriptTopology, language string) *domain.Topology {
 			"accessibility": fn.Accessibility,
 			"exported":      fn.Exported,
 		}
+		if len(fn.Overloads) > 0 {
+			// Only an overload set carries these; an absent key keeps every other
+			// function's property bag (and its stored row) exactly as it was.
+			props["overloads"] = fn.Overloads
+		}
 		kind := domain.ResourceFunction
 		if fn.MethodFrom != nil {
 			kind = domain.ResourceMethod
@@ -263,6 +280,9 @@ func ToGeneric(gt *JavaScriptTopology, language string) *domain.Topology {
 		if len(c.MergedInterfaceProperties) > 0 {
 			props["properties"] = c.MergedInterfaceProperties
 		}
+		if len(c.HeritageImports) > 0 {
+			props["heritage_imports"] = c.HeritageImports
+		}
 		topo.Resources[string(id)] = domain.Resource{
 			ID:          string(id),
 			Kind:        domain.ResourceStruct,
@@ -279,6 +299,10 @@ func ToGeneric(gt *JavaScriptTopology, language string) *domain.Topology {
 			"methods":    iface.Methods,
 			"properties": iface.Properties,
 			"bases":      iface.Bases,
+			"generics":   iface.Generics,
+		}
+		if len(iface.HeritageImports) > 0 {
+			props["heritage_imports"] = iface.HeritageImports
 		}
 		topo.Resources[string(id)] = domain.Resource{
 			ID:          string(id),
@@ -334,6 +358,9 @@ func ToGeneric(gt *JavaScriptTopology, language string) *domain.Topology {
 		}
 		if len(m.ReExportsNamed) > 0 {
 			props["re_exports_named"] = m.ReExportsNamed
+		}
+		if m.ModulePath != "" {
+			props["module_path"] = m.ModulePath
 		}
 		topo.Resources[string(id)] = domain.Resource{
 			ID:          string(id),

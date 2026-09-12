@@ -135,6 +135,12 @@ button:hover {
   display: none !important;
 }
 
+/* Rules like `.navItem { display: inline-flex }` outrank the browser's own [hidden] rule, so
+   without this an element with the hidden attribute stayed on screen. */
+[hidden] {
+  display: none !important;
+}
+
 .modeHelp,
 .fieldHint {
   color: var(--muted);
@@ -1465,6 +1471,14 @@ body.graph-inspector-hidden .right {
   display: block;
   margin-top: 3px;
   color: var(--muted);
+}
+
+.settingsError {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--danger);
+  border-radius: 10px;
+  color: var(--danger);
 }
 
 .simplePage {

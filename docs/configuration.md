@@ -8,7 +8,7 @@ Every tool name in this file is validated against the
 [`toolspec`](architecture.md#6-the-tool-catalog-internaltoolspec) catalog at load/init time,
 so a typo fails fast instead of silently disabling a tool.
 
-## The two top-level dials
+## The top-level dials
 
 ### `mode`
 
@@ -39,16 +39,46 @@ scan — gets the language-free form, and the next `arac setup` after a scan fil
 (`arac init` scans before it writes, so a wizard-generated contract already names the
 languages.)
 
+### `preload_mcp_tools`
+
+`true`, `false`, or absent. Claude Code only, and `mode: "mcp"` only.
+
+Claude Code defers tool schemas past a size threshold: a deferred tool reaches the model as a
+bare name with no parameters and no description, and calling it costs a schema lookup first.
+That tax lands on exactly the tools this mode exists to serve, and it is paid against a `grep`
+sitting right there fully described — so the tool that is cheaper to *reach for* wins over the
+one that is cheaper to *use*. Setting this to `true` makes `arac setup` write
+
+```json
+{ "env": { "ENABLE_TOOL_SEARCH": "false" } }
+```
+
+into `.claude/settings.json`, so every tool arrives with its schema. `arac init` asks for it as
+question seven, on the one combination where it means anything.
+
+The switch belongs to Claude Code and is not per-server: it loads *every* tool in the session up
+front, including any from other MCP servers. On a session with several of them that is real
+context spent on every request, which is why it is asked rather than assumed.
+
+**Three states, and absent is not `false`.** Absent means aracne does not manage the variable,
+so a project that predates this key — or one whose operator set `ENABLE_TOOL_SEARCH` themselves
+— is left exactly as it is. `false` means aracne manages it and withdraws it. Only the literal
+value aracne writes (`"false"`) is ever removed again: an `"auto:40"` you set yourself survives
+`arac setup` and `arac disable` alike.
+
+Setup applies this in every mode, not only `mcp` — that is what withdraws the variable when a
+project moves off `mcp`, without needing the question re-answered. Moving back restores it.
+
 ## Sections
 
 ### `scan` & `scanner`
 
 | key | default | meaning |
 |---|---|---|
-| `scan.ignore` | `[]` | `.gitignore`-style globs skipped on every walk — discovery, manifest, parsing, and language detection. No `!` negation; use `paths` to re-include a subtree. |
+| `scan.ignore` | `[]` | `.gitignore`-style globs skipped on every **scanner** walk — discovery, manifest, parsing, and language detection. No `!` negation; use `paths` to re-include a subtree. It does **not** narrow `grep`: what a search may reach on disk is a separate question from what earns a place in the topology, and a search prunes only what the project's own `.gitignore` prunes. |
 | `scan.workers` | `0` (NumCPU) | Max files parsed concurrently during a full scan. Lower it to cap peak RAM. |
 | `scan.progress` | `auto` | `auto` (on a terminal, above 15 files), `always`, `never`. |
-| `scan.pre_tool` | `default` | The scan the guard runs *before* every tool call it sees, on both harnesses. `default` is incremental, so the usual case — nothing changed since the last call — is a no-op. `none` switches the freshness guarantee off for projects keeping the topology current another way (e.g. `arac scanner run`). `full` re-scans every file, preserving descriptions. `hard` is **rejected**: it rebuilds from scratch, which would clear every description and bug *before every tool call* — use `arac scan --hard` for a one-off rebuild. An unrecognized value resolves to `default`. |
+| `scan.pre_tool` | `default` | The scan the guard runs *before* every tool call it sees, on both harnesses. `default` is incremental, so the usual case — nothing changed since the last call — is a no-op. `none` switches the freshness guarantee off for projects keeping the topology current another way (e.g. `arac scanner run`). `full` re-scans every file, preserving descriptions and any outstanding warnings whose cause is still on disk. `hard` is **rejected**: it rebuilds from scratch, which would clear every description, bug and warning *before every tool call* — use `arac scan --hard` for a one-off rebuild. An unrecognized value resolves to `default`. |
 | `scanner.update_frequency` | `200` (ms) | How often `arac scanner run` polls for changes. |
 
 `ignore`, `workers` and `progress` are each also a flag on `arac scan`, which wins for that
@@ -58,7 +88,7 @@ run.
 
 | key | default | meaning |
 |---|---|---|
-| `max_file_size` | `524288` | Files above this are neither read nor indexed. |
+| `max_file_size` | `524288` | Files above this are neither read nor indexed: every scan skips a source file over it, and a whole-file read of one is refused. |
 | `kinds` | `["file","function","struct","interface"]` | Allow-list of resource kinds that may be read. Also accepts `named_type`, `package`, `dependency`, `variable`. An explicit `[]` is rejected by validation. |
 | `context_filter` | `normal` | `off` (the code asked for, nothing around it), `normal` (each neighbour as `id: description`, undescribed ones omitted), `full` (neighbours as fenced source cuts, undescribed ones kept, plus a `# USED BY:` section). |
 | `file_mode` | `skeleton`, except `full` in `mcp` | What a whole-*file* read returns. `skeleton` is each top-level declaration's signature with large bodies elided. |
@@ -144,7 +174,7 @@ and a map of named `agents`.
 | `model` | string | Model for this agent. `"<inherits>"` copies the main agent's. |
 | `mcp_tools` | string[] | Which MCP tools this agent gets. Validated against the catalog, then filtered through `Config.ServableMCPTools`, which drops the shell-served ones and returns nothing outside `mcp` mode. |
 | `blocked_tools` | string[] | Native tools to deny: `read`, `grep`, `edit`, `write`, `bash`. Empty by default. Only bites in `mcp` and `cli`; `grep` is additionally dropped outside `mcp`. |
-| `plugins` | string[] | Currently one: `edit-update-db-plugin`, which installs the native-edit topology-sync hook. An optimization, not the warning channel: it syncs inline with the edit, where the guard otherwise syncs on the PostToolUse that follows it. Warnings reach the model either way, once. |
+| `plugins` | string[] | Currently one: `edit-update-db-plugin`, which installs the native-edit topology-sync hook (and `arac setup` removes it again once it is no longer listed). An optimization, not the warning channel: it syncs inline with the edit, where the guard otherwise syncs on the PostToolUse that follows it. Warnings reach the model either way, once. |
 | `params` | map[string]int | Integer knobs — `max-batch-size` for the description executor, `thinking` for chat sub-agents. Non-positive falls back to the default. |
 
 Resolution: the per-harness block beats `<any>`; an absent field or the sentinel
@@ -233,7 +263,7 @@ full screen, with the arrow keys, one question per screen:
    ▄▀█ █▀█ ▄▀█ █▀▀ █▄░█ █▀▀
    █▀█ █▀▄ █▀█ █▄▄ █░▀█ ██▄
 
-  Who writes your descriptions?                                              3/6
+  Who writes your descriptions?                                              3/7
 
   Aracne describes every function, type and file so a read can show you what its
   neighbours are without opening them. Something has to write those, and it
@@ -259,15 +289,16 @@ empty `Other:` says so and keeps the question open.
 
 Then the model, written to the `descriptions-generation-executor` agent (see
 [below](#the-model-is-not-here)). It defaults to the chosen provider's cheap tier —
-`claude-haiku-5`, `gpt-5.4-mini`, `deepseek-v4-flash`. On the CLI branch it offers `haiku`
+`claude-haiku-4-5`, `gpt-5.4-mini`, `deepseek-v4-flash`. On the CLI branch it offers `haiku`
 instead — the same model, spelled the way a command line wants it, because that answer is
 appended to a command rather than sent as a request field. There is one more rule there, since
 the CLI transport reads its model from the *command* and from nowhere else:
 
 - A command that already names one (`claude -p --model sonnet`) **answers this question**. The
   model question is skipped and `sonnet` is recorded.
-- Otherwise the answer is appended back onto the command — but only for `claude -p` /
-  `claude --print`, whose flag aracne actually knows. `codex exec` and a hand-written script
+- Otherwise the answer is appended back onto the command — but only for the Claude CLI in
+  print mode (`claude -p` / `claude --print`, with any other flags, by any path), whose flag
+  aracne actually knows. `codex exec` and a hand-written script
   are left exactly as typed: guessing a flag onto someone else's program is how a wizard turns
   a working command into one that exits 2.
 
@@ -315,7 +346,7 @@ It is the `descriptions-generation-executor` agent's, and only its:
 
 ```jsonc
 { "llm": { "<any>": { "agents": {
-  "descriptions-generation-executor": { "model": "claude-haiku-5" }
+  "descriptions-generation-executor": { "model": "claude-haiku-4-5" }
 } } } }
 ```
 
@@ -327,6 +358,20 @@ which won.
 `arac init` writes it under `<any>` rather than under a harness block, because `EffectiveAgent`
 merges `<any>` underneath whichever harness asks: one write covers Claude Code, OpenCode, and
 the read-path lazy fill (which resolves against `claude_code` by default).
+
+**The harness agent files get it only where the harness can run it.** `arac setup` also renders
+the executor as the sub-agent `/descriptions-generate` fans out to, and there the value is read
+per harness rather than copied — the wizard writes whatever the describer answer called for, and
+`gpt-5.4-mini` is right for the API sweep and meaningless to Claude Code:
+
+- `.claude/agents/descriptions-generation-executor.md` gets `model:` for a Claude Code alias
+  (`haiku`, `sonnet`, `opus`, `inherit`) or a `claude-*` id; an `anthropic/claude-*` is unwrapped.
+- `.opencode/agents/descriptions-generation-executor.md` gets it in OpenCode's `provider/model`
+  form: a value that already has a `/` as written, and a bare id qualified with
+  `descriptions.provider` when that is `anthropic`, `openai` or `deepseek` and no `base_url` is
+  set (behind a gateway, `openai` names a wire format, not OpenCode's OpenAI provider).
+- Anything else leaves the line out, and the sub-agent runs on the main agent's model. The lazy
+  fill and `arac descriptions generate` describe with the configured model either way.
 
 **It is unset out of the box**, and writing it is optional: without one, the chosen provider's
 own fallback is used (`claude-haiku-4-5`, `gpt-5.4-mini`, `deepseek-v4-flash` — see

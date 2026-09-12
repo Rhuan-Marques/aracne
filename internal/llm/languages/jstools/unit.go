@@ -54,18 +54,24 @@ func FunctionUnit(ctx *javascript.JavaScriptFunctionContext, st *renderstate.Sta
 	// A batch that asks for several members of one type used to inline the type once per
 	// member. st is nil for single-unit callers, where ParentSeen reports false.
 	elidedParent := inlinedParent && st.ParentSeen(ctx.ParentClass.Cut)
+	// A JS/TS class cut is the whole class, so it contains the member. When that class is
+	// already in this response -- inlined by a sibling member, or read in its own right --
+	// the member's source is already there too, and this unit has nothing left to print:
+	// writing the member again after an elision marker is how batching two methods of one
+	// class printed the second one twice.
+	contained := inlinedParent && ctx.ParentClass.Loc.Contains(ctx.Function.Loc)
 	if inlinedParent {
-		if elidedParent {
+		if !elidedParent {
+			body.WriteString(ctx.ParentClass.Cut)
+		} else if !contained {
 			body.WriteString(renderstate.ElisionMarker(string(ctx.ParentClass.ID),
 				"enclosing type already shown in this response"))
-		} else {
-			body.WriteString(ctx.ParentClass.Cut)
 		}
 	}
 	// Only append the member when the inlined parent does not already contain it. A Go/Rust
 	// type declaration does not; a Python/JS/Java class cut is the whole class and does, and
 	// appending anyway printed the method twice.
-	if !inlinedParent || elidedParent || !ctx.ParentClass.Loc.Contains(ctx.Function.Loc) {
+	if !contained {
 		if inlinedParent && !elidedParent {
 			body.WriteString("\n\n")
 		}
@@ -114,8 +120,9 @@ func FunctionUnit(ctx *javascript.JavaScriptFunctionContext, st *renderstate.Sta
 	return u
 }
 
-// ClassUnit decomposes a JS/TS class read.
-func ClassUnit(ctx *javascript.JavaScriptClassContext) readunit.Unit {
+// ClassUnit decomposes a JS/TS class read. st is the batch's render state, shared with the
+// member units (nil for a single-unit caller).
+func ClassUnit(ctx *javascript.JavaScriptClassContext, st *renderstate.State) readunit.Unit {
 	u := readunit.Unit{
 		ID:          string(ctx.Class.ID),
 		Kind:        domain.ResourceStruct,
@@ -129,10 +136,26 @@ func ClassUnit(ctx *javascript.JavaScriptClassContext) readunit.Unit {
 	}
 
 	var body strings.Builder
-	body.WriteString(ctx.Class.Cut)
+	// The class is registered with the batch's ledger NOW, while bodies are being built, not
+	// in Context -- which runs after every body exists, too late for a member of this class
+	// later in the same batch to elide it instead of inlining it a second time. And when a
+	// member EARLIER in the batch already inlined it, the class's source is on the page and
+	// this unit prints nothing of it.
+	if !st.ParentSeen(ctx.Class.Cut) {
+		body.WriteString(ctx.Class.Cut)
+	}
 	if ctx.Constructor != nil {
-		body.WriteString("\n\n")
-		body.WriteString(ctx.Constructor.Cut)
+		// A JS/TS constructor lives INSIDE the class body, so the class cut above has already
+		// printed it. Appending it as well -- right for Go, where NewX is a separate function
+		// after the type -- printed it twice, the second copy stranded after the class had
+		// closed. It is appended only when its span lies outside the class, and covered either
+		// way so the context section never lists it as a neighbour.
+		if !ctx.Class.Loc.Contains(ctx.Constructor.Loc) {
+			if body.Len() > 0 {
+				body.WriteString("\n\n")
+			}
+			body.WriteString(ctx.Constructor.Cut)
+		}
 		u.Covers = append(u.Covers, string(ctx.Constructor.ID))
 	}
 	u.Body = body.String()

@@ -99,8 +99,9 @@ func highMCPHowItReaches() string {
 		"Aracne's capabilities arrive as MCP tools, and each tool's own description says how " +
 		"to call it. Two things the schemas cannot tell you:\n\n" +
 		"**Prefer a symbol over a file.** Reading a declaration returns its source, the " +
-		"imports it needs, and a `# CONTEXT:` list of the neighbours it touches with their " +
-		"descriptions -- usually the whole answer, for a fraction of a file's tokens. Read a " +
+		"imports it needs, and a `# CONTEXT:` list of the neighbours around it with their " +
+		"descriptions -- BOTH what it touches and what implements, subclasses or uses it. " +
+		"Usually the whole answer, for a fraction of a file's tokens. Read a " +
 		"whole file only for a config, an unsupported language, or when you genuinely need " +
 		"all of it.\n\n" +
 		"**Batch your reads.** The read tool takes a LIST. Pass every ID you already know you " +
@@ -123,7 +124,8 @@ func highMCPHowItReaches() string {
 func highCLIHowItReaches(profiles []languageProfile) string {
 	return "## How it reaches you\n\n" +
 		"`arac read <id> <id> ...` returns declarations with their source, the imports they " +
-		"need, and the context around them. It takes a LIST: pass every ID you already know " +
+		"need, and the context around them -- BOTH what they touch and what implements, " +
+		"subclasses or uses them. It takes a LIST: pass every ID you already know " +
 		"you need in ONE call, because the results are grouped by file under a single context " +
 		"section and one batched call costs far less than one call per ID.\n\n" +
 		"```\n" + readExample(profiles) + "\n```\n\n" +
@@ -164,7 +166,8 @@ func highInterceptHowItReaches() string {
 		"Read files the way you normally would -- `cat`, `head -40`, `sed -n '80,120p'`. When " +
 		"the target is indexed, the answer comes back enriched: the lines you asked for, the " +
 		"signature of the declaration they sit inside, and a `# CONTEXT:` list of what they " +
-		"touch with each neighbour's description. `grep` is answered the same way, and " +
+		"touch, and of what implements or uses them, each with its description. `grep` is " +
+		"answered the same way, and " +
 		"additionally searches node names and stored descriptions -- so a plain-English query " +
 		"finds code that never says the word.\n\n" +
 		"There is nothing to opt into and no second spelling to learn: the command you " +
@@ -208,7 +211,11 @@ func highLanguageIDs(profiles []languageProfile) string {
 			continue
 		}
 		if b.Len() == 0 {
-			b.WriteString("## How an ID is spelled\n\n")
+			b.WriteString("## How an ID is spelled\n\n" +
+				"**Try the bare name first.** Any unique trailing part of an ID resolves on its " +
+				"own -- `RunGuard`, `register_blueprint` -- and an ambiguous or unknown one comes " +
+				"back with the matching candidates rather than an error, so guessing costs nothing " +
+				"and never needs a search first. The full spelling is for disambiguating.\n\n")
 		}
 		b.WriteString("**" + p.Display + ".** " + p.IDs + "\n\n")
 	}
@@ -263,7 +270,8 @@ func highReadOutput(cfg *helper.Config, profiles []languageProfile) string {
 		"Two sections. First one fenced code block per file, holding that file's pooled " +
 		"imports and every requested declaration in it -- a method comes with its enclosing " +
 		"type when the type is small enough to inline. Then ONE `# CONTEXT:` section for the " +
-		"whole call, describing everything the requested declarations interact with. " +
+		"whole call, describing everything the requested declarations connect to in BOTH " +
+		"directions -- what they touch, and what implements, subclasses or uses them. " +
 		"**Anything already shown as source above is never repeated in CONTEXT.**\n\n")
 	if cfg.LineRangeIdentification() {
 		b.WriteString("Each CONTEXT entry carries the exact span the declaration occupies, in " +
@@ -298,22 +306,50 @@ func highReadOutput(cfg *helper.Config, profiles []languageProfile) string {
 // That is ModeMCP alone. In the other three the same job is a command (`arac descriptions
 // generate`) run by a person, and the model has no `node_list_no_description` to call -- so
 // this paragraph there would be a workflow whose first step is a tool that is not in the list.
+//
+// And even there each tool is named only if the MAIN agent is served it. The default main
+// profile is `read` and `warnings_list` -- the two tools are the descriptions executor's, not
+// the main agent's -- so naming them sent the model to a first step it could not take. Where
+// the main agent lacks one, the section names the `arac` command that does the same job.
 func highDescriptionGeneration(cfg *helper.Config) string {
 	if !cfg.MCPEnabled() {
 		return ""
 	}
+	list := "`arac resource list --no-description`"
+	if mainAgentServes(cfg, "node_list_no_description") {
+		list = "`node_list_no_description`"
+	}
+	record := "`arac update-description <id> <kind> \"<description>\"`"
+	if mainAgentServes(cfg, "update_description") {
+		record = "`update_description`"
+	}
 	return "## Writing descriptions\n\n" +
-		"When asked to document the codebase, start from `node_list_no_description` -- it is " +
+		"When asked to document the codebase, start from " + list + " -- it is " +
 		"the list of resources the graph is missing a description for. Split it into batches " +
-		"of `description_batch_size` (from `.aracne/config.json`, default 5) and give each " +
-		"batch to one descriptions-generation-executor sub-agent where the platform has " +
-		"sub-agents; otherwise work the batches yourself. Re-check " +
-		"`node_list_no_description` when the batches finish and retry anything still " +
-		"listed.\n\n" +
+		"of `max-batch-size` (`llm.<any>.agents.descriptions-generation-executor.params` in " +
+		"`.aracne/config.json`, default 5) and give each batch to one descriptions-generation-executor sub-agent " +
+		"where the platform has sub-agents; otherwise work the batches yourself. Re-check " +
+		list + " when the batches finish and retry anything still listed.\n\n" +
 		"For each batch: read every assigned ID in ONE call, then write each description by " +
 		"hand -- 1-3 lines for a function, type or interface, 1 line for a variable, file or " +
-		"package -- and record it with `update_description`. Process every targeted resource; " +
+		"package -- and record it with " + record + ". Process every targeted resource; " +
 		"do not skip any.\n\n"
+}
+
+// mainAgentServes reports whether the main agent is served the MCP tool name on every harness
+// the contract is written for. One contract goes to both CLAUDE.md and AGENTS.md, so a tool only
+// one of the two main agents has is not one it may promise.
+func mainAgentServes(cfg *helper.Config, name string) bool {
+	for _, harness := range []string{"claude_code", "opencode"} {
+		served := false
+		for _, tool := range cfg.EffectiveAgent(harness, "main").MCPTools {
+			served = served || tool == name
+		}
+		if !served {
+			return false
+		}
+	}
+	return true
 }
 
 // highLanguageSemantics is the one language section that is never mode-gated.
@@ -344,7 +380,8 @@ func highLanguageSemantics(profiles []languageProfile) string {
 func highGuidelines() string {
 	return `## Guidelines
 
-1. **Prefer a declaration over a file.** A symbol read is precise and comes with its
+1. **Prefer a declaration over a file, and a read over a search.** A symbol read is precise
+   and comes with its
    neighbours; a whole file is for a config, an unsupported language, or when you genuinely
    need all of it.
 2. **Ask for everything you need at once.** Every call re-sends the whole conversation, so one

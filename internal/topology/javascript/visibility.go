@@ -216,9 +216,27 @@ func (m *JavaScriptManager) filterFunctionContext(gt *JavaScriptTopology, ctx *J
 	ctx.CalledFunctions = m.applyFuncList(gt, filter, dropSelf(ctx.CalledFunctions, targetID, func(f SimplifiedFunction) string { return f.ID }))
 	ctx.ClassesUsed = m.applyClassUsages(gt, filter, ctx.ClassesUsed)
 	ctx.ExtVarsUsed = m.applyExtVars(gt, filter, ctx.ExtVarsUsed)
+	ctx.InterfacesUsed = keepVisible(filter, domain.ResourceInterface, ctx.InterfacesUsed,
+		func(i SimplifiedInterface) string { return i.Description })
+	ctx.NamedTypesUsed = keepVisible(filter, domain.ResourceNamedType, ctx.NamedTypesUsed,
+		func(n SimplifiedNamedType) string { return n.Description })
 	if filter.IncludeIncoming {
 		ctx.Incoming = m.incomingRefs(gt, targetID)
 	}
+}
+
+// keepVisible drops the used interfaces or named types the filter hides. Neither kind ever
+// renders as a source cut, so the only decision is shown-or-hidden -- the one Go's function
+// context makes for its used interfaces. Without it a TS function's undescribed interface
+// printed "## id: no description" under `normal`, which hides every other undescribed neighbour.
+func keepVisible[T any](filter domain.ContextFilter, kind domain.ResourceKind, items []T, descOf func(T) string) []T {
+	out := items[:0:0]
+	for _, it := range items {
+		if filter.For(kind, 0, visHasDesc(descOf(it))) != domain.VisibilityHidden {
+			out = append(out, it)
+		}
+	}
+	return out
 }
 
 // Filters a class's context by applying visibility rules to its methods, used classes, and external variables, and optionally includes incoming references.

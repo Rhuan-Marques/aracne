@@ -70,10 +70,36 @@ def alias_refs(value_node):
         return annot_refs(value_node)
     return []
 
+def annot_str(node):
+    # An annotation AS WRITTEN. expr_str collapses composites -- a subscript to its
+    # head, a union to the placeholder 'expr' -- which is right for a value expression
+    # (the class an assignment produces) and wrong for a type: 'int | None' became
+    # 'expr' and 'typing.Sequence[str]' became 'typing.Sequence', so the matcher
+    # compared a literal argument against a name that describes no type and reported
+    # every correct call. ast.unparse is 3.9+; older interpreters keep the collapsed
+    # form, which is no worse than what they had.
+    if node is None:
+        return ''
+    try:
+        return ast.unparse(node)
+    except Exception:
+        return expr_str(node)
+
 def var_def(arg, optional=False, variadic=False, key_only=False):
-    annot = expr_str(arg.annotation) if arg.annotation else ''
+    annot = annot_str(arg.annotation) if arg.annotation else ''
     return {'name': arg.arg, 'typing': annot, 'type_refs': annot_refs(arg.annotation),
             'optional': optional, 'variadic': variadic, 'key_only': key_only}
+
+def def_lineno(node):
+    # Where the declaration STARTS for a reader: node.lineno is the def/class line,
+    # which sits below the decorators, so a read of a decorated declaration dropped
+    # the @dataclass, @property or route that gives it its meaning.
+    lines = [node.lineno]
+    for d in getattr(node, 'decorator_list', []):
+        ln = getattr(d, 'lineno', None)
+        if ln is not None:
+            lines.append(ln)
+    return min(lines)
 
 def decorator_names(node):
     return [expr_str(d) for d in getattr(node, 'decorator_list', [])]
@@ -136,6 +162,17 @@ def call_shape(node):
         'kw_names': [k.arg for k in node.keywords if k.arg is not None],
     }
 
+def dotted_name(node):
+    # 'a' or 'a.b.c' for a pure Name/Attribute chain; None when any link is a call,
+    # subscript or other expression, whose value a dotted name would misdescribe.
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        head = dotted_name(node.value)
+        if head is not None:
+            return head + '.' + node.attr
+    return None
+
 def extract_body_calls(body):
     calls = []
     for stmt in body:
@@ -144,11 +181,14 @@ def extract_body_calls(body):
         for node in walk_no_nested_scopes(stmt):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
                 val = node.func.value
-                if isinstance(val, ast.Name):
+                # A dotted receiver (pkg.sub.f(), mod.Cls.method()) is recorded whole, so
+                # the resolver can bind it through a dotted import.
+                obj = dotted_name(val)
+                if obj is not None:
                     c = {
-                        'object_name': val.id,
+                        'object_name': obj,
                         'method_name': node.func.attr,
-                        'func': expr_str(node.func),
+                        'func': obj + '.' + node.func.attr,
                         'lineno': node.lineno,
                     }
                     c.update(call_shape(node))
@@ -179,11 +219,18 @@ def extract_body_calls(body):
                 # overloaded dunder on a typed operand resolves to a Calls edge.
                 dunder = BINOP_DUNDERS.get(type(node.op).__name__)
                 if dunder:
+                    # The shape is REAL, not absent: an operator passes exactly one
+                    # argument, its right operand. Leaving it out recorded zero, and
+                    # the matcher then reported every overload as missing its operand.
                     calls.append({
                         'object_name': node.left.id,
                         'method_name': dunder,
                         'func': node.left.id + '.' + dunder,
                         'lineno': getattr(node, 'lineno', 0),
+                        'argc': 1,
+                        'argtypes': [arg_token(node.right)],
+                        'starred': False,
+                        'kw_names': [],
                     })
             elif (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name)
                   and isinstance(getattr(node, 'ctx', None), ast.Load)):
@@ -193,16 +240,22 @@ def extract_body_calls(body):
                     'method_name': '__getitem__',
                     'func': node.value.id + '.__getitem__',
                     'lineno': getattr(node, 'lineno', 0),
+                    'argc': 1,
+                    'argtypes': [arg_token(getattr(node, 'slice', None))],
+                    'starred': False,
+                    'kw_names': [],
                 })
             elif type(node).__name__ == 'MatchClass':
                 # A 'case ClassName(...)' pattern references the class as a use;
                 # record the class name (as a bare reference) so the resolver
-                # can emit a uses_class edge.
+                # can emit a uses_class edge. 'pattern' marks it as no call at all:
+                # matching a class pattern never runs the class's __init__.
                 calls.append({
                     'object_name': '',
                     'method_name': '',
                     'func': expr_str(node.cls),
                     'lineno': getattr(node, 'lineno', 0),
+                    'pattern': True,
                 })
     return calls
 
@@ -246,7 +299,48 @@ def extract_local_assignments(body):
                         'value_type': expr_str(item.context_expr),
                         'lineno': stmt.lineno,
                     })
+        # A local bound inside a block is still a local of this function: descend
+        # through control flow (not into nested def/class scopes), in source order.
+        if t in ('If', 'Try', 'TryStar', 'For', 'AsyncFor', 'While', 'With', 'AsyncWith'):
+            for nb in (getattr(stmt, 'body', []), getattr(stmt, 'orelse', []),
+                       getattr(stmt, 'finalbody', [])):
+                assignments.extend(extract_local_assignments(nb))
+            for handler in getattr(stmt, 'handlers', []):
+                assignments.extend(extract_local_assignments(getattr(handler, 'body', [])))
+        elif t == 'Match':
+            for case in getattr(stmt, 'cases', []):
+                assignments.extend(extract_local_assignments(case.body))
     return assignments
+
+def rebinding_wrapper(name, value):
+    # For 'name = w(name, ...)' or 'name = w(...)(name)' -- a decorator applied by
+    # hand -- the decorator expression, spelled as decorator_names spells '@w'.
+    if isinstance(value, ast.Call) and any(
+            isinstance(a, ast.Name) and a.id == name for a in value.args):
+        return expr_str(value.func)
+    return ''
+
+def fold_rebindings(functions, classes, variables):
+    # A module-level name bound by 'def' or 'class' and then re-assigned is one name,
+    # and the definition is what a reader looks for: it has the source, the signature
+    # and the callers' edges. So the variable is dropped rather than replacing it (the
+    # two share an ID). A rebinding that wraps the function after its def is exactly a
+    # decorator application ('handler = deco(handler)' is what '@deco' means), so it is
+    # recorded as the function's outermost decorator.
+    defined = {}
+    for f in functions:
+        defined.setdefault(f['name'], []).append(f)
+    class_names = {c['name'] for c in classes}
+    kept = []
+    for v in variables:
+        fs = defined.get(v['name'])
+        if fs is None and v['name'] not in class_names:
+            kept.append(v)
+            continue
+        for f in fs or []:
+            if v.get('wrapper') and v['lineno'] > f['lineno']:
+                f['decorators'].insert(0, v['wrapper'])
+    return kept
 
 def extract_body(body, parent, import_map):
     functions = []
@@ -285,6 +379,7 @@ def extract_body(body, parent, import_map):
                         'type_refs': refs,
                         'lineno': item.lineno,
                         'end_lineno': getattr(item, 'end_lineno', item.lineno),
+                        'wrapper': rebinding_wrapper(target.id, item.value),
                     })
         elif t == 'TypeAlias':
             # PEP 695 'type X = ...': emit X as a resource and record the inner
@@ -342,7 +437,7 @@ def parse_func(node, parent, import_map):
         params.append(var_def(kwarg, optional=True, variadic=True, key_only=True))
     results = []
     if getattr(node, 'returns', None):
-        results.append({'name': '', 'typing': expr_str(node.returns),
+        results.append({'name': '', 'typing': annot_str(node.returns),
                         'type_refs': annot_refs(node.returns)})
     return {
         'name': node.name,
@@ -353,19 +448,34 @@ def parse_func(node, parent, import_map):
         'is_abstract': is_abstract(decs),
         'params': params,
         'results': results,
-        'lineno': node.lineno,
+        'lineno': def_lineno(node),
         'end_lineno': getattr(node, 'end_lineno', node.lineno),
         'parent': parent,
         'body_calls': extract_body_calls(node.body),
         'body_assignments': extract_local_assignments(node.body),
     }
 
+# Modules named by 'from m import *', which bind names no import_map key shows.
+STAR_MODULES = []
+
+PROTOCOL_NAMES = ('typing.Protocol', 'typing_extensions.Protocol')
+ABC_NAMES = ('abc.ABC',)
+ABCMETA_NAMES = ('abc.ABCMeta',)
+
+def names_one_of(expr, import_map, qualified):
+    # Whether a base or metaclass expression is one of the qualified names, judged by
+    # what it is bound to rather than how it is spelled: 'Protocol' imported from
+    # typing is a Protocol, and 'ProtocolError' or a project class named Protocol is not.
+    head, sep, rest = expr.partition('.')
+    if head in import_map:
+        return (import_map[head] + sep + rest) in qualified
+    if not sep:
+        return any((m + '.' + expr) in qualified for m in STAR_MODULES)
+    return False
+
 def parse_class(node, import_map):
     bases = [expr_str(b) for b in node.bases]
     decs = decorator_names(node)
-    base_str = ' '.join(bases)
-    is_abc = any(n in base_str for n in ('ABC', 'ABCMeta'))
-    is_protocol = 'Protocol' in base_str
 
     # metaclass=Meta is a class keyword, not a base; record it so the resolver
     # can emit a uses_class edge to the metaclass.
@@ -373,6 +483,10 @@ def parse_class(node, import_map):
     for kw in getattr(node, 'keywords', []):
         if kw.arg == 'metaclass':
             metaclass = expr_str(kw.value)
+
+    is_abc = (any(names_one_of(b, import_map, ABC_NAMES) for b in bases)
+              or (metaclass != '' and names_one_of(metaclass, import_map, ABCMETA_NAMES)))
+    is_protocol = any(names_one_of(b, import_map, PROTOCOL_NAMES) for b in bases)
 
     funcs, subclasses, vars_ = extract_body(node.body, node.name, import_map)
     has_abstract = any(f.get('is_abstract') for f in funcs)
@@ -389,12 +503,14 @@ def parse_class(node, import_map):
         'is_abc': is_abc,
         'is_protocol': is_protocol,
         'has_abstract_methods': has_abstract,
-        'lineno': node.lineno,
+        'lineno': def_lineno(node),
         'end_lineno': getattr(node, 'end_lineno', node.lineno),
     }
 
 def parse_file(path, module_root):
-    with open(path, 'r', encoding='utf-8') as f:
+    # Bytes, not text: ast.parse then decodes the way Python does, honouring a UTF-8
+    # BOM and a PEP 263 coding cookie, both of which a str parse rejects.
+    with open(path, 'rb') as f:
         source = f.read()
     tree = ast.parse(source, filename=path)
 
@@ -416,6 +532,8 @@ def parse_file(path, module_root):
                 key = alias.asname or alias.name
                 import_map[key] = full
                 imports.append({'name': full, 'alias': key, 'module': mod, 'level': level})
+                if alias.name == '*' and mod and not level:
+                    STAR_MODULES.append(mod)
 
     def collect_imports(body):
         # Module-level imports, including those guarded by try/except or if/else
@@ -440,6 +558,7 @@ def parse_file(path, module_root):
                       if type(n).__name__ not in ('Import', 'ImportFrom')]
 
     funcs, classes, vars_ = extract_body(relevant_nodes, None, import_map)
+    vars_ = fold_rebindings(funcs, classes, vars_)
 
     return {
         'docstring': ast.get_docstring(tree) or '',

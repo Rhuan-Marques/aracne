@@ -42,6 +42,45 @@ func TestParseLazyDescriptionsToleratesDecoration(t *testing.T) {
 	}
 }
 
+// `_` is an id character, not only emphasis. Trimming it off both ends turned every dunder
+// method into an id nobody asked for, so the line was dropped and the resource was retried
+// until it "exceeded max retries" -- on every Python class in the corpus.
+func TestParseLazyDescriptionsKeepsUnderscoreIDs(t *testing.T) {
+	reply := strings.Join([]string{
+		"shapes.Circle.__init__ :: Builds a circle",
+		"shapes._private::Hidden helper",
+		"**shapes.Circle.__repr__** :: Renders the circle",
+		"2. `pkg.value_` :: Trailing underscore",
+		"- *pkg._star* :: Wrapped in single emphasis",
+	}, "\n")
+	ids := wanted("shapes.Circle.__init__", "shapes._private", "shapes.Circle.__repr__", "pkg.value_", "pkg._star")
+	got := ParseLazyDescriptions(reply, ids)
+	for id := range ids {
+		if got[id] == "" {
+			t.Errorf("%s was dropped; parsed %v", id, got)
+		}
+	}
+}
+
+// A wrapper is only ever peeled as a matched pair, and only when what is left is an id that was
+// asked for. The least-peeled match wins, because a token that already names a requested id was
+// copied exactly.
+func TestParseLazyDescriptionsPeelsOnlyMatchedPairs(t *testing.T) {
+	// `__x__` is bold for x when x is what was asked for...
+	if got := ParseLazyDescriptions("__pkg.x__ :: bold", wanted("pkg.x")); got["pkg.x"] != "bold" {
+		t.Errorf("underscore-bold id not unwrapped: %v", got)
+	}
+	// ...and is itself the id when both were asked for.
+	got := ParseLazyDescriptions("__pkg.x__ :: literal", wanted("pkg.x", "__pkg.x__"))
+	if got["__pkg.x__"] != "literal" || got["pkg.x"] != "" {
+		t.Errorf("an exact id was peeled into a different one: %v", got)
+	}
+	// An unmatched wrapper is part of the token, and a token that is no requested id is dropped.
+	if got := ParseLazyDescriptions("_pkg.x :: half", wanted("pkg.x")); len(got) != 0 {
+		t.Errorf("an unmatched `_` was stripped onto a different id: %v", got)
+	}
+}
+
 // The one thing it is strict about. A description stored against the wrong resource is worse
 // than no description at all, because it is re-shown on every later lookup as if it were true.
 func TestParseLazyDescriptionsDropsUnaskedIDs(t *testing.T) {
@@ -109,5 +148,38 @@ func TestLazyDescriptionsPromptStatesTheFormat(t *testing.T) {
 	}
 	if strings.Contains(p, "update_description") {
 		t.Error("the lazy prompt must not ask for a tool call: it runs without tools")
+	}
+}
+
+// DE-11: the no-space "::" fallback cut at the FIRST "::", and every Rust id is `a::b::c`, so
+// the id came out as `a` and the line was dropped -- a nospace model lost every Rust
+// description. The cut now lands on the "::" that ends a requested id.
+func TestParseLazyDescriptionsNoSpaceSeparatorWithRustIDs(t *testing.T) {
+	reply := strings.Join([]string{
+		"rustfamily::shapes::Circle::area::Computes the area",
+		"rustfamily::shapes::Circle:: Describes a circle",
+		"- `rustfamily::shapes::new`::Builds a shape from std::f64 values",
+		"rustfamily::nope::x::Not asked for",
+	}, "\n")
+	got := ParseLazyDescriptions(reply, wanted(
+		"rustfamily::shapes::Circle::area", "rustfamily::shapes::Circle", "rustfamily::shapes::new"))
+	for id, want := range map[string]string{
+		"rustfamily::shapes::Circle::area": "Computes the area",
+		"rustfamily::shapes::Circle":       "Describes a circle",
+		"rustfamily::shapes::new":          "Builds a shape from std::f64 values",
+	} {
+		if got[id] != want {
+			t.Errorf("%s = %q, want %q", id, got[id], want)
+		}
+	}
+	if len(got) != 3 {
+		t.Errorf("parsed %d entries, want 3: %v", len(got), got)
+	}
+
+	// The spaced separator and non-Rust ids behave exactly as before.
+	got = ParseLazyDescriptions("pkg.Foo::calls std::fmt\nrustfamily::a::b :: Does b",
+		wanted("pkg.Foo", "rustfamily::a::b"))
+	if got["pkg.Foo"] != "calls std::fmt" || got["rustfamily::a::b"] != "Does b" {
+		t.Errorf("got %v", got)
 	}
 }

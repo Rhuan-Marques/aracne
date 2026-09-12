@@ -149,23 +149,46 @@ func (f *Filler) fill(topo *domain.Topology, targets []Target) bool {
 		defer cancel()
 	}
 
-	results, settled := f.run(ctx, topo, pending)
+	results, settled, failed := f.run(ctx, topo, pending)
 	written := f.write(pending, results)
-	// Recorded AFTER the run, and only for the targets whose batch came back: a target that
-	// succeeded drops out of the plan on its own the moment the topology is re-read, and a
-	// target the provider declined or failed on is exactly what the record exists to hold.
+	// Recorded AFTER the run, and only for the targets whose batch came back with an answer
+	// that did not describe them: a target the model declined is exactly what the record
+	// exists to hold. A target that was written is NOT recorded. It drops out of the plan on
+	// its own while it has a description, and a record of it would outlive that description
+	// -- a hard rebuild, or a file deleted and restored, empties it under an unchanged
+	// fingerprint, and the record then suppressed the one fill that could put it back.
 	//
-	// A target whose batch the DEADLINE cut off is neither. Recording it -- as this once did,
-	// for the whole pending set -- persisted a timeout as though it were an answer, and since
-	// the record only expires when the code changes, the first slow read on a cold repository
-	// abandoned up to max_nodes resources for good: exactly the reads the feature exists for.
-	// Those are released instead, so the next read, in this process or the next, tries again.
-	f.recordAttempts(settled)
-	f.release(unsettled(pending, settled))
-	return written > 0
+	// A target whose batch the DEADLINE cut off is not an answer either. Recording it -- as
+	// this once did, for the whole pending set -- persisted a timeout as though it were an
+	// answer, and since the record only expires when the code changes, the first slow read on
+	// a cold repository abandoned up to max_nodes resources for good: exactly the reads the
+	// feature exists for. Those are released instead, so the next read, in this process or the
+	// next, tries again.
+	//
+	// A batch the PROVIDER failed on (a CLI that exited non-zero, an HTTP 401/429/5xx, a
+	// refused connection) says nothing about its resources either: it is the transport that
+	// failed, not the model that declined. It stays claimed in this process, so one broken
+	// provider costs one attempt per process rather than one per read, but it is never
+	// persisted -- an expired login or a rate limit would otherwise disable the fill for those
+	// resources until their code changed.
+	f.recordAttempts(unwritten(settled, written))
+	f.release(unsettled(pending, append(settled, failed...)))
+	return len(written) > 0
 }
 
-// unsettled is the pending targets whose batch did not come back before the deadline.
+// unwritten is the targets whose description did not land.
+func unwritten(targets []Target, written map[string]bool) []Target {
+	var out []Target
+	for _, t := range targets {
+		if !written[t.ID] {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// unsettled is the pending targets whose batch did not come back before the deadline. settled
+// is every target whose batch did come back, answered or failed.
 func unsettled(pending, settled []Target) []Target {
 	done := make(map[string]bool, len(settled))
 	for _, t := range settled {
@@ -267,22 +290,26 @@ func (f *Filler) generator() Generator {
 	return f.gen
 }
 
-// batchResult is one batch's reply. settled is false for a batch the deadline cut off, which
-// is not an answer about its resources and must not be remembered as one.
+// batchResult is one batch's reply. settled is true only for a batch the provider answered;
+// failed is true for one the provider errored on while the deadline still stood. A batch the
+// deadline cut off is neither: it is not an answer about its resources and must not be
+// remembered as one.
 type batchResult struct {
 	targets []Target
 	descs   map[string]string
 	settled bool
+	failed  bool
 }
 
-// run fans the batches out and collects whatever comes back, plus the targets whose batch came
-// back at all -- see fill for why the two are different.
+// run fans the batches out and collects whatever comes back, plus the targets whose batch the
+// provider answered and those whose batch it failed on -- see fill for why the three outcomes
+// are handled differently.
 //
 // "In the background, then waited on" is exactly this: the batches are goroutines so several
 // completions are in flight at once, and the read blocks until they are done or the deadline
 // expires. A batch that fails takes only itself down -- its siblings' descriptions are still
 // written, because four descriptions the project did not have is a better answer than none.
-func (f *Filler) run(ctx context.Context, topo *domain.Topology, targets []Target) (map[string]string, []Target) {
+func (f *Filler) run(ctx context.Context, topo *domain.Topology, targets []Target) (map[string]string, []Target, []Target) {
 	batches := chunk(targets, f.lazyCfg.BatchSize)
 	parallel := f.lazyCfg.Parallel
 	if parallel > len(batches) {
@@ -301,13 +328,15 @@ func (f *Filler) run(ctx context.Context, topo *domain.Topology, targets []Targe
 			defer wg.Done()
 			for batch := range jobs {
 				descs, err := f.gen.Describe(ctx, f.batch(topo, batch))
-				// A provider error while the deadline still stands is an answer (the batch
-				// failed); one raised because the deadline passed is not.
-				settled := err == nil || ctx.Err() == nil
+				// Only a reply is an answer. A provider error while the deadline still stands
+				// is a failed transport, and one raised because the deadline passed is a
+				// timeout; neither says anything about the resources.
+				settled := err == nil
+				failed := err != nil && ctx.Err() == nil
 				if err != nil {
 					descs = nil
 				}
-				out <- batchResult{targets: batch, descs: descs, settled: settled}
+				out <- batchResult{targets: batch, descs: descs, settled: settled, failed: failed}
 			}
 		}()
 	}
@@ -330,13 +359,16 @@ func (f *Filler) run(ctx context.Context, topo *domain.Topology, targets []Targe
 	}()
 
 	merged := map[string]string{}
-	var settled []Target
+	var settled, failed []Target
 	take := func(r batchResult) {
 		for id, desc := range r.descs {
 			merged[id] = desc
 		}
 		if r.settled {
 			settled = append(settled, r.targets...)
+		}
+		if r.failed {
+			failed = append(failed, r.targets...)
 		}
 	}
 	collect := func() {
@@ -355,15 +387,15 @@ func (f *Filler) run(ctx context.Context, topo *domain.Topology, targets []Targe
 			select {
 			case r, ok := <-out:
 				if !ok {
-					return merged, settled
+					return merged, settled, failed
 				}
 				take(r)
 			default:
-				return merged, settled
+				return merged, settled, failed
 			}
 		}
 	}
-	return merged, settled
+	return merged, settled, failed
 }
 
 // batch turns targets into a request, cutting each resource's source and choosing the
@@ -415,21 +447,21 @@ func (f *Filler) source(topo *domain.Topology, id string) string {
 	return strings.TrimSpace(entry.Cut)
 }
 
-// write stores the descriptions and returns how many landed.
+// write stores the descriptions and returns the ids that landed.
 //
 // Each write goes through TopologyManager.UpdateDescription, so an over-budget description is
 // rejected and an id that no longer exists is an error -- the same two gates the
 // update_description tool applies. A rejection is dropped silently: the resource stays
 // undescribed, it is already in the attempted set, and the read it was for renders without it.
-func (f *Filler) write(targets []Target, descriptions map[string]string) int {
+func (f *Filler) write(targets []Target, descriptions map[string]string) map[string]bool {
+	written := map[string]bool{}
 	if len(descriptions) == 0 {
-		return 0
+		return written
 	}
 	kinds := make(map[string]domain.ResourceKind, len(targets))
 	for _, t := range targets {
 		kinds[t.ID] = t.Kind
 	}
-	written := 0
 	for _, t := range targets {
 		desc, ok := descriptions[t.ID]
 		if !ok || strings.TrimSpace(desc) == "" {
@@ -438,7 +470,7 @@ func (f *Filler) write(targets []Target, descriptions map[string]string) int {
 		if err := f.mgr.UpdateDescription(t.ID, kinds[t.ID], desc); err != nil {
 			continue
 		}
-		written++
+		written[t.ID] = true
 	}
 	return written
 }

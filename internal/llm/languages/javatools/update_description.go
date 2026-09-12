@@ -36,7 +36,7 @@ func (u *UpdateDescriptionTool) Description() string {
 func (u *UpdateDescriptionTool) Parameters() []Parameter {
 	return []Parameter{
 		{Name: "id", Type: "string", Description: "Resource ID", Required: true},
-		{Name: "resource_name", Type: "string", Description: "Resource kind: Class, Enum, Record, AbstractClass, Interface, Annotation, Method, Constructor, File", Required: true},
+		{Name: "resource_name", Type: "string", Description: "Resource kind: Class, Enum, Record, AbstractClass, Interface, Annotation, Method, Constructor, Field, File", Required: true},
 		{Name: "description", Type: "string", Description: "The new description text", Required: true},
 	}
 }
@@ -59,8 +59,16 @@ func (u *UpdateDescriptionTool) Run(args json.RawMessage) (string, error) {
 		kind = domain.ResourceStruct
 	case "Interface", "Annotation":
 		kind = domain.ResourceInterface
-	case "Method", "Constructor", "Function":
+	// The scanner stores a method or constructor -- anything with a declaring class -- as kind
+	// `method`, and the write filters on kind, so mapping them to `function` rejected every one.
+	case "Method", "Constructor":
+		kind = domain.ResourceMethod
+	case "Function":
 		kind = domain.ResourceFunction
+	case "NamedType":
+		kind = domain.ResourceNamedType
+	case "Variable", "Field":
+		kind = domain.ResourceVariable
 	case "File", "Module":
 		kind = domain.ResourceFile
 	}

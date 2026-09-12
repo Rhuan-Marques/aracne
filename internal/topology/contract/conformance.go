@@ -3,7 +3,9 @@ package contract
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
+	"unicode"
 
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
@@ -37,17 +39,31 @@ func InterfaceMethods(iface domain.Resource) []Signature {
 		Input      []paramWire `json:"Input"`
 		Output     []paramWire `json:"Output"`
 		HasDefault bool        `json:"HasDefault"`
+		// TypeScript's optional method (`maybe?(): void`): like a default, nothing an
+		// implementer has to provide.
+		Optional bool `json:"Optional"`
+		// Java's `static` interface method (`static <T> Repo<T> empty() {...}`, and the
+		// private static helper beside it). It is called on the interface itself, is never
+		// inherited and can never be overridden, so it is not a requirement at all --
+		// requiring it put a conflict on every implementer the moment someone added a
+		// static factory. Only Java publishes this flag; Rust's trait summaries and
+		// TypeScript's interface members have no field of the name, so it stays false
+		// there and an associated function in a Rust trait is still required.
+		IsStatic bool `json:"IsStatic"`
 	}
 	if err := json.Unmarshal(blob, &wire); err != nil {
 		return nil
 	}
 	out := make([]Signature, 0, len(wire))
 	for _, w := range wire {
+		if w.IsStatic {
+			continue
+		}
 		out = append(out, Signature{
 			Name:       w.Name,
 			Input:      fromWire(w.Input),
 			Output:     fromWire(w.Output),
-			HasDefault: w.HasDefault,
+			HasDefault: w.HasDefault || w.Optional,
 		})
 	}
 	return out
@@ -113,6 +129,49 @@ func ChecksConformance(lang string) bool {
 //     longer accepts -- is caught by the call-site check instead, which is the right
 //     place for it.
 func Satisfies(lang string, required, provided Signature) (Verdict, string) {
+	return SatisfiesWithTypeParams(lang, required, provided, nil)
+}
+
+// ConformanceCtx is what the comparison needs from the graph it cannot see from two
+// signatures alone.
+//
+// TypeParams are the interface's own type-parameter names; see SatisfiesWithTypeParams.
+// Related answers whether two topology type ids stand in an inheritance relationship in
+// EITHER direction -- this package has no resolver, so the caller, which holds the topology,
+// supplies it. It may be nil, and then every relationship question answers "unknown".
+type ConformanceCtx struct {
+	TypeParams []string
+	Related    func(aID, bID string) bool
+}
+
+func (c ConformanceCtx) related(a, b string) bool {
+	if c.Related == nil || a == "" || b == "" {
+		return false
+	}
+	return c.Related(a, b)
+}
+
+// SatisfiesWithTypeParams is Satisfies told which names in `required` are the interface's own
+// TYPE PARAMETERS.
+//
+// An interface writes its methods against its parameters -- `void save(T item)` -- and an
+// implementer writes them against the argument it chose -- `save(User item)` for
+// `implements Repo<User>`. Comparing those as text made every implementer of a generic
+// interface a mismatch, which is most of the generic code in Java and TypeScript. A position
+// whose declared type mentions a type parameter therefore yields no verdict: substituting the
+// implements clause's type arguments needs a resolver this package does not have, and the
+// honest answer about `T` is that it says nothing about the concrete type. Everything a type
+// parameter does not explain -- arity, and a concrete type in a non-generic position -- is
+// still compared.
+func SatisfiesWithTypeParams(lang string, required, provided Signature, typeParams []string) (Verdict, string) {
+	return SatisfiesIn(lang, required, provided, ConformanceCtx{TypeParams: typeParams})
+}
+
+// SatisfiesIn is SatisfiesWithTypeParams given everything the graph knows: the interface's
+// type parameters and, for the languages whose rule needs it, a way to ask whether two types
+// are related by inheritance.
+func SatisfiesIn(lang string, required, provided Signature, ctx ConformanceCtx) (Verdict, string) {
+	typeParams := ctx.TypeParams
 	switch lang {
 	case "rust":
 		// Rust reports a MISSING method and nothing else. Comparing its signatures as text
@@ -133,9 +192,9 @@ func Satisfies(lang string, required, provided Signature) (Verdict, string) {
 		// is the claim names alone can support: the impl does not provide this method at all.
 		return Match, ""
 	case "java":
-		return exactlySatisfies(required, provided)
+		return exactlySatisfies(required, provided, typeParams)
 	case "typescript":
-		return tsSatisfies(required, provided)
+		return tsSatisfies(required, provided, ctx)
 	case "python":
 		// Reaching here means the name exists, which is all Python asks.
 		return Match, ""
@@ -143,13 +202,16 @@ func Satisfies(lang string, required, provided Signature) (Verdict, string) {
 	return Unknown, ""
 }
 
-func exactlySatisfies(required, provided Signature) (Verdict, string) {
+func exactlySatisfies(required, provided Signature, typeParams []string) (Verdict, string) {
 	if len(provided.Input) != len(required.Input) {
 		return Mismatch, fmt.Sprintf(
 			"%s takes %d parameter(s) but the interface declares %d",
 			provided.Name, len(provided.Input), len(required.Input))
 	}
 	for i := range required.Input {
+		if mentionsTypeParam(required.Input[i].Typing, typeParams) {
+			continue
+		}
 		if !sameTypeText(required.Input[i].Typing, provided.Input[i].Typing) {
 			return Mismatch, fmt.Sprintf(
 				"parameter %d of %s is %s but the interface declares %s",
@@ -162,6 +224,9 @@ func exactlySatisfies(required, provided Signature) (Verdict, string) {
 			provided.Name, len(provided.Output), len(required.Output))
 	}
 	for i := range required.Output {
+		if mentionsTypeParam(required.Output[i].Typing, typeParams) {
+			continue
+		}
 		if !sameTypeText(required.Output[i].Typing, provided.Output[i].Typing) {
 			return Mismatch, fmt.Sprintf(
 				"%s returns %s but the interface declares %s",
@@ -173,7 +238,18 @@ func exactlySatisfies(required, provided Signature) (Verdict, string) {
 
 // tsSatisfies applies TypeScript's assignability direction: an implementation may ignore
 // trailing parameters, but may not demand ones the interface does not supply.
-func tsSatisfies(required, provided Signature) (Verdict, string) {
+//
+// Parameter TYPES are a separate matter, and TypeScript is deliberately unsound about them:
+// a member written in method syntax -- which is what an interface member and a class method
+// both are -- is BIVARIANT in its parameters even under strictFunctionTypes. `handle(e:
+// MouseEv)` against `handle(e: BaseEv)` is accepted by tsc, and narrowing like that is how
+// handler hierarchies are written, so comparing the text reported working code. A position
+// is therefore a mismatch only when the two types are known to be UNRELATED: both resolve to
+// topology types with no inheritance path between them, or both are primitives. Anything the
+// graph cannot decide -- an external type, a type the scanner could not resolve -- yields no
+// verdict rather than a guess.
+func tsSatisfies(required, provided Signature, ctx ConformanceCtx) (Verdict, string) {
+	typeParams := ctx.TypeParams
 	req := 0
 	for _, p := range provided.Input {
 		if !p.Optional && !p.Variadic {
@@ -189,14 +265,76 @@ func tsSatisfies(required, provided Signature) (Verdict, string) {
 		if i >= len(required.Input) {
 			break
 		}
-		if !sameTypeText(required.Input[i].Typing, provided.Input[i].Typing) {
-			return Mismatch, fmt.Sprintf(
-				"parameter %d of %s is %s but the interface declares %s",
-				i+1, provided.Name, orUntyped(provided.Input[i].Typing),
-				orUntyped(required.Input[i].Typing))
+		// `any`, `unknown` and `object` accept whatever the interface passes, and `any` is
+		// assignable to whatever it demands, so text that differs from them is no evidence.
+		if tsTopType(required.Input[i].Typing) || tsTopType(provided.Input[i].Typing) {
+			continue
 		}
+		if mentionsTypeParam(required.Input[i].Typing, typeParams) {
+			continue
+		}
+		if sameTypeText(required.Input[i].Typing, provided.Input[i].Typing) {
+			continue
+		}
+		if !tsUnrelated(required.Input[i], provided.Input[i], ctx) {
+			continue
+		}
+		return Mismatch, fmt.Sprintf(
+			"parameter %d of %s is %s but the interface declares %s",
+			i+1, provided.Name, orUntyped(provided.Input[i].Typing),
+			orUntyped(required.Input[i].Typing))
 	}
 	return Match, ""
+}
+
+// tsUnrelated reports whether two differing TypeScript parameter types are known to have no
+// relationship at all -- the only case bivariance does not excuse.
+//
+// Two ids the topology holds decide it outright: related by inheritance either way, the
+// narrowing is legal; unrelated, it is a real error and stays reported. Two primitives decide
+// it too, since `number` is not reachable from `string`. Everything else is a type the graph
+// does not hold, and silence is the honest answer there.
+func tsUnrelated(required, provided Param, ctx ConformanceCtx) bool {
+	if required.TypingID != "" && provided.TypingID != "" {
+		return !ctx.related(required.TypingID, provided.TypingID)
+	}
+	return tsPrimitive(required.Typing) && tsPrimitive(provided.Typing)
+}
+
+// tsPrimitive reports whether a TypeScript type is one of the built-in scalars, which no
+// inheritance path can connect.
+func tsPrimitive(t string) bool {
+	switch strings.TrimSpace(t) {
+	case "string", "number", "boolean", "bigint", "symbol", "void", "null", "undefined", "never":
+		return true
+	}
+	return false
+}
+
+// tsTopType reports whether a TypeScript parameter type accepts every argument.
+func tsTopType(t string) bool {
+	switch strings.TrimSpace(t) {
+	case "any", "unknown", "object":
+		return true
+	}
+	return false
+}
+
+// mentionsTypeParam reports whether a declared type names one of the interface's type
+// parameters -- `T`, `Map<String, T>`, `T[]`. Such a position is compared to nothing: see
+// SatisfiesWithTypeParams.
+func mentionsTypeParam(typing string, typeParams []string) bool {
+	if len(typeParams) == 0 || strings.TrimSpace(typing) == "" {
+		return false
+	}
+	for _, name := range qualifiedName.FindAllString(typing, -1) {
+		for _, param := range typeParams {
+			if name == param {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // sameTypeText compares declared types, treating an unreadable one as agreeing. A scanner
@@ -221,7 +359,47 @@ func sameTypeText(a, b string) bool {
 	if isAssociatedType(a) || isAssociatedType(b) {
 		return true
 	}
-	return lastPathSegment(a) == lastPathSegment(b)
+	return canonicalTypeText(a) == canonicalTypeText(b)
+}
+
+// qualifiedName matches one dotted or `::`-separated name inside a type: `java.util.Map`,
+// `crate::peniko::Gradient`, or a bare `Integer`.
+var qualifiedName = regexp.MustCompile(`[\p{L}_$][\p{L}\p{N}_$]*(?:(?:\.|::)[\p{L}_$][\p{L}\p{N}_$]*)*`)
+
+// canonicalTypeText is lastPathSegment applied to EVERY name in a type rather than to the
+// type as a whole, with insignificant whitespace dropped.
+//
+// A type argument is a type in its own right and is spelled as freely as the outer one: the
+// interface says `Map<String, Integer>` and the implementer `Map<String,Integer>`, or one side
+// writes `java.lang.Integer` inside the brackets. Cutting the whole text at its last dot turned
+// the second into `Integer>`, and neither pair compared equal -- so a Java implementer whose
+// only difference was formatting was reported as not delivering the interface.
+//
+// Whitespace survives only between two word characters, where it separates tokens
+// (`&mut Scene`, `? extends Number`); everywhere else -- after a comma, inside brackets --
+// it carries nothing.
+func canonicalTypeText(t string) string {
+	t = qualifiedName.ReplaceAllStringFunc(t, lastPathSegment)
+	var b strings.Builder
+	pendingSpace := false
+	var prev rune
+	for _, r := range t {
+		if unicode.IsSpace(r) {
+			pendingSpace = b.Len() > 0
+			continue
+		}
+		if pendingSpace && isTypeWordRune(prev) && isTypeWordRune(r) {
+			b.WriteByte(' ')
+		}
+		pendingSpace = false
+		b.WriteRune(r)
+		prev = r
+	}
+	return b.String()
+}
+
+func isTypeWordRune(r rune) bool {
+	return r == '_' || r == '$' || unicode.IsLetter(r) || unicode.IsDigit(r)
 }
 
 // isAssociatedType reports whether a type name is a trait's own placeholder.

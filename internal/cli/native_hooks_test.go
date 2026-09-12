@@ -334,3 +334,54 @@ func TestOpenCodeNativeEditPluginHandlesNativeAndWatcherEdits(t *testing.T) {
 		}
 	}
 }
+
+// The MCP entries setup writes (.mcp.json, opencode.json, every agent's inline mcpServers) name
+// the binary and have NO fallback to `arac` on PATH the way the hook scripts and plugins do -- so
+// a path that stops existing is a server that silently fails to start. EvalSymlinks turned a
+// stable `bin/arac` into the versioned file behind it, which the next upgrade deletes.
+func TestAracBinaryPrefersAStablePathNameForTheSameFile(t *testing.T) {
+	dir := t.TempDir()
+	versioned := filepath.Join(dir, "Cellar", "arac", "1.0.0", "bin", "arac")
+	if err := os.MkdirAll(filepath.Dir(versioned), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(versioned, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	stable := filepath.Join(dir, "bin", "arac")
+	if err := os.MkdirAll(filepath.Dir(stable), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(versioned, stable); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	other := filepath.Join(dir, "other", "arac")
+	if err := os.MkdirAll(filepath.Dir(other), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(other, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	exe := func() (string, error) { return versioned, nil }
+	found := func(path string) func(string) (string, error) {
+		return func(string) (string, error) { return path, nil }
+	}
+
+	if got := aracBinaryFrom(exe, found(stable)); got != stable {
+		t.Errorf("aracBinaryFrom = %q, want the stable name %q", got, stable)
+	}
+	// A DIFFERENT arac on PATH is not this one, and naming it would run the wrong binary.
+	if got := aracBinaryFrom(exe, found(other)); got != versioned {
+		t.Errorf("aracBinaryFrom = %q, want the running binary %q", got, versioned)
+	}
+	// Nothing on PATH: the absolute path is still better than a bare name.
+	missing := func(string) (string, error) { return "", os.ErrNotExist }
+	if got := aracBinaryFrom(exe, missing); got != versioned {
+		t.Errorf("aracBinaryFrom = %q, want %q", got, versioned)
+	}
+	// And no executable at all is the one case where `arac` on PATH is all there is.
+	if got := aracBinaryFrom(func() (string, error) { return "", os.ErrNotExist }, found(stable)); got != "arac" {
+		t.Errorf("aracBinaryFrom = %q, want the bare name", got)
+	}
+}

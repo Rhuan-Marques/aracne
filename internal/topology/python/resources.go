@@ -75,6 +75,11 @@ type PythonClass struct {
 	IsABC              bool
 	IsProtocol         bool
 	HasAbstractMethods bool
+	// BaseCandidates holds, per entry of Bases, the IDs that base may name through the
+	// defining file's imports, in lookup order. Recorded at parse time because inheritance
+	// is rebuilt over the whole graph, where no other file's imports are known. An empty
+	// entry is a base no import binds; nil when no base is import-bound.
+	BaseCandidates [][]string
 }
 
 // Represents a Python module with its ID, name, description, parent package, and connection metadata.

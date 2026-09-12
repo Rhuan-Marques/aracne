@@ -20,6 +20,15 @@ type VariableDefinition struct {
 	// It is resolved in the DEFINING file's import context during resolveTopology, so a
 	// caller in another file can follow a return type without the callee's imports.
 	TypingID string
+	// Annotation is the declared type as written, normalised for whitespace: "Item[]",
+	// "Map<string,Item[]>", "Item|null". Typing cannot stand in for it, because Typing is
+	// deliberately reduced to a BASE name that resolves to a resource -- all three of those
+	// reduce to "Item" or "Map". That reduction is right for following a value's type and
+	// wrong for a signature: without this field `items: Item` becoming `items: Item[]` is
+	// not a change, so a breaking edit raises no warning at all. Empty when the declaration
+	// carries no annotation, and empty on rows written before this field existed -- which is
+	// why the comparison treats an absent annotation as "no information" rather than "none".
+	Annotation string `json:",omitempty"`
 	// Optional and Variadic are what the declaration says about how the parameter may be
 	// passed. TypeScript marks an optional parameter with "?" or a default, and neither is
 	// recoverable from Name and Typing -- without them `f(a: number, b?: string)` and
@@ -34,6 +43,19 @@ type FunctionDefinition struct {
 	Name   string
 	Input  []VariableDefinition
 	Output []VariableDefinition
+	// Optional marks an optional interface method (`maybe?(): void`), which an implementer
+	// need not provide.
+	Optional bool `json:"Optional,omitempty"`
+}
+
+// HeritageImport records the import behind a name written in an `extends`/`implements`
+// clause, as the declaring file bound it: `import {Base as B}` + `extends B` is Name
+// "Base" from Source "./shapes". Name is "default" for a default import and "" for a
+// whole-module binding (`import * as`, `require`). Kept on the declaration because the
+// inheritance passes run over the whole topology, long after that file's import map is gone.
+type HeritageImport struct {
+	Source string
+	Name   string
 }
 
 // Holds the complete JavaScript/TypeScript topology graph: functions, classes, interfaces, named types, modules, external vars, and their dependencies.
@@ -71,6 +93,14 @@ type JavaScriptFunction struct {
 	// Accessibility is the TypeScript member modifier: "public"/"private"/"protected" (or "").
 	Accessibility string
 	Exported      bool
+	// Overloads holds the bodiless signatures of a TypeScript overload set, in source
+	// order. Every declaration in the set -- each overload and the implementation -- mints
+	// this same id, and Input/Output above are the implementation's, which is the one
+	// signature TypeScript does not let anyone call. The overloads are therefore the whole
+	// callable API: a caller is checked against them, and deleting one is a breaking change
+	// the implementation's (deliberately widest) signature cannot show. Empty for an
+	// ordinary function, which is then judged on Input/Output as before.
+	Overloads []FunctionDefinition `json:",omitempty"`
 }
 
 // Represents a JavaScript/TypeScript class with its metadata including inheritance, interfaces, constructor, and decorators.
@@ -96,6 +126,8 @@ type JavaScriptClass struct {
 	// as the class resource's "methods"/"properties" properties.
 	MergedInterfaceMethods    []FunctionDefinition
 	MergedInterfaceProperties []VariableDefinition
+	// HeritageImports maps each imported name in Bases/ImplementsRaw to its import.
+	HeritageImports map[string]HeritageImport
 }
 
 // JavaScriptInterface models a TypeScript interface (JavaScript has none). Methods and
@@ -108,8 +140,14 @@ type JavaScriptInterface struct {
 	Methods     []FunctionDefinition
 	Properties  []VariableDefinition
 	Bases       []string
+	// Generics are the type-parameter names the interface declares (`interface Repo<T>`).
+	// Its methods are written against them, so conformance cannot compare those positions
+	// with an implementer's concrete types -- see contract.SatisfiesWithTypeParams.
+	Generics    []string
 	Loc         domain.Location
 	Connections map[ConnectionKind][]string
+	// HeritageImports maps each imported name in Bases to its import.
+	HeritageImports map[string]HeritageImport
 }
 
 // JavaScriptNamedType models a TypeScript `type` alias or `enum`. Kind is "type" or "enum";
@@ -141,6 +179,11 @@ type JavaScriptModule struct {
 	// express.
 	ReExportsNamed map[string]ReExportTarget
 	Connections    map[ConnectionKind][]string
+	// ModulePath is the ID namespace this file's declarations were minted under, recorded
+	// only when it is not the default extension-stripped path: a file sharing its stem with
+	// a sibling (`util.js` + `util.cjs`) keeps its extension so the two cannot mint the same
+	// IDs. Resolution reads it so an importer addresses the IDs the file really has.
+	ModulePath string
 }
 
 // ReExportTarget is the destination of a named re-export: the source module and

@@ -18,15 +18,43 @@ type tsMatcher struct{ lang string }
 func (m tsMatcher) Language() string { return m.lang }
 
 func (m tsMatcher) Match(env Env, callee domain.Resource, site CallSite) (Verdict, string) {
-	params := tsParams(callee)
-	if len(params) == 0 && site.N <= 0 {
-		return Unknown, ""
-	}
 	if site.N < 0 || site.Variadic {
 		return Unknown, "" // a spread call supplies an unknown number of arguments
 	}
+	// A call has to fit ONE of the signatures the callee declares, so a mismatch is only a
+	// mismatch when every one of them says so.
+	var why string
+	for _, params := range tsSignatures(callee) {
+		v, w := tsMatchOne(env, callee.Name, params, site)
+		if v != Mismatch {
+			return v, ""
+		}
+		if why == "" {
+			why = w // the first signature's complaint, which is the one in source order
+		}
+	}
+	return Mismatch, why
+}
+
+// tsSignatures lists the signatures a caller may be written against, in source order.
+//
+// For an overload set that is the overloads and ONLY the overloads: TypeScript does not let
+// anyone call the implementation signature, and rejects a call that fits it while fitting no
+// overload -- the usual `function convert(x: any)` under two typed overloads accepts
+// everything, so admitting it here would answer Match for every call in the set.
+func tsSignatures(callee domain.Resource) [][]Param {
+	if over := tsOverloadParams(callee); len(over) > 0 {
+		return over
+	}
+	return [][]Param{tsParams(callee)}
+}
+
+func tsMatchOne(env Env, name string, params []Param, site CallSite) (Verdict, string) {
+	if len(params) == 0 && site.N <= 0 {
+		return Unknown, ""
+	}
 	if a := PositionalArity(params); !a.Accepts(site.N) {
-		return Mismatch, arityMessage(callee.Name, a, site.N)
+		return Mismatch, arityMessage(name, a, site.N)
 	}
 	if v, why := matchTypes(env, params, site, tsTypeOpaque, tsAccepts); v == Mismatch {
 		return Mismatch, why
@@ -34,9 +62,21 @@ func (m tsMatcher) Match(env Env, callee domain.Resource, site CallSite) (Verdic
 	return Match, ""
 }
 
+// tsOverloadParams is tsParams for each declared overload signature.
+func tsOverloadParams(callee domain.Resource) [][]Param {
+	over := OverloadParams(callee)
+	for i := range over {
+		over[i] = tsRestMarkers(over[i])
+	}
+	return over
+}
+
 // tsParams recovers the rest marker, which the parser spells in the name ("...rest").
 func tsParams(callee domain.Resource) []Param {
-	params := Params(callee)
+	return tsRestMarkers(Params(callee))
+}
+
+func tsRestMarkers(params []Param) []Param {
 	for i, p := range params {
 		if strings.HasPrefix(p.Name, "...") {
 			params[i].Variadic = true
@@ -56,7 +96,8 @@ func tsParams(callee domain.Resource) []Param {
 func tsTypeOpaque(env Env, p Param) bool {
 	t := strings.TrimSpace(p.Typing)
 	switch t {
-	case "", "any", "unknown", "object":
+	// `Object` is the wrapper type: every non-null value is assignable to it.
+	case "", "any", "unknown", "object", "Object":
 		return true
 	}
 	if isLikelyTypeParam(t) {
@@ -67,7 +108,19 @@ func tsTypeOpaque(env Env, p Param) bool {
 	if strings.ContainsAny(t, "|&<") {
 		return true
 	}
-	return env.kindOf(p.TypingID) == domain.ResourceInterface
+	switch env.kindOf(p.TypingID) {
+	case domain.ResourceInterface:
+		return true
+	case domain.ResourceNamedType:
+		// A type alias or an enum. What it accepts is written in its right-hand side,
+		// which this package does not parse: `enum Kind {A}` takes the number 0, and
+		// `type Id = string | number` takes both -- neither argument's text ever equals
+		// the name the parameter is declared with, so comparing them warns on correct
+		// code. numEnum(0) was exactly that false positive, and being a call that fits,
+		// no edit to the caller could ever retire the warning it raised.
+		return true
+	}
+	return false
 }
 
 func tsAccepts(env Env, p Param, actual string) bool {
@@ -75,17 +128,23 @@ func tsAccepts(env Env, p Param, actual string) bool {
 	if !IsUntyped(actual) {
 		return declared == strings.TrimSpace(actual)
 	}
+	// Number, String and Boolean are the wrapper types of the primitives, and a primitive
+	// is assignable to its wrapper -- only the reverse is the error TypeScript reports.
 	switch actual {
 	case UntypedInt, UntypedFloat:
-		return declared == "number" || declared == "bigint"
+		return declared == "number" || declared == "bigint" || declared == "Number"
 	case UntypedString:
-		return declared == "string"
+		return declared == "string" || declared == "String"
 	case UntypedBool:
-		return declared == "boolean"
+		return declared == "boolean" || declared == "Boolean"
 	case UntypedNil:
-		return declared == "null" || declared == "undefined"
+		// An optional parameter IS `T | undefined`, so passing `undefined` explicitly is
+		// the thing it was declared for. null and undefined share one literal class --
+		// both spell "absent" -- so the optional case takes either rather than guessing
+		// which one the caller wrote and warning about a call that compiles.
+		return p.Optional || declared == "null" || declared == "undefined"
 	case UntypedRune:
-		return declared == "string"
+		return declared == "string" || declared == "String"
 	}
 	return false
 }

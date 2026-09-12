@@ -17,10 +17,10 @@ func clearKeys(t *testing.T) {
 
 func TestResolveProviderNeedsAKey(t *testing.T) {
 	clearKeys(t)
-	if _, _, ok := resolveProvider(helper.ResolvedLazyDescriptions{Model: "haiku"}); ok {
+	if _, _, ok := resolveProvider(helper.ResolvedLazyDescriptions{Model: "haiku"}, true); ok {
 		t.Fatal("a model with no key in the environment must not resolve")
 	}
-	if _, _, ok := resolveProvider(helper.ResolvedLazyDescriptions{}); ok {
+	if _, _, ok := resolveProvider(helper.ResolvedLazyDescriptions{}, true); ok {
 		t.Fatal("no model and no key must not resolve")
 	}
 }
@@ -30,7 +30,7 @@ func TestResolveProviderNeedsAKey(t *testing.T) {
 func TestResolveProviderExpandsAliases(t *testing.T) {
 	clearKeys(t)
 	t.Setenv("ANTHROPIC_API_KEY", "k")
-	_, model, ok := resolveProvider(helper.ResolvedLazyDescriptions{Model: "haiku"})
+	_, model, ok := resolveProvider(helper.ResolvedLazyDescriptions{Model: "haiku"}, false)
 	if !ok {
 		t.Fatal("haiku did not resolve with an Anthropic key present")
 	}
@@ -62,7 +62,7 @@ func TestResolveProviderExplicitProviderWins(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "k")
 	_, model, ok := resolveProvider(helper.ResolvedLazyDescriptions{
 		Provider: providerOpenAI, Model: "some-local-claude-ish",
-	})
+	}, false)
 	if !ok {
 		t.Fatal("an explicit provider with a key did not resolve")
 	}
@@ -71,12 +71,13 @@ func TestResolveProviderExplicitProviderWins(t *testing.T) {
 	}
 }
 
-// With nothing configured at all, whichever key is present decides -- which is what makes the
-// feature work out of the box for a project that has an API key and has never read this doc.
+// With probing asked for -- which only the explicit sweep does -- and nothing configured,
+// whichever key is present decides. The lazy fill never asks for it: see
+// TestGeneratorFactoryIgnoresEnvironmentKeysWhenUnconfigured.
 func TestResolveProviderProbesTheEnvironment(t *testing.T) {
 	clearKeys(t)
 	t.Setenv("DEEPSEEK_API_KEY", "k")
-	_, model, ok := resolveProvider(helper.ResolvedLazyDescriptions{})
+	_, model, ok := resolveProvider(helper.ResolvedLazyDescriptions{}, true)
 	if !ok {
 		t.Fatal("a bare config with a DeepSeek key did not resolve")
 	}
@@ -90,7 +91,7 @@ func TestResolveProviderProbesTheEnvironment(t *testing.T) {
 func TestResolveProviderDoesNotSubstituteProviders(t *testing.T) {
 	clearKeys(t)
 	t.Setenv("OPENAI_API_KEY", "k")
-	if _, _, ok := resolveProvider(helper.ResolvedLazyDescriptions{Provider: providerAnthropic}); ok {
+	if _, _, ok := resolveProvider(helper.ResolvedLazyDescriptions{Provider: providerAnthropic}, true); ok {
 		t.Fatal("an explicitly named provider with no key resolved to another provider")
 	}
 }
@@ -103,5 +104,62 @@ func TestGeneratorFactoryReturnsNothingWhenUnconfigured(t *testing.T) {
 	}
 	if gen != nil {
 		t.Fatal("an unconfigured project should get no generator, not a broken one")
+	}
+}
+
+// A key in the environment is not an answer to "who writes my descriptions". A lazy fill runs
+// inside a read, so a project that named neither a provider nor a model gets no generator,
+// whichever vendor's key the machine happens to export -- docs/configuration.md says it "stays
+// silent and does nothing until `arac init` -- or a hand-written config -- has answered".
+func TestGeneratorFactoryIgnoresEnvironmentKeysWhenUnconfigured(t *testing.T) {
+	for _, env := range ProviderKeyEnvNames() {
+		t.Run(env, func(t *testing.T) {
+			clearKeys(t)
+			t.Setenv(env, "k")
+			gen, err := GeneratorFactory(helper.ResolvedLazyDescriptions{})
+			if err != nil {
+				t.Fatalf("factory error: %v", err)
+			}
+			if gen != nil {
+				t.Fatalf("an unconfigured project got a %T from %s", gen, env)
+			}
+			// The default config is the unconfigured project the read path actually sees.
+			if gen, _ := GeneratorFactory(helper.DefaultConfig().EffectiveLazyDescriptions("")); gen != nil {
+				t.Fatalf("the default config got a %T from %s", gen, env)
+			}
+		})
+	}
+}
+
+// What the fill still does: a project that has answered -- by naming a provider, or by pinning
+// the executor's model -- describes with the key it holds.
+func TestGeneratorFactoryUsesAnAnsweredProvider(t *testing.T) {
+	clearKeys(t)
+	t.Setenv("DEEPSEEK_API_KEY", "k")
+	if gen, _ := GeneratorFactory(helper.ResolvedLazyDescriptions{Provider: providerDeepSeek}); gen == nil {
+		t.Fatal("a named provider with its key got no generator")
+	}
+	clearKeys(t)
+	t.Setenv("ANTHROPIC_API_KEY", "k")
+	if gen, _ := GeneratorFactory(helper.ResolvedLazyDescriptions{Model: "haiku"}); gen == nil {
+		t.Fatal("a pinned executor model with its provider's key got no generator")
+	}
+}
+
+// The sweep is an explicit request, so its documented fallback is unchanged: an inferred
+// provider with no key falls back to the key the machine holds, and so does a bare config.
+func TestSweepStillFallsBackToTheEnvironment(t *testing.T) {
+	clearKeys(t)
+	t.Setenv("DEEPSEEK_API_KEY", "k")
+	_, model, ok := ResolveDescriptionProvider(helper.ResolvedLazyDescriptions{Model: "claude-haiku-4-5"})
+	if !ok || model != providerFallbackModel[providerDeepSeek] {
+		t.Fatalf("inferred-provider fallback = (%v, %q), want DeepSeek's fallback model", ok, model)
+	}
+	if _, _, ok := ResolveDescriptionProvider(helper.ResolvedLazyDescriptions{}); !ok {
+		t.Fatal("the sweep no longer probes the environment for a bare config")
+	}
+	// A NAMED provider is still never swapped.
+	if _, _, ok := ResolveDescriptionProvider(helper.ResolvedLazyDescriptions{Provider: providerAnthropic}); ok {
+		t.Fatal("the sweep swapped a named provider for another vendor's key")
 	}
 }

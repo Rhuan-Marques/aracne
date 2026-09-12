@@ -1,0 +1,141 @@
+package helper
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func mustSymlink(t *testing.T, target, link string) {
+	t.Helper()
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable here: %v", err)
+	}
+}
+
+func mustRead(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+// assertStillLink fails when path is no longer a symbolic link to want.
+func assertStillLink(t *testing.T, path, want string) {
+	t.Helper()
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("%s was replaced by a regular file; the link must survive the write", path)
+	}
+	if got, _ := os.Readlink(path); got != want {
+		t.Fatalf("%s now points at %q, want %q", path, got, want)
+	}
+}
+
+// TestAtomicWriteFile_WritesThroughSymlink pins ST-6: the rename replaced the symlink itself,
+// so `arac edit` / `arac write` on a symlinked source reported success, cut the link, and left
+// the real file unchanged.
+func TestAtomicWriteFile_WritesThroughSymlink(t *testing.T) {
+	dir := t.TempDir()
+	shared := filepath.Join(dir, "shared")
+	pkg := filepath.Join(dir, "proj", "pkg")
+	for _, d := range []string{shared, pkg} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	real := filepath.Join(shared, "shared.go")
+	if err := os.WriteFile(real, []byte("return 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("relative", func(t *testing.T) {
+		link := filepath.Join(pkg, "rel.go")
+		mustSymlink(t, "../../shared/shared.go", link)
+		if err := AtomicWriteFile(link, []byte("return 42\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		assertStillLink(t, link, "../../shared/shared.go")
+		if got := mustRead(t, real); got != "return 42\n" {
+			t.Fatalf("the link's target must receive the write, got %q", got)
+		}
+		if info, _ := os.Stat(real); info.Mode().Perm() != 0o600 {
+			t.Errorf("the target keeps its own permissions, got %v", info.Mode().Perm())
+		}
+	})
+
+	t.Run("chain", func(t *testing.T) {
+		abs := filepath.Join(pkg, "abs.go")
+		mustSymlink(t, real, abs)
+		chain := filepath.Join(pkg, "chain.go")
+		mustSymlink(t, "abs.go", chain)
+		if err := AtomicWriteFile(chain, []byte("return 7\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		assertStillLink(t, chain, "abs.go")
+		assertStillLink(t, abs, real)
+		if got := mustRead(t, real); got != "return 7\n" {
+			t.Fatalf("a chain of links is followed to its end, got %q", got)
+		}
+	})
+
+	t.Run("dangling", func(t *testing.T) {
+		link := filepath.Join(pkg, "dangling.go")
+		mustSymlink(t, "../../shared/new.go", link)
+		if err := AtomicWriteFile(link, []byte("new\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		assertStillLink(t, link, "../../shared/new.go")
+		if got := mustRead(t, filepath.Join(shared, "new.go")); got != "new\n" {
+			t.Fatalf("a dangling link creates its target, as os.WriteFile would, got %q", got)
+		}
+	})
+
+	t.Run("loop", func(t *testing.T) {
+		a, b := filepath.Join(pkg, "loopa.go"), filepath.Join(pkg, "loopb.go")
+		mustSymlink(t, "loopb.go", a)
+		mustSymlink(t, "loopa.go", b)
+		if err := AtomicWriteFile(a, []byte("x\n"), 0o644); err == nil {
+			t.Fatal("a symlink loop is an error, not a write that replaces one of the links")
+		}
+		assertStillLink(t, a, "loopb.go")
+	})
+}
+
+// TestAtomicWriteFile_RegularFileUnchanged pins the behaviour ST-6 must not disturb: a regular
+// file is replaced whole, keeps its permissions, and no temp file is left behind.
+func TestAtomicWriteFile_RegularFileUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "run.sh")
+	if err := os.WriteFile(path, []byte("old\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := AtomicWriteFile(path, []byte("new\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustRead(t, path); got != "new\n" {
+		t.Fatalf("got %q", got)
+	}
+	if info, _ := os.Lstat(path); !info.Mode().IsRegular() || info.Mode().Perm() != 0o755 {
+		t.Fatalf("a regular file stays regular with its permissions, got %v", info.Mode())
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("no temp file may be left behind, got %d entries", len(entries))
+	}
+	fresh := filepath.Join(dir, "fresh.txt")
+	if err := AtomicWriteFile(fresh, []byte("x"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if info, _ := os.Stat(fresh); info.Mode().Perm() != 0o640 {
+		t.Fatalf("a new file gets perm, got %v", info.Mode().Perm())
+	}
+}

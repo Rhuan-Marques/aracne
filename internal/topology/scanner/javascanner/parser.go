@@ -61,6 +61,7 @@ type javaBody struct {
 type javaLet struct {
 	Name     string
 	DeclType string // declared type text (highest-priority var type)
+	Param    bool   // a lambda or catch parameter: types its receiver, records no uses edge
 	NewType  string // RHS `new T(...)` -> T
 	CallObj  string // RHS `recv.m(...)` receiver text
 	CallMeth string // RHS method name
@@ -75,6 +76,7 @@ type javaCall struct {
 	Method    string // method name (or "<init>")
 	ArgCount  int    // -1 => unknown arity (method reference): match all overloads
 	IsSelf    bool   // implicit-this or `this` receiver
+	Implicit  bool   // no receiver at all: resolved through the enclosing types, then static imports
 	IsSuper   bool   // `super` receiver
 	CastType  string // receiver was a cast to this type
 	FieldRecv string // receiver was `this.<field>` -> field name
@@ -107,10 +109,16 @@ type ParseResult struct {
 	TypeUses        []typeUse
 	AnnoUses        []typeUse
 
+	// AnonEnclosing maps an anonymous class to the type whose code declares it. Its
+	// ID is numbered under the top-level type, so the ID alone skips a member type
+	// the anonymous class sits in.
+	AnonEnclosing map[string]string
+
 	// Filled by the resolver.
-	ImportMap     map[string]javaImport
-	Wildcards     []string
-	StaticMembers map[string]string
+	ImportMap       map[string]javaImport
+	Wildcards       []string
+	StaticMembers   map[string]string // statically imported member -> owner type FQN (internal or not)
+	StaticWildcards []string          // internal owner types of `import static T.*`
 }
 
 // parseState carries the source bytes, accumulating parse result, and the
@@ -175,6 +183,7 @@ func ParseFile(filePath, _ string) (*ParseResult, error) {
 		FileID:        filePath,
 		ImportMap:     map[string]javaImport{},
 		StaticMembers: map[string]string{},
+		AnonEnclosing: map[string]string{},
 	}
 	st := &parseState{src: src, pr: pr, localSeen: map[string]bool{}}
 	st.walkProgram(root)
@@ -350,7 +359,8 @@ func (st *parseState) parseClassLike(n *sitter.Node, fqn, topLevelFQN string) {
 
 	// extends (class only), implements, permits, generic bounds.
 	if sc := n.ChildByFieldName("superclass"); sc != nil {
-		for _, t := range typeListTypes(sc, st.src) {
+		cls.Bases = typeListTypes(sc, st.src)
+		for _, t := range cls.Bases {
 			st.pr.HierRecords = append(st.pr.HierRecords, hierRec{ChildID: fqn, ParentName: t, Kind: hkExtendsClass})
 		}
 	}
@@ -702,6 +712,12 @@ func (st *parseState) synthesizeAccessors(recNode *sitter.Node, recFQN string, c
 			existing[mp.Method.Name] = true
 		}
 	}
+	// The accessor is declared by the record header (`record P(int x, int y)`), not by
+	// the body: the whole record's span made reading one accessor return every member.
+	header := loc(st.pr.FileID, recNode)
+	if params := recNode.ChildByFieldName("parameters"); params != nil {
+		header.EndsAt = endLine(params)
+	}
 	for _, c := range comps {
 		if c.Name == "" || existing[c.Name] {
 			continue
@@ -712,7 +728,7 @@ func (st *parseState) synthesizeAccessors(recNode *sitter.Node, recFQN string, c
 			ID:          id,
 			Name:        c.Name,
 			Output:      []java.VariableDefinition{{Typing: c.Typing}},
-			Loc:         loc(st.pr.FileID, recNode),
+			Loc:         header,
 			Connections: map[java.ConnectionKind][]string{},
 			MethodFrom:  &owner,
 			IsSynthetic: true,
@@ -783,6 +799,7 @@ func (st *parseState) walkBody(node *sitter.Node, methodID, enclosingTypeFQN, to
 		if cb := childByType(node, "class_body"); cb != nil {
 			st.anonCounter++
 			anonFQN := topLevelFQN + "$anon" + itoa(st.anonCounter)
+			st.pr.AnonEnclosing[anonFQN] = enclosingTypeFQN
 			st.buildAnonClass(node, cb, anonFQN, typeName, topLevelFQN)
 			if args != nil {
 				for i := 0; i < int(args.NamedChildCount()); i++ {
@@ -827,7 +844,20 @@ func (st *parseState) walkBody(node *sitter.Node, methodID, enclosingTypeFQN, to
 				rb.Lets = append(rb.Lets, javaLet{Name: nodeText(nm, st.src), DeclType: typeText(t, st.src)})
 			}
 		}
+	case "catch_formal_parameter":
+		// A multi-catch (`A | B e`) has no single type to call through.
+		if ct := childByType(node, "catch_type"); ct != nil && ct.NamedChildCount() == 1 {
+			if nm := node.ChildByFieldName("name"); nm != nil {
+				rb.Lets = append(rb.Lets, javaLet{Name: nodeText(nm, st.src), DeclType: typeText(ct.NamedChild(0), st.src), Param: true})
+			}
+		}
 	case "lambda_expression":
+		// Explicitly typed lambda parameters type their receivers like method parameters.
+		if ps := node.ChildByFieldName("parameters"); ps != nil && ps.Type() == "formal_parameters" {
+			for _, p := range paramDefs(ps, st.src) {
+				rb.Lets = append(rb.Lets, javaLet{Name: p.Name, DeclType: p.Typing, Param: true})
+			}
+		}
 		if b := node.ChildByFieldName("body"); b != nil {
 			st.walkBody(b, methodID, enclosingTypeFQN, topLevelFQN, rb)
 		}
@@ -854,6 +884,9 @@ func (st *parseState) buildAnonClass(node, classBody *sitter.Node, anonFQN, supe
 	}
 	st.pr.Classes[len(st.pr.Classes)-1].Fields = st.collectFields(classBody, anonFQN)
 	st.parseTypeMembers(classBody, anonFQN, topLevelFQN)
+	// Double-brace initialization (`new ArrayList<>() {{ add(x); }}`) is an instance
+	// initializer of the anonymous class.
+	st.buildInitBlocks(classBody, anonFQN, topLevelFQN)
 }
 
 // buildLocalClass creates a local (method-scoped) class struct and its members.
@@ -875,7 +908,8 @@ func (st *parseState) buildLocalClass(node *sitter.Node, localFQN, topLevelFQN s
 		Exported:    exported,
 	}
 	if sc := node.ChildByFieldName("superclass"); sc != nil {
-		for _, t := range typeListTypes(sc, st.src) {
+		cls.Bases = typeListTypes(sc, st.src)
+		for _, t := range cls.Bases {
 			st.pr.HierRecords = append(st.pr.HierRecords, hierRec{ChildID: localFQN, ParentName: t, Kind: hkExtendsClass})
 		}
 	}
@@ -901,6 +935,7 @@ func (st *parseState) classifyInvocation(n *sitter.Node) javaCall {
 	obj := n.ChildByFieldName("object")
 	if obj == nil {
 		c.IsSelf = true
+		c.Implicit = true
 		return c
 	}
 	switch obj.Type() {
@@ -945,7 +980,14 @@ func (st *parseState) classifyMethodRef(n *sitter.Node) javaCall {
 	}
 	c := javaCall{ArgCount: -1}
 	if len(ids) >= 1 {
-		c.Object = nodeText(ids[0], st.src)
+		switch ids[0].Type() {
+		case "this": // this::m
+			c.IsSelf = true
+		case "super": // super::m
+			c.IsSuper = true
+		default:
+			c.Object = nodeText(ids[0], st.src)
+		}
 	}
 	if len(ids) >= 2 {
 		c.Method = nodeText(ids[len(ids)-1], st.src)
@@ -1085,7 +1127,7 @@ func paramDefs(params *sitter.Node, src []byte) []java.VariableDefinition {
 		case "formal_parameter":
 			out = append(out, java.VariableDefinition{
 				Name:   nodeText(c.ChildByFieldName("name"), src),
-				Typing: typeText(c.ChildByFieldName("type"), src),
+				Typing: formalParamType(c, src),
 			})
 		case "spread_parameter":
 			t := firstTypeChild(c)
@@ -1097,6 +1139,20 @@ func paramDefs(params *sitter.Node, src []byte) []java.VariableDefinition {
 		}
 	}
 	return out
+}
+
+// formalParamType returns a formal parameter's type text, including array
+// dimensions written C-style after the name: `String s[]` is a `String[]`.
+func formalParamType(p *sitter.Node, src []byte) string {
+	t := typeText(p.ChildByFieldName("type"), src)
+	if dims := p.ChildByFieldName("dimensions"); dims != nil {
+		for i := 0; i < int(dims.ChildCount()); i++ {
+			if dims.Child(i).Type() == "[" {
+				t += "[]"
+			}
+		}
+	}
+	return t
 }
 
 // firstTypeChild returns the first type-ish named child of a node.
@@ -1129,7 +1185,7 @@ func paramSig(params *sitter.Node, src []byte) string {
 		c := params.NamedChild(i)
 		switch c.Type() {
 		case "formal_parameter":
-			parts = append(parts, sigTypeText(typeText(c.ChildByFieldName("type"), src)))
+			parts = append(parts, sigTypeText(formalParamType(c, src)))
 		case "spread_parameter":
 			parts = append(parts, sigTypeText(typeText(firstTypeChild(c), src))+"[]")
 		}

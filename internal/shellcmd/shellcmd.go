@@ -16,6 +16,7 @@
 package shellcmd
 
 import (
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -99,8 +100,42 @@ type GrepRequest struct {
 	Globs        []string
 	ExcludeGlobs []string
 	ExcludeDirs  []string
-	Type         string
+	// Filters is Globs and ExcludeGlobs again, in command-line order. Which one wins when both
+	// match a file depends on that order, for grep's --include/--exclude and for rg's -g alike.
+	Filters []Filter
+	// FollowLinks is `-R`: follow every symbolic link met while recursing, not only operands.
+	FollowLinks bool
+	Type        string
+	// Stdin is how a command that named no path decides between reading its stdin and
+	// walking the working directory. See StdinRule.
+	Stdin StdinRule
 }
+
+// Filter is one filename filter as the caller typed it: an --include or unnegated -g glob, or
+// an --exclude or `-g !glob` with Exclude set.
+type Filter struct {
+	Glob    string
+	Exclude bool
+}
+
+// StdinRule says what a search that named no path does with its stdin.
+//
+// It is a RULE rather than an answer because the answer depends on what stdin IS, and this
+// package does no I/O. `rg foo` walks the working directory from a terminal and searches the
+// file in `rg foo < README.md`; the caller holding the real stdin -- `arac cmd`, run in the
+// shell the command would have run in -- applies it.
+type StdinRule int
+
+const (
+	// StdinIgnored: the command names what it searches, or is `grep -r`/`ug -r` with no path,
+	// which walk the working directory whatever stdin holds.
+	StdinIgnored StdinRule = iota
+	// StdinIfData: ripgrep searches stdin when it is a file, a pipe or a socket, and
+	// walks the working directory when it is a terminal or /dev/null.
+	StdinIfData
+	// StdinUnlessTerminal: ugrep searches any stdin that is not a terminal.
+	StdinUnlessTerminal
+)
 
 // Request is one parsed command.
 type Request struct {
@@ -148,8 +183,15 @@ func Parse(argv []string) Request {
 		return parseAwk(name, args)
 	case "get-content":
 		return parseGetContent(name, args)
-	case "grep", "egrep", "fgrep", "rg", "ack", "ag", "ug":
+	case "grep", "egrep", "fgrep", "rg", "ug":
 		return parseGrep(name, args)
+	case "ag", "ack":
+		// Not grep with another name. Their shared letters mean other things -- `-n` stops the
+		// recursion, ack's `-x` reads the file list from stdin, ag's `-t` searches all text --
+		// both number every line by default, and both take a Perl-style regex. Answering them
+		// through grep's flag table served `ag -n Perimeter go` recursively and `ack Perimeter
+		// go/shapes` without the line numbers ack prints.
+		return pass(name, name+" is not modelled: its flags and regex dialect are not grep's")
 	}
 	// nl, tac, strings, xxd, od, hexdump and everything else. These ARE reads -- the guard
 	// classifies them as such and warns on them -- but they ask for a TRANSFORMATION of the
@@ -619,8 +661,31 @@ func WordSafe(pattern string) bool { return wordSafe(pattern) }
 // a capability, and the model that learns the spelling here finds it fails everywhere else.
 var (
 	includeFamily = map[string]bool{"grep": true, "egrep": true, "fgrep": true, "ug": true}
-	typeFamily    = map[string]bool{"rg": true, "ag": true, "ack": true, "ug": true}
+	typeFamily    = map[string]bool{"rg": true, "ug": true}
 )
+
+// exactTypes are the `-t` names whose extension set in topogrep is exactly the tool's own
+// definition (`rg --type-list`, `ug -tlist`). Any other name is a different set of files --
+// rg's cpp also takes .h/.H/.inl, its json takes composer.lock, its sh takes .bashrc -- or not
+// a type the tool knows at all (`rg -t javascript` is an error), so it passes through.
+var exactTypes = map[string]map[string]bool{
+	"rg": {"go": true, "py": true, "python": true, "js": true, "ts": true, "typescript": true,
+		"rust": true, "yaml": true},
+	"ug": {"go": true, "rust": true, "json": true, "yaml": true},
+}
+
+// rgForeignFlag reports whether a grep flag means something else to ripgrep, or nothing at
+// all. `rg -r X` replaces every match with X (so `rg -rn foo` prints "n" for each hit), `rg -E X`
+// names an encoding, and `--color`/`--colors` take their value as the next word, which grep's
+// reading would have taken for the pattern.
+func rgForeignFlag(a string) bool {
+	switch a {
+	case "-r", "-R", "-E", "-G", "-y", "--recursive", "--dereference-recursive",
+		"--extended-regexp", "--basic-regexp", "--color", "--colors":
+		return true
+	}
+	return strings.HasPrefix(a, "--binary-files=")
+}
 
 // parseGrep maps a search command onto the knobs topogrep has. Flags that change what a
 // match IS (`-v` inverts, `-o` prints the match not the line, `-P` is a different regex
@@ -669,6 +734,12 @@ func parseGrep(name string, args []string) Request {
 		switch {
 		case a == "--":
 			endOfFlags = true
+		// ripgrep shares most of grep's letters, not all of them. These are read rg's way or
+		// not at all, before the grep meanings below can claim them.
+		case name == "rg" && rgForeignFlag(a):
+			return pass(name, "rg does not read "+a+" the way grep does")
+		case name == "rg" && a == "-s":
+			g.IgnoreCase = false // --case-sensitive, and like -i the last one given wins
 		case a == "-i" || a == "--ignore-case" || a == "-y":
 			g.IgnoreCase = true
 		case a == "-w" || a == "--word-regexp":
@@ -682,11 +753,15 @@ func parseGrep(name string, args []string) Request {
 			dialect = dialectFixed
 		case a == "-E" || a == "--extended-regexp":
 			dialect = dialectERE
+			if name == "ug" {
+				dialect = dialectRust // ugrep's -E is its default syntax
+			}
 		case a == "-G" || a == "--basic-regexp":
 			dialect = dialectBRE
 		// Accepted and ignored: aracne always recurses into a directory operand.
 		case a == "-r" || a == "-R" || a == "--recursive" || a == "--dereference-recursive":
 			sawRecursive = true
+			g.FollowLinks = g.FollowLinks || a == "-R" || a == "--dereference-recursive"
 		// CARRIED, NOT IGNORED. These two sat in the branch below on the reasoning that
 		// "aracne always reports path:line" -- which is not true on the shell surface, where
 		// a single named file prints a bare `line:text`. So `-H` was silently dropped and
@@ -695,8 +770,9 @@ func parseGrep(name string, args []string) Request {
 			g.LineNumbers = true
 		case a == "-H" || a == "--with-filename":
 			g.WithFilename = true
-		case a == "-s" || a == "--no-messages",
-			a == "--binary-files=without-match", strings.HasPrefix(a, "--color"):
+		// Not --binary-files=without-match: it drops binary files from -l and zeroes their -c,
+		// which is a different answer, so it reaches the flag loop's default and runs for real.
+		case a == "-s" || a == "--no-messages", strings.HasPrefix(a, "--color"):
 		case a == "-l" || a == "--files-with-matches":
 			g.Mode = OutputFiles
 		case a == "-c" || a == "--count":
@@ -748,23 +824,27 @@ func parseGrep(name string, args []string) Request {
 				return pass(name, name+" has no --include")
 			}
 			g.Globs = append(g.Globs, strings.TrimPrefix(a, "--include="))
+			g.Filters = append(g.Filters, Filter{Glob: strings.TrimPrefix(a, "--include=")})
 		case a == "--include":
 			if !includeFamily[name] || i+1 >= len(args) {
 				return pass(name, "unmodelled --include")
 			}
 			i++
 			g.Globs = append(g.Globs, args[i])
+			g.Filters = append(g.Filters, Filter{Glob: args[i]})
 		case strings.HasPrefix(a, "--exclude="):
 			if !includeFamily[name] {
 				return pass(name, name+" has no --exclude")
 			}
 			g.ExcludeGlobs = append(g.ExcludeGlobs, strings.TrimPrefix(a, "--exclude="))
+			g.Filters = append(g.Filters, Filter{Glob: strings.TrimPrefix(a, "--exclude="), Exclude: true})
 		case a == "--exclude":
 			if !includeFamily[name] || i+1 >= len(args) {
 				return pass(name, "unmodelled --exclude")
 			}
 			i++
 			g.ExcludeGlobs = append(g.ExcludeGlobs, args[i])
+			g.Filters = append(g.Filters, Filter{Glob: args[i], Exclude: true})
 		case strings.HasPrefix(a, "--exclude-dir="):
 			if !includeFamily[name] {
 				return pass(name, name+" has no --exclude-dir")
@@ -781,11 +861,13 @@ func parseGrep(name string, args []string) Request {
 				return pass(name, name+" has no --glob")
 			}
 			g.Globs = append(g.Globs, strings.TrimPrefix(a, "--glob="))
+			g.Filters = append(g.Filters, Filter{Glob: strings.TrimPrefix(a, "--glob=")})
 		case a == "-g" || a == "--glob":
 			if !typeFamily[name] || i+1 >= len(args) {
 				return pass(name, "unmodelled "+a)
 			}
 			i++
+			g.Filters = append(g.Filters, Filter{Glob: strings.TrimPrefix(args[i], "!"), Exclude: strings.HasPrefix(args[i], "!")})
 			// ripgrep's `-g !pat` is a NEGATED glob, and reading it as a positive one
 			// searches exactly the files the caller asked to skip.
 			if strings.HasPrefix(args[i], "!") {
@@ -793,15 +875,17 @@ func parseGrep(name string, args []string) Request {
 				continue
 			}
 			g.Globs = append(g.Globs, args[i])
+		// One type, and only one whose file set is the tool's own: a second -t widens the
+		// search, and topogrep holds a single type.
 		case a == "-t" || a == "--type":
-			if !typeFamily[name] || i+1 >= len(args) {
+			if !typeFamily[name] || i+1 >= len(args) || g.Type != "" || !exactTypes[name][args[i+1]] {
 				return pass(name, "unmodelled "+a)
 			}
 			i++
 			g.Type = args[i]
 		case strings.HasPrefix(a, "--type="):
-			if !typeFamily[name] {
-				return pass(name, name+" has no --type")
+			if t := strings.TrimPrefix(a, "--type="); !typeFamily[name] || g.Type != "" || !exactTypes[name][t] {
+				return pass(name, "unmodelled "+a)
 			}
 			g.Type = strings.TrimPrefix(a, "--type=")
 		case a == "-e" || a == "--regexp":
@@ -831,14 +915,20 @@ func parseGrep(name string, args []string) Request {
 	if g.WholeWord && !wordSafe(g.Pattern) {
 		return pass(name, "-w on a pattern \\b cannot express: "+g.Pattern)
 	}
-	// The dialect is settled. `-F` rides into topogrep as a flag; BRE cannot ride at all,
-	// because topogrep compiles with Go's regexp and there is no RE2 switch for it, so the
-	// pattern is rewritten here or the command passes through.
+	// A newline separates PATTERNS: grep and ugrep search for either line, ripgrep refuses
+	// it, and RE2 looks for a newline inside a line, where there never is one.
+	if strings.Contains(g.Pattern, "\n") {
+		return pass(name, "a newline in the pattern is a list of patterns")
+	}
+	// The dialect is settled. `-F` rides into topogrep as a flag; no other dialect rides at
+	// all, because topogrep compiles with Go's regexp -- RE2 -- which is none of them. The
+	// pattern is rewritten here into the RE2 that means the same thing, or the command
+	// passes through.
 	g.Fixed = dialect == dialectFixed
-	if dialect == dialectBRE {
-		re2, ok := breToRE2(g.Pattern)
+	if translate := translators[dialect]; translate != nil {
+		re2, ok := translate(g.Pattern)
 		if !ok {
-			return pass(name, "BRE pattern with no RE2 equivalent: "+g.Pattern)
+			return pass(name, "pattern with no RE2 equivalent: "+g.Pattern)
 		}
 		g.Pattern = re2
 	}
@@ -852,7 +942,27 @@ func parseGrep(name string, args []string) Request {
 	if len(ops) == 0 && !searchesCwdByDefault[name] && !sawRecursive {
 		return pass(name, name+" without a path reads stdin")
 	}
+	// The tools that DO walk the tree without a path walk it only while stdin is not what they
+	// were asked to search, which is a fact about the stdin rather than about argv.
+	if len(ops) == 0 {
+		g.Stdin = pathlessStdinRule(name, sawRecursive)
+	}
 	return Request{Kind: KindGrep, Name: name, Operands: ops, Grep: g}
+}
+
+// pathlessStdinRule is the stdin test a search with no path applies. ugrep's -r means the
+// working directory, as GNU grep's does; for rg it changes nothing here.
+func pathlessStdinRule(name string, recursive bool) StdinRule {
+	switch name {
+	case "rg":
+		return StdinIfData
+	case "ug":
+		if recursive {
+			return StdinIgnored
+		}
+		return StdinUnlessTerminal
+	}
+	return StdinIgnored // grep -r
 }
 
 // positiveCount reads a count argument that must be a plain integer of at least 1. It reports
@@ -868,7 +978,7 @@ func positiveCount(s string) (int, bool) {
 
 // searchesCwdByDefault lists the search tools whose no-path form walks the working directory
 // rather than reading stdin.
-var searchesCwdByDefault = map[string]bool{"rg": true, "ag": true, "ack": true, "ug": true}
+var searchesCwdByDefault = map[string]bool{"rg": true, "ug": true}
 
 // clusterable is a short flag that takes no argument, so it may appear glued to others
 // (`-rn`, `-in`).
@@ -988,26 +1098,370 @@ func atoi(s string) int {
 // it returns a confident, well-formed answer to a different question. Treating the absence
 // of `-E` as "near enough to extended" was exactly the "ignore the flag" this package's
 // doc comment forbids, so the dialect is carried instead of assumed.
+//
+// ERE IS NOT RE2 EITHER, and neither is ripgrep's syntax. Passing them through raw let RE2
+// read `Ra{,3}dius` as a literal (GNU: zero to three a's; rg: an error) and `\d` as a digit
+// (GNU: the letter d), so each gets its own translator below.
 type regexDialect int
 
 const (
 	dialectBRE regexDialect = iota
 	dialectERE
 	dialectFixed
+	// dialectRust is ripgrep's syntax, the Rust regex crate. ugrep's default syntax agrees
+	// with it on every construct the translator checks (`\s` takes \v, `{,3}` and a stray
+	// `{` are errors, `\<` is a word boundary), so ug shares it.
+	dialectRust
 )
+
+// translators rewrite each regex dialect into RE2. -F has none: it rides as a flag.
+var translators = map[regexDialect]func(string) (string, bool){
+	dialectBRE:  breToRE2,
+	dialectERE:  ereToRE2,
+	dialectRust: rustToRE2,
+}
 
 // defaultDialect is the syntax a search tool uses when no dialect flag is given. Only
 // POSIX grep defaults to BRE; egrep is the flagless spelling of -E and fgrep of -F, and
-// rg/ack/ag/ug all default to ERE-or-richer dialects RE2 already covers.
+// rg/ug default to their own syntax.
 func defaultDialect(name string) regexDialect {
 	switch name {
 	case "grep":
 		return dialectBRE
 	case "fgrep":
 		return dialectFixed
-	default:
+	case "egrep":
 		return dialectERE
+	default:
+		return dialectRust
 	}
+}
+
+// gnuEscape translates the GNU escape `\c` (outside a bracket expression) into RE2, for the
+// characters BRE and ERE read alike. prevWord says whether the element before it was a
+// literal word character, next is the pattern byte after it (0 at the end).
+//
+// ok is false for everything whose meaning differs: `\d`, `\n`, `\t` and every other escaped
+// letter or digit are the letter itself (or a backreference) to GNU and a class, a control
+// character or an error to RE2; “ \` “ and `\'` anchor the buffer in GNU and are literals
+// in RE2. `\<` and `\>` become `\b` only where the neighbouring literal is a word character,
+// the one place a start- or end-of-word anchor and RE2's either-side boundary coincide.
+func gnuEscape(c byte, next byte, prevWord bool) (string, bool) {
+	switch {
+	case c == 's':
+		// Unicode where the locale is, like GNU's, and spelled out because RE2's own \s and
+		// its [[:space:]] are both ASCII. GNU's \s takes \v; RE2's does not.
+		space, _ := classSetRE2("space")
+		return `[` + space + `]`, true
+	case c == 'S':
+		space, _ := classSetRE2("space")
+		return `[^` + space + `]`, true
+	case c == 'w' || c == 'W' || c == 'b' || c == 'B':
+		return `\` + string(c), true
+	case c == '<':
+		return `\b`, isWordByte(next)
+	case c == '>':
+		return `\b`, prevWord
+	case isWordByte(c) || c == '`' || c == '\'' || c == ' ' || c >= utf8RuneSelf:
+		return "", false
+	}
+	return `\` + string(c), true // an escaped punctuation character is itself in both
+}
+
+// utf8RuneSelf is the first byte value that is not a whole ASCII character.
+const utf8RuneSelf = 0x80
+
+// isWordByte reports whether b is an ASCII word character, [0-9A-Za-z_].
+func isWordByte(b byte) bool {
+	return b == '_' || b >= '0' && b <= '9' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z'
+}
+
+// interval reads the body of a `{m,n}` repetition starting at i (just past the opening brace)
+// and ending at closer (`}` for ERE and Rust, `\}` for BRE). It returns the RE2 spelling, the
+// index of the closer's last byte, and ok. An empty lower bound is GNU's zero -- `{,3}` is
+// `{0,3}` -- which RE2 would otherwise read as a literal, so it is spelled out when allowEmpty
+// is set and refused otherwise (ripgrep rejects it).
+func interval(pat string, i int, closer string, allowEmpty bool) (string, int, bool) {
+	j := i
+	for j < len(pat) && pat[j] >= '0' && pat[j] <= '9' {
+		j++
+	}
+	lo := pat[i:j]
+	hi, comma := "", false
+	if j < len(pat) && pat[j] == ',' {
+		comma = true
+		j++
+		k := j
+		for j < len(pat) && pat[j] >= '0' && pat[j] <= '9' {
+			j++
+		}
+		hi = pat[k:j]
+	}
+	if !strings.HasPrefix(pat[j:], closer) || (lo == "" && !comma) {
+		return "", 0, false
+	}
+	if lo == "" {
+		if !allowEmpty {
+			return "", 0, false
+		}
+		lo = "0"
+	}
+	if hi != "" && atoi(hi) < atoi(lo) {
+		return "", 0, false
+	}
+	out := "{" + lo
+	if comma {
+		out += "," + hi
+	}
+	return out + "}", j + len(closer) - 1, true
+}
+
+// ereToRE2 rewrites a GNU Extended Regular Expression into RE2. The operators are RE2's own,
+// so the work is in what is NOT shared: the escapes (see gnuEscape), `{,n}`, a quantifier with
+// nothing to repeat -- GNU treats it as a literal or ignores it with a warning, RE2 refuses or
+// reads `(?i)` as a flag -- a brace that is not an interval, and bracket expressions, where
+// POSIX reads `\` as itself. ok is false for any of those it cannot vouch for.
+func ereToRE2(pat string) (string, bool) {
+	var b strings.Builder
+	leading := true // nothing to repeat: the start, or just past `(` or `|`
+	prevWord := false
+	for i := 0; i < len(pat); i++ {
+		c := pat[i]
+		wasLeading, word := leading, false
+		leading = false
+		switch c {
+		case '\\':
+			if i+1 >= len(pat) {
+				return "", false
+			}
+			i++
+			var next byte
+			if i+1 < len(pat) {
+				next = pat[i+1]
+			}
+			s, ok := gnuEscape(pat[i], next, prevWord)
+			if !ok {
+				return "", false
+			}
+			b.WriteString(s)
+		case '[':
+			end, ok := breBracket(pat, i)
+			if !ok {
+				return "", false
+			}
+			bracket, ok := bracketToRE2(pat[i : end+1])
+			if !ok {
+				return "", false
+			}
+			b.WriteString(bracket)
+			i = end
+		case '{':
+			// Not an interval at all -- `a{`, `{x}` -- is a literal brace to both. Anything
+			// that starts like one must be one.
+			if i+1 < len(pat) && (pat[i+1] == ',' || pat[i+1] == '}' || pat[i+1] >= '0' && pat[i+1] <= '9') {
+				s, end, ok := interval(pat, i+1, "}", true)
+				if !ok || wasLeading {
+					return "", false
+				}
+				b.WriteString(s)
+				i = end
+			} else {
+				b.WriteString(`\{`)
+			}
+		case '*', '+', '?':
+			if wasLeading {
+				return "", false
+			}
+			b.WriteByte(c)
+		case '(', '|':
+			b.WriteByte(c)
+			leading = true
+		case '^':
+			b.WriteByte(c)
+			leading = wasLeading
+		default:
+			b.WriteByte(c)
+			word = isWordByte(c)
+		}
+		prevWord = word
+	}
+	return compiled(b.String())
+}
+
+// rustToRE2 rewrites a ripgrep (Rust regex) pattern into RE2. The two agree on most of the
+// syntax; this refuses what they do not share -- `{,n}` and any brace that is not a complete
+// repetition (errors in rg, literals in RE2), `\<` `\>` and `\b{…}` (word anchors in rg,
+// literals in RE2), `\Q`, octal and backreference escapes, nested and set-operation classes
+// (`[a[b]]`, `[a&&b]`) -- and spells `\s` as the POSIX class, because rg's takes \v and RE2's
+// does not.
+func rustToRE2(pat string) (string, bool) {
+	var b strings.Builder
+	leading := true
+	for i := 0; i < len(pat); i++ {
+		c := pat[i]
+		wasLeading := leading
+		leading = false
+		switch c {
+		case '\\':
+			s, end, ok := rustEscape(pat, i, false)
+			if !ok {
+				return "", false
+			}
+			b.WriteString(s)
+			i = end
+		case '[':
+			s, end, ok := rustBracket(pat, i)
+			if !ok {
+				return "", false
+			}
+			b.WriteString(s)
+			i = end
+		case '{':
+			s, end, ok := interval(pat, i+1, "}", false)
+			if !ok || wasLeading {
+				return "", false
+			}
+			b.WriteString(s)
+			i = end
+		case '*', '+', '?':
+			if wasLeading {
+				return "", false
+			}
+			b.WriteByte(c)
+		case '(':
+			if !strings.HasPrefix(pat[i:], "(?") {
+				b.WriteByte(c)
+				leading = true
+				break
+			}
+			// A flag group or a named or non-capturing group, which both syntaxes share:
+			// copy its head, up to the `)` of `(?i)` or the `:`/`>` that opens a body.
+			end := strings.IndexAny(pat[i+2:], ":)>")
+			if end < 0 {
+				return "", false
+			}
+			end += i + 2
+			b.WriteString(pat[i : end+1])
+			i = end
+			leading = pat[end] != ')' || wasLeading
+		case '|':
+			b.WriteByte(c)
+			leading = true
+		case '^':
+			b.WriteByte(c)
+			leading = wasLeading
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return compiled(b.String())
+}
+
+// rustEscape translates the escape starting at pat[i] == '\\', returning its RE2 text and the
+// index of its last byte. inClass spells `\s`/`\S` for the inside of a bracket.
+func rustEscape(pat string, i int, inClass bool) (string, int, bool) {
+	if i+1 >= len(pat) {
+		return "", 0, false
+	}
+	c := pat[i+1]
+	switch {
+	case c == 's' || c == 'S':
+		// rg's \s is Unicode; RE2's \s and its [:space:] are both ASCII, so the class is
+		// spelled out (see posixClassRE2). A negated one inside a bracket has no splice-able
+		// form, so that pattern is left for the real command.
+		if c == 'S' && inClass {
+			return "", 0, false
+		}
+		space, _ := classSetRE2("space")
+		class := space
+		if !inClass {
+			class = "[" + space + "]"
+			if c == 'S' {
+				class = "[^" + space + "]"
+			}
+		}
+		return class, i + 1, true
+	case c == 'p' || c == 'P' || c == 'x':
+		// A property or a hex escape, whose braces are its argument, not a repetition.
+		if i+2 < len(pat) && pat[i+2] == '{' {
+			end := strings.IndexByte(pat[i+2:], '}')
+			if end < 0 {
+				return "", 0, false
+			}
+			return pat[i : i+2+end+1], i + 2 + end, true
+		}
+		return `\` + string(c), i + 1, true
+	case c == 'b' && i+2 < len(pat) && pat[i+2] == '{':
+		return "", 0, false // \b{start} and friends
+	case strings.IndexByte("dDwWbBAznrtfva", c) >= 0:
+		return `\` + string(c), i + 1, true
+	case isWordByte(c) || c == '<' || c == '>' || c == ' ' || c >= utf8RuneSelf:
+		return "", 0, false
+	}
+	return `\` + string(c), i + 1, true
+}
+
+// rustBracket copies the bracket expression opening at i into RE2, returning the index of
+// its closing `]`. Rust reads a class the way RE2 does except for nesting and the set
+// operators, which RE2 would take as literal characters.
+func rustBracket(pat string, i int) (string, int, bool) {
+	var b strings.Builder
+	b.WriteByte('[')
+	j := i + 1
+	if j < len(pat) && pat[j] == '^' {
+		b.WriteByte('^')
+		j++
+	}
+	if j < len(pat) && pat[j] == ']' {
+		b.WriteByte(']')
+		j++
+	}
+	for j < len(pat) {
+		switch c := pat[j]; {
+		case c == ']':
+			b.WriteByte(']')
+			return b.String(), j, true
+		case c == '\\':
+			s, end, ok := rustEscape(pat, j, true)
+			if !ok {
+				return "", 0, false
+			}
+			b.WriteString(s)
+			j = end + 1
+		case c == '[':
+			if !strings.HasPrefix(pat[j:], "[:") {
+				return "", 0, false // a nested class
+			}
+			k := strings.Index(pat[j:], ":]")
+			if k < 0 {
+				return "", 0, false
+			}
+			// Same Unicode rule as the grep dialects: rg evaluates these against Unicode and
+			// RE2's own classes do not. A negated `[:^alpha:]` has no splice-able set form,
+			// so it is left untranslatable rather than answered ASCII-only.
+			set, ok := classSetRE2(pat[j+2 : j+k])
+			if !ok {
+				return "", 0, false
+			}
+			b.WriteString(set)
+			j += k + 2
+		case (c == '&' || c == '-' || c == '~') && j+1 < len(pat) && pat[j+1] == c:
+			return "", 0, false // &&, --, ~~
+		default:
+			b.WriteByte(c)
+			j++
+		}
+	}
+	return "", 0, false
+}
+
+// compiled returns the rewrite when RE2 accepts it. A pattern RE2 rejects is one this package
+// cannot vouch for, so it reaches the real tool -- which may accept it, or report its own error.
+func compiled(re2 string) (string, bool) {
+	if _, err := regexp.Compile(re2); err != nil {
+		return "", false
+	}
+	return re2, true
 }
 
 // breToRE2 rewrites a POSIX Basic Regular Expression into the RE2 source that means the
@@ -1030,9 +1484,11 @@ func breToRE2(pat string) (string, bool) {
 	// give a following `*` something to repeat, so leading survives one -- but a SECOND caret
 	// is an ordinary character, and reading it off leading turned `^^foo` into two anchors.
 	anchorable := true
+	prevWord := false // the last element was a literal word character (see gnuEscape)
 	for i := 0; i < len(pat); i++ {
 		canAnchor := anchorable
 		anchorable = false
+		word := false
 		switch c := pat[i]; c {
 		case '\\':
 			if i+1 >= len(pat) {
@@ -1042,16 +1498,31 @@ func breToRE2(pat string) (string, bool) {
 			switch d := pat[i]; {
 			case d >= '1' && d <= '9':
 				return "", false // a backreference; RE2 has no such thing
-			case d == '(' || d == ')' || d == '{' || d == '}' || d == '|' || d == '+' || d == '?':
+			case d == '{':
+				// An interval, read whole: `\{,3\}` is GNU's zero-to-three, and copying the
+				// braces one at a time left RE2 the literal `{,3}`. Nothing to repeat, or
+				// anything that is not an interval, is an error or a literal to GNU.
+				s, end, ok := interval(pat, i+1, `\}`, true)
+				if !ok || leading {
+					return "", false
+				}
+				b.WriteString(s)
+				i = end
+				leading = false
+			case d == '(' || d == ')' || d == '}' || d == '|' || d == '+' || d == '?':
 				b.WriteByte(d) // BRE's escaped operator is RE2's bare one
 				leading = d == '(' || d == '|'
 				anchorable = leading
-			case d == '<' || d == '>':
-				b.WriteString(`\b`) // GNU's word boundaries
-				leading = false
 			default:
-				b.WriteByte('\\')
-				b.WriteByte(d)
+				var next byte
+				if i+1 < len(pat) {
+					next = pat[i+1]
+				}
+				s, ok := gnuEscape(d, next, prevWord)
+				if !ok {
+					return "", false
+				}
+				b.WriteString(s)
 				leading = false
 			}
 		case '(', ')', '{', '}', '|', '+', '?':
@@ -1085,19 +1556,21 @@ func breToRE2(pat string) (string, bool) {
 			if !ok {
 				return "", false
 			}
-			b.WriteString(pat[i : end+1])
+			bracket, ok := bracketToRE2(pat[i : end+1])
+			if !ok {
+				return "", false
+			}
+			b.WriteString(bracket)
 			i = end
 			leading = false
 		default:
 			b.WriteByte(c)
 			leading = false
+			word = isWordByte(c)
 		}
+		prevWord = word
 	}
-	out := b.String()
-	if _, err := regexp.Compile(out); err != nil {
-		return "", false
-	}
-	return out, true
+	return compiled(b.String())
 }
 
 // breEndAnchor reports whether the `$` at i anchors rather than matching a literal `$`:
@@ -1107,6 +1580,92 @@ func breEndAnchor(pat string, i int) bool {
 		return true
 	}
 	return i+2 < len(pat) && pat[i+1] == '\\' && (pat[i+2] == ')' || pat[i+2] == '|')
+}
+
+// posixClasses are the character class names POSIX defines, the only ones GNU grep accepts.
+// posixClassRE2 maps each POSIX class to the RE2 SET EXPRESSION with the same membership in a
+// UTF-8 locale, written so it can be spliced inside a bracket expression.
+//
+// RE2's own `[:alpha:]` is ASCII-only; glibc's is not. Copying the class through therefore
+// answered `grep 'caf[[:alpha:]]'` over "café" with "no matches" -- the one failure mode worse
+// than not answering, since the model reads exit 1 as proof the text is absent.
+//
+// punct, print and graph have no entry on purpose. glibc's membership for them is locale data
+// (which symbols count as punctuation), not a Unicode property, so nothing here reproduces it
+// exactly and the pattern is left untranslatable: `arac cmd` then runs the real grep, whose
+// output is by definition right. digit and xdigit stay ASCII because POSIX defines them that
+// way in every locale.
+var posixClassRE2 = map[string]string{
+	"alnum":  `\p{L}\p{N}`,
+	"alpha":  `\p{L}`,
+	"blank":  `\t\p{Zs}`,
+	"cntrl":  `\p{Cc}`,
+	"digit":  `0-9`,
+	"lower":  `\p{Ll}`,
+	"space":  `\t\n\v\f\r\p{Z}`,
+	"upper":  `\p{Lu}`,
+	"xdigit": `0-9A-Fa-f`,
+}
+
+// asciiCtype reports whether the process's locale makes the POSIX classes ASCII-only.
+//
+// glibc's [[:alpha:]] follows LC_CTYPE: in a UTF-8 locale it matches "é" and in the C/POSIX
+// locale it does not. aracne answers commands IN PLACE OF the real grep, so it has to read
+// the same setting the real grep would -- LC_ALL, then LC_CTYPE, then LANG, as POSIX
+// specifies. Anything else (including an unset environment, where a developer shell is
+// UTF-8 in practice) keeps the Unicode reading; only an explicit C/POSIX asks for the
+// narrow one.
+func asciiCtype() bool {
+	for _, key := range []string{"LC_ALL", "LC_CTYPE", "LANG"} {
+		v := strings.TrimSpace(os.Getenv(key))
+		if v == "" {
+			continue
+		}
+		return v == "C" || v == "POSIX"
+	}
+	return false
+}
+
+// classSetRE2 returns the RE2 spelling of one POSIX class for the current locale: the Unicode
+// set expression, or RE2's own ASCII class under C/POSIX. ok is false for a class aracne
+// cannot reproduce faithfully, which leaves the pattern untranslatable.
+func classSetRE2(name string) (string, bool) {
+	set, ok := posixClassRE2[name]
+	if !ok || set == "" {
+		return "", false
+	}
+	if asciiCtype() {
+		return "[:" + name + ":]", true
+	}
+	return set, true
+}
+
+// bracketToRE2 rewrites the POSIX classes inside one bracket expression into the RE2 set
+// expressions with the same membership in a UTF-8 locale. Everything else is copied
+// unchanged: POSIX and RE2 read the rest of a bracket the same way. See posixClassRE2.
+func bracketToRE2(bracket string) (string, bool) {
+	if !strings.Contains(bracket, "[:") {
+		return bracket, true
+	}
+	var b strings.Builder
+	for i := 0; i < len(bracket); {
+		if bracket[i] == '[' && i+1 < len(bracket) && bracket[i+1] == ':' {
+			k := strings.Index(bracket[i+2:], ":]")
+			if k < 0 {
+				return "", false
+			}
+			set, ok := classSetRE2(bracket[i+2 : i+2+k])
+			if !ok {
+				return "", false
+			}
+			b.WriteString(set)
+			i += 2 + k + 2
+			continue
+		}
+		b.WriteByte(bracket[i])
+		i++
+	}
+	return b.String(), true
 }
 
 // breBracket returns the index of the `]` closing the bracket expression opening at i.
@@ -1134,7 +1693,9 @@ func breBracket(pat string, i int) (int, bool) {
 			// A character class, which RE2 does support. Its own `]` does not close the
 			// bracket, so step over the whole `[:…:]`.
 			k := strings.Index(pat[j+2:], ":]")
-			if k < 0 {
+			// POSIX names twelve classes; RE2 also takes `word` and `^alpha`, which GNU grep
+			// rejects as an invalid class (exit 2).
+			if k < 0 || posixClassRE2[pat[j+2:j+2+k]] == "" {
 				return 0, false
 			}
 			j += 2 + k + 2

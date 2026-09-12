@@ -789,3 +789,78 @@ func contains(xs []string, want string) bool {
 	}
 	return false
 }
+
+// TestPackageDirsNamedLikeBuildOutputAreIndexed locks the fix for the prune list
+// being matched at any depth: a package directory whose basename happens to be
+// `out`, `build`, `bin` or `test` (hexagonal `...port.out`, `com.ex.build`,
+// `com.acme.test`) is source, not build output, and vanishing silently took the
+// whole package with it -- after which the project's own package prefix showed up
+// as an external dependency. Real build/test roots must still be pruned.
+func TestPackageDirsNamedLikeBuildOutputAreIndexed(t *testing.T) {
+	dir := writeProj(t, map[string]string{
+		"src/main/java/com/h/port/out/SavePort.java": `package com.h.port.out;
+public interface SavePort {
+    void save(String s);
+}
+`,
+		"src/main/java/com/h/app/Svc.java": `package com.h.app;
+import com.h.port.out.SavePort;
+public class Svc {
+    private final SavePort port;
+    public Svc(SavePort port) { this.port = port; }
+    public void run() { port.save("x"); }
+}
+`,
+		"src/main/java/com/ex/build/Builder.java": `package com.ex.build;
+public class Builder { public int make() { return 1; } }
+`,
+		"src/main/java/com/acme/test/Support.java": `package com.acme.test;
+public class Support { public int help() { return 2; } }
+`,
+		// A Gradle sub-module: its own build/ output is pruned, its sources are not.
+		"mod/build.gradle":                         "",
+		"mod/build/classes/com/h/ModGen.java":      "package com.h;\npublic class ModGen {}\n",
+		"mod/src/main/java/com/h/mod/ModKeep.java": "package com.h.mod;\npublic class ModKeep {}\n",
+		// Real build/test roots at the project root stay pruned.
+		"target/classes/com/h/InTarget.java": "package com.h;\npublic class InTarget {}\n",
+		"build/InBuild.java":                 "package com.h;\npublic class InBuild {}\n",
+		"out/InOut.java":                     "package com.h;\npublic class InOut {}\n",
+		"bin/InBin.java":                     "package com.h;\npublic class InBin {}\n",
+		"src/test/java/com/h/InTestDir.java": "package com.h;\npublic class InTestDir {}\n",
+		"tests/InTestsDir.java":              "package com.h;\npublic class InTestsDir {}\n",
+	})
+
+	topo := jScan(t, dir)
+
+	for _, want := range []string{
+		"com.h.port.out.SavePort", "com.h.app.Svc",
+		"com.ex.build.Builder", "com.acme.test.Support", "com.h.mod.ModKeep",
+	} {
+		if !hasID(topo, want) {
+			t.Errorf("%s should be indexed", want)
+		}
+	}
+	for _, gone := range []string{
+		"com.h.InTarget", "com.h.InBuild", "com.h.InOut", "com.h.InBin",
+		"com.h.InTestDir", "com.h.InTestsDir", "com.h.ModGen",
+	} {
+		if hasID(topo, gone) {
+			t.Errorf("%s should have been pruned as build/test output", gone)
+		}
+	}
+
+	// The import resolves internally: a file edge, a call edge, and no external
+	// dependency named after the project's own package prefix.
+	svcMod := idEndingWith(t, topo, "com/h/app/Svc.java")
+	if !connHasSuffix(topo, svcMod, "imports_module", "com/h/port/out/SavePort.java") {
+		t.Error("Svc.java should imports_module SavePort.java")
+	}
+	if !connHas(topo, "com.h.app.Svc.run()", "calls", "com.h.port.out.SavePort.save(String)") {
+		t.Error("Svc.run() should call SavePort.save(String)")
+	}
+	for id, r := range topo.Resources {
+		if r.Kind == domain.ResourceDependency && strings.HasPrefix(id, "com.h") {
+			t.Errorf("internal package %q recorded as an external dependency", id)
+		}
+	}
+}

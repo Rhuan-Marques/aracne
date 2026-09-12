@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"os"
 	"path"
 	"path/filepath"
 	"sort"
@@ -164,9 +165,55 @@ func activePathVisibility() *PathVisibility {
 
 // PathHidden reports whether p is excluded from the topology by either the
 // active path-visibility filter (config "paths") or the active scan.ignore
-// matcher. It is false (nothing excluded) when neither is installed.
+// matcher -- or, for a source file, by being over the active read.max_file_size (see
+// PathOversized). It is false (nothing excluded) when none is installed.
 func PathHidden(p string) bool {
-	return activePathVisibility().Hidden(p) || activeIgnoreMatcher().Match(p)
+	return activePathVisibility().Hidden(p) || activeIgnoreMatcher().Match(p) || PathOversized(p)
+}
+
+// Process-global read.max_file_size, installed beside the two filters above and for the same
+// reason: every walk that decides what gets indexed already consults PathHidden, so a file
+// over the limit is skipped by discovery, the manifest and the single-file update alike.
+var (
+	activeMaxSizeMu sync.RWMutex
+	activeMaxSize   int64
+)
+
+// SetActiveMaxFileSize installs read.max_file_size as the size above which PathHidden reports a
+// source file hidden. n <= 0 disables the check.
+func SetActiveMaxFileSize(n int64) {
+	activeMaxSizeMu.Lock()
+	activeMaxSize = n
+	activeMaxSizeMu.Unlock()
+}
+
+// sizeCheckedExts is every extension a scanner parses. PathOversized stats only these: the
+// manifest walk asks PathHidden about EVERY file in the tree before it looks at the name, and a
+// stat per image, lockfile and object file nearly doubled that walk, which runs before every
+// tool call. A file with any other extension is never indexed, so its size cannot matter.
+// cli's TestSizeCheckCoversEveryScannerExtension keeps this in step with the registry.
+var sizeCheckedExts = map[string]bool{
+	".go": true, ".py": true, ".rs": true, ".java": true,
+	".js": true, ".jsx": true, ".mjs": true, ".cjs": true,
+	".ts": true, ".tsx": true, ".mts": true, ".cts": true,
+}
+
+// SizeChecked reports whether files with this extension are subject to read.max_file_size at
+// indexing time.
+func SizeChecked(ext string) bool { return sizeCheckedExts[strings.ToLower(ext)] }
+
+// PathOversized reports whether p is a source file larger than the active read.max_file_size.
+// "Files above this are neither read nor indexed": a generated or bundled file of that size is
+// not something a model reads, and parsing it costs the scan more than any other file.
+func PathOversized(p string) bool {
+	activeMaxSizeMu.RLock()
+	limit := activeMaxSize
+	activeMaxSizeMu.RUnlock()
+	if limit <= 0 || !SizeChecked(filepath.Ext(p)) {
+		return false
+	}
+	info, err := os.Stat(p)
+	return err == nil && info.Mode().IsRegular() && info.Size() > limit
 }
 
 // PathPruneDir reports whether the active filters allow skipping a directory

@@ -61,7 +61,12 @@ var GeneratorFactory = func(cfg helper.ResolvedLazyDescriptions) (Generator, err
 		}
 		return gen, nil
 	}
-	if provider, model, ok := resolveProvider(cfg); ok {
+	// probeEnv=false: a project that has named neither a provider nor a model has not answered
+	// "who writes my descriptions", and a read is not where a vendor gets picked for it. Probing
+	// here billed whichever key the machine happened to export on every cold read of a project
+	// that was never set up (docs/configuration.md, "Three things deliberately never reach
+	// these questions").
+	if provider, model, ok := resolveProvider(cfg, false); ok {
 		return &llmGenerator{provider: provider, model: model}, nil
 	}
 	// Deliberately NOT a fallback. A CLI provider has to be asked for, because it spends the
@@ -187,7 +192,7 @@ func ResolveDescriptionProvider(cfg helper.ResolvedLazyDescriptions) (llm.Provid
 	if IsCLIProvider(cfg) {
 		return nil, "", false
 	}
-	if provider, model, ok := resolveProvider(cfg); ok {
+	if provider, model, ok := resolveProvider(cfg, false); ok {
 		return provider, model, true
 	}
 	// A provider the project NAMED is an answer, not a guess, so it is never swapped for
@@ -198,9 +203,15 @@ func ResolveDescriptionProvider(cfg helper.ResolvedLazyDescriptions) (llm.Provid
 	if strings.TrimSpace(cfg.Provider) != "" {
 		return nil, "", false
 	}
-	// Keep the caller's base URL: it is transport, not provider choice, and a project that
-	// proxies its LLM traffic still proxies it when the key came from the environment.
-	return resolveProvider(helper.ResolvedLazyDescriptions{BaseURL: cfg.BaseURL})
+	// First with the caller's own model, which the probe keeps when no provider could be
+	// inferred from it...
+	if provider, model, ok := resolveProvider(cfg, true); ok {
+		return provider, model, true
+	}
+	// ...then bare. Keep the caller's base URL: it is transport, not provider choice, and a
+	// project that proxies its LLM traffic still proxies it when the key came from the
+	// environment.
+	return resolveProvider(helper.ResolvedLazyDescriptions{BaseURL: cfg.BaseURL}, true)
 }
 
 // ProviderKeyEnvNames lists the environment variables any provider key may come from, for
@@ -213,13 +224,15 @@ func ProviderKeyEnvNames() []string {
 	return names
 }
 
-// resolveProvider works out what to call, in three tiers: an explicit provider, a provider
-// inferred from the model name, or whichever provider has a key in the environment.
+// resolveProvider works out what to call, in up to three tiers: an explicit provider, a
+// provider inferred from the model name, and -- only when probeEnv is set -- whichever provider
+// has a key in the environment. Only the explicit sweep probes (ResolveDescriptionProvider);
+// the lazy fill never does (GeneratorFactory).
 //
 // It reports ok=false rather than an error when nothing is configured. A project with no API
 // key has not misconfigured anything -- it has simply not opted into a feature that needs one,
 // and it must keep getting its reads unchanged and unmentioned.
-func resolveProvider(cfg helper.ResolvedLazyDescriptions) (llm.Provider, string, bool) {
+func resolveProvider(cfg helper.ResolvedLazyDescriptions, probeEnv bool) (llm.Provider, string, bool) {
 	name, model := cfg.Provider, cfg.Model
 	if alias, ok := modelAliases[strings.ToLower(strings.TrimSpace(model))]; ok {
 		if name == "" {
@@ -239,7 +252,7 @@ func resolveProvider(cfg helper.ResolvedLazyDescriptions) (llm.Provider, string,
 		keyEnv = helper.APIKeyEnvFor(helper.ResolvedLazyDescriptions{
 			Provider: name, APIKeyEnv: cfg.APIKeyEnv,
 		})
-	} else {
+	} else if probeEnv {
 		// Nothing named a provider, so the environment picks one -- and it picks by the
 		// STANDARD variable names, not by a configured one: api_key_env answers "where is
 		// the key for the provider I chose", and there is no chosen provider here.

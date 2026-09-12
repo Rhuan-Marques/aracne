@@ -353,7 +353,72 @@ func SignatureBaseline(res domain.Resource) string {
 	b.WriteString(canonicalJSON(res.Properties["input"]))
 	b.WriteByte('|')
 	b.WriteString(canonicalJSON(res.Properties["output"]))
+	// A TypeScript overload set declares several callable signatures under one id, and
+	// Input/Output above are the implementation's -- the one signature nobody may call, and
+	// deliberately the widest of the set, so it does not move when an overload is deleted.
+	// Without this segment that deletion left the baseline identical and
+	// DischargeSignatureWarnings retired the warning about it on the spot.
+	//
+	// Appended only when the property is there, so every other resource in every language
+	// keeps the exact baseline string it already has stored.
+	if ov, ok := res.Properties["overloads"]; ok && ov != nil {
+		b.WriteByte('|')
+		b.WriteString(canonicalJSON(ov))
+	}
 	return b.String()
+}
+
+// outputChangedSinceBaseline reports whether the callee's declared output is no longer the
+// one recorded in the warning's baseline. A warning with no baseline, or one whose baseline
+// cannot be read, reports false: that is the case the call-site rule already decided alone,
+// and it keeps doing so.
+func outputChangedSinceBaseline(w domain.TopologyWarning, callee domain.Resource) bool {
+	out, ok := baselineOutput(w.Baseline)
+	if !ok {
+		return false
+	}
+	return out != canonicalJSON(callee.Properties["output"])
+}
+
+// baselineOutput extracts the output segment of a SignatureBaseline. The segments are joined
+// with '|', which a parameter type can also contain (`string | number`), so each segment is
+// read as the JSON value it is rather than split on.
+//
+// The output is read the same way and not simply taken as the tail: a baseline may carry a
+// further segment after it (an overload set's signatures), and returning that with the output
+// would make every such warning look like a changed return type forever.
+func baselineOutput(baseline string) (string, bool) {
+	i := strings.IndexByte(baseline, '|')
+	if i < 0 {
+		return "", false
+	}
+	rest := baseline[i+1:]
+	if !strings.HasPrefix(rest, "|") {
+		end, ok := jsonValueEnd(rest)
+		if !ok || end >= len(rest) || rest[end] != '|' {
+			return "", false
+		}
+		rest = rest[end:]
+	}
+	rest = rest[1:] // past the separator; the output segment starts here
+	if rest == "" || strings.HasPrefix(rest, "|") {
+		return "", true // no output, whether or not a further segment follows
+	}
+	end, ok := jsonValueEnd(rest)
+	if !ok {
+		return "", false
+	}
+	return rest[:end], true
+}
+
+// jsonValueEnd reports where the first JSON value in s ends.
+func jsonValueEnd(s string) (int, bool) {
+	dec := json.NewDecoder(strings.NewReader(s))
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return 0, false
+	}
+	return int(dec.InputOffset()), true
 }
 
 // canonicalJSON renders v the same way whichever Go shape it arrives in.

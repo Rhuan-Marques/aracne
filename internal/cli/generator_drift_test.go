@@ -98,7 +98,7 @@ func emittedNames(t *testing.T, cfg *helper.Config, harness, agentName string) m
 		return names
 	}
 
-	content := openCodeAgentContent("d", eff, "Body paragraph.\n\nRest.")
+	content := openCodeAgentContent("d", eff, "", "Body paragraph.\n\nRest.")
 	for _, m := range openCodeAllowKey.FindAllStringSubmatch(content, -1) {
 		add(m[1])
 	}

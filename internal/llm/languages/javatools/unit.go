@@ -53,12 +53,18 @@ func FunctionUnit(ctx *java.JavaFunctionContext, st *renderstate.State) readunit
 	// A batch that asks for several members of one type used to inline the type once per
 	// member. st is nil for single-unit callers, where ParentSeen reports false.
 	elidedParent := inlinedParent && st.ParentSeen(ctx.ParentStruct.Cut)
+	// A Java class cut is the whole class, so it contains the member. When that class is
+	// already in this response -- inlined by a sibling member, or read in its own right --
+	// the member's source is already there too, and this unit has nothing left to print:
+	// writing the member again after an elision marker is how batching two methods of one
+	// class printed the second one twice.
+	contained := inlinedParent && ctx.Function != nil && ctx.ParentStruct.Loc.Contains(ctx.Function.Loc)
 	if inlinedParent {
-		if elidedParent {
+		if !elidedParent {
+			body.WriteString(ctx.ParentStruct.Cut)
+		} else if !contained {
 			body.WriteString(renderstate.ElisionMarker(string(ctx.ParentStruct.ID),
 				"enclosing type already shown in this response"))
-		} else {
-			body.WriteString(ctx.ParentStruct.Cut)
 		}
 	}
 	if ctx.Function != nil {
@@ -67,7 +73,7 @@ func FunctionUnit(ctx *java.JavaFunctionContext, st *renderstate.State) readunit
 		u.Line = ctx.Function.Loc.StartsAt
 		// A Java class cut is the whole class, so an inlined parent already contains the
 		// method; appending it again printed it twice.
-		if !inlinedParent || elidedParent || !ctx.ParentStruct.Loc.Contains(ctx.Function.Loc) {
+		if !contained {
 			if inlinedParent && !elidedParent {
 				body.WriteString("\n\n")
 			}
@@ -75,6 +81,7 @@ func FunctionUnit(ctx *java.JavaFunctionContext, st *renderstate.State) readunit
 		}
 	}
 	u.Body = body.String()
+	u.Incoming = ctx.Incoming
 
 	u.Context = func(b *strings.Builder, st *renderstate.State) {
 		if ctx.ParentStruct != nil {
@@ -83,34 +90,33 @@ func FunctionUnit(ctx *java.JavaFunctionContext, st *renderstate.State) readunit
 		if p := ctx.OversizedParent; p != nil && st.Renderable(string(p.ID)) {
 			fmt.Fprintf(b, "## %s (enclosing class): %s\n", p.ID, desc(p.Description))
 		}
+		// The manager already applied read.context_filter: hidden neighbours are gone, and each
+		// remaining one carries Normal or Full. Full entries render first, as source cuts.
 		g := st.Guard(b)
-		for _, su := range ctx.StructsUsed {
-			if !st.Renderable(string(su.ID)) || !g.More() {
-				continue
-			}
-			fmt.Fprintf(b, "## %s: %s\n", su.ID, desc(su.Description))
-			for _, m := range su.Methods {
-				if st.Renderable(string(m.ID)) {
-					fmt.Fprintf(b, "\t%s: %s\n", m.ID, desc(m.Description))
+		for _, full := range []bool{true, false} {
+			for _, su := range ctx.StructsUsed {
+				if wantVis(su.Visibility, full) && st.Renderable(string(su.ID)) && g.More() {
+					renderStructUsage(b, st, su)
 				}
 			}
-		}
-		for _, iu := range ctx.InterfacesUsed {
-			if g.More() {
-				line(b, st, string(iu.ID), " (interface)", iu.Description)
+			for _, iu := range ctx.InterfacesUsed {
+				if wantVis(iu.Visibility, full) && st.Renderable(string(iu.ID)) && g.More() {
+					fmt.Fprintf(b, "## %s (interface): %s\n", iu.ID, desc(iu.Description))
+				}
 			}
-		}
-		for _, cf := range ctx.CalledFunctions {
-			if g.More() {
-				line(b, st, string(cf.ID), "", cf.Description)
+			for _, cf := range ctx.CalledFunctions {
+				if wantVis(cf.Visibility, full) && st.Renderable(string(cf.ID)) && g.More() {
+					renderFunc(b, st, "## ", cf)
+				}
 			}
 		}
 	}
 	return u
 }
 
-// StructUnit decomposes a Java class/enum/record read.
-func StructUnit(ctx *java.JavaStructContext) readunit.Unit {
+// StructUnit decomposes a Java class/enum/record read. st is the batch's render state, shared
+// with the member units (nil for a single-unit caller).
+func StructUnit(ctx *java.JavaStructContext, st *renderstate.State) readunit.Unit {
 	u := readunit.Unit{
 		Kind:        domain.ResourceStruct,
 		Fence:       "java",
@@ -121,13 +127,23 @@ func StructUnit(ctx *java.JavaStructContext) readunit.Unit {
 		u.ID = string(ctx.Struct.ID)
 		u.Path = ctx.Struct.Loc.Path
 		u.Line = ctx.Struct.Loc.StartsAt
-		u.Body = ctx.Struct.Cut
+		// Registered with the batch's ledger at BUILD time, so a member of this class later in
+		// the batch elides it rather than inlining it again; a member earlier in the batch that
+		// already inlined it leaves nothing of it to print here.
+		if !st.ParentSeen(ctx.Struct.Cut) {
+			u.Body = ctx.Struct.Cut
+		}
 	}
+	u.Incoming = ctx.Incoming
 	u.Context = func(b *strings.Builder, st *renderstate.State) {
 		if ctx.Struct != nil {
 			st.MarkRendered(ctx.Struct.Cut)
 		}
 		g := st.Guard(b)
+		// The relationship lines -- variants, components, constructor, extends, implements --
+		// carry structure and render whatever read.context_filter says, as a Python base class
+		// or a Go struct's interfaces do. The constructor goes first so that, listed again
+		// among the methods, it keeps its "(constructor)" label rather than a Full cut.
 		if ctx.IsEnum && len(ctx.Variants) > 0 {
 			fmt.Fprintf(b, "## variants: %s\n", strings.Join(ctx.Variants, ", "))
 		}
@@ -137,29 +153,29 @@ func StructUnit(ctx *java.JavaStructContext) readunit.Unit {
 		if ctx.Constructor != nil {
 			line(b, st, string(ctx.Constructor.ID), " (constructor)", ctx.Constructor.Description)
 		}
-		for _, s := range ctx.Inherits {
-			if g.More() {
-				line(b, st, string(s.ID), " (extends)", s.Description)
+		// Members and used classes went through the filter in the manager: Full ones render
+		// first, as source cuts; hidden ones are already gone.
+		for _, full := range []bool{true, false} {
+			if !full {
+				for _, s := range ctx.Inherits {
+					if g.More() {
+						line(b, st, string(s.ID), " (extends)", s.Description)
+					}
+				}
+				for _, t := range ctx.Implements {
+					if g.More() {
+						line(b, st, string(t.ID), " (implements)", t.Description)
+					}
+				}
 			}
-		}
-		for _, t := range ctx.Implements {
-			if g.More() {
-				line(b, st, string(t.ID), " (implements)", t.Description)
+			for _, m := range ctx.Methods {
+				if wantVis(m.Visibility, full) && st.Renderable(string(m.ID)) && g.More() {
+					renderFunc(b, st, "## ", m)
+				}
 			}
-		}
-		for _, m := range ctx.Methods {
-			if g.More() {
-				line(b, st, string(m.ID), "", m.Description)
-			}
-		}
-		for _, su := range ctx.StructsUsed {
-			if !st.Renderable(string(su.ID)) || !g.More() {
-				continue
-			}
-			fmt.Fprintf(b, "## %s: %s\n", su.ID, desc(su.Description))
-			for _, mm := range su.Methods {
-				if st.Renderable(string(mm.ID)) {
-					fmt.Fprintf(b, "\t%s: %s\n", mm.ID, desc(mm.Description))
+			for _, su := range ctx.StructsUsed {
+				if wantVis(su.Visibility, full) && st.Renderable(string(su.ID)) && g.More() {
+					renderStructUsage(b, st, su)
 				}
 			}
 		}
@@ -176,6 +192,7 @@ func InterfaceUnit(ctx *java.JavaInterfaceContext) readunit.Unit {
 		u.Line = ctx.Interface.Loc.StartsAt
 		u.Body = ctx.Interface.Cut
 	}
+	u.Incoming = ctx.Incoming
 	u.Context = func(b *strings.Builder, st *renderstate.State) {
 		if ctx.Interface != nil {
 			st.MarkRendered(ctx.Interface.Cut)

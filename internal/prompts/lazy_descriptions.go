@@ -108,17 +108,14 @@ func ParseLazyDescriptions(reply string, wanted map[string]domain.ResourceKind) 
 		if !ok {
 			// Tolerate a bare "::" without the surrounding spaces, which is the one
 			// variation of the separator models actually produce.
-			id, desc, ok = strings.Cut(line, "::")
+			id, desc, ok = cutAtRequestedID(line, wanted)
 			if !ok {
 				continue
 			}
 		}
-		id = cleanLazyID(id)
+		id = cleanLazyID(id, wanted)
 		desc = cleanLazyDescription(desc)
 		if id == "" || desc == "" {
-			continue
-		}
-		if _, want := wanted[id]; !want {
 			continue
 		}
 		// First line wins: a model that answers twice for one id has contradicted itself,
@@ -130,18 +127,74 @@ func ParseLazyDescriptions(reply string, wanted map[string]domain.ResourceKind) 
 	return out
 }
 
-// cleanLazyID strips the list and emphasis decoration models put in front of an id.
-func cleanLazyID(s string) string {
+// cutAtRequestedID splits a line at a bare "::" separator, choosing the "::" that ends a
+// requested id rather than the first one.
+//
+// The first "::" is the wrong one wherever ids contain "::" themselves -- every Rust id is
+// `crate::module::item` -- so cutting there left `crate` as the id, which names nothing, and
+// every such line was dropped. Every "::" is tried and the longest prefix that names a
+// requested id wins: a shorter one would split a requested id in two. A line where none does
+// is reported as not found, the same outcome the first-"::" cut had for it.
+func cutAtRequestedID(line string, wanted map[string]domain.ResourceKind) (id, desc string, ok bool) {
+	for i := 0; ; {
+		j := strings.Index(line[i:], "::")
+		if j < 0 {
+			return id, desc, ok
+		}
+		at := i + j
+		if cleanLazyID(line[:at], wanted) != "" {
+			id, desc, ok = line[:at], line[at+2:], true
+		}
+		i = at + 1
+	}
+}
+
+// lazyIDWrappers are the emphasis pairs a model wraps an id in, longest first so `**x**` is
+// peeled as one layer rather than as two `*` layers.
+var lazyIDWrappers = []string{"**", "__", "`", "*", "_"}
+
+// cleanLazyID strips the list and emphasis decoration models put in front of an id, and returns
+// the requested id the token names -- or "" when it names none.
+//
+// IT PEELS, IT DOES NOT TRIM, and it asks the requested set after every layer. `_` and `*` are
+// real id characters, not only markdown: it used to Trim "`*_" off both ends, which turned
+// `shapes.Circle.__init__` into `shapes.Circle.__init`, matched nothing, and dropped the line --
+// so every dunder method, and every `_private` name, could never be described through the CLI
+// provider or the lazy fill however many times it was retried. Now the token is looked up as
+// the model wrote it first, and a wrapper is only ever removed as a matched pair on both ends.
+func cleanLazyID(s string, wanted map[string]domain.ResourceKind) string {
 	s = strings.TrimSpace(s)
+	if _, ok := wanted[s]; ok {
+		return s
+	}
 	s = strings.TrimPrefix(s, "- ")
 	s = strings.TrimPrefix(s, "* ")
 	// A leading "1. " / "12. " ordinal.
 	if i := strings.Index(s, ". "); i > 0 && i <= 3 && isAllDigits(s[:i]) {
 		s = s[i+2:]
 	}
-	s = strings.TrimSpace(s)
-	s = strings.Trim(s, "`*_")
-	return strings.TrimSpace(s)
+	return unwrapLazyID(strings.TrimSpace(s), wanted, 3)
+}
+
+// unwrapLazyID returns s if it is requested, else the first requested id reached by peeling
+// matched wrapper pairs off it, at most depth layers deep. The least-peeled match wins: a token
+// that already names a requested id was copied exactly, and peeling it further could only turn
+// it into a different one.
+func unwrapLazyID(s string, wanted map[string]domain.ResourceKind, depth int) string {
+	if _, ok := wanted[s]; ok {
+		return s
+	}
+	if depth == 0 {
+		return ""
+	}
+	for _, w := range lazyIDWrappers {
+		if len(s) > 2*len(w) && strings.HasPrefix(s, w) && strings.HasSuffix(s, w) {
+			if id := unwrapLazyID(strings.TrimSpace(s[len(w):len(s)-len(w)]), wanted, depth-1); id != "" {
+				return id
+			}
+		}
+	}
+	return ""
 }
 
 // cleanLazyDescription normalises the description to the single line the database stores.

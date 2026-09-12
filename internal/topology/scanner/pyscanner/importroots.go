@@ -141,14 +141,25 @@ func discoverImportRoots(absRoot string) *importRoots {
 		return out.roots[i] < out.roots[j]
 	})
 
-	// Bare top-level modules (`<root>/utils.py`) are importable as `utils`.
+	// Bare top-level modules (`<root>/utils.py`) are importable as `utils`, and so is a
+	// directory of Python code with no __init__.py: a PEP 420 namespace package
+	// (`<root>/ns/mod.py` is `import ns.mod`). It is project code either way, and classing
+	// it as third-party turned its imports into dependency nodes and dropped their edges.
 	for _, r := range out.roots {
 		entries, err := os.ReadDir(r)
 		if err != nil {
 			continue
 		}
 		for _, e := range entries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".py") {
+			if e.IsDir() {
+				dir := filepath.Join(r, e.Name())
+				if !pyRootSkipDirs[e.Name()] && !strings.HasPrefix(e.Name(), ".") &&
+					!domain.PathPruneDir(dir) && !hasInit(dir) && holdsPython(dir) {
+					out.topLevel[e.Name()] = true
+				}
+				continue
+			}
+			if !strings.HasSuffix(e.Name(), ".py") {
 				continue
 			}
 			stem := strings.TrimSuffix(e.Name(), ".py")
@@ -158,6 +169,29 @@ func discoverImportRoots(absRoot string) *importRoots {
 		}
 	}
 	return out
+}
+
+// holdsPython reports whether dir has a .py file anywhere below it, ignoring the
+// directories import-root discovery ignores. It stops at the first one found.
+func holdsPython(dir string) bool {
+	found := false
+	filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if path != dir && (pyRootSkipDirs[d.Name()] || strings.HasPrefix(d.Name(), ".") || domain.PathPruneDir(path)) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(d.Name(), ".py") {
+			found = true
+			return fs.SkipAll
+		}
+		return nil
+	})
+	return found
 }
 
 // isInternalImport reports whether a dotted import path names first-party code.

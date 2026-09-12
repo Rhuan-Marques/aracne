@@ -190,6 +190,31 @@ type paramWire struct {
 	KeyOnly  bool   `json:"KeyOnly"`
 }
 
+// OverloadParams reads the additional signatures a resource declares, as parameter lists.
+//
+// Only TypeScript writes them today (an overload set: N bodiless signatures plus one
+// implementation, all under one id), but the shape is the language-neutral one every
+// scanner already stores parameters in, so nothing here is TypeScript-specific. An absent
+// or unreadable property yields nothing, and the caller then judges the resource's own
+// parameters as before.
+func OverloadParams(res domain.Resource) [][]Param {
+	raw, err := json.Marshal(res.Properties["overloads"])
+	if err != nil {
+		return nil
+	}
+	var wire []struct {
+		Input []paramWire `json:"Input"`
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		return nil
+	}
+	out := make([][]Param, 0, len(wire))
+	for _, w := range wire {
+		out = append(out, paramsFromWire(w.Input))
+	}
+	return out
+}
+
 func decodeParams(v any) []Param {
 	if v == nil {
 		return nil
@@ -202,6 +227,10 @@ func decodeParams(v any) []Param {
 	if err := json.Unmarshal(raw, &wire); err != nil {
 		return nil
 	}
+	return paramsFromWire(wire)
+}
+
+func paramsFromWire(wire []paramWire) []Param {
 	out := make([]Param, 0, len(wire))
 	for _, w := range wire {
 		out = append(out, Param{

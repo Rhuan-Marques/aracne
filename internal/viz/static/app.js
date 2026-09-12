@@ -97,7 +97,7 @@
   function routeNodeColor(n) {}
   var modeHelp = {
     packages: 'Packages & Modules shows import relationships: Go packages (package→package), and Python/JS/TS modules as files (file→file).',
-    data_flow: 'Data Flow shows functions, methods, structs/classes, named types, and interfaces with call/use/type relationships.',
+    data_flow: 'Data Flow shows functions, methods, structs/classes, and interfaces with call/use/type relationships.',
     custom: 'Custom exposes all filters for hand-built graph slices.'
   };
   var defaultEdgeTypes = [
@@ -320,25 +320,30 @@
     });
     return p.toString();
   }
-  function api(path) {
-    return fetch(path).then(function (r) {
-      return r.json().then(function (body) {
-        if (!r.ok) throw new Error(body.error || r.statusText);
-        return body;
-      });
+  // Decodes an API response. An error that is not JSON (a plain-text 404 from a route that is
+  // switched off) is reported as its status and text, not as the JSON parser's complaint.
+  function responseJSON(r) {
+    return r.text().then(function (text) {
+      var body;
+      try {
+        body = JSON.parse(text);
+      } catch (err) {
+        if (r.ok) throw err;
+        throw new Error(r.status + ' ' + (r.statusText || 'error') + (text.trim() ? ': ' + text.trim() : ''));
+      }
+      if (!r.ok) throw new Error((body && body.error) || r.statusText);
+      return body;
     });
+  }
+  function api(path) {
+    return fetch(path).then(responseJSON);
   }
   function apiJSON(path, method, body) {
     return fetch(path, {
       method: method,
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(body)
-    }).then(function (r) {
-      return r.json().then(function (responseBody) {
-        if (!r.ok) throw new Error(responseBody.error || r.statusText);
-        return responseBody;
-      });
-    });
+    }).then(responseJSON);
   }
   function selectedValues(select) {
     return Array.prototype.slice.call(select.selectedOptions).map(function (option) {
@@ -379,6 +384,8 @@
   }
 
   function chatSocketNeeded() {
+    // The socket carries nothing but chat events.
+    if (!chatEnabled()) return false;
     var path = window.location.pathname;
     return path === '/graph' || path.indexOf('/chat/') === 0 || state.chatThinking || state.chatRunActive;
   }
@@ -767,7 +774,9 @@
   function setGraph(data) {
     state.nodes = data.nodes || [];
     state.edges = data.edges || [];
-    if (document.getElementById('strictEdges') && document.getElementById('strictEdges').checked) {
+    // Strict Edges is a Custom-mode control and only visible there; left ticked, it must not
+    // keep thinning the other views out of sight.
+    if (el('mode').value === 'custom' && document.getElementById('strictEdges') && document.getElementById('strictEdges').checked) {
       var connectedIDs = new Set();
       state.edges.forEach(function (e) {
         connectedIDs.add(e.source);
@@ -1594,6 +1603,10 @@
     if (path === '/settings') route = 'settings';
     else if (path === '/chat/history') route = 'history';
     else if (path === '/chat' || path.indexOf('/chat/') === 0) route = 'chat';
+    if ((route === 'chat' || route === 'history') && !chatEnabled()) {
+      navigate('/graph', true);
+      return;
+    }
 
     document.body.dataset.route = route;
     ['graphPage', 'chatPage', 'historyPage', 'settingsPage'].forEach(function (id) {
@@ -1608,8 +1621,9 @@
     if (route === 'graph') resize();
     if (route === 'chat') { var mg = ensureContextGraph(); if (mg) mg.resize(); }
     if (route === 'settings') {
-      loadChatProvider();
-      loadAppConfig();
+      loadAppConfig().then(function () {
+        if (chatEnabled()) loadChatProvider();
+      });
     }
     if (route === 'history') loadChatHistory();
     if (route === 'chat') enterChatRoute(path);
@@ -1652,7 +1666,7 @@
       renderProviderSettings();
       renderChatModelControls();
       renderChoiceControls();
-    }).catch(showError);
+    }).catch(showSettingsError);
   }
 
   function saveProviderConfig(config) {
@@ -1661,8 +1675,9 @@
       ensureSelectedChatModel();
       renderProviderSettings();
       renderChatModelControls();
+      renderSettingsNotice();
       return saved;
-    }).catch(showError);
+    }).catch(showSettingsError);
   }
 
   function defaultNeedDescription() {
@@ -1674,18 +1689,43 @@
       state.appConfig = config || {};
       applyFeatureGates();
       renderNeedDescriptionSettings();
-    }).catch(showError);
+      renderSettingsNotice();
+    }).catch(showSettingsError);
+  }
+
+  function chatEnabled() {
+    return !!(state.appConfig && state.appConfig.features && state.appConfig.features.chat);
   }
 
   // Chat ships behind features.chat. The server already refuses /api/chat with the feature
-  // off, so this only removes the nav item that would lead somewhere broken -- the gate is
-  // server-side, this is the SPA agreeing with it.
+  // off; this is the SPA agreeing with it. Every chat-only element carries data-feature="chat"
+  // and starts hidden, so nothing chat-shaped shows before /api/config has answered, and
+  // renderRoute sends the chat routes back to the graph.
   function applyFeatureGates() {
-    var features = (state.appConfig && state.appConfig.features) || {};
-    var navChat = el('navChat');
-    if (navChat) navChat.hidden = !features.chat;
-    var path = window.location.pathname;
-    if (!features.chat && (path === '/chat' || path.indexOf('/chat/') === 0)) navigate('/graph', true);
+    var chat = chatEnabled();
+    Array.prototype.forEach.call(document.querySelectorAll('[data-feature="chat"]'), function (node) {
+      node.hidden = !chat;
+    });
+  }
+
+  // Errors raised on the Settings page are shown on it: showError writes the graph page's status
+  // bar, which is hidden while Settings is open.
+  function showSettingsError(err) {
+    showError(err);
+    var box = el('settingsError');
+    if (!box) return;
+    box.textContent = 'Error: ' + (err && err.message ? err.message : err);
+    box.hidden = false;
+  }
+
+  // A config.json that does not validate still loads -- /api/config answers with the values
+  // aracne runs on plus config_error -- but the server refuses to save over it, so say so up front.
+  function renderSettingsNotice() {
+    var box = el('settingsError');
+    if (!box) return;
+    var problem = state.appConfig && state.appConfig.config_error;
+    box.textContent = problem ? '.aracne/config.json does not validate, so nothing on this page can be saved until the file is fixed: ' + problem : '';
+    box.hidden = !problem;
   }
 
   function renderNeedDescriptionSettings() {
@@ -1710,9 +1750,12 @@
       state.appConfig = saved || {};
       state.savingNeedDescription = false;
       renderNeedDescriptionSettings();
+      renderSettingsNotice();
     }).catch(function (err) {
       state.savingNeedDescription = false;
-      if (status) status.textContent = 'Save failed.';
+      // Show what is stored, not the selection the server refused.
+      renderNeedDescriptionSettings();
+      if (status) status.textContent = 'Save failed: ' + err.message;
       showError(err);
     });
   }
@@ -1910,7 +1953,7 @@
     var choice = el('providerChoice').value;
     var type = choice === 'custom' ? 'custom' : 'supported';
     var id = type === 'custom' ? el('providerCustomID').value.trim() : choice;
-    if (!id) return showError(new Error('Provider name is required'));
+    if (!id) return showSettingsError(new Error('Provider name is required'));
     var credentialType = el('providerCredentialType').value;
     var credentialValue = el('providerCredentialValue').value.trim();
     var entry = {
@@ -3680,8 +3723,12 @@
     });
   })();
 
-  loadChatProvider();
-  loadAgents().then(loadChatSessions).then(renderRoute);
+  // The feature flags decide what exists, so they load before anything chat-shaped does.
+  loadAppConfig().then(function () {
+    if (!chatEnabled()) return;
+    loadChatProvider();
+    return loadAgents().then(loadChatSessions);
+  }).then(renderRoute);
   resize();
   el('depthIcon').innerHTML = icon('waves-arrow-down');
   updateDepthControls();

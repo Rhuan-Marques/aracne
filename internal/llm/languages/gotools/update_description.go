@@ -33,7 +33,7 @@ func (u *UpdateDescriptionTool) Description() string {
 func (u *UpdateDescriptionTool) Parameters() []Parameter {
 	return []Parameter{
 		{Name: "id", Type: "string", Description: "Resource ID", Required: true},
-		{Name: "resource_name", Type: "string", Description: "Resource kind: Function, Struct(ype), Interface, Variable, File, Package", Required: true},
+		{Name: "resource_name", Type: "string", Description: "Resource kind: Function, Method, Struct(ype), Interface, NamedType, Variable, File, Package", Required: true},
 		{Name: "description", Type: "string", Description: "The new description text", Required: true},
 	}
 }
@@ -53,8 +53,13 @@ func (u *UpdateDescriptionTool) Run(args json.RawMessage) (string, error) {
 	switch params.ResourceName {
 	case "Function":
 		kind = domain.ResourceFunction
+	// A func with a receiver is stored as kind `method`, and the write filters on kind.
+	case "Method":
+		kind = domain.ResourceMethod
 	case "Struct", "Type":
 		kind = domain.ResourceStruct
+	case "NamedType":
+		kind = domain.ResourceNamedType
 	case "Interface":
 		kind = domain.ResourceInterface
 	case "ExternalVar", "Variable":

@@ -59,6 +59,14 @@ func (r *Read) ReadSlice(path string, from, to int) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("%s is not in the topology", path)
 	}
+	// The requested lines are cut from disk and always right; the FRAME around them is not.
+	// nodesCovering reads recorded spans, so a file changed outside the session framed its
+	// window with the wrong declaration. Re-index it first. See ReadIDs' freshness note.
+	if r.freshen([]string{fileID}) {
+		if topo, err = r.mgr.ReadAll(); err != nil {
+			return "", err
+		}
+	}
 	total := fileLineCount(fileID)
 	if total == 0 {
 		return "", fmt.Errorf("%s could not be read", path)
@@ -71,6 +79,14 @@ func (r *Read) ReadSlice(path string, from, to int) (string, error) {
 	}
 
 	covering := nodesCovering(topo, fileID, from, to)
+	// The anchor's context may inline neighbour source from other files; those have to be
+	// current too.
+	if r.freshen(touchedFiles(topo, []readunit.Unit{{Covers: coveringIDs(covering)}})) {
+		if topo, err = r.mgr.ReadAll(); err != nil {
+			return "", err
+		}
+		covering = nodesCovering(topo, fileID, from, to)
+	}
 
 	// THE PROMISE intercept_line_ranges MODE MAKES. Every context entry now advertises a span, so a
 	// model that reads exactly that span must get exactly what the resource read would have
@@ -86,7 +102,7 @@ func (r *Read) ReadSlice(path string, from, to int) (string, error) {
 	// a kind the project does not allow is not promoted, and falls to the framed form below.
 	// It is not refused here -- the caller asked for lines of a FILE, and cli.resolveReadOperand
 	// has already applied the gate to whatever the operand named.
-	if ids := whollyContained(covering, from, to); len(ids) > 0 {
+	if ids := promotable(covering, from, to); len(ids) > 0 {
 		if out, err := r.ReadIDs(ids, ReadIDsOptions{}); err == nil &&
 			strings.TrimSpace(out) != "" {
 			return out, nil
@@ -109,6 +125,9 @@ func (r *Read) ReadSlice(path string, from, to int) (string, error) {
 	}
 
 	unit := r.sliceUnit(topo, fileID, covering, body)
+	if r.cfgOrLoad().ContextOff() {
+		unit.Context = nil // context_filter "off": the lines asked for, nothing around them
+	}
 	unit.Label = displayPath(topo, unit.Path)
 	unit.Imports = dropImportsAlreadyShown(unit.Imports, body)
 	unit.Deps = dropImportsAlreadyShown(unit.Deps, body)
@@ -156,6 +175,13 @@ func (r *Read) BodyBounds(id string) (path string, from, to int, err error) {
 	if rerr != nil {
 		return "", 0, 0, rerr
 	}
+	// The bounds ARE a recorded span, so a file changed outside the session windowed
+	// `head -20 <id>` against lines that no longer hold the resource. Re-index and re-resolve.
+	if r.freshen([]string{target.res.Location.Path}) {
+		if target, _, rerr = resolveReadTargetWith(r.mgr, id, func(domain.Resource) bool { return true }); rerr != nil {
+			return "", 0, 0, rerr
+		}
+	}
 	loc := target.res.Location
 	if loc.Path == "" || loc.StartsAt < 1 || loc.EndsAt < loc.StartsAt {
 		return "", 0, 0, fmt.Errorf("resource %q has no source location", id)
@@ -178,8 +204,17 @@ func (r *Read) BodyBounds(id string) (path string, from, to int, err error) {
 }
 
 // sliceBody assembles the three permitted kinds of bytes in source order.
+//
+// Every file line is written at most once. A frame's signature is shown only up to the line
+// before the window -- a multi-line signature the window opens inside used to be printed whole
+// and then again as the window's own first lines -- and a line an enclosing frame's signature
+// already showed is not shown again. Each marker counts the lines between the last line
+// written and the NEXT one, so a nested frame's signature is never also counted as hidden
+// inside its parent.
 func sliceBody(r *Read, covering []domain.Resource, cut string, from, to int, loc func(string) string) string {
 	var b strings.Builder
+	last := 0    // the last file line written above the window
+	openID := "" // the innermost frame written so far: the owner of the lines after `last`
 	for _, res := range covering {
 		if res.Location.StartsAt >= from {
 			continue // starts inside the window: its own first line is already shown
@@ -189,11 +224,25 @@ func sliceBody(r *Read, covering []domain.Resource, cut string, from, to int, lo
 			continue // one unreadable frame must not cost the model its window
 		}
 		head, _ := splitSignature(entry.Cut)
-		b.WriteString(strings.TrimRight(head, "\n"))
-		b.WriteString("\n")
-		if hidden := from - res.Location.StartsAt - countLines(head); hidden > 0 {
-			b.WriteString(marker(res.ID, hidden, loc))
+		for k, text := range strings.Split(strings.TrimRight(head, "\n"), "\n") {
+			n := res.Location.StartsAt + k
+			if n >= from {
+				break // the window prints it
+			}
+			if n <= last {
+				continue // an enclosing frame's signature already printed it
+			}
+			if hidden := n - last - 1; hidden > 0 && openID != "" {
+				b.WriteString(marker(openID, hidden, loc))
+			}
+			b.WriteString(text)
+			b.WriteString("\n")
+			last = n
 		}
+		openID = res.ID
+	}
+	if hidden := from - last - 1; hidden > 0 && openID != "" {
+		b.WriteString(marker(openID, hidden, loc))
 	}
 	b.WriteString(strings.TrimRight(cut, "\n"))
 	b.WriteString("\n")
@@ -329,6 +378,36 @@ func whollyContained(covering []domain.Resource, from, to int) []string {
 		return nil // the window runs past the last declaration
 	}
 	return out
+}
+
+// promotable returns the declarations a window should be served as a resource read of, or nil
+// when it must stay a framed slice.
+//
+// whollyContained is the general rule. The second case is the one it cannot see: a window that
+// is EXACTLY one declaration's span, where that declaration sits inside another -- a method in
+// a Python, JS or Java class. The class covers the window without fitting in it, so the window
+// looked like a slice of the class. But that span is precisely what intercept_line_ranges
+// advertises for the method, in every context entry and marker that names it; reading it is
+// how a model in that mode reads the method, and the mode promises it gets the method's
+// resource read, enclosing type included. The enclosing declarations are set aside and the
+// window is judged on what lies inside it.
+func promotable(covering []domain.Resource, from, to int) []string {
+	if ids := whollyContained(covering, from, to); len(ids) > 0 {
+		return ids
+	}
+	for _, res := range covering {
+		if res.Location.StartsAt != from || res.Location.EndsAt != to {
+			continue
+		}
+		var inside []domain.Resource
+		for _, c := range covering {
+			if c.Location.StartsAt >= from && c.Location.EndsAt <= to {
+				inside = append(inside, c)
+			}
+		}
+		return whollyContained(inside, from, to)
+	}
+	return nil
 }
 
 // coveringIDs lists the ids rendered (whole or in part) by this body, so the context section

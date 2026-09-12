@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 
 	"github.com/Rhuan-Marques/aracne/internal/helper"
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
@@ -98,6 +99,53 @@ func currentWarningIDs(dbPath string) (map[string]bool, []domain.TopologyWarning
 	return ids, list, true
 }
 
+// How long a hook waits for another hook's turn on the ledger, and how old a lock must be before
+// it is taken to belong to a process that died holding it. The locked section is one table read
+// and one small file write, so either limit is reached only when something is already wrong --
+// and then the ledger is updated unlocked, which at worst repeats a warning.
+const (
+	warnStateLockWait  = 3 * time.Second
+	warnStateLockStale = 15 * time.Second
+)
+
+// withWarnStateLock runs fn while holding the ledger's lock.
+//
+// Hooks for parallel tool calls are separate processes, and each one reads the ledger, diffs it
+// against the warnings table and writes it back. Two of them interleaving that read-modify-write
+// both read the ledger before either wrote it, and both reported the same warning. The table read
+// is inside the lock too: a hook that read an older table could otherwise write back a ledger
+// missing a warning another hook had just reported, and it would be reported again.
+//
+// An O_EXCL lock file rather than flock, because it is the one primitive that means the same on
+// every platform the guard runs on. It is best-effort by design: a hook must never fail, or hang,
+// a tool call over bookkeeping.
+func withWarnStateLock(dbPath string, fn func()) {
+	lockPath := warnStateFile(dbPath) + ".lock"
+	deadline := time.Now().Add(warnStateLockWait)
+	for {
+		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+		if err == nil {
+			f.Close()
+			defer os.Remove(lockPath)
+			fn()
+			return
+		}
+		if !os.IsExist(err) {
+			fn() // the directory will not take a lock file at all
+			return
+		}
+		if info, statErr := os.Stat(lockPath); statErr == nil && time.Since(info.ModTime()) > warnStateLockStale {
+			os.Remove(lockPath)
+			continue
+		}
+		if time.Now().After(deadline) {
+			fn()
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // seedReportedWarnings records the current warnings as already-seen WITHOUT reporting them.
 //
 // Called before a tool runs, so the post-tool comparison is against the state the tool found
@@ -105,6 +153,10 @@ func currentWarningIDs(dbPath string) (map[string]bool, []domain.TopologyWarning
 // warning the repository already had -- none of which the model caused, all of which it would
 // then learn to skim past.
 func seedReportedWarnings(dbPath string) {
+	withWarnStateLock(dbPath, func() { seedReportedWarningsLocked(dbPath) })
+}
+
+func seedReportedWarningsLocked(dbPath string) {
 	ids, _, ok := currentWarningIDs(dbPath)
 	if !ok {
 		return
@@ -142,7 +194,12 @@ func seedReportedWarnings(dbPath string) {
 // set is replaced by the CURRENT one rather than accumulated, so an id that left the table and
 // came back is absent from the record when it returns. That is the behaviour an agent needs --
 // the second break is as worth knowing about as the first.
-func unreportedWarnings(dbPath string) []domain.TopologyWarning {
+func unreportedWarnings(dbPath string) (fresh []domain.TopologyWarning) {
+	withWarnStateLock(dbPath, func() { fresh = unreportedWarningsLocked(dbPath) })
+	return fresh
+}
+
+func unreportedWarningsLocked(dbPath string) []domain.TopologyWarning {
 	ids, list, ok := currentWarningIDs(dbPath)
 	if !ok {
 		return nil

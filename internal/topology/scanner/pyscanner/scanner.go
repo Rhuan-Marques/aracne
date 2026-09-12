@@ -142,8 +142,6 @@ func (s *PythonScanner) Scan(root string) (*domain.Topology, error) {
 
 	populateClassMethods(gt)
 	detectConstructors(gt)
-	matchClassInheritance(gt)
-	matchProtocolImplementations(gt)
 
 	// Resolve module->module import edges now that every module is present.
 	for _, fp := range parseResults {
@@ -161,6 +159,10 @@ func (s *PythonScanner) Scan(root string) (*domain.Topology, error) {
 		mod.Connections = uniqueConns(mod.Connections)
 		gt.Modules[moduleID] = mod
 	}
+	// After the import edges: a base class imported through a package re-export is found
+	// by following them.
+	matchClassInheritance(gt)
+	matchProtocolImplementations(gt)
 
 	for _, fp := range parseResults {
 		for _, fi := range fp.result.Functions {
@@ -200,20 +202,22 @@ func (s *PythonScanner) UpdateFile(topo *domain.Topology, path string) ([]domain
 		return warnings, nil
 	}
 
-	// Only an __init__.py can change which directories are packages, and therefore which
-	// import roots exist. Invalidating on every edit would re-walk the tree per keystroke;
-	// invalidating on none would leave a long-lived `arac serve` classifying against a
-	// stale sys.path after a package is added or removed.
-	if filepath.Base(path) == "__init__.py" {
-		ResetImportRootsCache()
-	}
-
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return warnings, nil
 	}
 
 	oldMod, hasMod := gt.Modules[python.ModuleID(absPath)]
+
+	// Only an __init__.py can change which directories are packages, and therefore which
+	// import roots exist -- and only a file the discovery has never seen can add a bare
+	// top-level module to them. Invalidating on every edit would re-walk the tree per
+	// keystroke; invalidating on neither left a long-lived process classifying `from later
+	// import fn` as a third-party import after later.py was written, so the importer that the
+	// incremental scan re-resolved for it resolved to nothing again.
+	if filepath.Base(path) == "__init__.py" || !hasMod {
+		ResetImportRootsCache()
+	}
 
 	dir := filepath.Dir(absPath)
 	pkgPath := getPythonPackagePath(rootPath, dir)
@@ -324,8 +328,6 @@ func (s *PythonScanner) UpdateFile(topo *domain.Topology, path string) ([]domain
 
 	populateClassMethods(gt)
 	detectConstructors(gt)
-	matchClassInheritance(gt)
-	matchProtocolImplementations(gt)
 
 	// Re-resolve module->module imports for the updated file now that all
 	// modules are present.
@@ -335,6 +337,9 @@ func (s *PythonScanner) UpdateFile(topo *domain.Topology, path string) ([]domain
 	}
 	updated.Connections = uniqueConns(updated.Connections)
 	gt.Modules[python.ModuleID(absPath)] = updated
+	// After the import edges, as in Scan.
+	matchClassInheritance(gt)
+	matchProtocolImplementations(gt)
 
 	for _, fi := range pr.Functions {
 		if fi.Body != nil {
@@ -415,7 +420,13 @@ func collectPythonFiles(root string) []string {
 	return files
 }
 
-// Compares two Python function signatures for equality based on input and output type annotations.
+// Compares two Python function signatures: each parameter's name, annotation and the way it
+// may be passed (default, *args/**kwargs, keyword-only), and the return annotations.
+//
+// This decides whether a warning EXISTS; the contract matcher then retires it for every call
+// that still fits, so it errs toward reporting. Comparing only the count and the annotations
+// missed a default removed from under `opt(3)`, a keyword renamed from under `kw(1, b=2)` and a
+// parameter made keyword-only under `g(1, 2)` -- each a TypeError at the call.
 func signaturesEqualPy(a, b python.PythonFunction) bool {
 	if len(a.Input) != len(b.Input) {
 		return false
@@ -424,7 +435,9 @@ func signaturesEqualPy(a, b python.PythonFunction) bool {
 		return false
 	}
 	for i := range a.Input {
-		if a.Input[i].Typing != b.Input[i].Typing {
+		x, y := a.Input[i], b.Input[i]
+		if x.Name != y.Name || x.Typing != y.Typing || x.Optional != y.Optional ||
+			x.Variadic != y.Variadic || x.KeyOnly != y.KeyOnly {
 			return false
 		}
 	}

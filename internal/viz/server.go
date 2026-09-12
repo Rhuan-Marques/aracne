@@ -1,6 +1,7 @@
 package viz
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -237,6 +238,12 @@ func (s *Server) loadIndex() (*graphIndex, error) {
 	}
 	for sourceID, res := range topo.Resources {
 		for connType, targets := range res.Connections {
+			// The private "__" records are not edges between resources; see
+			// domain.IsPrivateConnType. Counting them inflated every caller's degree and put
+			// their encoded targets in the Inspector, where clicking one answered 400.
+			if domain.IsPrivateConnType(connType) {
+				continue
+			}
 			for _, targetID := range targets {
 				edge := GraphEdge{Source: sourceID, Target: targetID, Type: connType, SourceKind: string(res.Kind), TargetKind: idx.resourceKind(targetID)}
 				idx.outgoing[sourceID] = append(idx.outgoing[sourceID], edge)
@@ -290,6 +297,11 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	for _, res := range idx.topo.Resources {
 		summary.Kinds[string(res.Kind)]++
 		for connType, targets := range res.Connections {
+			// Same rule as loadIndex: bookkeeping is not an edge type the Custom mode can
+			// offer, nor part of the edge count the summary reports.
+			if domain.IsPrivateConnType(connType) {
+				continue
+			}
 			summary.EdgeTypes[connType] += len(targets)
 			summary.EdgeCount += len(targets)
 		}
@@ -360,17 +372,27 @@ func (s *Server) handleNeighborhood(w http.ResponseWriter, r *http.Request) {
 	mode := strings.TrimSpace(r.URL.Query().Get("mode"))
 	kindSet := parseSet(r.URL.Query(), "kind")
 	edgeSet := parseSet(r.URL.Query(), "edge_kind")
+	language := normalizeLanguageFilter(r.URL.Query().Get("language"))
+	limit := queryInt(r.URL.Query(), "limit", 500, 1, 3000)
 	switch mode {
 	case "packages":
+		// Walk the graph the Packages & Modules view draws -- Go's file- and member-level
+		// imports_package/uses_package rolled up to package->package -- not the raw edges,
+		// which start at files and members this view never shows.
+		if graph, ok := idx.packageNeighborhood(id, depth, direction, language, limit); ok {
+			writeJSON(w, idx.optimizedGraph(graph, rules))
+			return
+		}
 		kindSet = packageKinds()
 		edgeSet = packageEdges()
 	case "data_flow":
 		kindSet = dataFlowKinds()
 		edgeSet = dataFlowEdges()
 	}
-	limit := queryInt(r.URL.Query(), "limit", 500, 1, 3000)
 
-	selected, truncated := idx.neighborhood(id, depth, direction, kindSet, edgeSet, limit)
+	selected, truncated := idx.neighborhood(id, depth, limit, func(nodeID string) []string {
+		return idx.neighbors(nodeID, direction, kindSet, edgeSet, language)
+	})
 	ids := setIDs(selected)
 	nodes := make([]GraphNode, 0, len(ids))
 	for _, nodeID := range ids {
@@ -419,12 +441,9 @@ func (s *Server) handleNode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	encodedID := strings.TrimPrefix(r.URL.Path, "/api/node/")
-	id, err := url.PathUnescape(encodedID)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
+	// r.URL.Path is already percent-decoded; decoding it again turned an ID holding a literal
+	// "%41" into one holding "A", and one holding a bare "%" into a 400.
+	id := strings.TrimPrefix(r.URL.Path, "/api/node/")
 	if _, ok := idx.topo.Resources[id]; !ok {
 		writeError(w, fmt.Errorf("node not found: %s", id))
 		return
@@ -454,7 +473,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	path := helper.ConfigPath(s.dbPath)
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, helper.EnsureConfig(path))
+		writeJSON(w, configView(helper.EnsureConfig(path)))
 	case http.MethodPut:
 		cfg := helper.EnsureConfig(path)
 		var raw map[string]json.RawMessage
@@ -470,12 +489,22 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 				writeError(w, err)
 				return
 			}
-			targets, err := helper.NormalizeDescribeTargets(section.Kinds)
-			if err != nil {
-				writeError(w, err)
-				return
+			// An empty list is refused, not stored: config loading reads descriptions.kinds []
+			// as "use the defaults", so saving it would report "None" and then serve the
+			// defaults on the next read. `--target ""` is refused the same way. An absent or
+			// null kinds leaves the stored list alone.
+			if section.Kinds != nil {
+				if len(section.Kinds) == 0 {
+					writeError(w, errors.New("descriptions.kinds must name at least one kind"))
+					return
+				}
+				targets, err := helper.NormalizeDescribeTargets(section.Kinds)
+				if err != nil {
+					writeError(w, err)
+					return
+				}
+				cfg.Descriptions.Kinds = targets
 			}
-			cfg.Descriptions.Kinds = targets
 		}
 		if data, ok := raw["description_batch_size"]; ok {
 			var value int
@@ -489,7 +518,14 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			}
 			setExecutorBatchSize(cfg, value)
 		}
-		if err := helper.SaveConfig(cfg, path); err != nil {
+		// Validated the way setup, init and serve validate. Loading keeps the file's own
+		// spelling for Validate, so a mistyped mode or context_filter is reported here rather
+		// than saved back as the value it silently fell back to.
+		if err := cfg.Validate(); err != nil {
+			writeError(w, fmt.Errorf("config.json does not validate, so it was left unchanged: %w", err))
+			return
+		}
+		if err := saveConfigKeepingUnknownKeys(cfg, path); err != nil {
 			writeError(w, err)
 			return
 		}
@@ -498,6 +534,79 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
+}
+
+// configView is what GET /api/config answers: the effective config and, when the file does
+// not validate, the reason as config_error. The page still loads -- the values shown are the
+// ones aracne runs with -- and can say why a save will be refused before one is attempted.
+func configView(cfg *helper.Config) any {
+	problem := cfg.Validate()
+	if problem == nil {
+		return cfg
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return cfg
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return cfg
+	}
+	fields["config_error"], _ = json.Marshal(problem.Error())
+	return fields
+}
+
+// saveConfigKeepingUnknownKeys writes cfg the way helper.SaveConfig does, but carries over
+// every top-level key of the existing file that the schema does not define. Re-encoding the
+// struct alone dropped them, so changing one setting here deleted whatever else the file held.
+// A file that cannot be read back is refused rather than overwritten.
+func saveConfigKeepingUnknownKeys(cfg *helper.Config, path string) error {
+	var existing map[string]json.RawMessage
+	if data, err := os.ReadFile(path); err == nil {
+		if err := json.Unmarshal(data, &existing); err != nil {
+			return fmt.Errorf("%s is not valid JSON, so it was left unchanged: %w", path, err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("%s could not be read, so it was left unchanged: %w", path, err)
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(cfg); err != nil {
+		return err
+	}
+	var known map[string]json.RawMessage
+	if err := json.Unmarshal(buf.Bytes(), &known); err != nil {
+		return err
+	}
+	extra := make([]string, 0)
+	for key := range existing {
+		if _, ok := known[key]; !ok {
+			extra = append(extra, key)
+		}
+	}
+	if len(extra) == 0 {
+		return helper.SaveConfig(cfg, path)
+	}
+	sort.Strings(extra)
+	// Splice the kept keys in before the closing brace, so the schema keys keep SaveConfig's order.
+	body := bytes.TrimRight(buf.Bytes(), "\n")
+	out := bytes.NewBuffer(append([]byte(nil), bytes.TrimRight(body[:len(body)-1], "\n")...))
+	for _, key := range extra {
+		name, _ := json.Marshal(key)
+		out.WriteString(",\n  ")
+		out.Write(name)
+		out.WriteString(": ")
+		if err := json.Indent(out, existing[key], "  ", "  "); err != nil {
+			return err
+		}
+	}
+	out.WriteString("\n}\n")
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	return helper.AtomicWriteFile(path, out.Bytes(), 0644)
 }
 
 // Updates the chat manager's configuration if initialized, respecting lazy initialization synchronization.
@@ -1158,6 +1267,48 @@ func (idx *graphIndex) packageGraph(query string, language string, limit int) Gr
 	return GraphResponse{Nodes: nodes, Edges: edges, Truncated: truncated, Limit: limit, TotalMatch: total}
 }
 
+// packageNeighborhood is the Packages & Modules drill-down: the nodes within depth of root in
+// the same graph packageGraph draws, so a Go package's neighbours are the packages it imports
+// and is imported by, not the files and members its raw edges start at. ok is false when root
+// is not a node of that view.
+func (idx *graphIndex) packageNeighborhood(root string, depth int, direction string, language string, limit int) (GraphResponse, bool) {
+	view := idx.packageGraph("", language, len(idx.topo.Resources))
+	nodes := make(map[string]GraphNode, len(view.Nodes))
+	for _, node := range view.Nodes {
+		nodes[node.ID] = node
+	}
+	if _, ok := nodes[root]; !ok {
+		return GraphResponse{}, false
+	}
+	out := make(map[string][]string)
+	in := make(map[string][]string)
+	for _, edge := range view.Edges {
+		out[edge.Source] = append(out[edge.Source], edge.Target)
+		in[edge.Target] = append(in[edge.Target], edge.Source)
+	}
+	selected, truncated := idx.neighborhood(root, depth, limit, func(id string) []string {
+		var adjacent []string
+		if direction == "out" || direction == "both" {
+			adjacent = append(adjacent, out[id]...)
+		}
+		if direction == "in" || direction == "both" {
+			adjacent = append(adjacent, in[id]...)
+		}
+		return adjacent
+	})
+	graph := GraphResponse{Nodes: make([]GraphNode, 0, len(selected)), Edges: make([]GraphEdge, 0), Truncated: truncated, Limit: limit}
+	for _, id := range setIDs(selected) {
+		graph.Nodes = append(graph.Nodes, nodes[id])
+	}
+	for _, edge := range view.Edges {
+		if selected[edge.Source] && selected[edge.Target] {
+			graph.Edges = append(graph.Edges, edge)
+		}
+	}
+	graph.TotalMatch = len(graph.Nodes)
+	return graph, true
+}
+
 // isPackagesAndModulesNode reports whether a resource is a node in the
 // "Packages & Modules" view: a Go package, or a Python/JS/TS/Rust/Java module (file).
 func (idx *graphIndex) isPackagesAndModulesNode(res domain.Resource) bool {
@@ -1344,15 +1495,15 @@ func (idx *graphIndex) edgesWithin(selected map[string]bool, edgeSet map[string]
 	return edges
 }
 
-// Explores graph nodes within a given depth and direction, filtering by kind and edge type, stopping at limit.
+// Explores graph nodes breadth-first from root up to depth, taking each node's neighbours from neighborsOf, stopping at limit.
 
-func (idx *graphIndex) neighborhood(root string, depth int, direction string, kindSet map[string]bool, edgeSet map[string]bool, limit int) (map[string]bool, bool) {
+func (idx *graphIndex) neighborhood(root string, depth int, limit int, neighborsOf func(id string) []string) (map[string]bool, bool) {
 	selected := map[string]bool{root: true}
 	frontier := []string{root}
 	for level := 0; level < depth && len(frontier) > 0; level++ {
 		next := make([]string, 0)
 		for _, id := range frontier {
-			for _, neighbor := range idx.neighbors(id, direction, kindSet, edgeSet) {
+			for _, neighbor := range neighborsOf(id) {
 				if selected[neighbor] {
 					continue
 				}
@@ -1368,9 +1519,9 @@ func (idx *graphIndex) neighborhood(root string, depth int, direction string, ki
 	return selected, false
 }
 
-// Returns adjacent nodes in a given direction, optionally filtered by resource kind and edge type.
+// Returns adjacent nodes in a given direction, optionally filtered by resource kind, edge type and language ("" = all).
 
-func (idx *graphIndex) neighbors(id string, direction string, kindSet map[string]bool, edgeSet map[string]bool) []string {
+func (idx *graphIndex) neighbors(id string, direction string, kindSet map[string]bool, edgeSet map[string]bool, language string) []string {
 	seen := make(map[string]bool)
 	add := func(edges []GraphEdge, incoming bool) {
 		for _, edge := range edges {
@@ -1383,6 +1534,9 @@ func (idx *graphIndex) neighbors(id string, direction string, kindSet map[string
 			}
 			if res, ok := idx.topo.Resources[neighbor]; ok {
 				if hasSet(kindSet) && !kindSet[strings.ToLower(string(res.Kind))] {
+					continue
+				}
+				if language != "" && idx.resourceLanguage(res) != language {
 					continue
 				}
 				seen[neighbor] = true

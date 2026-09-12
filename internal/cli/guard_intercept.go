@@ -110,7 +110,14 @@ func interceptableSegment(segments []commandSegment, i int, original, dbPath str
 	seg := segments[i]
 	// A segment reading piped stdin has no file to look up, and one redirecting stdout would
 	// send aracne's answer to that file instead of to the model.
-	if seg.pipedInto || seg.redirectsOut {
+	//
+	// One reading REDIRECTED stdin is the pipe case spelled differently, and it was not
+	// refused. The shell strips `< README.md` before the command sees its argv, so
+	// `rg retry < README.md` reached shellcmd as a path-less `rg retry` -- which for rg means
+	// the working directory -- and came back as a search of the whole tree: matches from five
+	// files where the real command printed the one README line. `<(…)` hides a file behind a
+	// descriptor the same way. `<<` and `<<<` never get this far; see interceptCommand.
+	if seg.pipedInto || seg.redirectsOut || commandRedirectsInput(segments, i) {
 		return 0, false, false
 	}
 	// A segment INSIDE a substitution, a subshell or a group is not a command whose stdout
@@ -169,6 +176,51 @@ func interceptableSegment(segments []commandSegment, i int, original, dbPath str
 		off++
 	}
 	return off, piped, true
+}
+
+// commandRedirectsInput reports whether the command the segment at i begins takes its stdin
+// from somewhere: an unquoted `<`, which also opens `<(…)`, anywhere in that command.
+//
+// Anywhere in the COMMAND is more than segment i. The scanner cuts a new segment at every
+// nesting boundary, so in `rg x $(echo .) < f` the redirect sits in the segment after the
+// substitution's body. The walk is pipelineStages', at the producer's own depth: a deeper
+// segment is a body with a stdin of its own and is skipped, and the command ends at the first
+// cut that is not a nesting boundary.
+func commandRedirectsInput(segments []commandSegment, i int) bool {
+	depth := segments[i].depth
+	for j := i; j < len(segments); j++ {
+		seg := segments[j]
+		if seg.depth > depth {
+			continue
+		}
+		if seg.depth < depth {
+			return false
+		}
+		if j > i {
+			switch segments[j-1].endedBy {
+			case '(', ')', '{', '}', '`':
+			default:
+				return false
+			}
+		}
+		if redirectsInput(seg) {
+			return true
+		}
+	}
+	return false
+}
+
+// redirectsInput reports whether a segment holds an unquoted `<`. The scanner records the offset
+// of every unquoted redirection operator while quoting is still known, so the `<` inside a
+// quoted pattern -- `grep '<div' f` -- is not among them.
+func redirectsInput(seg commandSegment) bool {
+	runes := []rune(seg.text)
+	for _, at := range seg.redirs {
+		if at < len(runes) && runes[at] == '<' {
+			return true
+		}
+	}
+	return false
 }
 
 // pipesIntoLinePreservingConsumers decides whether a segment that FEEDS a pipe may be

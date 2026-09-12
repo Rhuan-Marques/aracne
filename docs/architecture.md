@@ -76,6 +76,7 @@ internal/
   prompts/        Generators for CLAUDE.md/AGENTS.md, agent .md files, slash commands, system prompts
   toolspec/       Single source of truth catalog of tool names (MCP vs chat vs blockable-native)
   topogrep/       Topology-annotated grep: node name > node description > line match, path:line:match
+                  Prunes exactly what ripgrep prunes (the .gitignore hierarchy, gitignore.go), silently
 tests/            Cross-cutting suites incl. atscale_* topology-consistency (3 scan modes) + per-scanner tests
 testing_ground/   Hand-built multi-language corpus of edge cases (see its README.md)
 ```
@@ -117,7 +118,10 @@ testing_ground/   Hand-built multi-language corpus of edge cases (see its README
   which apply to a root (by detection file *and* by recursively finding source
   files, skipping `.git`/`.aracne`/`node_modules`/`vendor`/`__pycache__`).
 - **`TopologyManager`** (`manager.go`) is the orchestrator:
-  - `FullScan` / `FullReScan` (the latter preserves descriptions) / `IncrementalScan`.
+  - `FullScan` / `FullReScan` (the latter preserves descriptions, and carries outstanding
+    warnings across the rebuild — re-judged against the new graph, so a caller fixed since the
+    last scan retires its own row) / `IncrementalScan`. `arac scan --hard` is `FullScan`: a
+    rebuild from nothing, which clears descriptions, bugs and warnings alike.
   - **Incremental scan** diffs the on-disk tree against `file_manifest.json`,
     then takes one of two paths:
     - **Partial fast-path** (`tryPartialIncremental` + `PartialUpdater`): a single
@@ -128,7 +132,12 @@ testing_ground/   Hand-built multi-language corpus of edge cases (see its README
     - **Full two-phase path**: parse every changed file, then re-resolve changed
       files **plus reverse-caller files** of any symbol whose signature/identity
       changed, so body edges (`calls`, `uses_*`) never go stale. Correctness over
-      coverage — anything unsafe falls back here.
+      coverage — anything unsafe falls back here. A deleted file's removal is followed by
+      a re-parse of the surviving files whose structural edges it justified (an `impl`
+      or a method in it, a record naming what it held), so `implements` is rebuilt.
+    - A changed `go.mod` module line, `Cargo.toml`, `pom.xml` or `build.gradle` re-roots
+      or re-classifies every file, which no per-file diff sees, so it forces one
+      `FullReScan` (`project_manifests.go`; stamps in `.aracne/project_manifests.json`).
   - Per-file edit serialization via `WithFileLock` (parallel sub-agents editing
     the *same* file can't clobber each other; different files run concurrently).
   - Also the home of bug/description/warning CRUD that the tools call into.
@@ -217,7 +226,12 @@ transform rather than window (`nl`, `tac`, `xxd`, `od`, `hexdump`, `strings`); `
 passes through for an unindexed file, an over-budget answer, a missing database, or a command
 whose **binary is not installed** — serving `rg` on a box without ripgrep taught the model a
 capability that vanished on the next unmodelled flag — and execs the real binary with its exit
-status. That fidelity is what makes interception safe on by
+status. `ag` and `ack` always pass through (their flags and Perl-style regex are not grep's), and
+so does any pattern whose meaning in grep's BRE/ERE or ripgrep's syntax cannot be rewritten
+exactly into Go's RE2. It passes through, too, for a path-less `rg`/`ug` whose stdin is a file or a
+pipe: those read that stdin instead of the tree, and `arac cmd` holds the very stdin they would
+have had (the guard never rewrites a segment that redirects its input at all). That fidelity is
+what makes interception safe on by
 default: everything aracne does not model runs exactly as it would have, and
 `tests/terminal_e2e_test.go` asserts byte-identical output for those cases.
 
@@ -226,6 +240,13 @@ runs the binary on `PATH`. A shell FUNCTION or alias of the same name is invisib
 process — Claude Code ships a `grep` wrapper around ugrep, for instance — so for a wrapped
 command the passthrough is byte-identical to the binary, not to what that shell would have
 resolved.
+
+An `rg` that is answered is answered over the files `rg --files` lists for the same roots, globs
+and type: .gitignore/.ignore, hidden files and ripgrep's glob dialect stay ripgrep's decisions
+rather than a re-implementation of them. And a search that meets bytes or paths whose real output
+aracne does not reproduce — a binary file rg was named, a NUL past the binary sniff, invalid UTF-8
+under `--piped`, a repeated operand under `--piped`, a `-R` link loop or dangling link — gives up
+(`topogrep.ErrUnmodelled`) and runs the real command.
 
 The agent never types `arac cmd` itself. The guard rewrites its Bash call in place, through
 whichever door the harness offers: Claude Code's PreToolUse hook returns
@@ -302,7 +323,18 @@ re-renders an integration must not be able to change which integration a project
 `arac setup` (flags `--claude`, `--opencode`, `--global`, `-y`) wires aracne into
 a project: generates the injected **CLAUDE.md / AGENTS.md**, the MCP config
 (`.mcp.json` / `.opencode/opencode.json`), agent + command markdown, and harness hooks/
-plugins. Two hooks ship for Claude Code:
+plugins. It writes at the root of the project whose config and database it finds walking up,
+so running it from a subdirectory re-renders the real integration rather than starting a
+second one there. `--global` writes to user level instead; it renders from the project's
+config when run inside one (that is how `arac init --global` carries its answers) and from the
+defaults otherwise, never creates a project config, and names no project's languages. What
+setup created from nothing is recorded in `aracne-setup.json` beside each harness config, and
+`arac disable` removes exactly that once it is empty again — the contract file, `.mcp.json`,
+the directories — while anything the operator had stays. Every JSON config it merges into is read
+as **JSONC** and written back as a **patch** (`internal/cli/jsonconfig.go`): both harnesses accept
+comments, and OpenCode resolves a permission object in key order with `findLast`, so re-encoding a
+decoded map would drop the operator's comments and turn `{"git*": "allow", "git push": "deny"}`
+into its opposite. Two hooks ship for Claude Code:
 
 - **`arac-guard.sh`** → `arac guard --claude-hook`: the **Tool Guard**. What it does depends
   on `mode`:
@@ -352,7 +384,8 @@ plugins. Two hooks ship for Claude Code:
 - **`arac-update-file.sh`** → `arac update-file --claude-hook`: re-parses a file
   into the topology after a **native** edit, keeping the graph current even when
   the change bypassed the MCP `edit`/`write` tools. Installed only when the main
-  agent lists the `edit-update-db-plugin` plugin — an optimization, not the
+  agent lists the `edit-update-db-plugin` plugin (and removed by the next `arac setup` once it
+  no longer does) — an optimization, not the
   warning channel: it syncs *inline* with the edit rather than on the next call.
   The warnings themselves come from the guard either way (below), and both hooks
   report through the same `guard-reported-warnings.json` ledger, so whichever
@@ -365,7 +398,10 @@ Both hook commands **quote** the script path and, under `--global`, name the abs
 `arac setup` actually wrote rather than `${CLAUDE_PROJECT_DIR}` — which expands to the
 *project* root, not the user's home. Unquoted, a project under `~/My Projects` word-split and
 every tool call failed with exit 127; under `--global`, the entry named a file that was never
-created. See `hookScriptRef` / `bashHookCommand` in `internal/cli/native_hooks.go`.
+created. See `hookScriptRef` / `bashHookCommand` in `internal/cli/native_hooks.go`. The
+scripts (and the OpenCode plugins) run the absolute path of the binary that wrote them, and
+`arac` on `PATH` only when that path is not there — a teammate's checkout of the committed
+script, or a binary that moved.
 
 Freshness itself is not a plugin. **Before** every tool call the guard sees, it runs the
 `scan.pre_tool` scan (default: incremental) so the call is answered from a graph that
@@ -396,7 +432,10 @@ the table however it got there.
 ## 10. Languages & known quirks
 
 - **Go** — stdlib `go/ast` parser; richest support (cross-package return-type
-  inference, interface↔struct matching, generics, embedding).
+  inference, interface↔struct matching, generics, embedding). IDs are
+  `<module>/<dir>.Name`, the module being the file's nearest `go.mod`. A function id a
+  package declares more than once (`init`, `_`, build-tag variants) stays plain for the
+  first declaration in file order; the rest are `Name#2`, `Name#3`, ….
 - **Python** — custom parser that **shells out to `python3`** (then `python`), running an
   embedded script via `exec.CommandContext` and reading back a JSON AST
   (`pyscanner/parser.go`, `parse_script.go`). It is the only scanner with a runtime
@@ -406,7 +445,11 @@ the table however it got there.
 - **JavaScript + TypeScript** — share one **tree-sitter (CGO)** scanner, so the
   build **requires gcc**. JS and TS are **independent topologies** (no
   cross-language import resolution). TS adds interfaces/type-aliases/enums and
-  annotation-driven method resolution. Also *modules-first*.
+  annotation-driven method resolution. Also *modules-first*: an ID is the file's path
+  without its extension, except that of two files sharing a stem (`util.js` + `util.cjs`, a
+  compiled `util.js` beside `util.ts`) the one an extension-less import does not reach
+  keeps its extension (`util.cjs.fmt`). Imports honour tsconfig/jsconfig `paths` and
+  `baseUrl`.
 - **Rust** — **tree-sitter (CGO)**; module-path IDs, and a cross-file `impl`
   mechanism so methods defined away from their type still attach to it.
 - **Java** — **tree-sitter (CGO)**; FQN + signature IDs, struct↔struct

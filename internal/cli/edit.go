@@ -52,10 +52,21 @@ func RunEdit() {
 	// topology when none exists; UpdateFile re-reads the edited file straight
 	// afterwards, so the pre-edit snapshot it sees does not survive.
 	manager, reg := InitRegistry(ProjectDBPath(DefaultDBRelative))
-	out, err := tools.NewEdit(manager, reg).Run(data)
+	edit := tools.NewEdit(manager, reg)
+	// The warnings go through the guard's ledger rather than the tool's own summary, so this
+	// edit's breakage is reported exactly ONCE. Printing both meant the PostToolUse drift
+	// check repeated it on the same call -- and for the spellings that check skips as pure
+	// `arac` commands (`arac edit < f.json`), the warning instead surfaced later, attached to
+	// whatever unrelated command ran next. See guard_warnstate.go.
+	edit.OmitWarnings = true
+	out, err := edit.Run(data)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Println(out)
+	if msg := formatDriftWarnings(unreportedWarnings(manager.DbPath())); msg != "" {
+		fmt.Println()
+		fmt.Println(msg)
+	}
 }

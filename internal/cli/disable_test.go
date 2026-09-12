@@ -364,9 +364,11 @@ func TestDisableClaudeCode(t *testing.T) {
 
 	disableClaudeCode(false, true)
 
-	mcpData, _ := os.ReadFile(".mcp.json")
-	if strings.TrimSpace(string(mcpData)) != "{}" {
-		t.Fatalf(".mcp.json should be empty, got:\n%s", string(mcpData))
+	// Nothing but aracne's server was in it, and nothing records it as the operator's (this
+	// fixture has no setup record, like an install by an older binary): a `.mcp.json` left
+	// holding `{}` is residue, so it goes (SU-9).
+	if mcpData, err := os.ReadFile(".mcp.json"); err == nil {
+		t.Fatalf(".mcp.json aracne created should be removed, got:\n%s", string(mcpData))
 	}
 
 	checkEmptyDir(t, ".claude/commands", "Claude commands")
@@ -466,8 +468,7 @@ func TestRunDisableParsesFlagsAndDisablesBothByDefault(t *testing.T) {
 		t.Fatal("RunDisable default should disable OpenCode (mcp still present)")
 	}
 
-	mcpData, _ := os.ReadFile(".mcp.json")
-	if strings.TrimSpace(string(mcpData)) != "{}" {
+	if mcpData, err := os.ReadFile(".mcp.json"); err == nil && strings.Contains(string(mcpData), "mcpServers") {
 		t.Fatal("RunDisable default should disable Claude Code (mcpServers still present)")
 	}
 }
@@ -540,8 +541,7 @@ func TestRunDisableAllFlag(t *testing.T) {
 		t.Fatal("--all should disable OpenCode")
 	}
 
-	mcpData, _ := os.ReadFile(".mcp.json")
-	if strings.TrimSpace(string(mcpData)) != "{}" {
+	if mcpData, err := os.ReadFile(".mcp.json"); err == nil && strings.Contains(string(mcpData), "mcpServers") {
 		t.Fatal("--all should disable Claude Code")
 	}
 }
@@ -645,5 +645,76 @@ func checkFileNotExist(t *testing.T, path, label string) {
 	t.Helper()
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("%s should not exist at %s", label, path)
+	}
+}
+
+// `arac disable < /dev/null` -- a CI step, a cron job, an agent shell -- must not answer its own
+// prompt "no". stdinIsTerminal only asked whether stdin is a CHARACTER DEVICE, and /dev/null is
+// one, so confirmDisable took the interactive branch, read EOF, and read that as a refusal: the
+// config edits were skipped while every file, hook and contract block was still removed.
+func TestStdinIsTerminalRejectsDevNull(t *testing.T) {
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer devNull.Close()
+	real := os.Stdin
+	os.Stdin = devNull
+	defer func() { os.Stdin = real }()
+
+	if stdinIsTerminal() {
+		t.Fatal("/dev/null is not someone who can answer a prompt")
+	}
+}
+
+func TestDisableWithStdinAtDevNullStillRemovesConfigEntries(t *testing.T) {
+	inProject(t)
+	initOpenCode(false, blockingConfig(), true, nil)
+
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer devNull.Close()
+	realStdin, realReader := os.Stdin, promptReader
+	os.Stdin, promptReader = devNull, devNull
+	defer func() { os.Stdin, promptReader = realStdin, realReader }()
+
+	disableOpenCode(false, false)
+
+	if _, err := os.Stat(".opencode/opencode.json"); err == nil {
+		config := readJSONConfig(".opencode/opencode.json")
+		if servers, _ := config["mcp"].(map[string]interface{}); servers["aracne"] != nil {
+			t.Fatalf("disable left the aracne MCP server behind: %v", config)
+		}
+		perms, _ := config["permission"].(map[string]interface{})
+		for key := range perms {
+			if strings.HasPrefix(key, "aracne_") {
+				t.Fatalf("disable left %q behind: %v", key, perms)
+			}
+		}
+	}
+}
+
+// A prompt that was genuinely DECLINED leaves the file as setup wrote it -- so the record of
+// what setup created has to survive, or the next `arac disable` no longer knows what it may
+// remove. The OpenCode half already kept it; the Claude half deleted it either way.
+func TestDisableDeclinedKeepsClaudeSetupState(t *testing.T) {
+	inProject(t)
+	cfg := blockingConfig()
+	initClaudeCode(false, cfg, true, nil)
+
+	realTerminal, realReader := stdinIsTerminal, promptReader
+	defer func() { stdinIsTerminal, promptReader = realTerminal, realReader }()
+	stdinIsTerminal = func() bool { return true }
+	promptReader = strings.NewReader("n\n")
+
+	disableClaudeCode(false, false)
+
+	if _, err := os.Stat(".mcp.json"); err != nil {
+		t.Fatalf("a declined prompt must leave .mcp.json as setup wrote it: %v", err)
+	}
+	if _, err := os.Stat(setupStatePath(".claude/settings.json")); err != nil {
+		t.Fatalf("the record of what setup created was deleted by a declined disable: %v", err)
 	}
 }

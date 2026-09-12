@@ -121,7 +121,7 @@ func TestSyncManifestStampsAttemptedFiles(t *testing.T) {
 			good: {ID: good, Kind: domain.ResourceFile, Name: "good.go", Language: "go"},
 		},
 	}
-	SyncManifest(topo, dbPath, []string{broken})
+	SyncManifest(topo, dbPath, SnapshotManifest([]string{broken}))
 
 	manifest := ReadManifest(ManifestPath(dbPath))
 	if _, ok := manifest[broken]; !ok {
@@ -151,7 +151,8 @@ func TestSyncManifestIgnoresAttemptedPathsThatAreGone(t *testing.T) {
 	gone := filepath.Join(dir, "gone.go")
 
 	topo := &domain.Topology{Root: dir, Language: "go", Resources: map[string]domain.Resource{}}
-	SyncManifest(topo, dbPath, []string{gone})
+	// A stamp handed in for it (the file was deleted after the snapshot) must still be dropped.
+	SyncManifest(topo, dbPath, FileManifest{gone: "2020-01-01T00:00:00Z"})
 
 	if _, ok := ReadManifest(ManifestPath(dbPath))[gone]; ok {
 		t.Fatal("a deleted path must not be stamped back into the manifest")

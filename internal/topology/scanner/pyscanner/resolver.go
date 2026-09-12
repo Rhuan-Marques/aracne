@@ -1,6 +1,7 @@
 package pyscanner
 
 import (
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -125,6 +126,7 @@ func resolveBodyCallRefs(bodyCalls []pyBodyCall, bodyAssigns []pyBodyAssign, pr 
 				if receiverClass == nil || cid != *receiverClass {
 					add(python.ConnUsesClass, string(cid))
 				}
+				addConstructorCall(cid, call, gt, add)
 			}
 			continue
 		}
@@ -132,7 +134,7 @@ func resolveBodyCallRefs(bodyCalls []pyBodyCall, bodyAssigns []pyBodyAssign, pr 
 		// super().method(...) resolves against the receiver class's bases.
 		if call.ObjectName == "super" {
 			if receiverClass != nil {
-				resolveSuperMethod(*receiverClass, call.MethodName, gt, add)
+				resolveInheritedMethod(*receiverClass, call.MethodName, gt, add)
 			}
 			continue
 		}
@@ -142,11 +144,16 @@ func resolveBodyCallRefs(bodyCalls []pyBodyCall, bodyAssigns []pyBodyAssign, pr 
 			// `mod.func()` / `mod.Class()` where mod is an imported module alias
 			// (not a typed local): resolve the dotted call against that module.
 			if fid := lookupFuncByName(call.Func, pr, gt); fid != "" {
+				if cur != nil && passesReceiverExplicitly(fid, call, pr, gt) {
+					shifted := withoutExplicitReceiver(call)
+					*cur = &shifted
+				}
 				add(python.ConnCalls, string(fid))
 			} else if cid := lookupClassByName(call.Func, pr, gt); cid != "" {
 				if receiverClass == nil || cid != *receiverClass {
 					add(python.ConnUsesClass, string(cid))
 				}
+				addConstructorCall(cid, call, gt, add)
 			}
 			continue
 		}
@@ -160,21 +167,60 @@ func resolveBodyCallRefs(bodyCalls []pyBodyCall, bodyAssigns []pyBodyAssign, pr 
 			add(python.ConnUsesClass, string(classID))
 		}
 
-		// Find the method on the class
+		// Find the method on the class, then on what it inherits. Stopping at the class's
+		// own methods left the ordinary OOP case -- calling a method the class inherits --
+		// with no edge at all, so the base method showed no callers and a change to it
+		// warned none of them.
+		found := false
 		for _, mid := range cls.Methods() {
 			m, ok := gt.Functions[mid]
 			if ok && m.Name == call.MethodName {
 				add(python.ConnCalls, string(mid))
+				found = true
 				break
 			}
+		}
+		if !found {
+			resolveInheritedMethod(classID, call.MethodName, gt, add)
 		}
 	}
 }
 
-// resolveSuperMethod resolves a super().method(...) call by walking the receiver
-// class's base classes breadth-first (MRO order) and recording a Calls edge to
-// the first inherited method whose name matches methodName.
-func resolveSuperMethod(receiver python.ClassID, methodName string, gt *python.PythonTopology, add func(kind python.ConnectionKind, id string)) {
+// addConstructorCall records `Cls(...)` as the call to Cls.__init__ it is, so the call site
+// is kept and a constructor signature change is judged against it like any other call.
+//
+// Only an __init__ the class itself declares is linked. With none, the constructor that runs
+// is inherited or object's, and resolving it through bases, metaclasses and __new__ would be
+// a guess; a guessed callee is a false warning. The @dataclass constructor the parser
+// synthesizes is skipped for the same reason: it is built from every class-level name,
+// without defaults, ClassVar or field() options, so its arity is not the real one. A class
+// pattern (`case Cls(...)`) runs no constructor at all.
+func addConstructorCall(cid python.ClassID, call pyBodyCall, gt *python.PythonTopology, add func(kind python.ConnectionKind, id string)) {
+	if call.Pattern {
+		return
+	}
+	cls, ok := gt.Classes[cid]
+	if !ok {
+		return
+	}
+	initID := python.FunctionID(string(cid) + ".__init__")
+	fn, ok := gt.Functions[initID]
+	if !ok || fn.MethodFrom == nil || *fn.MethodFrom != cid {
+		return
+	}
+	// The synthesized constructor carries the class's own span; a written `def __init__`
+	// always starts below the `class` line.
+	if fn.Loc.Path == cls.Loc.Path && fn.Loc.StartsAt == cls.Loc.StartsAt {
+		return
+	}
+	add(python.ConnCalls, string(initID))
+}
+
+// resolveInheritedMethod walks a class's bases breadth-first (MRO order) and records a
+// Calls edge to the first INHERITED method whose name matches methodName. It serves both
+// callers of an inherited method: super().method(...), which names the bases explicitly,
+// and a plain receiver.method() the class does not declare itself.
+func resolveInheritedMethod(receiver python.ClassID, methodName string, gt *python.PythonTopology, add func(kind python.ConnectionKind, id string)) {
 	if methodName == "" {
 		return
 	}
@@ -265,15 +311,25 @@ func canonicalTypeID(typing string, modulePath string, importMap map[string]stri
 	if t == "" || strings.ContainsAny(t, " \t[](){}|,'\"") {
 		return ""
 	}
-	// `from m import Name` -> alias Name binds a symbol of internal module m.
-	if tgt, ok := importTargets[t]; ok && tgt.Symbol != "" {
-		return tgt.ModulePath + "." + tgt.Symbol
+	// `from m import Name` -> alias Name binds a symbol of internal module m (for
+	// `from . import Name`, a name defined in the package's __init__.py).
+	if tgt, ok := importTargets[t]; ok {
+		if refs := tgt.symbolRefs(); len(refs) > 0 {
+			return refs[0].Module + "." + refs[0].Name
+		}
 	}
-	// `m.Name` via `import m` / `from . import m` (m is a module alias).
+	// `m.Name` via `import m` / `from . import m` / `from pkg import m` (m binds a
+	// module), or `Cls.Inner` via `from m import Cls` (a member of the bound symbol).
 	if i := strings.Index(t, "."); i > 0 {
 		alias := t[:i]
 		if tgt, ok := importTargets[alias]; ok {
-			return tgt.ModulePath + "." + t[i+1:]
+			if mods := tgt.moduleRefs(); len(mods) > 0 {
+				return mods[0] + "." + t[i+1:]
+			}
+			if refs := tgt.symbolRefs(); len(refs) > 0 {
+				return refs[0].Module + "." + refs[0].Name + "." + t[i+1:]
+			}
+			return ""
 		}
 		if impPath, ok := importMap[alias]; ok {
 			// External dependency: keep the dotted path (it won't match an
@@ -299,26 +355,8 @@ func lookupClassByName(name string, pr *ParseResult, gt *python.PythonTopology) 
 	if cid := python.ClassID(pr.ModulePath + "." + name); classExists(cid, gt) {
 		return cid
 	}
-	if tgt, ok := pr.ImportTargets[name]; ok {
-		if tgt.Symbol != "" {
-			if cid := python.ClassID(tgt.ModulePath + "." + tgt.Symbol); classExists(cid, gt) {
-				return cid
-			}
-		}
-		// `from . import X` / `from .. import X` where X is a class in the
-		// package __init__ rather than a submodule.
-		if tgt.PkgSymbol != "" {
-			if cid := python.ClassID(tgt.PkgModulePath + "." + tgt.PkgSymbol); classExists(cid, gt) {
-				return cid
-			}
-		}
-	}
-	if i := strings.Index(name, "."); i > 0 {
-		if tgt, ok := pr.ImportTargets[name[:i]]; ok {
-			if cid := python.ClassID(tgt.ModulePath + "." + name[i+1:]); classExists(cid, gt) {
-				return cid
-			}
-		}
+	if id := resolveImportedName(name, pr, gt, func(id string) bool { return classExists(python.ClassID(id), gt) }); id != "" {
+		return python.ClassID(id)
 	}
 	for _, sp := range starModulePrefixes(name, pr) {
 		if cid := python.ClassID(sp + name); classExists(cid, gt) {
@@ -334,26 +372,8 @@ func lookupFuncByName(name string, pr *ParseResult, gt *python.PythonTopology) p
 	if fid := python.FunctionID(pr.ModulePath + "." + name); funcExists(fid, gt) {
 		return fid
 	}
-	if tgt, ok := pr.ImportTargets[name]; ok {
-		if tgt.Symbol != "" {
-			if fid := python.FunctionID(tgt.ModulePath + "." + tgt.Symbol); funcExists(fid, gt) {
-				return fid
-			}
-		}
-		// `from . import X` / `from .. import X` where X is a function in the
-		// package __init__ rather than a submodule.
-		if tgt.PkgSymbol != "" {
-			if fid := python.FunctionID(tgt.PkgModulePath + "." + tgt.PkgSymbol); funcExists(fid, gt) {
-				return fid
-			}
-		}
-	}
-	if i := strings.Index(name, "."); i > 0 {
-		if tgt, ok := pr.ImportTargets[name[:i]]; ok {
-			if fid := python.FunctionID(tgt.ModulePath + "." + name[i+1:]); funcExists(fid, gt) {
-				return fid
-			}
-		}
+	if id := resolveImportedName(name, pr, gt, func(id string) bool { return funcExists(python.FunctionID(id), gt) }); id != "" {
+		return python.FunctionID(id)
 	}
 	for _, sp := range starModulePrefixes(name, pr) {
 		if fid := python.FunctionID(sp + name); funcExists(fid, gt) {
@@ -369,26 +389,8 @@ func lookupExtVarByName(name string, pr *ParseResult, gt *python.PythonTopology)
 	if vid := python.ExternalVarID(pr.ModulePath + "." + name); extVarExists(vid, gt) {
 		return vid
 	}
-	if tgt, ok := pr.ImportTargets[name]; ok {
-		if tgt.Symbol != "" {
-			if vid := python.ExternalVarID(tgt.ModulePath + "." + tgt.Symbol); extVarExists(vid, gt) {
-				return vid
-			}
-		}
-		// `from . import X` / `from .. import X` where X is a module-level var in
-		// the package __init__ rather than a submodule.
-		if tgt.PkgSymbol != "" {
-			if vid := python.ExternalVarID(tgt.PkgModulePath + "." + tgt.PkgSymbol); extVarExists(vid, gt) {
-				return vid
-			}
-		}
-	}
-	if i := strings.Index(name, "."); i > 0 {
-		if tgt, ok := pr.ImportTargets[name[:i]]; ok {
-			if vid := python.ExternalVarID(tgt.ModulePath + "." + name[i+1:]); extVarExists(vid, gt) {
-				return vid
-			}
-		}
+	if id := resolveImportedName(name, pr, gt, func(id string) bool { return extVarExists(python.ExternalVarID(id), gt) }); id != "" {
+		return python.ExternalVarID(id)
 	}
 	for _, sp := range starModulePrefixes(name, pr) {
 		if vid := python.ExternalVarID(sp + name); extVarExists(vid, gt) {
@@ -396,6 +398,109 @@ func lookupExtVarByName(name string, pr *ParseResult, gt *python.PythonTopology)
 		}
 	}
 	return ""
+}
+
+// resolveImportedName resolves name through the file's internal imports to the first
+// candidate ID that exists, as judged by exists (which fixes the resource kind). A bare
+// name is the symbol its alias binds (`from pkg import helper`, `from . import helper`).
+// A dotted `alias.rest` is rest inside the module the alias binds (`import pkg`,
+// `from pkg import sub`), else a member of the symbol it binds (`Cls.method`). A name the
+// target module does not define itself is then followed through that module's own imports:
+// the re-export `from .sub import subf` in pkg/__init__.py.
+func resolveImportedName(name string, pr *ParseResult, gt *python.PythonTopology, exists func(id string) bool) string {
+	refs, members := importRefs(name, pr)
+	for _, r := range refs {
+		if id := r.Module + "." + r.Name; exists(id) {
+			return id
+		}
+	}
+	for _, id := range members {
+		if exists(id) {
+			return id
+		}
+	}
+	for _, r := range refs {
+		if id := followReexport(r, pr, gt, exists); id != "" {
+			return id
+		}
+	}
+	return ""
+}
+
+// importRefs lists what name may denote through the file's internal imports, in the order
+// resolveImportedName tries them: refs are symbols by the module expected to define them,
+// members are IDs nested inside an imported symbol. For a dotted `a.b.rest`, the longest
+// import-bound prefix is tried first, so `import pkg.sub` lets `pkg.sub.f` reach f in
+// pkg/sub.py while `pkg` itself still names the package.
+func importRefs(name string, pr *ParseResult) (refs []pySymbolRef, members []string) {
+	if tgt, ok := pr.ImportTargets[name]; ok {
+		refs = append(refs, tgt.symbolRefs()...)
+	}
+	for i := strings.LastIndex(name, "."); i > 0; i = strings.LastIndex(name[:i], ".") {
+		tgt, ok := pr.ImportTargets[name[:i]]
+		if !ok {
+			continue
+		}
+		rest := name[i+1:]
+		for _, m := range tgt.moduleRefs() {
+			refs = append(refs, pySymbolRef{Module: m, Name: rest})
+		}
+		for _, r := range tgt.symbolRefs() {
+			members = append(members, r.Module+"."+r.Name+"."+rest)
+		}
+	}
+	return refs, members
+}
+
+// pyMaxReexportDepth bounds how many import hops followReexport walks.
+const pyMaxReexportDepth = 4
+
+// followReexport looks for ref.Name in the modules ref.Module imports, breadth-first, when
+// ref.Module does not define it itself -- `from pkg import subf` where pkg/__init__.py only
+// does `from .sub import subf`. The first module found to define the name is taken as its
+// binding: the result is that ID when it is of the kind exists asks for, and "" otherwise.
+// Each level is walked in sorted order because a full scan and an incremental one see a
+// module's import edges in different orders, and they must pick the same binding.
+func followReexport(ref pySymbolRef, pr *ParseResult, gt *python.PythonTopology, exists func(id string) bool) string {
+	if ref.Module == "" || strings.Contains(ref.Name, ".") || pyNameDefined(ref.Module+"."+ref.Name, gt) {
+		return ""
+	}
+	visited := map[string]bool{ref.Module: true}
+	frontier := []string{ref.Module}
+	for depth := 0; depth < pyMaxReexportDepth && len(frontier) > 0; depth++ {
+		var next []string
+		for _, modPath := range frontier {
+			mod, ok := gt.Modules[python.ModuleID(filepath.Join(pr.ModuleRoot, filepath.FromSlash(modPath)+".py"))]
+			if !ok {
+				continue
+			}
+			var targets []string
+			for _, mid := range mod.ModulesImported() {
+				targets = append(targets, pyModulePath(pr.ModuleRoot, string(mid)))
+			}
+			sort.Strings(targets)
+			for _, tp := range targets {
+				if visited[tp] {
+					continue
+				}
+				visited[tp] = true
+				if id := tp + "." + ref.Name; pyNameDefined(id, gt) {
+					if exists(id) {
+						return id
+					}
+					return ""
+				}
+				next = append(next, tp)
+			}
+		}
+		frontier = next
+	}
+	return ""
+}
+
+// pyNameDefined reports whether id names a class, function or module-level variable.
+func pyNameDefined(id string, gt *python.PythonTopology) bool {
+	return classExists(python.ClassID(id), gt) || funcExists(python.FunctionID(id), gt) || extVarExists(python.ExternalVarID(id), gt)
 }
 
 // starModulePrefixes returns the candidate ID prefixes that a bare `name` could
@@ -744,6 +849,32 @@ func resolveMetaclassRefs(pr *ParseResult, gt *python.PythonTopology) {
 		}
 		gt.Classes[ref.ClassID] = cls
 	}
+}
+
+// passesReceiverExplicitly reports whether a call spells its receiver out --
+// Base.m(self, x), Base.__init__(self, ...) -- which passes it as the first argument while
+// the stored signature has it stripped, so the call counts one argument too many and can
+// never fit. Judged from the callee: only an instance method of the class the call names
+// takes a receiver this way. A staticmethod declares none, and a classmethod gets its cls
+// bound by the attribute lookup, so neither is shifted.
+func passesReceiverExplicitly(fid python.FunctionID, call pyBodyCall, pr *ParseResult, gt *python.PythonTopology) bool {
+	fn, ok := gt.Functions[fid]
+	if !ok || fn.MethodFrom == nil || call.ObjectName == "" || call.ArgC <= 0 {
+		return false
+	}
+	if isStaticMethod(fn.Decorators) || isClassMethod(fn.Decorators) {
+		return false
+	}
+	return lookupClassByName(call.ObjectName, pr, gt) == *fn.MethodFrom
+}
+
+// withoutExplicitReceiver drops the leading receiver argument from a recorded shape.
+func withoutExplicitReceiver(c pyBodyCall) pyBodyCall {
+	c.ArgC--
+	if len(c.ArgTypes) > 0 {
+		c.ArgTypes = c.ArgTypes[1:]
+	}
+	return c
 }
 
 // pyCallSite reads the argument shape of one Python call.

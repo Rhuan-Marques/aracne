@@ -15,13 +15,16 @@ import (
 	"github.com/Rhuan-Marques/aracne/internal/llm"
 )
 
-// anthropicHTTP is the client every request goes through.
+// providerHTTP is the client every provider's requests go through -- Anthropic, OpenAI and
+// DeepSeek alike.
 //
 // http.DefaultClient has no timeout at all, and Chat passes context.Background() -- so a
 // stalled connection stalled the caller forever, with nothing to cancel it. The budget is
 // generous because a long completion with a thinking budget legitimately takes minutes; it is
-// a backstop against a dead socket, not a latency target.
-var anthropicHTTP = &http.Client{Timeout: 10 * time.Minute}
+// a backstop against a dead socket, not a latency target. It is shared because the hazard is
+// the transport's, not one vendor's: OpenAI and DeepSeek once went through http.DefaultClient,
+// and a sweep against a gateway that never answered hung until it was killed.
+var providerHTTP = &http.Client{Timeout: 10 * time.Minute}
 
 // Anthropic LLM provider with API key, model, base URL, and thinking budget configuration.
 type Anthropic struct {
@@ -156,7 +159,7 @@ func (a *Anthropic) StreamChatContext(ctx context.Context, messages []llm.Messag
 	req.Header.Set("x-api-key", a.apiKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
 
-	resp, err := anthropicHTTP.Do(req)
+	resp, err := providerHTTP.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("do request: %w", err)
 	}

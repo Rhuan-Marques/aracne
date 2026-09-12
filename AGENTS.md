@@ -19,15 +19,12 @@ the core model, and a tour of every subsystem.
 required — the JS/TS, Rust and Java scanners are tree-sitter, so you need `gcc`.
 [CONTRIBUTING.md](CONTRIBUTING.md) has the rest, including what to run before a PR.
 
-## Two things that will bite you
+## Things that will bite you
 
 - **`testing_ground/` is load-bearing and deliberately not gofmt-clean.** ~20 test files
   scan it and assert on resource IDs keyed to the literal `testing_ground/<lang>/…`
   prefix; reformatting it shifts line numbers those suites check. Never
   `gofmt -w .` at the repo root.
-- **Go resource IDs are module-path-prefixed.** They begin
-  `github.com/Rhuan-Marques/aracne/…`, pinned by `corpusModulePath` in
-  `tests/atscale_harness_test.go`, which must stay equal to `go.mod`'s module line.
 
 ## Note on the block above
 

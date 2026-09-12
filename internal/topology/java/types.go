@@ -30,6 +30,16 @@ type ModuleCut struct {
 	Cut string
 }
 
+// FullBlock carries everything needed to render a neighbour as a full source cut (its
+// dependencies, an optional enclosing type, and the resource's own cut) without its own
+// CONTEXT section. Path labels the fenced code block.
+type FullBlock struct {
+	Path      string
+	Deps      []DependencyPath
+	ParentCut string
+	Cut       string
+}
+
 // SimplifiedFunction is a lightweight reference to a Java method/constructor used
 // in context lists.
 type SimplifiedFunction struct {
@@ -39,6 +49,10 @@ type SimplifiedFunction struct {
 	Input       []VariableDefinition
 	Output      []VariableDefinition
 	Location    domain.Location
+	// Visibility is the read.context_filter verdict for this neighbour (hidden / normal /
+	// full), not the Java access modifier -- that is JavaMethod.Visibility.
+	Visibility domain.Visibility
+	Full       *FullBlock
 }
 
 // SimplifiedStruct is a lightweight reference to a Java class/enum/record.
@@ -57,6 +71,9 @@ type StructUsage struct {
 	Description string
 	Location    domain.Location
 	Methods     []SimplifiedFunction
+	// Visibility is the read.context_filter verdict, as on SimplifiedFunction.
+	Visibility domain.Visibility
+	Full       *FullBlock
 }
 
 // SimplifiedInterface is a lightweight reference to a Java interface/annotation.
@@ -65,6 +82,10 @@ type SimplifiedInterface struct {
 	Name        string
 	Description string
 	Location    domain.Location
+	// Visibility is the read.context_filter verdict, as on SimplifiedFunction. Set only where
+	// the interface is a neighbour the filter governs (an interface a method uses); the
+	// relationship lists -- implements, supertypes -- leave it zero and always render.
+	Visibility domain.Visibility
 }
 
 // ResourceUsage describes a Java resource that uses some target (e.g. a
@@ -91,6 +112,7 @@ type JavaFunctionContext struct {
 	StructsUsed     []StructUsage
 	InterfacesUsed  []SimplifiedInterface
 	Dependencies    []DependencyPath
+	Incoming        []domain.ResourceRef
 }
 
 // JavaStructContext is the full context for a class/enum/record: its own code
@@ -108,6 +130,7 @@ type JavaStructContext struct {
 	Inherits     []SimplifiedStruct
 	StructsUsed  []StructUsage
 	Dependencies []DependencyPath
+	Incoming     []domain.ResourceRef
 }
 
 // JavaInterfaceContext is the full context for an interface/annotation: its own
@@ -118,6 +141,7 @@ type JavaInterfaceContext struct {
 	Supertypes    []SimplifiedInterface
 	ImplementedBy []SimplifiedStruct
 	IsAnnotation  bool
+	Incoming      []domain.ResourceRef
 }
 
 // JavaModuleContext is the context view of a module (a file): its own code cut,
