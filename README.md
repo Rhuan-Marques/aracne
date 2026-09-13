@@ -120,21 +120,6 @@ should be one decision rather than five independent switches:
 Shell `grep` is answered by Aracne in **all four**, and edits re-sync the graph in all four.
 See [docs/modes.md](docs/modes.md).
 
-## Does it work?
-
-Honestly: not settled yet, and this page is not going to claim otherwise.
-
-[`bench/`](bench/) is a paired A/B harness that runs the **same model twice** on real,
-test-graded GitHub issues — once with native file tools, once with Aracne — and compares them
-**within task**, so difficulty cancels. It grades with each repo's own test suite and
-bootstraps over repositories rather than tasks, because several tasks from one repo are not
-independent samples.
-
-What it has produced so far is directional rather than conclusive: a token saving that is
-significant in one run and not distinguishable from no effect in better-powered ones, and too
-few graded solves to say anything about solve rate. Published numbers will follow a run large
-enough to carry them.
-
 ## Documentation
 
 | | |

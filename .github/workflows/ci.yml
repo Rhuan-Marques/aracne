@@ -69,9 +69,14 @@ jobs:
         with:
           go-version: '1.25'
           cache: true
-      - uses: golangci/golangci-lint-action@v6
+      # The action's major must match the golangci-lint major: v6 installs the v1 line,
+      # which cannot read this repo's `version: "2"` config. The version is pinned rather
+      # than `latest` for the same reason CI pins everything else -- and because the
+      # binary has to be BUILT with a Go at least as new as go.mod's (`go 1.25.0`), or the
+      # config loader refuses to start. v2.13.2 is built with go1.26.
+      - uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
+          version: v2.13.2
 
   gofmt:
     name: gofmt
