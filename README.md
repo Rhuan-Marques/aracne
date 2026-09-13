@@ -9,6 +9,11 @@
 </p>
 
 <p align="center">
+  <a href="https://aracne-ai.lat"><strong>Website</strong></a> &nbsp;·&nbsp;
+  <a href="https://aracne-ai.lat/docs.html"><strong>Documentation</strong></a>
+</p>
+
+<p align="center">
   <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue.svg"></a>
   <img alt="Go 1.25" src="https://img.shields.io/badge/go-1.25-00ADD8.svg">
   <img alt="Languages" src="https://img.shields.io/badge/languages-Go%20%7C%20Python%20%7C%20JS%20%7C%20TS%20%7C%20Rust%20%7C%20Java-informational.svg">
@@ -121,6 +126,9 @@ Shell `grep` is answered by Aracne in **all four**, and edits re-sync the graph 
 See [docs/modes.md](docs/modes.md).
 
 ## Documentation
+
+Full documentation lives at **[aracne-ai.lat/docs.html](https://aracne-ai.lat/docs.html)**;
+the project site is **[aracne-ai.lat](https://aracne-ai.lat)**. In-repo:
 
 | | |
 |---|---|
