@@ -28,7 +28,6 @@ cmd/arac/main.go             Subcommand dispatcher → internal/cli.*
 docs/                        This reference, modes.md, configuration.md
 CLAUDE.md / AGENTS.md        This repo's own orientation docs, each carrying the injected
                              contract block `arac setup` writes into them — see §9
-bench/                       Paired A/B benchmark harness (Python). Not in any build.
 testing_ground/              Multi-language edge-case corpus the test suite scans.
 .aracne/                     Per-project state: topology.db, config.json, file_manifest.json,
                              optimization_rules.json, providers.json, agents/*.md, chat/*.json
@@ -366,11 +365,10 @@ into its opposite. Two hooks ship for Claude Code:
     answered rather than refused however `blocked_tools` reads.
   - The **PostToolUse nudge** fires on native `Read`/`Grep`/`Edit`/`Write`, which interception
     never sees, and names the surface the mode actually has (`toolspec.WarningForSurface`).
-    A **shell** read earns no nudge in any mode: benchmarking found the pointer fired hundreds
-    of times against servable shell reads without moving the model onto `arac read` once, so it
-    is pure per-call cost. The MCP fallback below it is keyed on the *mode* rather than on
-    `!InterceptReads()`, which is also true in `cli`; keying it on the predicate would print
-    the MCP pointer after a read `cli` was never going to refuse. Note that
+    A **shell** read earns no nudge in any mode: the pointer is pure per-call cost against a
+    read the shell was going to serve anyway. The MCP fallback below it is keyed on the *mode*
+    rather than on `!InterceptReads()`, which is also true in `cli`; keying it on the predicate
+    would print the MCP pointer after a read `cli` was never going to refuse. Note that
     `grep`/`edit`/`write` guidance is the `arac` subcommand in *every* mode including `mcp`,
     because no mode registers a tool for them.
 

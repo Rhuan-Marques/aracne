@@ -184,9 +184,8 @@ def test_terminal_surface_is_visible_on_the_row():
 def test_an_intercepted_call_counts_once_from_either_signature():
     """The call form and the result form are two views of one exchange.
 
-    It is not settled whether a transcript records a Bash call's input before or after a
-    PreToolUse hook rewrites it, so both are matched -- and a transcript carrying both must
-    not double-count.
+    Both the pre-hook and post-hook forms of a Bash call's input are matched, and a
+    transcript carrying both must not double-count.
     """
     both = "\n".join([
         _bash("1", "arac cmd -- tail -5 pkg/shapes.go"),

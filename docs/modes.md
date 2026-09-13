@@ -50,8 +50,6 @@ product. A config with no `mode` resolves to `cli`.
 returns byte-for-byte what the resource read would have, imports and context included — for a
 method inside a class too, whose resource read carries the enclosing class
 (`promotable` in `universaltools/slice.go`). It is the default addressing for the
-intercepting pair because file+line is vocabulary the model already has: benchmarking found
-models address code as file+line essentially always and as a resource ID essentially never,
-whatever the contract asks for. `intercept_id` is there for the properties an ID has that a
-span does not — it cannot land mid-declaration, and it does not go stale when the file
-shifts.
+intercepting pair because file+line is vocabulary the model already has. `intercept_id` is
+there for the properties an ID has that a span does not — it cannot land mid-declaration, and
+it does not go stale when the file shifts.

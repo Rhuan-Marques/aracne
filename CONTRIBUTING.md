@@ -58,7 +58,6 @@ internal/
   prompts/         every generated agent/contract/command markdown
 tests/             cross-package integration + the at-scale suites
 testing_ground/    the multi-language corpus those suites scan
-bench/             the A/B benchmark harness (Python). Not in any build.
 docs/              architecture, modes, configuration
 ```
 

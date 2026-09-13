@@ -107,16 +107,13 @@ does not merely ask for IDs, it prints them everywhere the model looks — and
 
 **Why these values** (all read live at run time):
 - `read.context_filter`: `include_incoming: true` adds a `# USED BY:` section; `small_functions_visibility: "full"` inlines small neighbor bodies; a high `small_function_threshold` makes more neighbors qualify; `hide_no_description: false` keeps undocumented neighbors. Never use `"hidden"` — it *drops* information. The requested resource's own code is always rendered first and is never truncated; only the trailing context can be cut by the harness, which is why `perf-balanced` keeps external vars `normal` (their full source is a large "token wall" that dilutes the more valuable relationship info).
-- `scan.pre_tool` — `"default"` (the shipped default) re-indexes before every tool call the guard sees, so freshness is paid for per call on the measured path. `perf-balanced` sets `"none"` instead and lets the harness run `arac scanner run` beside the aracne arm (`bench/arms.py:background_scanner`), which polls `scanner.update_frequency` ms and re-scans only what changed. Runs record `bg_scanner` in `runs.jsonl`; **if that is false, `scan.pre_tool: "none"` means nothing is keeping the topology fresh** — treat the run as void. **Avoid `"hard"`** (it *wipes descriptions*, the payload of every context line) and **`"full"`** (re-scans the whole repo on every call → per-tool timeout risk on large repos).
+- `scan.pre_tool` — `"default"` (the shipped default) re-indexes before every tool call the guard sees, so freshness is paid for per call on the measured path. `perf-balanced` sets `"none"` instead and lets the harness run `arac scanner run` beside the aracne arm (`bench/arms.py:background_scanner`), which polls `scanner.update_frequency` ms and re-scans only what changed. Runs record `bg_scanner` in `runs.jsonl`. **Avoid `"hard"`** (it *wipes descriptions*, the payload of every context line) and **`"full"`** (re-scans the whole repo on every call → per-tool timeout risk on large repos).
 - The watcher also covers what `blocked_tools` cannot: the guard classifies a shell command by its command WORD, so `sed -i` is an edit but `python3 - <<EOF` writing a file is just `python3`. Heredoc patching is common, and only the scanner catches it.
 - `read.max_file_size: 33554432` (32 MiB) — files over the limit are *rejected*, not truncated, so this effectively removes the cap for any real source file.
 - `mcp_tools` set explicitly on `llm.claude_code.main_agent` (an empty list would serve zero tools). `perf-mcp-only` blocks native code tools but leaves `bash` and `pipe_passthrough: true` so the agent can still build/test/git and inspect piped output — only reads/greps/edits are forced through aracne.
 
-**Caveats:** these assume the well-described fixtures the bench produces — description *content*,
-`scan.mode`, and `paths` are frozen into `topology.db` at prepare time and a run overlay can't
-change them (re-prepare fixtures to benchmark those). Knobs you can push further if your repos are
-small: `scan.pre_tool: "full"` (more accuracy, slower) and `external_vars_visibility: "full"` in
-`perf-balanced` (more detail, dilution risk).
+Knobs you can push further if your repos are small: `scan.pre_tool: "full"` (more accuracy,
+slower) and `external_vars_visibility: "full"` in `perf-balanced` (more detail, dilution risk).
 
 ## Smaller examples
 

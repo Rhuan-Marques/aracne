@@ -448,7 +448,6 @@
           <tr><td class="id"><a href="#guard-07">GUARD-07</a></td><td class="sev"><span class="chip med">Med</span></td><td>In <code>mcp</code> mode the Bash-read nudge fires with no evidence test at all</td><td><code>mode: mcp</code></td></tr>
           <tr><td class="id"><a href="#guard-08">GUARD-08</a></td><td class="sev"><span class="chip med">Med</span></td><td><code>blocked_tools: ["bash"]</code> does not block Bash, and its refusal advice is unrunnable</td><td>opt-in</td></tr>
           <tr><td class="id"><a href="#guard-09">GUARD-09</a></td><td class="sev"><span class="chip med">Med</span></td><td>The guard's own timeouts sum to 40 s against the 30 s hook timeout setup writes</td><td>large repos</td></tr>
-          <tr><td class="id"><a href="#guard-10">GUARD-10</a></td><td class="sev"><span class="chip low">Low</span></td><td>Warning telemetry labels every batch <code>Bash</code>, including native edits</td><td>benchmarks</td></tr>
           <tr><td class="id"><a href="#warn-01">WARN-01</a></td><td class="sev"><span class="chip high">High</span></td><td>A signature change never warns about callers in the same file</td><td>always</td></tr>
           <tr><td class="id"><a href="#warn-02">WARN-02</a></td><td class="sev"><span class="chip med">Med</span></td><td><code>IndexHealth</code> diffs only languages already in the DB, so a new language reads as "up to date"</td><td>new language</td></tr>
           <tr><td class="id"><a href="#setup-01">SETUP-01</a></td><td class="sev"><span class="chip high">High</span></td><td><code>arac setup</code> silently skips every generated file that exists, including the guard hook script</td><td>every re-run</td></tr>
@@ -881,32 +880,6 @@ Read{file_path: "CHANGELOG.md"}   <span class="g">→ silent</span></pre>
             <code>driftCheck</code> one deadline shared by both stages. A single <code>context.Context</code> with
             a <code>guardHookBudget</code> threaded through <code>indexHasDrifted</code> and
             <code>runGuardScan</code> also makes the arithmetic checkable by a test.</p>
-        </div>
-      </article>
-
-      <article class="finding low" id="guard-10">
-        <div class="fhead">
-          <span class="fid">GUARD-10</span>
-          <h3>Warning telemetry labels every batch <code>Bash</code>, including native edits</h3>
-          <span class="chip low">Low</span><span class="chip low">From source</span>
-        </div>
-        <p class="sites"><b>internal/cli/guard_drift.go:148</b> <code>logGuardWarnings("Bash", fresh)</code></p>
-
-        <div class="field"><span class="label">Requirements</span>
-          <p><code>ARACNE_GUARD_LOG</code> set — i.e. a benchmark run.</p>
-        </div>
-        <div class="field"><span class="label">What happens</span>
-          <p><code>driftCheckApplies</code> was extended to fire after a native <code>Edit</code>/<code>Write</code>/
-            <code>MultiEdit</code>/<code>NotebookEdit</code> — that was the whole point of the change — but
-            <code>driftCheck</code> still passes the literal <code>"Bash"</code> to the logger.</p>
-        </div>
-        <div class="field"><span class="label">Effect</span>
-          <p>The one channel that exists because warnings are invisible in the transcript now misattributes every
-            native-edit warning to Bash. A benchmark measuring "which surface produced warnings" reads zero for the
-            native path.</p>
-        </div>
-        <div class="field"><span class="label">Fix</span>
-          <p>Thread <code>event.ToolName</code> into <code>driftCheck</code> and pass it through.</p>
         </div>
       </article>
 
