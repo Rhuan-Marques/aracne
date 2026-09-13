@@ -27,7 +27,7 @@ import (
 // cannot keep.
 var modeMarkers = map[string]string{
 	helper.ModeMCP:                 "arrive as MCP tools",
-	helper.ModeCLI:                 "Prefer it over reading whole files or line ranges",
+	helper.ModeCLI:                 "Reach for it the moment you want to know",
 	helper.ModeInterceptID:         "## Resource IDs",
 	helper.ModeInterceptLineRanges: "## Line ranges",
 }
@@ -77,12 +77,19 @@ func TestOnlyInterceptingModesTeachShellReads(t *testing.T) {
 // Every byte of every contract is re-sent on every request. The ceiling is a tripwire, not a
 // target: it catches a contract that grows a section back rather than one that is a little long.
 //
+// It was 2400 while each mode's steer was a sentence of prose. The trigger-shaped rewrite binds
+// the questions a model actually asks -- "where is it defined", "who calls it" -- to the command
+// that answers them, and names the commands it should NOT reach for instead. That is worth a few
+// dozen bytes, and it left intercept_id (the one mode that also carries a worked example) at
+// 2393: passing, with seven bytes of room, which is not room at all. 2500 is headroom for a
+// wording change, not permission to grow a section back.
+//
 // It guards the DEFAULT verbosity, which is the one a project gets without asking for it. The
 // long contract has no budget by design -- a project that sets contract_verbosity to "high" has
 // chosen to pay for the paragraphs -- but it is measured below, because "high" quietly becoming
 // the thing every session sends is the failure this number exists to catch.
 func TestNoContractExceedsItsBudget(t *testing.T) {
-	const budget = 2400
+	const budget = 2500
 	for mode := range modeMarkers {
 		cfg := helper.DefaultConfig()
 		cfg.Mode = mode

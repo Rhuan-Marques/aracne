@@ -79,7 +79,7 @@ func proxyRead(command, dbPath string) string {
 		cfg := helper.LoadConfig(helper.ConfigPath(dbPath))
 		budget := proxyBudget(cfg, target, info.Size())
 		// NO LAZY FILL ON THIS PATH. NewRead attaches a descriptions filler, which is awaited
-		// inline for up to descriptions.lazy.timeout_seconds (8s by default) -- longer than
+		// inline for up to descriptions.lazy.timeout_seconds (45s by default) -- far longer than
 		// proxyReadTimeout, so on a repository whose descriptions are not yet written (a fresh
 		// install, exactly when the filler is doing the most work) the proxy reliably gave up
 		// and the model got a bare pointer instead of the file: the two-turns-for-one-question

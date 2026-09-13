@@ -98,12 +98,13 @@ func highMCPHowItReaches() string {
 	return "## How it reaches you\n\n" +
 		"Aracne's capabilities arrive as MCP tools, and each tool's own description says how " +
 		"to call it. Two things the schemas cannot tell you:\n\n" +
-		"**Prefer a symbol over a file.** Reading a declaration returns its source, the " +
-		"imports it needs, and a `# CONTEXT:` list of the neighbours around it with their " +
-		"descriptions -- BOTH what it touches and what implements, subclasses or uses it. " +
-		"Usually the whole answer, for a fraction of a file's tokens. Read a " +
-		"whole file only for a config, an unsupported language, or when you genuinely need " +
-		"all of it.\n\n" +
+		"**Prefer a symbol over a file.** Where is it defined? Who calls, implements or " +
+		"subclasses it? What does this one declaration do? Each is a read of the SYMBOL -- " +
+		"not a `grep`, a `cat` or a `find`. It returns the source, the imports it needs, and " +
+		"a `# CONTEXT:` list of the neighbours around it with their descriptions -- BOTH what " +
+		"it touches and what implements, subclasses or uses it. Usually the whole answer, for " +
+		"a fraction of a file's tokens. Read a whole file only for a config, an unsupported " +
+		"language, or when you genuinely need all of it.\n\n" +
 		"**Batch your reads.** The read tool takes a LIST. Pass every ID you already know you " +
 		"need in ONE call: results are grouped by file under a single context section, and " +
 		"every call re-sends the whole conversation, so one read of three IDs costs far less " +
@@ -123,17 +124,19 @@ func highMCPHowItReaches() string {
 // knows a second spelling exists, and naming one costs bytes on every request.
 func highCLIHowItReaches(profiles []languageProfile) string {
 	return "## How it reaches you\n\n" +
+		"**Where is it defined? Who calls, implements or subclasses it? What does this one " +
+		"declaration do?** Each of those is one command -- not a `grep -rn`, not a `cat`, not " +
+		"a `find`:\n\n" +
+		"```\n" + readExample(profiles) + "\n```\n\n" +
 		"`arac read <id> <id> ...` returns declarations with their source, the imports they " +
 		"need, and the context around them -- BOTH what they touch and what implements, " +
 		"subclasses or uses them. It takes a LIST: pass every ID you already know " +
 		"you need in ONE call, because the results are grouped by file under a single context " +
 		"section and one batched call costs far less than one call per ID.\n\n" +
-		"```\n" + readExample(profiles) + "\n```\n\n" +
-		"**Prefer it over opening files.** A symbol read returns the declaration and the " +
-		"descriptions of everything it touches, for a fraction of a file's tokens; a whole " +
-		"file is for a config, an unsupported language, or when you genuinely need all of " +
-		"it. A unique trailing part of an ID is enough, and a miss returns the nearest " +
-		"candidates rather than an error.\n\n" +
+		"**Prefer it over opening files.** A whole file is for a config, an unsupported " +
+		"language, or when you genuinely need all of it. A unique trailing part of an ID is " +
+		"enough, and a miss returns the nearest candidates rather than an error -- so guess a " +
+		"name rather than searching for one first.\n\n" +
 		"`grep` is answered from the topology however you run it, and additionally searches " +
 		"node names and stored descriptions -- so a plain-English query finds code that never " +
 		"says the word.\n\n"
@@ -380,10 +383,10 @@ func highLanguageSemantics(profiles []languageProfile) string {
 func highGuidelines() string {
 	return `## Guidelines
 
-1. **Prefer a declaration over a file, and a read over a search.** A symbol read is precise
-   and comes with its
-   neighbours; a whole file is for a config, an unsupported language, or when you genuinely
-   need all of it.
+1. **Reach for a declaration before a file, and a read before a search.** "Where is X
+   defined", "who calls X", "what does X do" are each one symbol read -- not a grep, a cat or
+   a find. A whole file is for a config, an unsupported language, or when you genuinely need
+   all of it.
 2. **Ask for everything you need at once.** Every call re-sends the whole conversation, so one
    read of three declarations costs far less than three reads of one. The same goes for edits.
 3. **Descriptions are usually sufficient.** The ` + "`# CONTEXT:`" + ` block already tells you what a

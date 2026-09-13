@@ -19,14 +19,26 @@ const (
 	DefaultLazyMaxNodes = 40
 	// DefaultLazyTimeoutSeconds bounds the whole fill, not one batch.
 	//
-	// SINGLE DIGITS, because this deadline sits on the READ path and nowhere else: the
-	// filler is awaited inline by `read`, `grep` and every intercepted shell command, so it
-	// is the ceiling on how long a `cat` can hang. It was 120 -- two minutes for a command
-	// the model expected to be instant, and the fill is a side effect of the answer rather
-	// than the answer itself. What does not land in time is simply not described, and the
-	// next read that names the same node picks it up. The whole-repo sweep is a different
-	// job with its own patience; it does not come through here.
-	DefaultLazyTimeoutSeconds = 8
+	// This deadline sits on the READ path and nowhere else: the filler is awaited inline by
+	// `read`, `grep` and every intercepted shell command, so it is the ceiling on how long a
+	// `cat` can hang. That is why it is not the two minutes it started at -- the fill is a
+	// side effect of the answer rather than the answer itself.
+	//
+	// BUT IT CANNOT BE SINGLE DIGITS, which is what it was. A deadline shorter than the
+	// provider's floor does not trade completeness for latency; it buys neither. The fill is
+	// cut off every time, nothing is ever written, and the read pays the FULL deadline to
+	// render exactly what it would have rendered with the feature off. Worse, a deadline-cut
+	// target is deliberately not recorded as an attempt (see lazydesc.Filler.fill), so it is
+	// retried -- and re-timed-out -- by every subsequent read, forever. Measured against
+	// `descriptions.provider: "cli"` with `claude -p`: ~5s of process start-up before a token
+	// is generated, and ~29s to describe two resources. At 8s that configuration could not
+	// land a single description, and reads cost 8s each to prove it.
+	//
+	// So the floor is the slowest provider a project can reasonably name, not the fastest.
+	// What still does not land in time is simply not described, and the next read that names
+	// the same node picks it up. The whole-repo sweep is a different job with its own
+	// patience; it does not come through here.
+	DefaultLazyTimeoutSeconds = 45
 	// DefaultLazyBatchSize is how many resources one completion describes.
 	DefaultLazyBatchSize = DefaultDescriptionBatchSize
 	// DefaultLazyParallel is how many batches run at once.

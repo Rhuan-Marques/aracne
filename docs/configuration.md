@@ -158,9 +158,16 @@ written back in whichever you used:
 |---|---|---|
 | `enabled` | `true` | The switch. |
 | `max_nodes` | `40` | Nodes one fill may describe. `≤ 0` means no cap. |
-| `timeout_seconds` | `8` | Bounds the whole fill, not one batch — and it sits on the read path, so it is the ceiling on how long a `cat` can hang. `≤ 0` disables the deadline. |
+| `timeout_seconds` | `45` | Bounds the whole fill, not one batch — and it sits on the read path, so it is the ceiling on how long a `cat` can hang. `≤ 0` disables the deadline. |
 | `batch_size` | `5` | Resources per completion. Non-positive keeps the default. |
 | `parallel` | `4` | Batches in flight at once. Non-positive keeps the default. |
+
+Size `timeout_seconds` against the provider you actually named. A deadline shorter than the
+provider's floor is worse than no fill at all: nothing is ever written, and since a
+deadline-cut resource is not recorded as an attempt, every later read retries it and pays
+the full deadline again. `descriptions.provider: "cli"` spawning `claude -p` needs ~5s
+before its first token, so the CLI providers want a deadline in the tens of seconds, not
+the single digits an HTTP provider can live with.
 
 With nothing configured to write with, the lazy fill is a silent no-op rather than an error.
 

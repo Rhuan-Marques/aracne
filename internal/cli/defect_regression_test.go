@@ -396,7 +396,7 @@ func TestGeneratedMCPEntriesRunTheResolvedBinary(t *testing.T) {
 // TestProxyReadDoesNotWaitOnDescriptions pins the timeout inversion.
 //
 // NewRead attaches a descriptions filler that is awaited inline for up to
-// descriptions.lazy.timeout_seconds -- 8s by default, longer than proxyReadTimeout's 5s. On a
+// descriptions.lazy.timeout_seconds -- 45s by default, far longer than proxyReadTimeout's 5s. On a
 // repository whose descriptions are not yet written (a fresh install, exactly when the filler
 // works hardest) the proxy reliably gave up and the model got a bare pointer instead of the
 // file: the two-turns-for-one-question failure the proxy exists to end.

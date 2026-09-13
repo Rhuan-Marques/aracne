@@ -82,14 +82,15 @@ func contractIntro() string {
 func mcpHowItReaches() string {
 	return "## How it reaches you\n\n" +
 		"Aracne's capabilities arrive as MCP tools; each tool's own description says how to " +
-		"call it. **Prefer a symbol over a file:** reading a declaration returns its source, " +
-		"its imports, and a `# CONTEXT:` list of the neighbours around it with their " +
-		"descriptions -- what it touches, AND what implements or uses it -- usually the " +
-		"answer, for a fraction of a file's tokens.\n\n" +
+		"call it.\n\n" +
+		"**Prefer a symbol over a file.** Where something is defined, who calls or implements " +
+		"it, what one declaration does inside a large file -- each of those is a read of the " +
+		"SYMBOL, not a `grep`, a `cat` or a `find`. It returns the source, the imports, and a " +
+		"`# CONTEXT:` list of what it touches AND what implements or uses it, each with its " +
+		"description: usually the whole answer, for a fraction of a file's tokens.\n\n" +
 		"`grep` is answered from the topology however you run it, and additionally searches " +
 		"node names and stored descriptions -- so a plain-English query finds code that never " +
-		"says the word.\n" +
-		"When aracne is a viable option, prefer it over searching with grep, sed, car or find"
+		"says the word.\n\n"
 }
 
 // aracneReadContract is the whole document for ModeCLI.
@@ -113,27 +114,26 @@ func mcpHowItReaches() string {
 // behaviour the paragraph above it argues against.
 func aracneReadContract(cfg *helper.Config) string {
 	var b strings.Builder
-	// The H1 stays: it is how init finds this block again to REPLACE it, and how `arac
-	// disable` finds it to remove it. It also keeps the generated text from merging into
-	// whatever a project already had in its CLAUDE.md.
-	b.WriteString("# Aracne\n\n")
+	// contractIntro carries the H1 -- how init finds this block again to REPLACE it, and how
+	// `arac disable` finds it to remove it -- and the one sentence saying what the graph is.
+	// Shared with the other three modes so the four cannot drift on the same fact.
+	b.WriteString(contractIntro())
 	b.WriteString(
-		"This repository supports Aracne: every function, type, interface and variable is " +
-			"indexed, with a description and unique id you can use to read it.\n\n" +
-			"`arac read <id> <id> ...` returns declarations with their source, their imports " +
-			"and the context around them -- what they touch, AND what implements, subclasses " +
-			"or uses them -- several in one call. Very useful for exploring and " +
-			"navigating. When possible, Prefer " +
-			"it over reading with commands like grep, sed, cat ot find.\n\n" +
-			"**The bare name is enough** any unique trailing part of an id " +
-			"resolves, so you can use it even if you only know the name of the function, struct or other resource you're looking for\n\n" +
-			"Example: If you need information about function NotifyPlayers, you should use" +
-			"`arac read Notify Players`" +
-			"Edits keep the graph current automatically; act on any topology warning that " +
-			"comes back.\n\n" +
-			"Let descriptions guide you: only read files and resources you need to understand " +
-			"fully -- most times the descriptions are enough.\n\n" +
-			"When aracne is a viable option, prefer it over searching with grep, sed, car or find")
+		"`arac read <id> <id> ...` returns declarations with their source, their imports " +
+			"and a `# CONTEXT:` list of what they touch AND what implements, subclasses or " +
+			"uses them, each with its description. Several ids in one call.\n\n" +
+			"**Reach for it the moment you want to know** where something is defined, who " +
+			"calls or implements it, or what one declaration does inside a large file. Each " +
+			"of those is `arac read <name>` -- not `grep -rn`, not `cat`, not `sed -n`, not " +
+			"`find`. Open a whole file only for a config, an unsupported language, or when " +
+			"you genuinely need all of it.\n\n" +
+			"**The bare name is enough** -- any unique trailing part of an id resolves, and a " +
+			"miss returns the nearest candidates, so guess rather than searching for one " +
+			"first. To learn about the function `NotifyPlayers`, run " +
+			"`arac read NotifyPlayers`.\n\n" +
+			"A CONTEXT entry's description is usually already the answer; drill in only to " +
+			"change or deeply understand that neighbour.\n\n" +
+			"Edits re-sync the graph; act on any topology warning that comes back.\n\n")
 	// Only when someone has opted into blocked_tools. A denial the contract has not explained
 	// costs a turn to work out. Written BEFORE the closing line, because that line is what
 	// init and disable find to locate the end of this block.
@@ -180,13 +180,13 @@ func interceptResourceIDs() string {
 		"head -20 app.Flask             # the first 20 lines of the class body\n" +
 		"grep 'retry' internal/http.Client   # search inside one resource\n" +
 		"```\n\n" +
+		"**Where is it defined? Who calls or implements it?** `cat` the ID -- do not `grep` " +
+		"for the file first. An ID cannot land mid-declaration, does not go stale when the " +
+		"file shifts, and arrives with its neighbours' descriptions.\n\n" +
 		"**The bare name is usually enough** (`RunGuard`, `register_blueprint`): any unique " +
-		"trailing part resolves, and an ambiguous or unknown one comes back with the " +
-		"matching candidates rather than an error -- so guess an ID rather than searching " +
-		"for one first. **Reach for an ID before a file.** An ID " +
-		"cannot land mid-declaration and does not go stale when the file shifts, and it comes " +
-		"back with the neighbours' descriptions attached. Search results and `# CONTEXT:` " +
-		"entries print the ID of every declaration they name -- feed those straight back.\n\n"
+		"trailing part resolves, and a miss returns candidates rather than an error -- so " +
+		"guess an ID rather than searching for one. Search results and `# CONTEXT:` entries " +
+		"print the ID of every declaration they name; feed those straight back.\n\n"
 }
 
 // interceptLineRanges is ModeInterceptLineRanges's addressing section, and the shortest addressing
@@ -201,13 +201,13 @@ func interceptResourceIDs() string {
 func interceptLineRanges() string {
 	return "## Line ranges\n\n" +
 		"Search results and `# CONTEXT:` entries name each declaration by the exact lines it " +
-		"spans, e.g. `src/parser.rs:940-1080`. **Reading that range is the cheapest move " +
-		"available:**\n\n" +
+		"spans, e.g. `src/parser.rs:940-1080`. **Want that declaration? Read the span you " +
+		"were handed -- do not search for it again:**\n\n" +
 		"```\nsed -n '940,1080p' src/parser.rs\n```\n\n" +
-		"Reading a declaration's exact range returns the whole thing -- its imports, its " +
-		"enclosing type, and a `# CONTEXT:` list of what it touches. You do not need to " +
-		"locate it first, and you do not need to guess how far it runs: the range already " +
-		"says. Widening a range by trial and error is the one habit this replaces.\n\n"
+		"That returns the whole thing -- its imports, its enclosing type, and a `# CONTEXT:` " +
+		"list of what it touches. You never need to locate it first or guess how far it runs: " +
+		"the range already says. Widening a range by trial and error is the one habit this " +
+		"replaces.\n\n"
 }
 
 // toolNameSet turns a blocked_tools list into the set BlockableInMode takes.
