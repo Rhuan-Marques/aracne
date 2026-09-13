@@ -1,6 +1,8 @@
 package rustscanner
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"strings"
 
@@ -257,7 +259,14 @@ func ParseFile(filePath, modulePath string) (*ParseResult, error) {
 	defer parser.Close()
 	parser.SetLanguage(rustgrammar.GetLanguage())
 
-	tree := parser.Parse(nil, src)
+	// ParseCtx, not the deprecated Parse: it is the only form that reports a parse
+	// failure instead of handing back a tree to walk. The context is Background because
+	// LanguageScanner.Scan takes none -- making a parse cancellable means threading one
+	// through the interface, which is a change to every scanner, not to this line.
+	tree, err := parser.ParseCtx(context.Background(), nil, src)
+	if err != nil {
+		return nil, fmt.Errorf("parse %s: %w", filePath, err)
+	}
 	defer tree.Close()
 	root := tree.RootNode()
 

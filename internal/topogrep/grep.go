@@ -1215,7 +1215,10 @@ func rowPath(root, path string, opt Options) string {
 	if err != nil {
 		return displayPath(path, false)
 	}
-	return filepath.ToSlash(strings.TrimRight(root, `/`+string(filepath.Separator)) + "/" + rel)
+	// Both separators, spelled out. It was `/`+string(filepath.Separator), which on Unix is
+	// the cutset "//" -- a duplicate character, and a cutset that drops the backslash on the
+	// one platform where it is the separator.
+	return filepath.ToSlash(strings.TrimRight(root, `/\`) + "/" + rel)
 }
 
 // namedFileWanted reports whether a file named as an operand is searched. aracne's own filters

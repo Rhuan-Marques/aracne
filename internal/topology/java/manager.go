@@ -194,9 +194,7 @@ func (m *JavaManager) ReadStruct(id string, opts ...topology.TopologyOption) (*J
 	}
 
 	if opt.HasResource(domain.ResourceDependency) {
-		for _, d := range s.UsesDep() {
-			ctx.Dependencies = append(ctx.Dependencies, d)
-		}
+		ctx.Dependencies = append(ctx.Dependencies, s.UsesDep()...)
 	}
 
 	m.filterStructContext(gt, ctx, opt.ContextFilter(), s.ID)
@@ -301,9 +299,7 @@ func (m *JavaManager) ReadModule(id string, opts ...topology.TopologyOption) (*J
 		}
 	}
 
-	for _, target := range mod.ModulesImported() {
-		ctx.Imports = append(ctx.Imports, target)
-	}
+	ctx.Imports = append(ctx.Imports, mod.ModulesImported()...)
 	for _, d := range mod.DependenciesImported() {
 		ctx.Dependencies = append(ctx.Dependencies, d.Coordinate)
 	}

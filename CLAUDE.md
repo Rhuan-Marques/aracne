@@ -41,19 +41,3 @@ cannot use would be noise in a document that is re-sent on every request. Everyt
 this heading is aracne's own repo documentation, written by hand.
 
 `AGENTS.md` carries the same two halves for OpenCode.
-
-# Aracne
-
-`.aracne/topology.db` holds a pre-analyzed graph of this repo: every function, type, interface and variable, where it is declared, a one-line description, and what it references.
-
-`arac read <id> <id> ...` returns declarations with their source, their imports and a `# CONTEXT:` list of what they touch AND what implements, subclasses or uses them, each with its description. Several ids in one call.
-
-**Reach for it the moment you want to know** where something is defined, who calls or implements it, or what one declaration does inside a large file. Each of those is `arac read <name>` -- not `grep -rn`, not `cat`, not `sed -n`, not `find`. Open a whole file only for a config, an unsupported language, or when you genuinely need all of it.
-
-**The bare name is enough** -- any unique trailing part of an id resolves, and a miss returns the nearest candidates, so guess rather than searching for one first. To learn about the function `NotifyPlayers`, run `arac read NotifyPlayers`.
-
-A CONTEXT entry's description is usually already the answer; drill in only to change or deeply understand that neighbour.
-
-Edits re-sync the graph; act on any topology warning that comes back.
-
-Parallelise multiple reads and edits in a single command when possible.

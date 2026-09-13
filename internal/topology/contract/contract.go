@@ -233,14 +233,9 @@ func decodeParams(v any) []Param {
 func paramsFromWire(wire []paramWire) []Param {
 	out := make([]Param, 0, len(wire))
 	for _, w := range wire {
-		out = append(out, Param{
-			Name:     w.Name,
-			Typing:   w.Typing,
-			TypingID: w.TypingID,
-			Optional: w.Optional,
-			Variadic: w.Variadic,
-			KeyOnly:  w.KeyOnly,
-		})
+		// paramWire is Param plus JSON tags, field for field: a conversion says that in one
+		// place, and stops a new Param field from being silently dropped here.
+		out = append(out, Param(w))
 	}
 	return out
 }

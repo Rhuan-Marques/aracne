@@ -81,10 +81,9 @@ func SignatureOf(method domain.Resource) Signature {
 func fromWire(w []paramWire) []Param {
 	out := make([]Param, 0, len(w))
 	for _, p := range w {
-		out = append(out, Param{
-			Name: p.Name, Typing: p.Typing, TypingID: p.TypingID,
-			Optional: p.Optional, Variadic: p.Variadic, KeyOnly: p.KeyOnly,
-		})
+		// paramWire is Param plus JSON tags, field for field: a conversion says that in one
+		// place, and stops a new Param field from being silently dropped here.
+		out = append(out, Param(p))
 	}
 	return out
 }

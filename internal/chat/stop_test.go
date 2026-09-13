@@ -2,7 +2,6 @@ package chat
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -146,5 +145,4 @@ func TestStopSession_LeavesTaskGroupResumable(t *testing.T) {
 	if _, _, err := findTaskGroup(sess, group.ID); err != nil {
 		t.Fatalf("task group should remain resumable: %v", err)
 	}
-	_ = fmt.Sprintf("%s", group.ID)
 }

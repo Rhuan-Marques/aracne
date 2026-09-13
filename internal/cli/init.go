@@ -374,7 +374,7 @@ func initScan(reg *scanner.Registry) (*topology.TopologyManager, error) {
 
 	manager := topology.New()
 	os.MkdirAll(".aracne", 0755)
-	manager.Load(dbPath)
+	_ = manager.Load(dbPath)
 
 	// The same two filters RunScan installs before it walks anything: an ignored or hidden
 	// tree has to be invisible to the file count and to the scan alike.

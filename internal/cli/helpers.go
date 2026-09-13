@@ -92,7 +92,7 @@ func InitRegistry(dbPath string) (*topology.TopologyManager, *scanner.Registry) 
 	mgr := topology.New()
 	os.MkdirAll(filepath.Dir(dbPath), 0755)
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		mgr.Load(dbPath)
+		_ = mgr.Load(dbPath)
 		// Rooted at the project the database belongs to rather than at the process
 		// working directory, so a first scan triggered from a subdirectory still indexes
 		// the whole project.
@@ -105,7 +105,7 @@ func InitRegistry(dbPath string) (*topology.TopologyManager, *scanner.Registry) 
 		}
 		fmt.Fprintf(os.Stderr, "Topology built in %s\n", time.Since(start).Round(time.Millisecond))
 	} else {
-		mgr.Load(dbPath)
+		_ = mgr.Load(dbPath)
 		// A project moved since its last scan answers every read from paths that are gone; see
 		// TopologyManager.Relocation. Every read verb (read, serve, grep, check-updates, edit,
 		// write) opens the topology here, so it is rebuilt once, under the new root, here.

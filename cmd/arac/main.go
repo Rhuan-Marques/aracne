@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/Rhuan-Marques/aracne/internal/buildinfo"
 	"github.com/Rhuan-Marques/aracne/internal/cli"
 )
 
@@ -18,6 +19,8 @@ var Version = "dev"
 
 // main dispatches Aracne subcommands
 func main() {
+	// Hand the stamped version to the packages that report it over a protocol.
+	buildinfo.Version = Version
 	if len(os.Args) < 2 {
 		cli.PrintUsage()
 		return

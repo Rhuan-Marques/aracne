@@ -75,7 +75,7 @@ func (m *TopologyManager) RunPreToolScan(reg *scanner.Registry, mode helper.PreT
 		if err := m.FullScan(root, reg); err != nil {
 			return err
 		}
-		m.DeleteAllBugs()
+		_ = m.DeleteAllBugs()
 		return nil
 	default:
 		_, err := m.IncrementalScan(root, reg)
@@ -485,7 +485,7 @@ func (m *TopologyManager) incrementalScanLocked(root string, reg *scanner.Regist
 		return allWarnings, fmt.Errorf("write topology db: %w", err)
 	}
 
-	helper.CleanupOrphanedBugs(m.dbPath, topo)
+	_ = helper.CleanupOrphanedBugs(m.dbPath, topo)
 	// changedFiles, not just the ones that produced nodes: a file this scan tried and failed
 	// to parse still has to be stamped, or it comes back as `added` on every later scan. And
 	// ONLY changedFiles: every other file in the graph keeps the stamp it had, because this scan
@@ -823,7 +823,7 @@ func (m *TopologyManager) fullReScanLocked(root string, reg *scanner.Registry) (
 		}
 	}
 
-	helper.CleanupOrphanedBugs(m.dbPath, newTopo)
+	_ = helper.CleanupOrphanedBugs(m.dbPath, newTopo)
 	helper.SyncManifest(newTopo, m.dbPath, stamps)
 	m.recordProjectManifests(root, fileIDs(newTopo))
 	return nil, nil
@@ -1005,7 +1005,7 @@ func (m *TopologyManager) updateFileLocked(path string, reg *scanner.Registry) (
 		if err := helper.WriteIncremental(m.dbPath, topo, upserts, deletes); err != nil {
 			return nil, fmt.Errorf("write topology db: %w", err)
 		}
-		helper.CleanupOrphanedBugs(m.dbPath, topo)
+		_ = helper.CleanupOrphanedBugs(m.dbPath, topo)
 		// SCOPED to this one file. SyncManifest used to stamp EVERY file in the topology with
 		// its current mtime, which is right after a scan that parsed them all and badly wrong
 		// here: parsing one file would declare the whole tree freshly indexed. Anything that

@@ -174,8 +174,8 @@ var DefaultService = &Service{}
 	dbPath := filepath.Join(dir, "test.db")
 	out := mustRun(t, dir, "scan", "-root", dir, "-output", dbPath)
 
-	if !strings.Contains(out, "-1 packages") {
-		t.Fatalf("expected '-1 packages' in output, got:\n%s", out)
+	if !strings.Contains(out, "- 1 packages") {
+		t.Fatalf("expected '- 1 packages' in output, got:\n%s", out)
 	}
 }
 
@@ -206,10 +206,10 @@ func TestScanUnderHiddenRootIndexesFiles(t *testing.T) {
 	hiddenOut := mustRun(t, hidden, "scan", "-all", "-root", hidden, "-output", filepath.Join(hidden, "t.db"), "-progress", "never")
 	visibleOut := mustRun(t, visible, "scan", "-all", "-root", visible, "-output", filepath.Join(visible, "t.db"), "-progress", "never")
 
-	if strings.Contains(hiddenOut, "-0 files") {
+	if strings.Contains(hiddenOut, "- 0 files") {
 		t.Fatalf("a repo under a hidden directory scanned to zero files:\n%s", hiddenOut)
 	}
-	for _, want := range []string{"-1 files", "-2 functions"} {
+	for _, want := range []string{"- 1 files", "- 2 functions"} {
 		if !strings.Contains(hiddenOut, want) {
 			t.Errorf("expected %q under a hidden root, got:\n%s", want, hiddenOut)
 		}
@@ -231,7 +231,7 @@ func TestScanWithDotNamedRootIndexesFiles(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "main.go"), "package main\n\nfunc Alpha() int { return 1 }\n")
 
 	out := mustRun(t, dir, "scan", "-all", "-root", dir, "-output", filepath.Join(dir, "t.db"), "-progress", "never")
-	if !strings.Contains(out, "-1 files") {
+	if !strings.Contains(out, "- 1 files") {
 		t.Fatalf("a repo in a dot-named directory scanned to zero:\n%s", out)
 	}
 }
@@ -244,13 +244,13 @@ func TestScanWarnsWhenNothingIndexed(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "package.json"), `{ "name": "empty", "version": "1.0.0" }`+"\n")
 
 	out := mustRun(t, dir, "scan", "-all", "-root", dir, "-output", filepath.Join(dir, "t.db"), "-progress", "never")
-	if !strings.Contains(out, "-0 files") {
+	if !strings.Contains(out, "- 0 files") {
 		t.Fatalf("expected an empty scan, got:\n%s", out)
 	}
 	if !strings.Contains(out, "indexed 0 files") {
 		t.Errorf("an empty scan of a detected project must warn, got:\n%s", out)
 	}
-	if strings.Contains(out, "-0 errors") {
+	if strings.Contains(out, "- 0 errors") {
 		t.Errorf("a detected-but-empty scanner should be recorded as an error, got:\n%s", out)
 	}
 }

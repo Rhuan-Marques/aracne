@@ -109,16 +109,6 @@ func ambiguousTargets(name string, candidates []readTarget) string {
 	return b.String()
 }
 
-// Extracts a boolean property value from a resource, defaulting to false if missing or not a bool.
-func boolProp(res domain.Resource, key string) bool {
-	value, ok := res.Properties[key]
-	if !ok || value == nil {
-		return false
-	}
-	b, ok := value.(bool)
-	return ok && b
-}
-
 // fileSuffixKind is what a trailing ":something" on a file-shaped id turned out to mean.
 type fileSuffixKind int
 

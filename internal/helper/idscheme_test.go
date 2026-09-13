@@ -42,20 +42,6 @@ func seedSchemeDB(t *testing.T, path string, withResources bool) {
 	}
 }
 
-func userVersion(t *testing.T, path string) int {
-	t.Helper()
-	var v int
-	db, err := openSQLite(path, false)
-	if err != nil {
-		t.Fatalf("openSQLite: %v", err)
-	}
-	defer db.Close()
-	if err := db.QueryRow("PRAGMA user_version").Scan(&v); err != nil {
-		t.Fatalf("user_version: %v", err)
-	}
-	return v
-}
-
 func TestMigrationV2DoesNotRewriteIDs(t *testing.T) {
 	// Recomputing IDs needs the scanners and the source tree; the schema step must only
 	// record which scheme is present.

@@ -98,13 +98,6 @@ func writeRustFile(t *testing.T, root, rel, content string) {
 	touchFuture(t, p)
 }
 
-func removeRustFile(t *testing.T, root, rel string) {
-	t.Helper()
-	if err := os.Remove(rustFile(root, rel)); err != nil {
-		t.Fatalf("remove %s: %v", rel, err)
-	}
-}
-
 // replaceInRustFile applies literal old->new replacements and bumps mtime. Each
 // anchor must exist, so a drifted corpus is caught loudly.
 func replaceInRustFile(t *testing.T, root, rel string, pairs ...[2]string) {

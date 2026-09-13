@@ -319,5 +319,8 @@ func jsonConvert(from any, to any) {
 	if err != nil {
 		return
 	}
-	json.Unmarshal(b, to)
+	// Marshal succeeded, so b is valid JSON: Unmarshal can only fail if `from` and `to`
+	// disagree on a field's type, which is a bug in this mapper rather than anything the
+	// scanned source can cause. `to` is left as it was.
+	_ = json.Unmarshal(b, to)
 }

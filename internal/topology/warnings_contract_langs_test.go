@@ -208,15 +208,6 @@ func (p *contractProj) edit(rel, content string) {
 	}
 }
 
-func (p *contractProj) sigWarnings() int {
-	p.t.Helper()
-	w, err := p.mgr.ListWarnings("", "", domain.WarnSignatureChanged)
-	if err != nil {
-		p.t.Fatal(err)
-	}
-	return len(w)
-}
-
 // callerWarnings counts warnings that name the caller to go verify, whichever kind they
 // are. Java is the reason this is not just signature_changed: its method ids encode the
 // parameter list, so widening a signature is an identity change and the graph may report

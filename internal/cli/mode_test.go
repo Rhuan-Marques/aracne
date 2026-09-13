@@ -22,15 +22,10 @@ import (
 // the contract for it never mentioned a range at all. Four named modes exist so that
 // combination cannot be spelled.
 
-// modeMarkers are the strings that must appear in exactly one mode's contract. Each is the
-// capability that mode is FOR, so a marker in the wrong contract is a promise the project
-// cannot keep.
-var modeMarkers = map[string]string{
-	helper.ModeMCP:                 "arrive as MCP tools",
-	helper.ModeCLI:                 "Reach for it the moment you want to know",
-	helper.ModeInterceptID:         "## Resource IDs",
-	helper.ModeInterceptLineRanges: "## Line ranges",
-}
+// modeMarkers is prompts.ModeMarkers: the string that must appear in exactly one mode's
+// contract. It is declared beside the generators so a phrasing pass cannot update one copy of
+// it and leave another suite asserting the old wording.
+var modeMarkers = prompts.ModeMarkers
 
 func TestEachContractCarriesOnlyItsOwnModesMarker(t *testing.T) {
 	for mode, own := range modeMarkers {

@@ -83,17 +83,6 @@ type anthropicTool struct {
 	InputSchema llm.Parameters `json:"input_schema"`
 }
 
-// Response payload from Anthropic API containing content blocks with text, tool calls, and metadata.
-type anthropicResponse struct {
-	Content []struct {
-		Type  string          `json:"type"`
-		Text  string          `json:"text"`
-		ID    string          `json:"id"`
-		Name  string          `json:"name"`
-		Input json.RawMessage `json:"input"`
-	} `json:"content"`
-}
-
 // Initializes an Anthropic LLM provider with API key, model, and base URL, using default Claude Sonnet model and environment variables as fallback.
 func NewAnthropic(apiKey, model, baseURL string) *Anthropic {
 	if apiKey == "" {

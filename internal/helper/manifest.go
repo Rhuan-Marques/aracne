@@ -119,7 +119,7 @@ func SyncManifest(topo *domain.Topology, dbPath string, stamps FileManifest) {
 	}
 
 	if err := WriteManifest(manifest, manifestPath); err != nil {
-		os.Stderr.WriteString("Warning: failed to write file manifest: " + err.Error() + "\n")
+		_, _ = os.Stderr.WriteString("Warning: failed to write file manifest: " + err.Error() + "\n")
 	}
 }
 

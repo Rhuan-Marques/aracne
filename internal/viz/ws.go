@@ -62,11 +62,11 @@ func (m *WebSocketManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	accept := websocketAccept(key)
 	if _, err := fmt.Fprintf(buf, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", accept); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return
 	}
 	if err := buf.Flush(); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return
 	}
 	client := &webSocketClient{conn: conn, send: make(chan []byte, 32), done: make(chan struct{})}
@@ -131,7 +131,7 @@ func (m *WebSocketManager) remove(client *webSocketClient) {
 		delete(m.clients, client)
 		m.mu.Unlock()
 		close(client.done)
-		client.conn.Close()
+		_ = client.conn.Close()
 	})
 }
 

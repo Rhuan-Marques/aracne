@@ -3,6 +3,8 @@ package tests_test
 import (
 	"strings"
 	"testing"
+
+	"github.com/Rhuan-Marques/aracne/internal/prompts"
 )
 
 // The four modes, through the real binary.
@@ -177,20 +179,19 @@ func TestServeRefusesOutsideMCPMode(t *testing.T) {
 // `arac init` has to rewrite the contract when the mode changes, and the contract it writes has
 // to be the one for the mode the project is actually in.
 func TestInitWritesTheContractForTheMode(t *testing.T) {
-	for _, tc := range []struct {
-		mode   string
-		marker string
-	}{
-		{modeAracneRead, "Prefer it over reading whole files or line ranges"},
-		{modeInterceptID, "## Resource IDs"},
-		{modeLineRange, "## Line ranges"},
-	} {
-		root := modeProject(t, tc.mode)
+	// prompts.ModeMarkers is the one declaration of which sentence belongs to which mode; a
+	// phrasing pass that moves it moves this assertion with it.
+	for _, mode := range []string{modeAracneRead, modeInterceptID, modeLineRange} {
+		marker := prompts.ModeMarkers[mode]
+		if marker == "" {
+			t.Fatalf("mode %q has no marker in prompts.ModeMarkers", mode)
+		}
+		root := modeProject(t, mode)
 		mustRun(t, root, "setup", "-y", "--claude")
 		body := readFile(t, root, "CLAUDE.md")
-		if !strings.Contains(body, tc.marker) {
+		if !strings.Contains(body, marker) {
 			t.Errorf("mode %q: CLAUDE.md is not that mode's contract (want %q)\n%s",
-				tc.mode, tc.marker, body)
+				mode, marker, body)
 		}
 	}
 }

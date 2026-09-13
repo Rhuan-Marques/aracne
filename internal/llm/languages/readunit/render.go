@@ -277,12 +277,3 @@ func writeIncoming(b *strings.Builder, st *renderstate.State, units []Unit, opt 
 	b.WriteString(withLocations(inner.String(), opt.Locate))
 	b.WriteString(used.Trailer())
 }
-
-// describe is the shared "no description" fallback, kept here so the batch sections read the
-// same as the per-language ones.
-func describe(s string) string {
-	if s == "" {
-		return "no description"
-	}
-	return s
-}

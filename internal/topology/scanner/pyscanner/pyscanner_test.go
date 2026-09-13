@@ -347,15 +347,9 @@ class y:
 	}
 
 	var calls, usesClass, usesVar []string
-	for _, conn := range res.Connections["calls"] {
-		calls = append(calls, conn)
-	}
-	for _, conn := range res.Connections["uses_class"] {
-		usesClass = append(usesClass, conn)
-	}
-	for _, conn := range res.Connections["uses_extvar"] {
-		usesVar = append(usesVar, conn)
-	}
+	calls = append(calls, res.Connections["calls"]...)
+	usesClass = append(usesClass, res.Connections["uses_class"]...)
+	usesVar = append(usesVar, res.Connections["uses_extvar"]...)
 
 	if len(calls) != 1 || !containsSuffix(calls, ".x") {
 		t.Errorf("expected ConnCalls to x, got calls=%v", calls)

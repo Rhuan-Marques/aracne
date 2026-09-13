@@ -1027,19 +1027,6 @@ func containsConfigString(list []string, want string) bool {
 	return false
 }
 
-func containsStr(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsStrInner(s, substr))
-}
-
-func containsStrInner(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}
-
 func TestGrepDescriptionKindsDefaultWhenKeyAbsent(t *testing.T) {
 	// An existing config predating the key must pick up the defaults rather than
 	// silently losing description search.

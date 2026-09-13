@@ -66,6 +66,14 @@ func runSetup(claude, opencode, global, autoYes bool) {
 		fmt.Fprintf(os.Stderr, "Invalid .aracne/config.json: %v\n", err)
 		os.Exit(1)
 	}
+	// A key nothing reads is not fatal -- an older binary should still run a newer config --
+	// but it must not be silent. Validate() only ever saw the DECODED config, where a
+	// misspelled key has already been dropped, so this is the one place it can be caught.
+	if raw, err := os.ReadFile(configPath); err == nil {
+		if warning := helper.ConfigKeyWarning(raw); warning != "" {
+			fmt.Fprintln(os.Stderr, warning)
+		}
+	}
 	announceMode(cfg)
 
 	// Read from the database rather than scanned for: setup must stay cheap and must work on a

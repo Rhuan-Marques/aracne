@@ -30,27 +30,6 @@ type deepSeekRequest struct {
 	Stream   bool          `json:"stream,omitempty"`
 }
 
-// Represents the API response from DeepSeek's chat completions endpoint, wrapping an array of Choices each containing a Message with role, content, and optional tool_calls for function-calling workflows.
-type deepSeekResponse struct {
-	Choices []struct {
-		Message struct {
-			Role      string             `json:"role"`
-			Content   string             `json:"content"`
-			ToolCalls []deepSeekToolCall `json:"tool_calls"`
-		} `json:"message"`
-	} `json:"choices"`
-}
-
-// Represents a tool call in DeepSeek API responses containing the call ID, type, and function details (name and JSON arguments). Used to parse and dispatch tool calls from the LLM.
-type deepSeekToolCall struct {
-	ID   string `json:"id"`
-	Type string `json:"type"`
-	Func struct {
-		Name      string `json:"name"`
-		Arguments string `json:"arguments"`
-	} `json:"function"`
-}
-
 // Creates a new DeepSeek LLM provider instance configured with the DEEPSEEK_API_KEY environment variable, model name, and base URL.
 func NewDeepSeek() *DeepSeek {
 	return NewDeepSeekWithConfig(os.Getenv("DEEPSEEK_API_KEY"), "deepseek-chat", "https://api.deepseek.com")

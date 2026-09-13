@@ -113,25 +113,3 @@ func renderExtVar(b *strings.Builder, st *renderstate.State, ev python.Simplifie
 	}
 	b.WriteString(fmt.Sprintf("## %s%s\n", ev.ID, valStr))
 }
-
-// Writes a markdown section listing resources that use the current dependency.
-// Capped: built by scanning every function/class in the topology and previously
-// rendered in full with no limit.
-func writeUsedBy(b *strings.Builder, st *renderstate.State, incoming []domain.ResourceRef) {
-	if len(incoming) == 0 {
-		return
-	}
-	used := renderstate.New()
-	if st != nil {
-		used.MaxEntries, used.MaxBytes = st.MaxEntries, st.MaxBytes
-	}
-	b.WriteString("# USED BY:\n")
-	for _, ref := range incoming {
-		line := fmt.Sprintf("## %s (%s): %s\n", ref.ID, string(ref.Kind), desc(ref.Description))
-		if !used.Allow(len(line)) {
-			continue
-		}
-		b.WriteString(line)
-	}
-	b.WriteString(used.Trailer())
-}

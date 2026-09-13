@@ -75,6 +75,13 @@ func runGrep(args []string, stdout, stderr io.Writer) int {
 	manager, _ := InitRegistry(*dbPath)
 	topo, err := manager.ReadAll()
 	if err != nil {
+		// Degrading to a plain content search is right -- the matches are still the matches,
+		// and refusing to search because the graph is broken would be worse. Doing it SILENTLY
+		// is not: the node-name and description tiers simply vanish, so a query that only ever
+		// matched a description comes back empty and reads as "no such code". Said on stderr,
+		// so the result on stdout stays exactly what a caller parses.
+		fmt.Fprintf(stderr, "arac grep: the topology could not be read (%v); searching file contents only. "+
+			"Name and description matches are unavailable until it is rebuilt with `arac scan --hard`.\n", err)
 		topo = nil
 	}
 	cfg := helper.LoadConfig(helper.ConfigPath(*dbPath))

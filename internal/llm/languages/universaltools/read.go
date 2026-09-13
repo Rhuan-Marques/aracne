@@ -122,7 +122,7 @@ func (r *Read) Description() string {
 	b.WriteString("Prefer resources -- a function, method, struct/class or interface -- over whole files: ")
 	b.WriteString("a symbol carries its neighbours and their descriptions, which usually answers the question ")
 	b.WriteString("for a fraction of a file's tokens. ")
-	b.WriteString("Interfaces carry information on who implements them and files on their methods, so \"who implements X\" is also a valid call")
+	b.WriteString("Interfaces carry information on who implements them and files on their methods, so \"who implements X\" is also a valid call. ")
 	// Only where the section actually renders: read.context_filter "full" turns on "# USED
 	// BY:", and promising callers under "normal" would send the model looking for a heading
 	// the renderer never emits.
@@ -130,10 +130,10 @@ func (r *Read) Description() string {
 		b.WriteString("A `# USED BY:` section names each resource's callers as well. ")
 	}
 	if r.readsFiles() {
-		b.WriteString("A file path works too, for anything you need the fool file for. ")
+		b.WriteString("A file path works too, for anything you need the full file for. ")
 	}
-	b.WriteString("Pass every ID you need in ONE call: results are grouped by file and share a single context section, ")
-	b.WriteString("If you do not know an ID, bare names serve as one. Anything like the name of a function, struct, etc, will resolve. And if multiple, tell you the matching candidates.")
+	b.WriteString("Pass every ID you need in ONE call: results are grouped by file and share a single context section. ")
+	b.WriteString("If you do not know an ID, a bare name serves as one. Anything like the name of a function, struct, etc, will resolve. And if multiple, tell you the matching candidates.")
 	return b.String()
 }
 
@@ -442,7 +442,13 @@ func (r *Read) ReadIDs(rawIDs []string, opt ReadIDsOptions) (string, error) {
 		out += "# UNRESOLVED:\n" + strings.Join(problems, "\n") + "\n"
 		// Attribute the miss. Without this a stale database and a typo produce the same
 		// output, and the model has no way to tell which recovery is the cheap one.
-		if note := r.indexHealthNote(); note != "" {
+		//
+		// An UNREADABLE database is checked first and answers instead of the staleness note,
+		// because it is the more fundamental failure and IndexHealth cannot run without the
+		// graph either -- it would return nothing and leave the miss unattributed.
+		if note := topologyUnreadableNote(topoErr); note != "" {
+			out += note + "\n"
+		} else if note := r.indexHealthNote(); note != "" {
 			out += note + "\n"
 		}
 		// Nothing came back at all: the report is the whole answer, so hand it up as a
@@ -795,6 +801,25 @@ func touchedFiles(topo *domain.Topology, units []readunit.Unit) []string {
 		}
 	}
 	return out
+}
+
+// topologyUnreadableNote is the line appended under "# UNRESOLVED:" when the topology could
+// not be read AT ALL -- a corrupt, truncated or unopenable database.
+//
+// Without it the read path answers a broken database with "not found in topology and not a
+// readable file", which is the same sentence a typo gets. That is the worst available answer:
+// it tells the caller the declaration does not exist, so an agent stops asking the graph and
+// starts grepping the tree, or concludes the code is missing and writes it again. The database
+// is the one thing it cannot work out for itself, so the read has to say so. `arac node count`
+// and `arac check-updates` already report this error; only the read path swallowed it.
+func topologyUnreadableNote(err error) string {
+	if err == nil {
+		return ""
+	}
+	return fmt.Sprintf(
+		"NOTE: the topology could NOT be read — %v. The miss above is that failure, not a "+
+			"missing declaration: nothing can be resolved from the graph until it is fixed. "+
+			"Rebuild it with `arac scan --hard`.", err)
 }
 
 // indexHealthNote is the line appended under "# UNRESOLVED:" when the database has drifted

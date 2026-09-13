@@ -328,17 +328,6 @@ func toolStringListArg(input map[string]any, key string) []string {
 	return nil
 }
 
-// toolStringArg reads a single string argument from a recorded tool call.
-func toolStringArg(input map[string]any, key string) string {
-	if input == nil {
-		return ""
-	}
-	if v, ok := input[key].(string); ok {
-		return v
-	}
-	return ""
-}
-
 // lineSpan reports the inclusive source line span of a location, or 0 when
 // unknown.
 func lineSpan(loc domain.Location) int {

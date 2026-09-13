@@ -122,15 +122,18 @@ See [docs/modes.md](docs/modes.md).
 
 ## Does it work?
 
-There is a real benchmark, not a demo: [`bench/`](bench/) runs the **same model twice** on
-real, test-graded GitHub issues — once with native file tools, once with Aracne — and
-compares them **within task**, so difficulty cancels. It grades with each repo's own test
-suite, bootstraps over repositories rather than tasks, and reports token cost, solve rate
-and turns separately.
+Honestly: not settled yet, and this page is not going to claim otherwise.
 
-Results are reported per run, with their sample sizes and confidence intervals, in
-[`bench/README.md`](bench/README.md). Read those numbers rather than a headline: the
-harness is built to make the comparison honest, including when it is unflattering.
+[`bench/`](bench/) is a paired A/B harness that runs the **same model twice** on real,
+test-graded GitHub issues — once with native file tools, once with Aracne — and compares them
+**within task**, so difficulty cancels. It grades with each repo's own test suite and
+bootstraps over repositories rather than tasks, because several tasks from one repo are not
+independent samples.
+
+What it has produced so far is directional rather than conclusive: a token saving that is
+significant in one run and not distinguishable from no effect in better-powered ones, and too
+few graded solves to say anything about solve rate. Published numbers will follow a run large
+enough to carry them.
 
 ## Documentation
 
@@ -140,7 +143,6 @@ harness is built to make the comparison honest, including when it is unflatterin
 | [docs/modes.md](docs/modes.md) | The four modes, and why they aren't a cross-product |
 | [docs/configuration.md](docs/configuration.md) | Every key in `.aracne/config.json` |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Build, test, and how to add a language |
-| [bench/README.md](bench/README.md) | The benchmark harness and its statistics |
 
 ## Next up
 

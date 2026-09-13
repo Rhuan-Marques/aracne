@@ -468,9 +468,7 @@ func (m *JavaScriptManager) ReadModule(id string, opts ...topology.TopologyOptio
 		}
 	}
 
-	for _, target := range mod.ModulesImported() {
-		ctx.Imports = append(ctx.Imports, target)
-	}
+	ctx.Imports = append(ctx.Imports, mod.ModulesImported()...)
 
 	var blocks []ContextBlock
 	blocks = append(blocks, ContextBlock{

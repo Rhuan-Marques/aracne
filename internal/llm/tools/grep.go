@@ -81,7 +81,15 @@ func (g *Grep) Run(args json.RawMessage) (string, error) {
 		params.Path = "."
 	}
 	topo, err := g.mgr.ReadAll()
+	// Degrading to a plain content search is right -- the matches are still the matches. Doing
+	// it silently is not: the node-name and description tiers disappear, so a plain-English
+	// query that only ever matched a stored description comes back empty and reads to the model
+	// as "no such code". The note rides on the result because a tool has no second channel.
+	topoNote := ""
 	if err != nil {
+		topoNote = fmt.Sprintf("NOTE: the topology could not be read (%v); these are FILE-CONTENT "+
+			"matches only. Name and description matches are unavailable until it is rebuilt "+
+			"with `arac scan --hard`.\n\n", err)
 		topo = nil
 	}
 
@@ -118,7 +126,7 @@ func (g *Grep) Run(args json.RawMessage) (string, error) {
 	}
 	// Always a message, never "": an empty tool result reads as a broken tool rather than
 	// as an honest "nothing matched".
-	return out, nil
+	return topoNote + out, nil
 }
 
 // splitGlobs turns the tool's single glob parameter into the list topogrep takes. A caller

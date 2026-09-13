@@ -1840,15 +1840,6 @@ func removeStrings(slice []string, items ...string) []string {
 	return result
 }
 
-// Converts a slice of FunctionID to a string slice.
-func castFuncIDs(ids []golang.FunctionID) []string {
-	var result []string
-	for _, id := range ids {
-		result = append(result, string(id))
-	}
-	return result
-}
-
 // Converts a slice of StructIDs to []string by casting each element.
 func castStructIDs(ids []golang.StructID) []string {
 	var result []string

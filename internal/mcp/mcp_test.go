@@ -196,10 +196,6 @@ func rawID(n int) json.RawMessage {
 	return json.RawMessage(strconv.Itoa(n))
 }
 
-func intPtr(n int) *int {
-	return &n
-}
-
 // A JSON-RPC id may be a string, a number or null. It used to be decoded into a *int, so a
 // client sending `"id": "1"` -- legal, and what several hosts send -- failed to unmarshal and
 // got a parse error carrying no id at all, which it could not correlate with anything.

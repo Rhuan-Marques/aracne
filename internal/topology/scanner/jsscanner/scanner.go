@@ -688,30 +688,3 @@ func getJSPackagePath(root, dir string) js.PackagePath {
 	rel = strings.ReplaceAll(rel, "/", ".")
 	return js.PackagePath(rel)
 }
-
-// Generic helper that converts a slice of string-like types to a string slice.
-func toStrings[T ~string](ids []T) []string {
-	out := make([]string, 0, len(ids))
-	for _, id := range ids {
-		out = append(out, string(id))
-	}
-	return out
-}
-
-// Filters a string slice by removing specified items, returning a new slice without matches.
-func removeStrings(slice []string, items ...string) []string {
-	if len(items) == 0 {
-		return slice
-	}
-	removeSet := make(map[string]bool, len(items))
-	for _, item := range items {
-		removeSet[item] = true
-	}
-	var result []string
-	for _, s := range slice {
-		if !removeSet[s] {
-			result = append(result, s)
-		}
-	}
-	return result
-}

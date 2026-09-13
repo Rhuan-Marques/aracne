@@ -2,10 +2,15 @@ package topology
 
 import "github.com/Rhuan-Marques/aracne/internal/topology/domain"
 
-// Filtering options for ReadAll operations, supporting resource kind filtering and description presence filtering.
+// Filtering options for ReadAll operations: which resource kinds are included, and how much
+// of a neighbour a context block renders.
+//
+// It used to claim a third, "description presence filtering", on the strength of a
+// hasDescription field that nothing ever set or read. Describing a filter the struct does not
+// apply is worse than not having it: the real one is ContextFilter.HideNoDescription, and a
+// reader looking for it here found a field that agreed with them and did nothing.
 type TopologyOptions struct {
 	resourceFilter map[domain.ResourceKind]bool
-	hasDescription *bool
 	contextFilter  *domain.ContextFilter
 }
 

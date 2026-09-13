@@ -1,6 +1,7 @@
 package jsscanner
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -324,7 +325,14 @@ func ParseFile(filePath string, pkgPath js.PackagePath, moduleRoot string) (*Par
 	defer parser.Close()
 	parser.SetLanguage(grammarForFile(filePath))
 
-	tree := parser.Parse(nil, src)
+	// ParseCtx, not the deprecated Parse: it is the only form that reports a parse
+	// failure instead of handing back a tree to walk. The context is Background because
+	// LanguageScanner.Scan takes none -- making a parse cancellable means threading one
+	// through the interface, which is a change to every scanner, not to this line.
+	tree, err := parser.ParseCtx(context.Background(), nil, src)
+	if err != nil {
+		return nil, fmt.Errorf("parse %s: %w", filePath, err)
+	}
 	defer tree.Close()
 	root := tree.RootNode()
 
@@ -1527,34 +1535,37 @@ func declaredTypeName(ta *sitter.Node, src []byte) string {
 }
 
 // typeAnnotationName returns the resolvable user type name inside a type_annotation, or "".
+//
+// The FIRST named child is the whole answer -- a type_annotation wraps exactly one type. This
+// was written as a `for` loop that returns on its first iteration, which reads as "search the
+// children" and is not: it ran once whatever the count. Spelled as the bounds check it always
+// was, so the next reader does not have to work that out (and staticcheck stops reporting a
+// loop whose condition never changes).
 func typeAnnotationName(ta *sitter.Node, src []byte) string {
-	for i := 0; i < int(ta.NamedChildCount()); i++ {
-		return typeRefName(ta.NamedChild(i), src)
+	if ta.NamedChildCount() == 0 {
+		return ""
 	}
-	return ""
+	return typeRefName(ta.NamedChild(0), src)
 }
 
 // typeAnnotationArg returns the first generic type argument of a type annotation,
 // e.g. "Circle" for `: Box<Circle>`, or "" when the annotation is non-generic.
 func typeAnnotationArg(ta *sitter.Node, src []byte) string {
-	for i := 0; i < int(ta.NamedChildCount()); i++ {
-		n := ta.NamedChild(i)
-		if n.Type() != ntGenericType {
-			return ""
-		}
-		args := n.ChildByFieldName("type_arguments")
-		if args == nil {
-			args = childByType(n, ntTypeArguments)
-		}
-		if args == nil {
-			return ""
-		}
-		for j := 0; j < int(args.NamedChildCount()); j++ {
-			return typeRefName(args.NamedChild(j), src)
-		}
+	if ta.NamedChildCount() == 0 {
 		return ""
 	}
-	return ""
+	n := ta.NamedChild(0)
+	if n.Type() != ntGenericType {
+		return ""
+	}
+	args := n.ChildByFieldName("type_arguments")
+	if args == nil {
+		args = childByType(n, ntTypeArguments)
+	}
+	if args == nil || args.NamedChildCount() == 0 {
+		return ""
+	}
+	return typeRefName(args.NamedChild(0), src)
 }
 
 // Extracts the name from a TypeScript/JavaScript type reference node, handling identifiers, generics, arrays, and member expressions.
@@ -1567,8 +1578,9 @@ func typeRefName(n *sitter.Node, src []byte) string {
 			return typeRefName(nm, src)
 		}
 	case ntArrayType:
-		for i := 0; i < int(n.NamedChildCount()); i++ {
-			return typeRefName(n.NamedChild(i), src)
+		// The element type is the first named child; the loop only ever ran once.
+		if n.NamedChildCount() > 0 {
+			return typeRefName(n.NamedChild(0), src)
 		}
 	case ntUnionType:
 		// Union (`A | B`): resolve against the first member that yields a

@@ -45,13 +45,13 @@ func parseResourceListArgs(args []string) (string, kindFilters, bool) {
 				os.Exit(1)
 			}
 			i++
-			kinds.Set(args[i])
+			_ = kinds.Set(args[i])
 		case strings.HasPrefix(arg, "--kind="):
-			kinds.Set(strings.TrimPrefix(arg, "--kind="))
+			_ = kinds.Set(strings.TrimPrefix(arg, "--kind="))
 		case strings.HasPrefix(arg, "-kind="):
-			kinds.Set(strings.TrimPrefix(arg, "-kind="))
+			_ = kinds.Set(strings.TrimPrefix(arg, "-kind="))
 		case strings.HasPrefix(arg, "-k="):
-			kinds.Set(strings.TrimPrefix(arg, "-k="))
+			_ = kinds.Set(strings.TrimPrefix(arg, "-k="))
 		case strings.HasPrefix(arg, "-"):
 			fmt.Fprintf(os.Stderr, "Unknown flag: %s\n", arg)
 			fmt.Fprintln(os.Stderr, "Usage: arac resource list [query] [--kind <kind>]... [--no-description]")

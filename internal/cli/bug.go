@@ -89,7 +89,7 @@ func RunBugReport(args []string) {
 // setter; the read paths need nothing else.
 func bugManager(dbPath string) *topology.TopologyManager {
 	mgr := topology.New()
-	mgr.Load(dbPath)
+	_ = mgr.Load(dbPath)
 	return mgr
 }
 

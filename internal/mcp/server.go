@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/Rhuan-Marques/aracne/internal/buildinfo"
 	"github.com/Rhuan-Marques/aracne/internal/llm/tools"
 )
 
@@ -49,8 +50,10 @@ func (s *Server) serve(in io.Reader, out io.Writer) error {
 		}
 		if reply != nil {
 			b, _ := json.Marshal(reply)
-			out.Write(b)
-			out.Write([]byte{'\n'})
+			// A failed write means the peer closed the pipe; the next read returns EOF and
+			// ends the loop. There is no reply channel left to report it on.
+			_, _ = out.Write(b)
+			_, _ = out.Write([]byte{'\n'})
 		}
 		if err == io.EOF {
 			return nil
@@ -192,7 +195,7 @@ func (s *Server) handleInitialize(id json.RawMessage) *Response {
 		Result: InitializeResult{
 			ProtocolVersion: "2024-11-05",
 			Capabilities:    Capabilities{Tools: &struct{}{}},
-			ServerInfo:      ServerInfo{Name: "aracne", Version: "1.0.0"},
+			ServerInfo:      ServerInfo{Name: "aracne", Version: buildinfo.Version},
 		},
 	}
 }

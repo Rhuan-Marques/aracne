@@ -15,6 +15,68 @@ linters:
     - unused
     - misspell
 
+  settings:
+    staticcheck:
+      # golangci-lint's own default list, plus the QF (quickfix) family.
+      #
+      # QF checks are editor refactoring suggestions -- "could apply De Morgan's law", "use
+      # fmt.Fprintf instead of WriteString(fmt.Sprintf(...))". They were 190 of the 317 issues
+      # this config produced, which is the whole reason the job's output was unreadable and the
+      # one real finding in it went unnoticed for so long. Gating CI on them was never a
+      # decision anyone made; it is what "all" happens to mean. Correctness (SA) and
+      # simplification (S1) still gate.
+      checks:
+        - all
+        - -ST1000
+        - -ST1003
+        - -ST1016
+        - -ST1020
+        - -ST1021
+        - -ST1022
+        - -QF1001
+        - -QF1002
+        - -QF1003
+        - -QF1011
+        - -QF1012
+    misspell:
+      # Load-bearing, not typos. `dependancy` and `dependencie` are deliberate aliases in the
+      # resource-kind parsers so a user who types the common misspelling still gets a match --
+      # "correcting" them collapses two switch cases into one and the package stops compiling.
+      # `recommented` is used correctly, meaning "the comments changed"; the dictionary reads
+      # it as "recommended".
+      ignore-rules:
+        - dependancy
+        - dependencie
+        - recommented
+    errcheck:
+      # The conventional unchecked calls, excluded by NAME rather than by 163 scattered
+      # //nolint comments. A deferred Close, a write to an already-failing stderr and an
+      # advisory unlock have no recovery a caller could perform. Anything that PARSES or
+      # DECODES is deliberately absent from this list: that is where a swallowed error turns
+      # malformed input into a silent zero value, and those get read one at a time.
+      exclude-functions:
+        - (io.Closer).Close
+        - (*os.File).Close
+        - (*os.File).Seek
+        - (*database/sql.DB).Close
+        - (*database/sql.Rows).Close
+        - (*database/sql.Stmt).Close
+        - (*database/sql.Tx).Rollback
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - io.WriteString
+        - os.MkdirAll
+        - os.Remove
+        - syscall.Flock
+        - (*flag.FlagSet).Parse
+        # Every WalkDir here returns nil on every entry error and uses SkipDir/SkipAll as
+        # control flow, both of which WalkDir absorbs -- so the call cannot return non-nil.
+        # The tree walks are deliberately best-effort: a directory that cannot be read is a
+        # directory with nothing to scan.
+        - path/filepath.WalkDir
+        - path/filepath.Walk
+
   exclusions:
     generated: lax
     paths:

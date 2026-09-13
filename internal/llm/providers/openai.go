@@ -67,13 +67,6 @@ type openAIToolCall struct {
 	Function openAIFunction `json:"function"`
 }
 
-// OpenAI API response payload containing message choices from model completion.
-type openAIResponse struct {
-	Choices []struct {
-		Message openAIMessage `json:"message"`
-	} `json:"choices"`
-}
-
 // Initializes an OpenAI LLM provider with API key, model, and base URL, using default GPT-4.1 model and environment variables as fallback.
 func NewOpenAI(apiKey, model, baseURL string) *OpenAI {
 	if apiKey == "" {

@@ -996,9 +996,7 @@ func (m *GoManager) ReadFile(id string, opts ...topology.TopologyOption) (*GoFil
 		}
 	}
 
-	for _, p := range f.PackagesImported() {
-		ctx.Imports = append(ctx.Imports, p)
-	}
+	ctx.Imports = append(ctx.Imports, f.PackagesImported()...)
 
 	blocks := []ContextBlock{{
 		Kind: "file", FileID: FileID(fileID), Line: 1,

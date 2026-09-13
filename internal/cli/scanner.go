@@ -68,7 +68,7 @@ func RunScannerRun(args []string) {
 
 	reg := NewScannerRegistry()
 	manager := topology.New()
-	manager.Load(dbPath)
+	_ = manager.Load(dbPath)
 
 	cfg := helper.EnsureConfig(helper.ConfigPath(dbPath))
 	// Install the path-visibility filter up front so the watch-loop's change

@@ -451,7 +451,7 @@ func emitPreToolRewrite(output io.Writer, toolInput map[string]interface{}, comm
 		updated[k] = v
 	}
 	updated["command"] = command
-	json.NewEncoder(output).Encode(map[string]interface{}{
+	_ = json.NewEncoder(output).Encode(map[string]interface{}{
 		"hookSpecificOutput": map[string]interface{}{
 			"hookEventName": "PreToolUse",
 			"updatedInput":  updated,

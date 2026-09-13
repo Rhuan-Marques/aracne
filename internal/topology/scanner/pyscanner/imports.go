@@ -82,7 +82,9 @@ func resolveInternalImport(imp pyImport, importerFile, moduleRoot string) (pyImp
 	isFrom := imp.Module != "" || imp.Level > 0
 
 	if isFrom {
-		baseDir := moduleRoot
+		// Only the relative branch below uses this; the absolute one returns before it is
+		// read, which is why seeding it with moduleRoot was a dead assignment.
+		var baseDir string
 		var modSegs []string
 		if imp.Level > 0 {
 			// Relative import: level 1 is the importer's own directory, each

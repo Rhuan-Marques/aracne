@@ -82,7 +82,7 @@ func runPostToolCommand(tool, command string, output io.Writer) {
 			}
 		}
 	}
-	json.NewEncoder(output).Encode(answer)
+	_ = json.NewEncoder(output).Encode(answer)
 }
 
 // runRewriteCommand answers `arac guard --rewrite <command>`: the interception decision on its
@@ -116,7 +116,7 @@ func runRewriteCommand(command string, output io.Writer) {
 		logGuardDecision(guardRewrote, "bash", command)
 		answer["command"] = rewritten
 	}
-	json.NewEncoder(output).Encode(answer)
+	_ = json.NewEncoder(output).Encode(answer)
 }
 
 // runPreToolScanCommand runs the configured pre-tool scan against the project the working
@@ -1068,7 +1068,7 @@ func baseName(tok string) string {
 // Emits a PreToolUse hook event that denies tool execution with a reason as JSON.
 
 func emitPreToolDeny(output io.Writer, reason string) {
-	json.NewEncoder(output).Encode(map[string]interface{}{
+	_ = json.NewEncoder(output).Encode(map[string]interface{}{
 		"hookSpecificOutput": map[string]interface{}{
 			"hookEventName":            "PreToolUse",
 			"permissionDecision":       "deny",
@@ -1079,7 +1079,7 @@ func emitPreToolDeny(output io.Writer, reason string) {
 
 // Emits a PostToolUse hook event with additional context message as JSON.
 func emitPostToolWarning(output io.Writer, msg string) {
-	json.NewEncoder(output).Encode(map[string]interface{}{
+	_ = json.NewEncoder(output).Encode(map[string]interface{}{
 		"hookSpecificOutput": map[string]interface{}{
 			"hookEventName":     "PostToolUse",
 			"additionalContext": msg,

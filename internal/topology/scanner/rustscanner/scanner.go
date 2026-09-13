@@ -253,12 +253,8 @@ func resolveTopology(gt *rust.RustTopology, results []*ParseResult, ctx *crateCt
 		}
 		delete(mod.Connections, rust.ConnImportsModule)
 		delete(mod.Connections, rust.ConnImportsDep)
-		for _, f := range modFiles {
-			mod.Connections[rust.ConnImportsModule] = append(mod.Connections[rust.ConnImportsModule], f)
-		}
-		for _, d := range deps {
-			mod.Connections[rust.ConnImportsDep] = append(mod.Connections[rust.ConnImportsDep], d)
-		}
+		mod.Connections[rust.ConnImportsModule] = append(mod.Connections[rust.ConnImportsModule], modFiles...)
+		mod.Connections[rust.ConnImportsDep] = append(mod.Connections[rust.ConnImportsDep], deps...)
 		mod.Connections = uniqueConns(mod.Connections)
 		gt.Modules[pr.FileID] = mod
 	}

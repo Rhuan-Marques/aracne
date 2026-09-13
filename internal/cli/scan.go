@@ -66,7 +66,7 @@ func RunScan(args []string) {
 	}
 
 	manager := topology.New()
-	manager.Load(*output)
+	_ = manager.Load(*output)
 	os.MkdirAll(filepath.Dir(*output), 0755)
 
 	cfgPath := helper.ConfigPath(*output)
@@ -138,7 +138,7 @@ func RunScan(args []string) {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
-		manager.DeleteAllBugs()
+		_ = manager.DeleteAllBugs()
 	case helper.ScanModeAll:
 		fmt.Println("Full re-scan: processing all files")
 		if _, err := manager.FullReScan(*root, reg); err != nil {
@@ -249,7 +249,9 @@ func RunScan(args []string) {
 
 	fmt.Printf("Topology written to: %s\n", *output)
 	fmt.Printf("Analyzed in %s\n", elapsed.Round(time.Millisecond))
-	fmt.Printf("-%d packages\n-%d files\n-%d functions\n-%d structs\n-%d named types\n-%d interfaces\n-%d variables\n-%d dependencies\n-%d errors\n",
+	// A SPACE after each bullet. Without it every count reads as a negative number:
+	// a clean scan of one package reported "-1 packages".
+	fmt.Printf("- %d packages\n- %d files\n- %d functions\n- %d structs\n- %d named types\n- %d interfaces\n- %d variables\n- %d dependencies\n- %d errors\n",
 		pkgCount, fileCount, funcCount, structCount, namedTypeCount, ifaceCount, varCount, depCount, len(topo.Errors))
 	printScanErrors(topo.Errors)
 
