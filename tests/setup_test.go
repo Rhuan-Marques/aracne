@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -248,12 +249,24 @@ func TestSetupBackToTerminalRemovesTheServer(t *testing.T) {
 	}
 }
 
+// hookScript names the guard/update hook setup actually writes on this platform: a PowerShell
+// script on Windows (claudeGuardHookForOS), a shell script everywhere else.
+func hookScript(base string) string {
+	if runtime.GOOS == "windows" {
+		return ".claude/hooks/" + base + ".ps1"
+	}
+	return ".claude/hooks/" + base + ".sh"
+}
+
 func TestInitGlobal_CreatesFilesInHome(t *testing.T) {
 	homeDir := t.TempDir()
 	dir := t.TempDir()
 
 	cmd := bashCmd(t, dir, "setup", "-y", "--global")
-	cmd.Env = append(os.Environ(), "HOME="+homeDir)
+	// BOTH, because os.UserHomeDir reads USERPROFILE on Windows and HOME everywhere else.
+	// Setting only HOME there sent a --global setup into the REAL user profile: the fixture
+	// stayed empty, and the run wrote harness files outside the test.
+	cmd.Env = append(os.Environ(), "HOME="+homeDir, "USERPROFILE="+homeDir)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("arac init --global failed: %v\n%s", err, out)
@@ -305,7 +318,7 @@ func TestInitDefault_PreToolScanOnBothSurfaces(t *testing.T) {
 
 	// Claude Code gets the same thing through the guard hook, which is already registered
 	// on PreToolUse.
-	assertExists(t, dir, ".claude/hooks/arac-guard.sh")
+	assertExists(t, dir, hookScript("arac-guard"))
 	settings, err := os.ReadFile(filepath.Join(dir, ".claude/settings.json"))
 	if err != nil {
 		t.Fatalf("read settings.json: %v", err)
@@ -329,7 +342,7 @@ func TestInitWithEditPlugin_CreatesNativeHooks(t *testing.T) {
 
 	mustRun(t, dir, "setup", "-y")
 
-	assertExists(t, dir, ".claude/hooks/arac-update-file.sh")
+	assertExists(t, dir, hookScript("arac-update-file"))
 	assertExists(t, dir, ".claude/settings.json")
 	assertExists(t, dir, ".opencode/plugins/arac-native-edit-sync.js")
 }

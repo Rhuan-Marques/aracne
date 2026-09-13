@@ -54,7 +54,8 @@ func jtWantBoolProp(t *testing.T, topo *domain.Topology, idSuffix, key string) {
 func jtCountSuffix(topo *domain.Topology, idSuffix string) int {
 	n := 0
 	for id := range topo.Resources {
-		if strings.HasSuffix(id, idSuffix) {
+		// Slash-normalized: a file's resource id IS its OS path (backslashes on Windows).
+		if strings.HasSuffix(filepath.ToSlash(id), idSuffix) {
 			n++
 		}
 	}

@@ -3,6 +3,7 @@ package helper
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -32,7 +33,10 @@ func assertStillLink(t *testing.T, path, want string) {
 	if info.Mode()&os.ModeSymlink == 0 {
 		t.Fatalf("%s was replaced by a regular file; the link must survive the write", path)
 	}
-	if got, _ := os.Readlink(path); got != want {
+	// Slash-normalized: Windows stores a link target with its own separators, so a link
+	// created as "../../shared/shared.go" reads back as "..\..\shared\shared.go". The
+	// target is unchanged -- only its spelling is the platform's.
+	if got, _ := os.Readlink(path); filepath.ToSlash(got) != filepath.ToSlash(want) {
 		t.Fatalf("%s now points at %q, want %q", path, got, want)
 	}
 }
@@ -121,8 +125,15 @@ func TestAtomicWriteFile_RegularFileUnchanged(t *testing.T) {
 	if got := mustRead(t, path); got != "new\n" {
 		t.Fatalf("got %q", got)
 	}
-	if info, _ := os.Lstat(path); !info.Mode().IsRegular() || info.Mode().Perm() != 0o755 {
-		t.Fatalf("a regular file stays regular with its permissions, got %v", info.Mode())
+	info, _ := os.Lstat(path)
+	if !info.Mode().IsRegular() {
+		t.Fatalf("a regular file stays regular, got %v", info.Mode())
+	}
+	// The permission half only means something where there are Unix permission bits. On
+	// Windows os.Chmod toggles the read-only attribute and nothing else, so every writable
+	// file reports 0666 however it was created.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o755 {
+		t.Fatalf("a regular file keeps its permissions, got %v", info.Mode())
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {

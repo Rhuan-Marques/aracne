@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -188,13 +189,17 @@ func TestWriteManifestReplacesAtomically(t *testing.T) {
 		}
 	}
 
-	// The mode has to survive the rename too -- the temp file starts at 0600.
-	info, err := os.Stat(manifestPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if perm := info.Mode().Perm(); perm != 0644 {
-		t.Fatalf("manifest mode = %v, want 0644", perm)
+	// The mode has to survive the rename too -- the temp file starts at 0600. Not on Windows,
+	// which has no Unix permission bits: os.Chmod there only toggles the read-only attribute,
+	// and any writable file reports 0666.
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(manifestPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if perm := info.Mode().Perm(); perm != 0644 {
+			t.Fatalf("manifest mode = %v, want 0644", perm)
+		}
 	}
 }
 

@@ -176,7 +176,9 @@ func (s *JavaScanner) UpdateFile(topo *domain.Topology, path string) ([]domain.T
 		results = append(results, coPR)
 		delete(gt.Errors, f)
 	}
-	sort.Slice(results, func(i, j int) bool { return results[i].FileID < results[j].FileID })
+	sort.Slice(results, func(i, j int) bool {
+		return filepath.ToSlash(results[i].FileID) < filepath.ToSlash(results[j].FileID)
+	})
 	for _, r := range results {
 		applyParsedFile(gt, r)
 	}
@@ -347,6 +349,20 @@ func coOwners(gt *java.JavaTopology, path string, oldMod java.JavaModule, pr *Pa
 	}
 	sort.Strings(out)
 	return out
+}
+
+// sortByPortablePath orders absolute file paths identically on every platform.
+//
+// THE ORDER IS A TIE-BREAK, NOT A PRESENTATION CHOICE. One FQN declared by two source sets is
+// resolved by keeping the LAST file in path order, so this ordering decides which copy the graph
+// holds. Sorting the raw OS paths made that answer platform-dependent: `src/main/java/...`
+// sorts before `src/main/java11/...` on Unix, because "/" (0x2F) is below "1" (0x31), and after
+// it on Windows, because "\" (0x5C) is above it. The same repository produced a different graph
+// on the two, and nothing in the output said which copy had won.
+func sortByPortablePath(files []string) {
+	sort.Slice(files, func(i, j int) bool {
+		return filepath.ToSlash(files[i]) < filepath.ToSlash(files[j])
+	})
 }
 
 // ownedIDs lists every type and method ID a module declares.

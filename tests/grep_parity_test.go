@@ -179,6 +179,14 @@ var grepFamily = sync.OnceValue(func() string {
 // suite there.
 func requireGNUFamilyGrep(t *testing.T) {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		// There is no system grep on Windows to be at parity WITH. Whatever answers on PATH
+		// comes from whichever Git-for-Windows or MSYS install happens to be there, in
+		// whichever version, and it has already been seen to differ from the GNU grep these
+		// rows are written against (`-m1 -A3` printed no trailing context). The surface this
+		// package models is a POSIX shell's.
+		t.Skip("no system grep is part of this platform")
+	}
 	version := grepFamily()
 	if version == "" {
 		t.Skip("grep is not installed")

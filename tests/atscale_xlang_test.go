@@ -5,6 +5,7 @@ package tests_test
 // components present) and isolate the cross-language dependency bug (..._4).
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -16,7 +17,8 @@ import (
 func assertFileImportsDep(t *testing.T, topo *domain.Topology, mode, suffix, dep string) {
 	t.Helper()
 	for id, r := range topo.Resources {
-		if r.Kind == domain.ResourceFile && strings.HasSuffix(id, suffix) {
+		// Slash-normalized: a file's resource id IS its OS path (backslashes on Windows).
+		if r.Kind == domain.ResourceFile && strings.HasSuffix(filepath.ToSlash(id), suffix) {
 			if hasTarget(r, connImportsDep, dep) {
 				return
 			}

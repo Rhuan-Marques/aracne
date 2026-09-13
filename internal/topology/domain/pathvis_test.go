@@ -5,8 +5,23 @@ import (
 	"testing"
 )
 
+// testRoot is an absolute root valid on every platform.
+//
+// "/proj" is rooted but carries no VOLUME, and on Windows that is not an absolute path:
+// BuildPathVisibility resolves its own root through filepath.Abs, which qualifies it with the
+// current drive, and filepath.Rel can then relate nothing to it -- every rule matched nothing
+// and every assertion here failed for a reason the matcher does not have.
+func testRoot(t *testing.T, p string) string {
+	t.Helper()
+	abs, err := filepath.Abs(filepath.FromSlash(p))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return abs
+}
+
 func TestPathVisibilityMostInternalWins(t *testing.T) {
-	root := "/proj"
+	root := testRoot(t, "/proj")
 	pv := BuildPathVisibility(root, []PathRule{
 		{Path: "my_example", Hidden: true},
 		{Path: "my_example/another_layer", Hidden: false},
@@ -38,7 +53,7 @@ func TestPathVisibilityMostInternalWins(t *testing.T) {
 }
 
 func TestPathVisibilityPruneDir(t *testing.T) {
-	root := "/proj"
+	root := testRoot(t, "/proj")
 	pv := BuildPathVisibility(root, []PathRule{
 		{Path: "secret", Hidden: true},
 		{Path: "my_example", Hidden: true},
@@ -67,14 +82,15 @@ func TestPathVisibilityNilAndEmpty(t *testing.T) {
 	if pv.PruneDir("/anything") {
 		t.Errorf("nil PathVisibility should prune nothing")
 	}
-	empty := BuildPathVisibility("/proj", nil)
-	if empty.Hidden("/proj/x.go") {
+	root := testRoot(t, "/proj")
+	empty := BuildPathVisibility(root, nil)
+	if empty.Hidden(filepath.Join(root, "x.go")) {
 		t.Errorf("empty rules should hide nothing")
 	}
 }
 
 func TestPathVisibilityNormalization(t *testing.T) {
-	root := "/proj"
+	root := testRoot(t, "/proj")
 	pv := BuildPathVisibility(root, []PathRule{
 		{Path: "./gen/", Hidden: true},  // leading ./ and trailing slash
 		{Path: "", Hidden: true},        // dropped
@@ -90,15 +106,16 @@ func TestPathVisibilityNormalization(t *testing.T) {
 
 func TestActivePathVisibilityGlobal(t *testing.T) {
 	t.Cleanup(func() { SetActivePathVisibility(nil) })
-	SetActivePathVisibility(BuildPathVisibility("/proj", []PathRule{{Path: "hidden", Hidden: true}}))
-	if !PathHidden("/proj/hidden/x.go") {
+	root := testRoot(t, "/proj")
+	SetActivePathVisibility(BuildPathVisibility(root, []PathRule{{Path: "hidden", Hidden: true}}))
+	if !PathHidden(filepath.Join(root, "hidden", "x.go")) {
 		t.Errorf("PathHidden should consult the active filter")
 	}
-	if PathHidden("/proj/visible/x.go") {
+	if PathHidden(filepath.Join(root, "visible", "x.go")) {
 		t.Errorf("PathHidden should not hide unmatched paths")
 	}
 	SetActivePathVisibility(nil)
-	if PathHidden("/proj/hidden/x.go") {
+	if PathHidden(filepath.Join(root, "hidden", "x.go")) {
 		t.Errorf("cleared filter should hide nothing")
 	}
 }

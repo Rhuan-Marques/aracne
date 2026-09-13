@@ -29,6 +29,19 @@ func batchDir(t *testing.T, files map[string]string) string {
 	return dir
 }
 
+// jsonPath quotes a path AS a JSON string, quotes included.
+//
+// A Windows path concatenated raw into JSON text is not JSON: `C:\Users\...` carries `\U`,
+// which is an invalid escape, and every batch below was refused before it reached the tool.
+func jsonPath(t *testing.T, p string) string {
+	t.Helper()
+	b, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
 func runEdits(t *testing.T, edits string) (string, error) {
 	t.Helper()
 	return NewEdit(nil, nil).Run(json.RawMessage(`{"edits":` + edits + `}`))
@@ -50,9 +63,9 @@ func TestBatchAppliesEveryEditAcrossFiles(t *testing.T) {
 	})
 	a, b := filepath.Join(dir, "a.go"), filepath.Join(dir, "b.go")
 	out, err := runEdits(t, `[
-		{"file_path":"`+a+`","old_string":"const One = 1","new_string":"const One = 10"},
-		{"file_path":"`+a+`","old_string":"const Two = 2","new_string":"const Two = 20"},
-		{"file_path":"`+b+`","old_string":"const Three = 3","new_string":"const Three = 30"}
+		{"file_path":`+jsonPath(t, a)+`,"old_string":"const One = 1","new_string":"const One = 10"},
+		{"file_path":`+jsonPath(t, a)+`,"old_string":"const Two = 2","new_string":"const Two = 20"},
+		{"file_path":`+jsonPath(t, b)+`,"old_string":"const Three = 3","new_string":"const Three = 30"}
 	]`)
 	if err != nil {
 		t.Fatalf("batch failed: %v", err)
@@ -75,8 +88,8 @@ func TestBatchEditsSeeEachOthersChanges(t *testing.T) {
 	dir := batchDir(t, map[string]string{"m.go": "package m\n\nfunc Old() {}\n"})
 	p := filepath.Join(dir, "m.go")
 	if _, err := runEdits(t, `[
-		{"file_path":"`+p+`","old_string":"func Old()","new_string":"func Middle()"},
-		{"file_path":"`+p+`","old_string":"func Middle()","new_string":"func New()"}
+		{"file_path":`+jsonPath(t, p)+`,"old_string":"func Old()","new_string":"func Middle()"},
+		{"file_path":`+jsonPath(t, p)+`,"old_string":"func Middle()","new_string":"func New()"}
 	]`); err != nil {
 		t.Fatalf("chained edits failed: %v", err)
 	}
@@ -98,8 +111,8 @@ func TestBatchWritesNothingWhenAnyEditFails(t *testing.T) {
 	beforeA, beforeB := read(t, a), read(t, b)
 
 	_, err := runEdits(t, `[
-		{"file_path":"`+a+`","old_string":"const One = 1","new_string":"const One = 10"},
-		{"file_path":"`+b+`","old_string":"NOT PRESENT ANYWHERE","new_string":"x"}
+		{"file_path":`+jsonPath(t, a)+`,"old_string":"const One = 1","new_string":"const One = 10"},
+		{"file_path":`+jsonPath(t, b)+`,"old_string":"NOT PRESENT ANYWHERE","new_string":"x"}
 	]`)
 	if err == nil {
 		t.Fatal("a batch with an unmatched edit must fail")
@@ -122,8 +135,8 @@ func TestBatchRollsBackWithinASingleFile(t *testing.T) {
 	p := filepath.Join(dir, "a.go")
 	before := read(t, p)
 	if _, err := runEdits(t, `[
-		{"file_path":"`+p+`","old_string":"const One = 1","new_string":"const One = 10"},
-		{"file_path":"`+p+`","old_string":"const Missing = 9","new_string":"x"}
+		{"file_path":`+jsonPath(t, p)+`,"old_string":"const One = 1","new_string":"const One = 10"},
+		{"file_path":`+jsonPath(t, p)+`,"old_string":"const Missing = 9","new_string":"x"}
 	]`); err == nil {
 		t.Fatal("expected failure")
 	}
@@ -137,14 +150,14 @@ func TestBatchReportsAmbiguityByIndex(t *testing.T) {
 	dir := batchDir(t, map[string]string{"a.go": "x\nx\n"})
 	p := filepath.Join(dir, "a.go")
 	_, err := runEdits(t, `[
-		{"file_path":"`+p+`","old_string":"x","new_string":"y"}
+		{"file_path":`+jsonPath(t, p)+`,"old_string":"x","new_string":"y"}
 	]`)
 	if err == nil || !strings.Contains(err.Error(), "matched 2 times") {
 		t.Fatalf("ambiguous single edit should be refused, got: %v", err)
 	}
 	// replace_all is per-edit, so the same batch succeeds when the caller opts in.
 	if _, err := runEdits(t, `[
-		{"file_path":"`+p+`","old_string":"x","new_string":"y","replace_all":true}
+		{"file_path":`+jsonPath(t, p)+`,"old_string":"x","new_string":"y","replace_all":true}
 	]`); err != nil {
 		t.Fatalf("replace_all should apply per edit: %v", err)
 	}
@@ -157,11 +170,19 @@ func TestBatchReportsAmbiguityByIndex(t *testing.T) {
 // opposite orders would otherwise deadlock — a batch is the first thing in this tool that can
 // hold more than one lock at once.
 func TestDistinctPathsAreSortedAndDeduplicated(t *testing.T) {
+	// An absolute root valid on every platform: distinctPaths reports each path through
+	// filepath.Abs, and "/z/a.go" is rooted but carries no VOLUME, so on Windows it came back
+	// drive-qualified and matched neither literal.
+	root, err := filepath.Abs(filepath.FromSlash("/z"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, b := filepath.Join(root, "a.go"), filepath.Join(root, "b.go")
 	ops := []editOp{
-		{FilePath: "/z/b.go"}, {FilePath: "/z/a.go"}, {FilePath: "/z/b.go"},
+		{FilePath: b}, {FilePath: a}, {FilePath: b},
 	}
 	got := distinctPaths(ops)
-	if len(got) != 2 || got[0] != "/z/a.go" || got[1] != "/z/b.go" {
-		t.Fatalf("distinctPaths = %v, want sorted unique [/z/a.go /z/b.go]", got)
+	if len(got) != 2 || got[0] != a || got[1] != b {
+		t.Fatalf("distinctPaths = %v, want sorted unique [%s %s]", got, a, b)
 	}
 }

@@ -1,6 +1,7 @@
 package topology
 
 import (
+	"path/filepath"
 	"sort"
 	"testing"
 
@@ -11,6 +12,15 @@ import (
 // pinned in both directions: every structural tie is found, and a plain caller -- which the
 // removal already warns about and strips -- is not re-parsed for it.
 func TestStructuralDependentFilesIsBounded(t *testing.T) {
+	// An absolute root valid on every platform. structuralDependentFiles reports each file
+	// through filepath.Abs, and "/p/x.rs" is rooted but carries no VOLUME: on Windows Abs
+	// qualifies it with the current drive, so the answers came back as `D:\p\x.rs` and matched
+	// none of the literals this fixture was written with.
+	root, err := filepath.Abs(filepath.FromSlash("/p"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := func(name string) string { return filepath.Join(root, name) }
 	res := func(id, file string, props map[string]any, conns map[string][]string) domain.Resource {
 		if props == nil {
 			props = map[string]any{}
@@ -19,20 +29,20 @@ func TestStructuralDependentFilesIsBounded(t *testing.T) {
 			Location: domain.Location{Path: file}, Properties: props, Connections: conns}
 	}
 	graph := map[string]domain.Resource{
-		"/p/shapes.rs": {ID: "/p/shapes.rs", Kind: domain.ResourceFile},
-		"/p/impls.rs": {ID: "/p/impls.rs", Kind: domain.ResourceFile, Connections: map[string][]string{
+		f("shapes.rs"): {ID: f("shapes.rs"), Kind: domain.ResourceFile},
+		f("impls.rs"): {ID: f("impls.rs"), Kind: domain.ResourceFile, Connections: map[string][]string{
 			"__impl_records": {"q::Circle=>>q::Shape"},
 		}},
-		"/p/Kid.java": {ID: "/p/Kid.java", Kind: domain.ResourceFile, Connections: map[string][]string{
+		f("Kid.java"): {ID: f("Kid.java"), Kind: domain.ResourceFile, Connections: map[string][]string{
 			"__extends_records": {"com.Kid=>>com.Base:class"},
 		}},
-		"q::Circle": res("q::Circle", "/p/shapes.rs", nil, map[string][]string{"methods": {"q::Circle::area"}}),
-		"q::Shape":  res("q::Shape", "/p/shapes.rs", nil, nil),
-		"q::Circle::area": res("q::Circle::area", "/p/impls.rs",
+		"q::Circle": res("q::Circle", f("shapes.rs"), nil, map[string][]string{"methods": {"q::Circle::area"}}),
+		"q::Shape":  res("q::Shape", f("shapes.rs"), nil, nil),
+		"q::Circle::area": res("q::Circle::area", f("impls.rs"),
 			map[string]any{"method_from": "q::Circle"}, nil),
-		"com.Base":   res("com.Base", "/p/Base.java", nil, nil),
-		"com.Kid":    res("com.Kid", "/p/Kid.java", nil, nil),
-		"app.caller": res("app.caller", "/p/app.rs", nil, map[string][]string{"calls": {"q::Circle::area"}}),
+		"com.Base":   res("com.Base", f("Base.java"), nil, nil),
+		"com.Kid":    res("com.Kid", f("Kid.java"), nil, nil),
+		"app.caller": res("app.caller", f("app.rs"), nil, map[string][]string{"calls": {"q::Circle::area"}}),
 	}
 	files := func(removed []string, wholeFile bool) []string {
 		set := map[string]bool{}
@@ -59,16 +69,16 @@ func TestStructuralDependentFilesIsBounded(t *testing.T) {
 	}
 
 	// The impl file is deleted: the record tied two survivors, and Circle's method set shrank.
-	if got := files([]string{"/p/impls.rs", "q::Circle::area"}, true); !same(got, "/p/shapes.rs") {
-		t.Errorf("deleting the impl file: got %v, want [/p/shapes.rs]", got)
+	if got := files([]string{f("impls.rs"), "q::Circle::area"}, true); !same(got, f("shapes.rs")) {
+		t.Errorf("deleting the impl file: got %v, want [%s]", got, f("shapes.rs"))
 	}
 	// The type is removed: the impl file attaches a method to it and records an impl of it.
-	if got := files([]string{"q::Circle"}, false); !same(got, "/p/impls.rs") {
-		t.Errorf("removing the type: got %v, want [/p/impls.rs]", got)
+	if got := files([]string{"q::Circle"}, false); !same(got, f("impls.rs")) {
+		t.Errorf("removing the type: got %v, want [%s]", got, f("impls.rs"))
 	}
 	// A removed parent class: the child's record names it.
-	if got := files([]string{"com.Base"}, false); !same(got, "/p/Kid.java") {
-		t.Errorf("removing the parent class: got %v, want [/p/Kid.java]", got)
+	if got := files([]string{"com.Base"}, false); !same(got, f("Kid.java")) {
+		t.Errorf("removing the parent class: got %v, want [%s]", got, f("Kid.java"))
 	}
 	// A changed file is re-parsed anyway, so a method set it shrank is not a reason to re-parse
 	// the type's file, and a caller is never a structural tie.

@@ -3,6 +3,7 @@ package helper
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -102,6 +103,11 @@ func TestSyncManifestStampsOnlyWhatWasParsed(t *testing.T) {
 // every language: one directory owned by another user stopped every incremental scan. It is
 // skipped now, and a file the walk could not see because of it is not reported deleted.
 func TestUnreadableDirectoryDoesNotStopTheWalk(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// os.Chmod on Windows only toggles the read-only bit; a directory cannot be made
+		// unreadable that way, so the walk reads the file this test needs it not to see.
+		t.Skip("a mode-000 directory cannot be made on Windows")
+	}
 	if os.Geteuid() == 0 {
 		t.Skip("root reads a mode-000 directory anyway")
 	}
