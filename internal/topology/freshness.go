@@ -73,7 +73,19 @@ func (m *TopologyManager) StaleFiles(paths []string) []string {
 		seen[path] = true
 		stamp, ok := manifest[path]
 		if !ok {
-			continue
+			// The manifest is keyed by the canonical path the scan recorded, and a caller can
+			// reach the same file through a symlinked directory -- /var/folders on macOS, a
+			// bind mount, a linked checkout. Only on the miss: the paths a read passes here
+			// come out of the graph and are already canonical, and EvalSymlinks is one lstat
+			// per component. See helper.CanonicalPath.
+			canon := helper.CanonicalPath(path)
+			if canon == path || seen[canon] {
+				continue
+			}
+			seen[canon] = true
+			if stamp, ok = manifest[canon]; !ok {
+				continue
+			}
 		}
 		recorded, err := time.Parse(time.RFC3339Nano, stamp)
 		if err != nil {

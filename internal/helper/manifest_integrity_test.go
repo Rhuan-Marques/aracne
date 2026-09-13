@@ -16,7 +16,7 @@ import (
 // was never indexed, and check-updates vouched for it. The stamp handed in is the one taken
 // before the read, and a later edit must still read as modified.
 func TestSyncManifestRecordsThePreReadStamp(t *testing.T) {
-	dir := t.TempDir()
+	dir := CanonicalPath(t.TempDir()) // see writeDiffFixture: a manifest holds canonical paths
 	dbPath := filepath.Join(dir, ".aracne", "topology.db")
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		t.Fatal(err)
@@ -58,7 +58,7 @@ func TestSyncManifestRecordsThePreReadStamp(t *testing.T) {
 // path handed SyncManifest the whole graph, which restamped every file in it -- including ones
 // this scan never opened -- with the mtime on disk.
 func TestSyncManifestStampsOnlyWhatWasParsed(t *testing.T) {
-	dir := t.TempDir()
+	dir := CanonicalPath(t.TempDir()) // see writeDiffFixture: a manifest holds canonical paths
 	dbPath := filepath.Join(dir, ".aracne", "topology.db")
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		t.Fatal(err)
@@ -105,7 +105,7 @@ func TestUnreadableDirectoryDoesNotStopTheWalk(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root reads a mode-000 directory anyway")
 	}
-	dir := t.TempDir()
+	dir := CanonicalPath(t.TempDir()) // see writeDiffFixture: a manifest holds canonical paths
 	dbPath := filepath.Join(dir, ".aracne", "topology.db")
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		t.Fatal(err)

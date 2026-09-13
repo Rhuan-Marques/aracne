@@ -19,7 +19,11 @@ import (
 // need, returning the manager, the registry and the project root.
 func scanFiles(t *testing.T, files map[string]string) (*topology.TopologyManager, *scanner.Registry, string) {
 	t.Helper()
-	dir := t.TempDir()
+	// CANONICAL, because the scan below resolves this root before it walks and every id and
+	// span it stores is spelled that way. Tests built paths from what this returns and compared
+	// them against what the graph holds; under macOS's /var -> /private/var those are two
+	// spellings of one file. See helper.CanonicalPath.
+	dir := helper.CanonicalPath(t.TempDir())
 	for name, body := range files {
 		path := filepath.Join(dir, name)
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

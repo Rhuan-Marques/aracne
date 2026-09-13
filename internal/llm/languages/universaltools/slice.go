@@ -539,6 +539,9 @@ func (r *Read) resolveFileID(topo *domain.Topology, path string) (string, bool) 
 		if _, ok := topo.Resources[cand]; ok {
 			return cand, true
 		}
+		// Abs of a candidate, not only of the input: a topology root that is itself relative
+		// makes the joined form relative too. The canonical spellings are already in the
+		// candidate list; see helper.PathCandidates.
 		if abs, err := filepath.Abs(cand); err == nil {
 			if _, ok := topo.Resources[abs]; ok {
 				return abs, true

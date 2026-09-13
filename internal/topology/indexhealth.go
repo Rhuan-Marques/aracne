@@ -183,6 +183,12 @@ func (m *TopologyManager) IndexHealth(root string, reg *scanner.Registry) (Index
 	if root == "" {
 		root = "."
 	}
+	// CANONICAL, like every scan verb (FullScan, IncrementalScan, FullReScan all open with
+	// this). Health DIFFS a walk of this root against a manifest those scans wrote, so a root
+	// spelled through a symlink walks files the manifest holds under their real path: every
+	// file is reported once as new and once as deleted, and a freshly scanned tree reads as
+	// wholly out of sync. See helper.CanonicalPath.
+	root = helper.CanonicalPath(root)
 	// Same filters the scan itself applies, so a hidden or ignored path is never reported as
 	// drift the caller cannot act on.
 	m.applyPathVisibility(root)

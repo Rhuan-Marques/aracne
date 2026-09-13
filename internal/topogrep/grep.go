@@ -437,6 +437,7 @@ func SearchWith(opt Options, topo *domain.Topology) (*Result, error) {
 	}
 
 	index := buildResourceIndex(topo)
+	aliasResourceIndexForRoots(index, searchRoots(opt))
 	tiers := matchNodes(re, topo, descriptionKindSet(opt.DescriptionKinds))
 	out := &Result{
 		Counts:     map[string]int{},
@@ -1896,6 +1897,54 @@ func buildResourceIndex(topo *domain.Topology) map[string][]resourceLocation {
 		})
 	}
 	return index
+}
+
+// aliasResourceIndexForRoots registers the index under the spelling the WALK will produce, for
+// a root that reaches the project through a symlinked directory.
+//
+// The index is keyed by the resource paths the scan stored, and a scan resolves its root before
+// it walks (helper.CanonicalPath). The walk here does not: a root keeps the spelling the caller
+// typed, because that is what the rows must print. So `arac grep pat .` inside a linked
+// checkout -- or anywhere under macOS's /var, which is a symlink to /private/var -- looked up
+// every file under a name the index does not hold, found no resource, and answered with a plain
+// grep: no headers, no descriptions, no node rows, and no sign that anything was missing.
+//
+// Aliasing rather than canonicalizing the root keeps both halves: the walk and the rows stay in
+// the caller's spelling, and the lookup finds the resources anyway. It costs one EvalSymlinks
+// per root, and a pass over the index only for a root that actually resolves elsewhere.
+func aliasResourceIndexForRoots(index map[string][]resourceLocation, roots []string) {
+	if len(index) == 0 {
+		return
+	}
+	for _, root := range roots {
+		abs := canonicalPath(root)
+		resolved, err := filepath.EvalSymlinks(abs)
+		if err != nil || resolved == "" {
+			continue
+		}
+		if resolved = canonicalPath(resolved); resolved == abs {
+			continue
+		}
+		type alias struct {
+			key string
+			val []resourceLocation
+		}
+		var add []alias
+		prefix := resolved + string(filepath.Separator)
+		for key, val := range index {
+			switch {
+			case key == resolved:
+				add = append(add, alias{abs, val})
+			case strings.HasPrefix(key, prefix):
+				add = append(add, alias{filepath.Join(abs, key[len(prefix):]), val})
+			}
+		}
+		for _, a := range add {
+			if _, exists := index[a.key]; !exists {
+				index[a.key] = a.val
+			}
+		}
+	}
 }
 
 // bestResource picks the narrowest resource containing the line, falling back to the

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Rhuan-Marques/aracne/internal/helper"
 )
 
 func TestRegistryDetectGoProject(t *testing.T) {
@@ -107,7 +109,8 @@ func Hello() {}
 }
 
 func TestManifestRecordsSourceFiles(t *testing.T) {
-	dir := t.TempDir()
+	// CANONICAL: a manifest holds the paths the scan recorded, which it resolves first.
+	dir := helper.CanonicalPath(t.TempDir())
 	writeFile(t, filepath.Join(dir, "go.mod"), "module manifestfiles\n\ngo 1.21\n")
 	writeFile(t, filepath.Join(dir, "main.go"), `package main
 

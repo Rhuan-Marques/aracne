@@ -57,6 +57,12 @@ func resolveReadTargetWith(mgr *topology.TopologyManager, name string, matches f
 	if abs, absErr := filepath.Abs(id); absErr == nil && abs != id && tryID(abs) {
 		return candidates[0], "", nil
 	}
+	// And the canonical spelling: the scan minted its ids through helper.CanonicalPath, so a
+	// project reached through a symlinked directory names its files by the real path while the
+	// caller names them through the link. See helper.PathCandidates.
+	if canon := helper.CanonicalPath(id); canon != id && canon != "" && tryID(canon) {
+		return candidates[0], "", nil
+	}
 	// Beyond an exact ID, hand the query to the shared resolver: it absorbs a wrong root
 	// prefix and the wrong separator convention (the Python/JS "worktree/src/flask/app.X"
 	// vs "flask.app.X" problem), consults the alias table for IDs minted under a previous
@@ -232,10 +238,10 @@ func declaredIn(base string, res domain.Resource) bool {
 	if got == want || strings.HasSuffix(filepath.ToSlash(got), "/"+filepath.ToSlash(want)) {
 		return true
 	}
-	if abs, err := filepath.Abs(want); err == nil {
-		return got == abs
+	if abs, err := filepath.Abs(want); err == nil && got == abs {
+		return true
 	}
-	return false
+	return got == helper.CanonicalPath(want)
 }
 
 // nodesSpanning names the resources covering a line window, so a `file:120-160` id can answer

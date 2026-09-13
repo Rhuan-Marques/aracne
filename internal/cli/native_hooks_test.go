@@ -340,7 +340,11 @@ func TestOpenCodeNativeEditPluginHandlesNativeAndWatcherEdits(t *testing.T) {
 // a path that stops existing is a server that silently fails to start. EvalSymlinks turned a
 // stable `bin/arac` into the versioned file behind it, which the next upgrade deletes.
 func TestAracBinaryPrefersAStablePathNameForTheSameFile(t *testing.T) {
-	dir := t.TempDir()
+	// CANONICAL, so the only symlink in play is the Cellar one this test is about:
+	// aracBinaryFrom resolves the executable path, and a temp dir that is itself reached
+	// through a link (macOS /var -> /private/var) would be resolved along with it and fail
+	// every comparison below for a reason that has nothing to do with the behaviour pinned here.
+	dir := helper.CanonicalPath(t.TempDir())
 	versioned := filepath.Join(dir, "Cellar", "arac", "1.0.0", "bin", "arac")
 	if err := os.MkdirAll(filepath.Dir(versioned), 0755); err != nil {
 		t.Fatal(err)

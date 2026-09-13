@@ -351,7 +351,11 @@ func TestRelocatedProjectIsRebuiltUnderTheNewRoot(t *testing.T) {
 	}
 	for name, run := range entryPoints {
 		t.Run(name, func(t *testing.T) {
-			parent := t.TempDir()
+			// CANONICAL: every assertion below compares a path the SCAN stored -- the root, a
+			// file id, a manifest key -- against one built here, and a scan resolves its root
+			// before it walks. macOS hands out every t.TempDir() under /var, a symlink to
+			// /private/var, so the two spellings would never meet.
+			parent := helper.CanonicalPath(t.TempDir())
 			p1 := scanRelocatable(t, parent)
 			p2 := filepath.Join(parent, "p2")
 			if err := os.Rename(p1, p2); err != nil {
@@ -408,7 +412,7 @@ func TestRelocatedProjectIsRebuiltUnderTheNewRoot(t *testing.T) {
 // database kept outside `<root>/.aracne/` was placed by a caller who chose the root, and keeps
 // the old behaviour.
 func TestRelocationNeedsTheStandardLayout(t *testing.T) {
-	parent := t.TempDir()
+	parent := helper.CanonicalPath(t.TempDir()) // see TestRelocatedProjectIsRebuiltUnderTheNewRoot
 	p1 := scanRelocatable(t, parent)
 
 	// A copy: sources and database duplicated, original left in place.

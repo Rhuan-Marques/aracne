@@ -1071,23 +1071,10 @@ func (r *Read) rawFileUnit(topo *domain.Topology, id string) (readunit.Unit, err
 var errNoReadableFile = errors.New("not found in topology and not a readable file")
 
 // readPathCandidates returns the input followed by alternative path forms: its absolute form,
-// and (for a relative input) its form joined onto the topology root.
+// its form joined onto the topology root, and the canonical (symlink-resolved) form of each.
+// See helper.PathCandidates, which the read tool in internal/llm/tools shares.
 func readPathCandidates(id, root string) []string {
-	candidates := []string{id}
-	seen := map[string]bool{id: true}
-	add := func(p string) {
-		if p != "" && !seen[p] {
-			seen[p] = true
-			candidates = append(candidates, p)
-		}
-	}
-	if abs, err := filepath.Abs(id); err == nil {
-		add(abs)
-	}
-	if root != "" && !filepath.IsAbs(id) {
-		add(filepath.Join(root, id))
-	}
-	return candidates
+	return helper.PathCandidates(id, root)
 }
 
 // neighborContext renders a flat neighbour list, skipping whatever the response already shows

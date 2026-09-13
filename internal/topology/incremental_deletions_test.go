@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Rhuan-Marques/aracne/internal/helper"
 	"github.com/Rhuan-Marques/aracne/internal/topology"
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
@@ -270,7 +271,8 @@ func callSitesNaming(topo *domain.Topology, callee string) []string {
 // never produced a node, so the removal used to find nothing to remove -- and nothing re-parses
 // a deleted file, so the error stood until `scan --all`.
 func TestDeletedFileTakesItsScanErrorWithIt(t *testing.T) {
-	dir := t.TempDir()
+	// CANONICAL: topo.Errors is keyed by the path the scan recorded, which it resolves first.
+	dir := helper.CanonicalPath(t.TempDir())
 	additionWrite(t, dir, map[string]string{
 		"a.py": "def ok():\n    return 1\n",
 		"b.py": "def bad(:\n    return 1\n",
