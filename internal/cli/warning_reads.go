@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 	"os"
-	"sort"
 	"strings"
 	"time"
 
@@ -13,12 +12,21 @@ import (
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
-// warningReadBudget bounds the whole expansion, for the same reason every other stage of a
-// hook is bounded: this runs on the agent's critical path, after an edit, and a report that
-// arrives late is a report the harness has already killed. Spent inside GuardHookTimeoutSeconds
-// alongside driftCheckBudget -- 20 + 10 plus the small checks around them still leaves margin
-// under 45.
+// warningReadBudget bounds the expansion on the HOOK path, for the same reason every other
+// stage of a hook is bounded: it runs on the agent's critical path, after an edit, and a report
+// that arrives late is a report the harness has already killed. Spent inside
+// GuardHookTimeoutSeconds alongside driftCheckBudget -- 20 + 10 plus the small checks around
+// them still leaves margin under 45.
 const warningReadBudget = 10 * time.Second
+
+// warningReadNoBudget is the deadline for a surface the model ASKED for the reads on --
+// `arac warnings list --read` and the warnings_list tool's `read`. There is none.
+//
+// The hook's deadline exists because a report that arrives late is discarded whole, which
+// makes returning nothing the better of two bad outcomes. Neither of those holds here: the
+// caller is waiting for exactly this answer, and handing it an empty section because a large
+// repository took eleven seconds would be a silent wrong answer to a direct question.
+const warningReadNoBudget time.Duration = 0
 
 // driftWarningReport is the text a warning report comes back as: the summary formatDriftWarnings
 // has always rendered, plus -- when features.warning_reads is on -- the full read of the code
@@ -34,14 +42,17 @@ func driftWarningReport(dbPath string, warnings []domain.TopologyWarning) string
 	if summary == "" {
 		return ""
 	}
-	reads := warningReads(dbPath, warnings)
+	reads := warningReadSection(dbPath, warnings, warningReadBudget)
 	if reads == "" {
 		return summary
 	}
 	return summary + "\n\n" + reads
 }
 
-// warningReads renders the batched read behind features.warning_reads.
+// warningReadSection renders the batched read behind features.warning_reads, plus the
+// "N warnings left" note when the cap bit. It is the whole feature, shared by the three
+// surfaces that offer it: the report an edit comes back with (driftWarningReport),
+// `arac warnings list --read`, and the warnings_list tool's `read`.
 //
 // ONE read call for the whole batch, not one per warning, and that is the requirement rather
 // than an optimization. universaltools.Read shares a single renderstate ledger across
@@ -49,7 +60,17 @@ func driftWarningReport(dbPath string, warnings []domain.TopologyWarning) string
 // is emitted once and back-referenced afterwards. Eleven callers of one function are eleven
 // warnings, one callee and (usually) a handful of files -- read one at a time that is the
 // callee's declaration eleven times over. Batched, it is once.
-func warningReads(dbPath string, warnings []domain.TopologyWarning) string {
+//
+// THE CAP IS NOT A TRUNCATION, it is a page. Whatever the cap left out is named in the note,
+// and the surface the note points at reads the next page from the table as it stands -- so
+// fixing the first five and asking again gets the next five, because a fixed warning has
+// retired itself by then. That is why no "already expanded" ledger exists and must not: the
+// warnings are derived from current state (see domain.TopologyWarning), and a remembered
+// page would hand the model warnings 6-10 while 1-5 were still broken.
+//
+// budget bounds the whole thing; warningReadNoBudget (0) waits for the answer. See both
+// constants for which surface gets which and why.
+func warningReadSection(dbPath string, warnings []domain.TopologyWarning, budget time.Duration) string {
 	if dbPath == "" || len(warnings) == 0 {
 		return ""
 	}
@@ -61,34 +82,22 @@ func warningReads(dbPath string, warnings []domain.TopologyWarning) string {
 		return ""
 	}
 
-	// SORTED BEFORE IT IS CAPPED. The list arrives from unreportedWarnings, which walks the
-	// warnings table as a map -- so "the first five" is a different five on every run, and a
-	// capped expansion would have shown the model an arbitrary subset and called it the top
-	// of the list. Ordered by kind then by the ids, which is the order `arac warnings list`
-	// prints, so the expansion and that command agree on what the first five are.
+	// SORTED BEFORE IT IS CAPPED, through the ordering every warning surface prints in. The
+	// list arrives from unreportedWarnings or from ListWarnings, both of which walk the
+	// warnings table as a map -- so "the first five" would be a different five on every run,
+	// and the note below would promise a continuation that starts somewhere else. See
+	// domain.SortWarnings.
 	ordered := append([]domain.TopologyWarning(nil), warnings...)
-	sort.SliceStable(ordered, func(i, j int) bool {
-		a, b := ordered[i], ordered[j]
-		if a.Kind != b.Kind {
-			return a.Kind < b.Kind
-		}
-		if a.SourceID != b.SourceID {
-			return a.SourceID < b.SourceID
-		}
-		if a.TargetID != b.TargetID {
-			return a.TargetID < b.TargetID
-		}
-		return a.ID < b.ID
-	})
+	domain.SortWarnings(ordered)
 	limit := cfg.EffectiveWarningReadLimit()
 	expanded := ordered
 	if limit > 0 && len(expanded) > limit {
 		expanded = expanded[:limit]
 	}
 
-	// Bounded and panic-proof, like every other piece of work a hook runs: a read that hangs
-	// or a scanner that panics must not take the agent's tool call down with it. See
-	// runGuardScan, which does the same for the scan half.
+	// Panic-proof always, deadlined only where the caller set one: a read that hangs or a
+	// scanner that panics must not take the agent's tool call down with it. See runGuardScan,
+	// which does the same for the scan half.
 	done := make(chan string, 1)
 	go func() {
 		defer func() {
@@ -96,20 +105,54 @@ func warningReads(dbPath string, warnings []domain.TopologyWarning) string {
 				done <- ""
 			}
 		}()
-		done <- renderWarningReads(dbPath, cfg, expanded, len(ordered))
+		done <- renderWarningReads(dbPath, cfg, expanded)
 	}()
+	var expired <-chan time.Time
+	if budget > 0 {
+		expired = time.After(budget)
+	}
 	select {
 	case out := <-done:
+		if out == "" {
+			return ""
+		}
+		// Attached to the READ rather than to the caller's summary, so the one surface that
+		// knows how many warnings it left unexpanded is the one that says so.
+		if note := warningsLeftNote(cfg, len(ordered)-len(expanded)); note != "" {
+			out += "\n\n" + note
+		}
 		return out
-	case <-time.After(warningReadBudget):
+	case <-expired:
 		return ""
 	}
 }
 
+// warningsLeftNote is what the model reads when the cap bit: how many warnings it has not been
+// shown the code for, and the one command that shows the next page of them.
+//
+// It names the surface THIS project actually has. In ModeMCP the model is served warnings_list
+// as a tool and has no reason to reach for a shell command; in every other mode there is no MCP
+// tool at all and the CLI verb is the only spelling that exists. (A ModeMCP project that has
+// hand-narrowed mcp_tools to exclude warnings_list gets a pointer to a tool it disabled --
+// `arac warnings list --read` still works there, and narrowing that list is the deliberate act
+// of someone who knows what they removed.)
+func warningsLeftNote(cfg *helper.Config, left int) string {
+	if left <= 0 {
+		return ""
+	}
+	noun := "warnings"
+	if left == 1 {
+		noun = "warning"
+	}
+	surface := "`arac warnings list --read`"
+	if cfg.MCPEnabled() {
+		surface = "`warnings_list` with `read: true`"
+	}
+	return fmt.Sprintf("... %d %s left. Use %s to continue fixing.", left, noun, surface)
+}
+
 // renderWarningReads resolves the ids the expanded warnings name and reads them in one call.
-func renderWarningReads(
-	dbPath string, cfg *helper.Config, expanded []domain.TopologyWarning, total int,
-) string {
+func renderWarningReads(dbPath string, cfg *helper.Config, expanded []domain.TopologyWarning) string {
 	mgr := topology.New()
 	if err := mgr.Load(dbPath); err != nil {
 		return ""
@@ -136,7 +179,7 @@ func renderWarningReads(
 	if err != nil || strings.TrimSpace(out) == "" {
 		return ""
 	}
-	return warningReadsHeader(len(expanded), total) + "\n" + strings.TrimRight(out, "\n")
+	return warningReadsHeader + "\n" + strings.TrimRight(out, "\n")
 }
 
 // warningReadIDs is the ordered, de-duplicated list of resource ids the expansion reads.
@@ -194,14 +237,7 @@ func warningReadTargets(w domain.TopologyWarning) []string {
 	}
 }
 
-// warningReadsHeader says what the block below it is, and -- when the cap bit -- that it is not
-// all of them. A truncation the reader cannot see is one it will assume did not happen.
-func warningReadsHeader(expanded, total int) string {
-	if expanded < total {
-		return fmt.Sprintf(
-			"Warned code, read in full (%d of %d warnings; features.warning_read_limit caps this, "+
-				"`arac warnings list` has the rest). Fix from this instead of reading it again:",
-			expanded, total)
-	}
-	return "Warned code, read in full. Fix from this instead of reading it again:"
-}
+// warningReadsHeader says what the block below it is. It says nothing about the cap: the note
+// under the read carries that, together with the remedy, and stating it twice is one statement
+// to keep in sync with the arithmetic for no reader who is better off.
+const warningReadsHeader = "Warned code, read in full. Fix from this instead of reading it again:"

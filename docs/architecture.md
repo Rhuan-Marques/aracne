@@ -439,6 +439,17 @@ named by eleven warnings exactly once. Ids the graph no longer holds are dropped
 call — `node_removed` and `use_missing_node` name a missing target by construction — so the
 report never comes back with an `# UNRESOLVED:` block about its own warning.
 
+The cap is a **page, not a truncation**. Whatever it left out is counted in a note under the
+read — `... 3 warnings left. Use \`arac warnings list --read\` to continue fixing.`, naming the
+`warnings_list` tool instead in `mcp` mode — and the same expansion backs all three surfaces
+that show it: the post-edit report, `arac warnings list --read`, and the `read` parameter the
+`warnings_list` tool grows when the feature is on (injected at registry-build time, since
+`universaltools` imports `internal/llm/tools` and the tool cannot reach the read path itself).
+No cursor is stored: the page advances because a *fixed* warning has retired itself from the
+table by the next call, so the model never loses the code for something it has not fixed yet.
+Every surface orders the list through `domain.SortWarnings`, which is what makes "the first
+five" the same five each time and the next page start where the last one stopped.
+
 ## 10. Languages & known quirks
 
 - **Go** — stdlib `go/ast` parser; richest support (cross-package return-type

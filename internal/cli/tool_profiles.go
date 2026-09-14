@@ -60,7 +60,7 @@ var mcpToolConstructors = map[string]func(toolDeps) tools.Tool{
 	// mutation goes through the native edit -- which the `arac update-file` hook re-syncs the
 	// topology after -- or through `arac edit` / `arac write`. Keeping unreachable
 	// constructors around let the catalog advertise tools no mode could ever register.
-	"warnings_list":            func(d toolDeps) tools.Tool { return tools.NewWarningsList(d.manager) },
+	"warnings_list":            func(d toolDeps) tools.Tool { return newWarningsListTool(d) },
 	"bug_report":               func(d toolDeps) tools.Tool { return tools.NewBugReport(d.manager) },
 	"bug_list":                 func(d toolDeps) tools.Tool { return tools.NewBugList(d.manager) },
 	"bug_acknowledge":          func(d toolDeps) tools.Tool { return tools.NewBugAcknowledge(d.manager) },
@@ -132,6 +132,27 @@ func ValidAgentProfile(cfg *helper.Config, name string) bool {
 		return true
 	}
 	return false
+}
+
+// newWarningsListTool builds warnings_list, with the features.warning_reads expansion wired in
+// where the project turned it on.
+//
+// THE WIRING LIVES HERE because the direction of the imports says it must: the expansion runs
+// a universaltools read, and universaltools imports internal/llm/tools, so the tool cannot
+// reach the read itself. This package sits above both. See tools.WarningReader.
+//
+// The closure captures the db path rather than the manager: warningReadSection opens its own
+// topology, which is what makes it the same code the guard's post-tool report runs.
+func newWarningsListTool(d toolDeps) tools.Tool {
+	list := tools.NewWarningsList(d.manager)
+	if d.cfg == nil || !d.cfg.WarningReadsEnabled() {
+		return list
+	}
+	dbPath := d.manager.DbPath()
+	return list.WithReads(func(ws []domain.TopologyWarning) string {
+		// No deadline: an MCP call is the model asking for exactly this and waiting for it.
+		return warningReadSection(dbPath, ws, warningReadNoBudget)
+	})
 }
 
 // effectiveMCPToolSet returns the set of MCP tool names the (harness, agent)

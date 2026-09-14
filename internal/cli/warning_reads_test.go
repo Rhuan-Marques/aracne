@@ -118,9 +118,10 @@ func TestWarningReadsStopAtTheConfiguredLimit(t *testing.T) {
 			t.Fatalf("%s is past the limit but must still appear in the summary:\n%s", unwanted, printed)
 		}
 	}
-	// A truncation the reader cannot see is one it will assume did not happen.
-	if !strings.Contains(printed, "2 of 4 warnings") {
-		t.Fatalf("the expansion did not say it was truncated:\n%s", printed)
+	// A truncation the reader cannot see is one it will assume did not happen. The count and
+	// the remedy live in the note under the read -- see warningsLeftNote.
+	if !strings.Contains(printed, "... 2 warnings left. Use `arac warnings list --read` to continue fixing.") {
+		t.Fatalf("the expansion did not say it was truncated, or how to continue:\n%s", printed)
 	}
 }
 
@@ -135,8 +136,8 @@ func TestWarningReadLimitZeroExpandsEverything(t *testing.T) {
 			t.Fatalf("limit 0 means unlimited and %s was left out:\n%s", want, printed)
 		}
 	}
-	if strings.Contains(printed, "of 6 warnings") {
-		t.Fatalf("nothing was truncated, so the header must not claim it was:\n%s", printed)
+	if strings.Contains(printed, "warnings left") {
+		t.Fatalf("nothing was truncated, so there must be no continuation note:\n%s", printed)
 	}
 }
 

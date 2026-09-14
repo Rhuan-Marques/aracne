@@ -1,5 +1,7 @@
 package domain
 
+import "sort"
+
 type WarningKind string
 
 const (
@@ -38,6 +40,32 @@ type TopologyWarning struct {
 	// keeps Baseline A, because A is still what the callers were written
 	// against. See PreserveSignatureBaselines.
 	Baseline string
+}
+
+// SortWarnings puts a warning list in the one order every surface prints it in: kind, then
+// source, then target, then id.
+//
+// A TOTAL order, and that is the point. The warnings table is a map, so a listing built by
+// ranging over it arrives shuffled, and the two sorts that existed (`arac warnings list` and
+// the warnings_list tool, both keyed on kind+source only) left every tie to that shuffle. That
+// was merely untidy while the whole list was printed. It stops being untidy the moment
+// something takes the FIRST N of it -- the warning-read expansion does, and "the first five"
+// has to be the same five each time, and the same five the surface that continues the fixing
+// loop picks up. See cli.warningReadSection.
+func SortWarnings(ws []TopologyWarning) {
+	sort.SliceStable(ws, func(i, j int) bool {
+		a, b := ws[i], ws[j]
+		if a.Kind != b.Kind {
+			return a.Kind < b.Kind
+		}
+		if a.SourceID != b.SourceID {
+			return a.SourceID < b.SourceID
+		}
+		if a.TargetID != b.TargetID {
+			return a.TargetID < b.TargetID
+		}
+		return a.ID < b.ID
+	})
 }
 
 // Graph of code resources indexed by ID, with language tracking, warnings, and errors for a codebase root.

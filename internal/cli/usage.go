@@ -140,7 +140,7 @@ Usage:
   arac update-description <id> <kind> <desc>  Update a resource's description in the topology DB
   arac node count            Print total node count
   arac node count --no-description  Print count of undocumented nodes
-  arac warnings list [flags] List outstanding topology warnings
+  arac warnings list [flags] List outstanding topology warnings (--read also returns the source of the warned code)
   arac bug report  [flags] Report a bug on a resource node
   arac bug list    [flags] List known bugs (filterable by node or state)
   arac bug acknowledge <bugID>  Mark a bug as acknowledged
@@ -217,6 +217,10 @@ Flags for "warnings list":
   --source <id>   Filter by source resource ID
   --target <id>   Filter by target resource ID
   --kind <kind>   Filter by warning kind (use_missing_node, node_removed, signature_changed, interface_conflict)
+  --read          Also print the source of the code the first warnings name, so they can be
+                  fixed without a separate read. Capped at features.warning_read_limit (5);
+                  run it again after fixing those to get the next batch. Needs
+                  features.warning_reads in .aracne/config.json.
 
 Flags for "bug report":
   --db <path>            Topology database path (default ".aracne/topology.db")

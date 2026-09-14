@@ -3,9 +3,9 @@ package cli
 import (
 	"fmt"
 	"os"
-	"sort"
 	"strings"
 
+	"github.com/Rhuan-Marques/aracne/internal/helper"
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
@@ -33,9 +33,12 @@ func RunWarningsList(args []string) {
 	dbPath := ProjectDBPath(DefaultDBRelative)
 	sourceID := ""
 	targetID := ""
+	readCode := false
 	var kind domain.WarningKind
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
+		case "--read":
+			readCode = true
 		case "--db":
 			if i+1 < len(args) {
 				dbPath = args[i+1]
@@ -81,12 +84,10 @@ func RunWarningsList(args []string) {
 		return
 	}
 
-	sort.SliceStable(warnings, func(i, j int) bool {
-		if warnings[i].Kind != warnings[j].Kind {
-			return warnings[i].Kind < warnings[j].Kind
-		}
-		return warnings[i].SourceID < warnings[j].SourceID
-	})
+	// The shared total order, not a local one. `--read` expands the FIRST N of this list, and
+	// the note it prints promises the next page starts where this one stopped -- which is only
+	// true if every surface agrees on the order. See domain.SortWarnings.
+	domain.SortWarnings(warnings)
 
 	counts := make(map[domain.WarningKind]int)
 	for _, w := range warnings {
@@ -109,4 +110,33 @@ func RunWarningsList(args []string) {
 		}
 		fmt.Println()
 	}
+
+	if readCode {
+		printWarningReads(dbPath, warnings)
+	}
+}
+
+// printWarningReads answers `--read`: the full source of the code the first
+// features.warning_read_limit warnings name, so the listing is something to fix from rather
+// than something to look up.
+//
+// AN OFF FEATURE SAYS SO. A flag that silently does nothing is worse than no flag -- the
+// caller typed it, got a plain listing, and has no way to tell "nothing to read" from "this
+// project has the feature off". It is a note rather than an error because the command still
+// did its job: the warnings were listed.
+func printWarningReads(dbPath string, warnings []domain.TopologyWarning) {
+	cfg := helper.LoadConfig(helper.ConfigPath(dbPath))
+	if !cfg.WarningReadsEnabled() {
+		fmt.Println("--read did nothing: features.warning_reads is off in .aracne/config.json.")
+		return
+	}
+	// warningReadNoBudget, not the hook's deadline: the caller asked for exactly this and is
+	// waiting for it. See the constant.
+	section := warningReadSection(dbPath, warnings, warningReadNoBudget)
+	if section == "" {
+		fmt.Println("--read found nothing to read: every warning names code the graph no longer holds,")
+		fmt.Println("or a kind read.kinds does not allow.")
+		return
+	}
+	fmt.Println(section)
 }

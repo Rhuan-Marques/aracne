@@ -135,7 +135,7 @@ func main() {
 		}
 	case "warnings":
 		if len(os.Args) < 3 || os.Args[2] != "list" {
-			fmt.Fprintln(os.Stderr, "Usage: arac warnings list [--source <id>] [--target <id>] [--kind <kind>]")
+			fmt.Fprintln(os.Stderr, "Usage: arac warnings list [--source <id>] [--target <id>] [--kind <kind>] [--read]")
 			os.Exit(1)
 		}
 		cli.RunWarningsList(os.Args[3:])
