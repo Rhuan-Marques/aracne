@@ -1,0 +1,15 @@
+# Build context for docker/trial/Dockerfile.
+#
+# bench/ is 41G of datasets and .git is 135M; neither is needed to build the binary,
+# and Docker copies the whole context before it reads the first instruction.
+bench/
+.git/
+bin/
+node_modules/
+dist/
+*.db
+*.log
+# Aracne's own per-project state has no business inside a "never seen aracne" image.
+.aracne/
+.claude/
+.opencode/
