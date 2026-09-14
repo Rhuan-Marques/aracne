@@ -796,10 +796,14 @@ func CommandPaths(command string) []string {
 		}
 		// A `rev:path` operand (git) names a path but not one on disk to compare; the git
 		// classifier decides those, so they are not this function's business.
-		if strings.Contains(tok, ":") && !filepath.IsAbs(tok) {
+		if strings.Contains(tok, ":") && !ShellPathIsAbs(tok) {
 			continue
 		}
-		if strings.ContainsRune(tok, filepath.Separator) || hasFileExtension(tok) {
+		// Either dialect's separator. filepath.Separator alone is `\` on Windows, where it
+		// matched none of the POSIX operands an agent actually writes -- `/tmp/other` and
+		// `shapes/shape.go` were not collected as paths at all, so the guard judged commands
+		// by whatever was left. See ShellPathHasSeparator.
+		if ShellPathHasSeparator(tok) || hasFileExtension(tok) {
 			out = append(out, tok)
 		}
 	}

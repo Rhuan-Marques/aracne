@@ -20,7 +20,7 @@ func inProject(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
 	t.Chdir(dir)
-	t.Setenv("HOME", filepath.Join(dir, "home"))
+	setHome(t, filepath.Join(dir, "home"))
 }
 
 func writeOpenCodeConfig(t *testing.T, content string) {

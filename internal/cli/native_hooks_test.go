@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -207,8 +208,12 @@ func TestWriteClaudeGuardHookMerges(t *testing.T) {
 		}
 	}
 
-	// Both script files were written.
-	for _, name := range []string{"arac-update-file.sh", "arac-guard.sh"} {
+	// Both script files were written, under the names this platform uses: PowerShell on
+	// Windows, shell everywhere else (claudeGuardHookForOS).
+	for _, name := range []string{
+		claudeNativeEditHookForOS(runtime.GOOS, hooksDir, false).scriptName,
+		claudeGuardHookForOS(runtime.GOOS, hooksDir, false).scriptName,
+	} {
 		if _, err := os.Stat(filepath.Join(hooksDir, name)); err != nil {
 			t.Fatalf("expected hook script %s: %v", name, err)
 		}

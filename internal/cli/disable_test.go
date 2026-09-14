@@ -564,7 +564,7 @@ func TestSetupThenDisableRemovesShellInterception(t *testing.T) {
 	}
 	defer os.Chdir(prevDir)
 	// Nothing may reach the real home directory, even though this is the local install.
-	t.Setenv("HOME", filepath.Join(dir, "home"))
+	setHome(t, filepath.Join(dir, "home"))
 	os.MkdirAll(".aracne", 0755)
 
 	runSetup(true, true, false, true)

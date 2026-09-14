@@ -147,7 +147,10 @@ func stringValues(v any) []string {
 // against the workspace and is inside it by construction, which is the same rule the `command`
 // branch below applies.
 func pathShapedToken(tok string) bool {
-	return filepath.IsAbs(tok)
+	// Absolute AS THE CALLER WROTE IT. filepath.IsAbs is false on Windows for `/etc/passwd`
+	// -- rooted, but carrying no volume -- so an id like that was not even judged path-shaped
+	// there, and the workspace-scope check this feeds never saw it.
+	return toolspec.ShellPathIsAbs(tok)
 }
 
 // Checks whether a file path is contained within the configured workspace directory.
@@ -155,8 +158,14 @@ func (p PermissionPolicy) insideWorkspace(path string) bool {
 	if path == "." {
 		return true
 	}
-	if !filepath.IsAbs(path) {
+	if !toolspec.ShellPathIsAbs(path) {
 		path = filepath.Join(p.workspace, path)
+	} else if !filepath.IsAbs(path) {
+		// Rooted in the caller's dialect but not in this platform's: a POSIX path on Windows.
+		// It names somewhere outside any workspace this process has, and joining it onto the
+		// workspace -- which is what the branch above would do -- is how `/etc/passwd` came
+		// back as an in-workspace read there.
+		return false
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {

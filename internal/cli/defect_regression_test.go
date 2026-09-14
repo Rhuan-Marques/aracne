@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -388,8 +389,11 @@ func TestGeneratedMCPEntriesRunTheResolvedBinary(t *testing.T) {
 	if strings.Contains(frontmatter, "command: arac\n") {
 		t.Errorf("sub-agent frontmatter still runs a bare `arac`:\n%s", frontmatter)
 	}
-	if !strings.Contains(frontmatter, aracBinary()) {
-		t.Errorf("sub-agent frontmatter should run %q:\n%s", aracBinary(), frontmatter)
+	// strconv.Quote is what writes it (claudeMCPServersFrontmatter), so the quoted form is
+	// what is in there: on Windows every separator in the path is escaped, and searching for
+	// the raw spelling finds nothing.
+	if want := strconv.Quote(aracBinary()); !strings.Contains(frontmatter, want) {
+		t.Errorf("sub-agent frontmatter should run %s:\n%s", want, frontmatter)
 	}
 }
 
