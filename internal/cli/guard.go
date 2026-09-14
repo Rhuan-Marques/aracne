@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -708,6 +709,10 @@ type commandSegment struct {
 //
 // Each segment also records the nesting depth it sits at, so a caller can tell a top-level
 // command from the body of a substitution. See commandSegment.depth.
+// backslashEscapes: see the note inside splitCommandSegments. A variable rather than a
+// constant so a test can pin either reading.
+var backslashEscapes = runtime.GOOS != "windows"
+
 func splitCommandSegments(command string) []commandSegment {
 	runes := []rune(command)
 	// Byte offset of each rune, so a segment can be located in the original string.
@@ -751,6 +756,19 @@ func splitCommandSegments(command string) []commandSegment {
 		curRedirect = false
 		segStart = nextStart
 	}
+	// backslashEscapes is whether a `\` in a command is read as the shell's escape character.
+	//
+	// NOT ON WINDOWS, where it is the path separator. Reading it as an escape there ate every
+	// separator in every unquoted path an agent writes: `head -5 C:\Users\me\repo\a.go`
+	// tokenized as the single word `C:Usersmerepoa.go`, which names no file -- so the guard
+	// could not tell that the read was of an indexed file, could not place a `cd` target, and
+	// could not proxy a windowed read. Interception simply stopped there, quietly, for every
+	// path spelled the way that platform spells them.
+	//
+	// The cost is the case the escape handling was added for -- `echo \; grep x f`, where the
+	// `;` must not split the command -- and on Windows that shape is rarer by far than a path
+	// with a backslash in it. Unix keeps the shell's own reading, unchanged.
+	//
 	// A backslash escapes the next character the way the shell reads it: anywhere outside
 	// quotes, inside `$'…'`, and before `"`, `\`, `$` or a backtick inside double quotes. The
 	// escaped character is kept as a literal and can neither end a quote nor separate commands:
@@ -762,7 +780,7 @@ func splitCommandSegments(command string) []commandSegment {
 	dollarAt := -1 // index of the last unquoted, unescaped `$`, which may open `$'…'`
 	for i := 0; i < len(runes); i++ {
 		r := runes[i]
-		if r == '\\' && i+1 < len(runes) && (quote == 0 || ansiC ||
+		if backslashEscapes && r == '\\' && i+1 < len(runes) && (quote == 0 || ansiC ||
 			quote == '"' && strings.ContainsRune("\"\\$`\n", runes[i+1])) {
 			i++
 			escapedAt = i

@@ -55,7 +55,11 @@ func BuildIgnoreMatcher(root string, patterns []string) *IgnoreMatcher {
 		if p == "" || strings.HasPrefix(p, "#") {
 			continue
 		}
-		p = filepath.ToSlash(p)
+		// NOT filepath.ToSlash. A .gitignore pattern is forward-slash on every platform and
+		// `\` is its ESCAPE character -- the only way to spell a literal `[`, `*` or `?`. On
+		// Windows ToSlash rewrote those escapes into separators (`s\[1].go` became
+		// `s/[1].go`, `\[slug\]` became `/[slug/]`), so every bracket or literal-glob rule
+		// copied from a real .gitignore silently matched nothing there.
 		dirOnly := false
 		anchored := false
 		// `X/**` means "everything under X", which is what a directory rule already

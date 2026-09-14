@@ -293,7 +293,9 @@ func TestBinaryAndExampleRoots(t *testing.T) {
 			t.Errorf("missing %s", id)
 			continue
 		}
-		if !strings.HasSuffix(r.Location.Path, file) {
+		// Slash-normalized: Location.Path is an OS path (backslashes on Windows), the wanted
+		// suffix is forward-slash.
+		if !strings.HasSuffix(filepath.ToSlash(r.Location.Path), file) {
 			t.Errorf("%s is declared in %s, located at %s", id, file, r.Location.Path)
 		}
 	}

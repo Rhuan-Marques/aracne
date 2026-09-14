@@ -48,7 +48,7 @@ data: [DONE]`
 	}))
 	defer server.Close()
 
-	manager, err := NewManager(dbPath, dir, collect)
+	manager, err := newTestManager(t, dbPath, dir, collect)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
@@ -132,7 +132,7 @@ data: [DONE]`
 	}))
 	defer server.Close()
 
-	manager, err := NewManager(dbPath, dir, collect)
+	manager, err := newTestManager(t, dbPath, dir, collect)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
@@ -241,7 +241,7 @@ data: [DONE]`
 	}))
 	defer server.Close()
 
-	manager, err := NewManager(dbPath, dir, collect)
+	manager, err := newTestManager(t, dbPath, dir, collect)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
@@ -307,7 +307,7 @@ func TestManagerSend_ProviderErrorEmitsThinkingFalse(t *testing.T) {
 
 	dbPath := filepath.Join(dir, "topology.db")
 
-	manager, err := NewManager(dbPath, dir, collect)
+	manager, err := newTestManager(t, dbPath, dir, collect)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
@@ -390,7 +390,7 @@ data: [DONE]`
 	}))
 	defer server.Close()
 
-	manager, err := NewManager(dbPath, dir, collect)
+	manager, err := newTestManager(t, dbPath, dir, collect)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
@@ -425,6 +425,12 @@ func waitForDeltas(t *testing.T, mu *sync.Mutex, events *[]Event, timeout time.D
 	deadline := time.Now().Add(timeout)
 	var sb strings.Builder
 	for time.Now().Before(deadline) {
+		// RESET EACH PASS. This re-reads the WHOLE events slice every time round, so a builder
+		// that survives the loop appends what it has already seen: a poll that caught only the
+		// first delta, followed by one that caught both, produced "HelloHello world" and failed
+		// a test that was working perfectly. It needed the deltas to arrive split across two
+		// polls, so it surfaced only under load -- on CI, never here.
+		sb.Reset()
 		mu.Lock()
 		for _, e := range *events {
 			if e.Type == "thinking" {
@@ -452,6 +458,36 @@ func waitForDeltas(t *testing.T, mu *sync.Mutex, events *[]Event, timeout time.D
 	}
 	t.Fatalf("timed out waiting for streaming deltas; accumulated: %q", sb.String())
 	return ""
+}
+
+// TestWaitForDeltasDoesNotDoubleCountAcrossPolls pins the helper above, which six tests read
+// their answer from.
+//
+// It re-reads the whole events slice on every poll, so it only reports the right thing if it
+// starts each pass empty. It did not, and a run whose two deltas landed in different polls came
+// back as "HelloHello world" -- a failure with no bug behind it, in a test that had passed the
+// commit before. The deltas are fed here in two batches with a gap wider than the poll
+// interval, so the split is arranged rather than waited for.
+func TestWaitForDeltasDoesNotDoubleCountAcrossPolls(t *testing.T) {
+	var (
+		mu     sync.Mutex
+		events []Event
+	)
+	add := func(e Event) {
+		mu.Lock()
+		events = append(events, e)
+		mu.Unlock()
+	}
+	go func() {
+		add(Event{Type: "delta", Payload: map[string]any{"content": "Hello"}})
+		time.Sleep(120 * time.Millisecond) // wider than the 50ms poll, so the halves cannot share one
+		add(Event{Type: "delta", Payload: map[string]any{"content": " world"}})
+		add(Event{Type: "thinking", Payload: map[string]any{"active": false}})
+	}()
+
+	if got := waitForDeltas(t, &mu, &events, 10*time.Second); got != "Hello world" {
+		t.Errorf("deltas split across polls read back as %q, want %q", got, "Hello world")
+	}
 }
 
 func setupTopologyDB(t *testing.T, dir string) {
@@ -498,7 +534,7 @@ data: [DONE]`
 	}))
 	defer server.Close()
 
-	manager, err := NewManager(dbPath, dir, collect)
+	manager, err := newTestManager(t, dbPath, dir, collect)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
@@ -597,7 +633,7 @@ data: [DONE]`)
 	}
 	dbPath := filepath.Join(dir, "topology.db")
 
-	manager, err := NewManager(dbPath, dir, func(e Event) {})
+	manager, err := newTestManager(t, dbPath, dir, func(e Event) {})
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
@@ -672,7 +708,7 @@ data: [DONE]`)
 	}
 	dbPath := filepath.Join(dir, "topology.db")
 
-	manager, err := NewManager(dbPath, dir, func(e Event) {})
+	manager, err := newTestManager(t, dbPath, dir, func(e Event) {})
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
@@ -763,7 +799,7 @@ func TestGetSession_ReturnsRunningFalseWhenNotActive(t *testing.T) {
 	}
 	dbPath := filepath.Join(dir, "topology.db")
 
-	manager, err := NewManager(dbPath, dir, func(e Event) {})
+	manager, err := newTestManager(t, dbPath, dir, func(e Event) {})
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}

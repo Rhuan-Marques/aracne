@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/Rhuan-Marques/aracne/internal/helper"
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
@@ -15,7 +16,11 @@ import (
 // file", check-updates with "access root". Opening a moved project must rebuild it under p2 and
 // keep the descriptions it had.
 func TestInitRegistryRebuildsAMovedProject(t *testing.T) {
-	parent := t.TempDir()
+	// CANONICAL: the root this test reads back was stored through helper.CanonicalPath, as
+	// every scan verb stores it, so an expectation built from an unresolved temp dir compares
+	// two spellings of one directory. macOS hands every t.TempDir() out under /var, which is a
+	// symlink to /private/var.
+	parent := helper.CanonicalPath(t.TempDir())
 	p1 := filepath.Join(parent, "p1")
 	for rel, body := range map[string]string{
 		"go.mod":          "module example.com/p\n\ngo 1.22\n",

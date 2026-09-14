@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"time"
 )
 
 // AtomicWriteFile replaces the file at path with data, atomically: the bytes go to a temp
@@ -63,7 +65,39 @@ func AtomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	if err := os.Chmod(tmpName, perm); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, path)
+	return renameOverDestination(tmpName, path)
+}
+
+// renameOverDestination is the rename that completes the write, with the one retry Windows
+// needs.
+//
+// WHY A RETRY, AND ONLY THERE. POSIX rename(2) replaces a destination other processes hold
+// open; Windows refuses it. A handle opened without FILE_SHARE_DELETE -- which is what a
+// plain reader, an editor, a file indexer or an antivirus scan holds -- makes MoveFileEx fail
+// with ERROR_ACCESS_DENIED, and the write fails for a reason that has nothing to do with the
+// caller and is gone milliseconds later. The files this package rewrites are exactly the ones
+// something else is most likely to be reading: config.json, file_manifest.json, the topology
+// database, and the harness files `arac setup` writes.
+//
+// The retry is bounded at about a quarter of a second and is not narrowed to a particular
+// errno: a sharing violation reaches Go as ERROR_ACCESS_DENIED or ERROR_SHARING_VIOLATION
+// depending on who holds the handle and how, and both have been spelled differently across Go
+// releases. A rename that can never succeed therefore costs that quarter second once and then
+// fails exactly as it did before -- rename is atomic, so a failed one has changed nothing and
+// there is nothing to be careful about in trying it again. On every other platform the first
+// rename is the only one attempted, so this is a no-op there.
+func renameOverDestination(tmp, dest string) error {
+	err := os.Rename(tmp, dest)
+	if err == nil || runtime.GOOS != "windows" {
+		return err
+	}
+	for delay := time.Millisecond; delay <= 128*time.Millisecond; delay *= 2 {
+		time.Sleep(delay)
+		if err = os.Rename(tmp, dest); err == nil {
+			return nil
+		}
+	}
+	return err
 }
 
 // maxSymlinkHops bounds resolveSymlinkTarget, as the kernel's own limit does for open(2).

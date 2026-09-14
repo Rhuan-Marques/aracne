@@ -646,16 +646,37 @@ func TrackedFiles(dbPath string, paths []string) (map[string]bool, error) {
 			return err
 		}
 		defer stmt.Close()
-		for _, p := range paths {
+		hit := func(p string) (bool, error) {
 			var one int
 			switch err := stmt.QueryRow(p, p).Scan(&one); err {
 			case nil:
-				out[p] = true
+				return true, nil
 			case sql.ErrNoRows:
-				out[p] = false
+				return false, nil
 			default:
+				return false, err
+			}
+		}
+		for _, p := range paths {
+			found, err := hit(p)
+			if err != nil {
 				return err
 			}
+			// A miss is retried under the canonical spelling, because loc_path holds the one
+			// the scan minted through CanonicalPath: a project reached through a symlinked
+			// directory (macOS /var, a bind mount, a linked checkout) stores its files under
+			// the real path while the guard is handed the path the agent typed. The answer
+			// was "not indexed" for a file the index held, and every read of it went
+			// un-intercepted. Only on the miss -- this runs on every guarded tool call, and
+			// EvalSymlinks is one lstat per component.
+			if !found {
+				if canon := CanonicalPath(p); canon != p {
+					if found, err = hit(canon); err != nil {
+						return err
+					}
+				}
+			}
+			out[p] = found
 		}
 		return nil
 	})

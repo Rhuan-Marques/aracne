@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Rhuan-Marques/aracne/internal/helper"
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
@@ -66,8 +67,13 @@ func cutFromCommit(ref, path, name string, startsAt, endsAt int) (string, bool) 
 	if ref == "" || path == "" || startsAt <= 0 || endsAt < startsAt {
 		return "", false
 	}
-	abs, err := filepath.Abs(path)
-	if err != nil {
+	// CANONICAL, because the other side of the comparison is git's. `rev-parse
+	// --show-toplevel` prints the resolved path, so an absolute-but-unresolved path reached
+	// through a symlinked directory -- every macOS temp dir, a linked checkout, a bind mount --
+	// makes filepath.Rel answer `../../var/...`, RelInside reject it, and the whole clean-source
+	// cut silently fall back to the working tree it exists to avoid.
+	abs := helper.CanonicalPath(path)
+	if abs == "" {
 		return "", false
 	}
 	dir := filepath.Dir(abs)
@@ -76,7 +82,9 @@ func cutFromCommit(ref, path, name string, startsAt, endsAt int) (string, bool) 
 	if err != nil {
 		return "", false // not a git repository: nothing committed to read
 	}
-	rel, err := filepath.Rel(strings.TrimSpace(top), abs)
+	// FromSlash: git prints a toplevel with forward slashes on every platform, including the
+	// one where they are not the separator.
+	rel, err := filepath.Rel(helper.CanonicalPath(filepath.FromSlash(strings.TrimSpace(top))), abs)
 	if err != nil || !domain.RelInside(rel) {
 		return "", false
 	}

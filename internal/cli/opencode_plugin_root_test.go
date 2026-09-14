@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -35,6 +36,14 @@ func fakeAracScript(t *testing.T, dir, logPath string) string {
 // of its hooks, runs both under node, and returns the working directories the fake recorded.
 func runPluginHook(t *testing.T, pluginSrc, harnessBody string) []string {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		// The fake arac is a `#!/bin/sh` script, and the plugin runs it through execFile with
+		// no shell -- deliberately, so that a path with a space cannot be re-split. Windows
+		// has no shebang, and Node will not execFile a .cmd without a shell either, so there
+		// is no fake binary to hand the plugin there. What these tests pin -- the DIRECTORY
+		// arac is run in -- is the same plumbing on every platform; only this harness is not.
+		t.Skip("no way to stand in for the arac binary without a shell")
+	}
 	node, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node not on PATH")

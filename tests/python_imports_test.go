@@ -24,7 +24,8 @@ func TestPythonScanNeverImportsProjectModules(t *testing.T) {
 	if !hasPython() {
 		t.Skip("Python not available")
 	}
-	dir := t.TempDir()
+	// CANONICAL: the ids below are the ones the scan stored, and it resolves its root first.
+	dir := helper.CanonicalPath(t.TempDir())
 	// Outside the project, so the scan cannot see it and no project file depends on it.
 	marker := filepath.Join(t.TempDir(), "MARKER")
 	shadows := []string{"json", "enum", "ast", "re", "site"}

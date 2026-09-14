@@ -48,7 +48,9 @@ func resBySuffix(t *testing.T, topo *domain.Topology, suffix string) domain.Reso
 	t.Helper()
 	var found []domain.Resource
 	for id, r := range topo.Resources {
-		if strings.HasSuffix(id, suffix) {
+		// Slash-normalized: a file's resource id IS its OS path, so on Windows it carries
+		// backslashes while every suffix written in these tests is forward-slash.
+		if strings.HasSuffix(filepath.ToSlash(id), suffix) {
 			found = append(found, r)
 		}
 	}
@@ -67,7 +69,7 @@ func resBySuffix(t *testing.T, topo *domain.Topology, suffix string) domain.Reso
 
 func hasRes(topo *domain.Topology, suffix string) bool {
 	for id := range topo.Resources {
-		if strings.HasSuffix(id, suffix) {
+		if strings.HasSuffix(filepath.ToSlash(id), suffix) {
 			return true
 		}
 	}
@@ -78,11 +80,11 @@ func hasRes(topo *domain.Topology, suffix string) bool {
 // target whose ID ends with targetSuffix.
 func connHas(topo *domain.Topology, idSuffix, conn, targetSuffix string) bool {
 	for id, r := range topo.Resources {
-		if !strings.HasSuffix(id, idSuffix) {
+		if !strings.HasSuffix(filepath.ToSlash(id), idSuffix) {
 			continue
 		}
 		for _, tgt := range r.Connections[conn] {
-			if strings.HasSuffix(tgt, targetSuffix) {
+			if strings.HasSuffix(filepath.ToSlash(tgt), targetSuffix) {
 				return true
 			}
 		}

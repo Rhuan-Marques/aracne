@@ -119,7 +119,7 @@ func TestSetupAndDisableFromASubdirectoryWorkOnTheProjectRoot(t *testing.T) {
 	for name, withDB := range map[string]bool{"config only": false, "scanned": true} {
 		t.Run(name, func(t *testing.T) {
 			root := t.TempDir()
-			t.Setenv("HOME", filepath.Join(root, "home"))
+			setHome(t, filepath.Join(root, "home"))
 			saveTestConfig(t, root, helper.DefaultConfig())
 			if withDB {
 				os.WriteFile(filepath.Join(root, DefaultDBRelative), nil, 0644)
@@ -256,7 +256,7 @@ func TestGlobalSetupRendersTheProjectsModeButNotItsLanguages(t *testing.T) {
 	root, dbPath := scannedProject(t) // a Go project
 	t.Chdir(root)
 	home := filepath.Join(t.TempDir(), "home")
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	if len(TopologyLanguages(dbPath)) == 0 {
 		t.Fatal("the fixture should have a language for the global contract to leave out")
 	}

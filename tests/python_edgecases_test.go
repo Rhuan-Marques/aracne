@@ -125,7 +125,8 @@ func assertConnTargetSuffix(t *testing.T, topo *domain.Topology, mode, id, connT
 	t.Helper()
 	r := mustResource(t, topo, mode, id)
 	for _, tg := range r.Connections[connType] {
-		if strings.HasSuffix(tg, suffix) {
+		// Slash-normalized: a module target is an OS path (backslashes on Windows).
+		if strings.HasSuffix(filepath.ToSlash(tg), suffix) {
 			return
 		}
 	}
@@ -137,7 +138,8 @@ func findIDBySuffix(t *testing.T, topo *domain.Topology, suffix string) string {
 	t.Helper()
 	var found []string
 	for id := range topo.Resources {
-		if strings.HasSuffix(id, suffix) {
+		// Slash-normalized: a file's resource id IS its OS path (backslashes on Windows).
+		if strings.HasSuffix(filepath.ToSlash(id), suffix) {
 			found = append(found, id)
 		}
 	}

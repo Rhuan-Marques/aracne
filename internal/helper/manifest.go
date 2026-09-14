@@ -437,7 +437,15 @@ func isIgnoredSourceDir(name string) bool {
 }
 
 // Compares source files in a directory against a manifest to identify added, modified, and deleted files by language.
+//
+// THE ROOT IS CANONICALIZED FIRST, because the two sides of this diff have to be spelled the
+// same way. The manifest side was written by a scan, which mints every path through
+// CanonicalPath; the current side is a walk of this root. Hand it a root reached through a
+// symlinked directory -- macOS's /var, a bind mount, a linked checkout -- and every file is
+// reported BOTH added (under the link) and deleted (under the real path), which reads as a tree
+// wholly out of sync however recently it was scanned.
 func DiffScanFiles(root, language, manifestPath string) (added, modified, deleted []string, err error) {
+	root = CanonicalPath(root)
 	manifest := ReadManifest(manifestPath)
 
 	manifestTimes := make(map[string]time.Time)

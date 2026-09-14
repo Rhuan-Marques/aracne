@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/Rhuan-Marques/aracne/internal/toolspec"
-	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
 // The guard exists to route work to the aracne tools where they are the better answer. A
@@ -31,8 +30,8 @@ func operatesOutsideProject(command, root string) bool {
 	if root == "" || strings.TrimSpace(command) == "" {
 		return false
 	}
-	absRoot, err := filepath.Abs(root)
-	if err != nil {
+	absRoot := shellAbs(root)
+	if absRoot == "" {
 		return false
 	}
 	paths := commandPaths(command)
@@ -40,10 +39,13 @@ func operatesOutsideProject(command, root string) bool {
 		return false
 	}
 	for _, p := range paths {
-		if !filepath.IsAbs(p) {
+		// Absolute AS THE COMMAND MEANS IT. On Windows filepath.IsAbs is false for `/tmp/x`,
+		// so every POSIX path an agent writes was read as relative and assumed to be inside
+		// the project -- the exemption this function exists for never fired there.
+		if !toolspec.ShellPathIsAbs(p) {
 			return false // relative: assume it is inside the project
 		}
-		if isUnder(filepath.Clean(p), absRoot) {
+		if isUnder(p, absRoot) {
 			return false
 		}
 	}
@@ -52,12 +54,12 @@ func operatesOutsideProject(command, root string) bool {
 
 // isUnder reports whether path is root or lives beneath it. Compared segment-wise so a sibling
 // directory sharing a name prefix (`/repo-backup` beside `/repo`) is not mistaken for a child.
+//
+// Both sides are reduced to one spelling first: the path comes out of a command and the root
+// out of the filesystem, so on Windows they arrive in different dialects and filepath.Rel
+// answers with an error rather than a relationship.
 func isUnder(path, root string) bool {
-	rel, err := filepath.Rel(root, path)
-	if err != nil {
-		return false
-	}
-	return domain.RelInside(rel)
+	return toolspec.ShellPathUnder(path, root)
 }
 
 // commandPaths is toolspec.CommandPaths under the name the guard has always used for it.
@@ -103,8 +105,8 @@ func commandPaths(command string) []string {
 			// Unknowable from here on: the rest keeps today's reading.
 			return append(out, toolspec.CommandPaths(command[from:])...)
 		}
-		if base != "" && !filepath.IsAbs(dir) {
-			dir = filepath.Join(base, dir)
+		if base != "" && !toolspec.ShellPathIsAbs(dir) {
+			dir = toolspec.ShellPathJoin(base, dir)
 		}
 		base = dir
 	}
@@ -155,7 +157,12 @@ func cdTarget(seg commandSegment, command string) (dir string, isCd, known bool)
 		}
 		target = filepath.Join(home, strings.TrimPrefix(target, "~"))
 	}
-	if target == "" || target == "-" || strings.ContainsAny(target, "$`*?[~") {
+	// `~` ONLY AT THE FRONT, where the shell expands it -- the two forms it can expand are
+	// resolved just above, so a leading one left here is `~user`, which this cannot resolve.
+	// Anywhere else it is an ordinary filename character, and on Windows an ordinary one in
+	// every 8.3 path: `cd C:\Users\RUNNER~1\...` read as unknowable, so the operands after
+	// it were never rebased and a read in another directory was judged against the project.
+	if target == "" || target == "-" || strings.ContainsAny(target, "$`*?[") || strings.HasPrefix(target, "~") {
 		return "", true, false
 	}
 	return target, true, true
@@ -167,11 +174,32 @@ func rebasePaths(paths []string, base string) []string {
 		return paths
 	}
 	for i, p := range paths {
-		if !filepath.IsAbs(p) {
-			paths[i] = filepath.Join(base, p)
+		if !toolspec.ShellPathIsAbs(p) {
+			paths[i] = toolspec.ShellPathJoin(base, p)
 		}
 	}
 	return paths
+}
+
+// shellAbs resolves a root against the working directory only when it is not already absolute.
+//
+// ONE DIALECT ON BOTH SIDES OR THE COMPARISON MEANS NOTHING. The paths this root is compared
+// against come out of a command, in the spelling the command used. filepath.Abs on Windows
+// qualifies `/repo/worktree` with the current drive -- `D:\repo\worktree` -- and a root in one
+// dialect can never contain a path in the other, so every command reads as "outside the
+// project". A root that IS relative still needs resolving, and that is the only case left here.
+func shellAbs(p string) string {
+	if p == "" {
+		return ""
+	}
+	if toolspec.ShellPathIsAbs(p) {
+		return p
+	}
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return ""
+	}
+	return abs
 }
 
 // projectRoot turns the resolved database path back into the directory the topology indexes.
@@ -180,8 +208,8 @@ func projectRoot(dbPath string) string {
 	if dbPath == "" {
 		return ""
 	}
-	abs, err := filepath.Abs(dbPath)
-	if err != nil {
+	abs := shellAbs(dbPath)
+	if abs == "" {
 		return ""
 	}
 	dir := filepath.Dir(abs) // .../.aracne

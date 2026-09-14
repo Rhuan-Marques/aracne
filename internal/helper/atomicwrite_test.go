@@ -3,6 +3,7 @@ package helper
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -32,8 +33,30 @@ func assertStillLink(t *testing.T, path, want string) {
 	if info.Mode()&os.ModeSymlink == 0 {
 		t.Fatalf("%s was replaced by a regular file; the link must survive the write", path)
 	}
-	if got, _ := os.Readlink(path); got != want {
+	// Slash-normalized: Windows stores a link target with its own separators, so a link
+	// created as "../../shared/shared.go" reads back as "..\..\shared\shared.go". The
+	// target is unchanged -- only its spelling is the platform's.
+	if got, _ := os.Readlink(path); filepath.ToSlash(got) != filepath.ToSlash(want) {
 		t.Fatalf("%s now points at %q, want %q", path, got, want)
+	}
+}
+
+// assertPerm checks a file's Unix permission bits, where there are any.
+//
+// Windows has none: os.Chmod there toggles the read-only attribute and nothing else, so every
+// writable file reports 0666 however it was created. The bits are what this file is about on
+// every other platform, so the check is skipped rather than weakened.
+func assertPerm(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		return
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != want {
+		t.Errorf("%s has permissions %v, want %v", path, got, want)
 	}
 }
 
@@ -64,9 +87,7 @@ func TestAtomicWriteFile_WritesThroughSymlink(t *testing.T) {
 		if got := mustRead(t, real); got != "return 42\n" {
 			t.Fatalf("the link's target must receive the write, got %q", got)
 		}
-		if info, _ := os.Stat(real); info.Mode().Perm() != 0o600 {
-			t.Errorf("the target keeps its own permissions, got %v", info.Mode().Perm())
-		}
+		assertPerm(t, real, 0o600) // the target keeps its own permissions
 	})
 
 	t.Run("chain", func(t *testing.T) {
@@ -121,9 +142,11 @@ func TestAtomicWriteFile_RegularFileUnchanged(t *testing.T) {
 	if got := mustRead(t, path); got != "new\n" {
 		t.Fatalf("got %q", got)
 	}
-	if info, _ := os.Lstat(path); !info.Mode().IsRegular() || info.Mode().Perm() != 0o755 {
-		t.Fatalf("a regular file stays regular with its permissions, got %v", info.Mode())
+	info, _ := os.Lstat(path)
+	if !info.Mode().IsRegular() {
+		t.Fatalf("a regular file stays regular, got %v", info.Mode())
 	}
+	assertPerm(t, path, 0o755) // and keeps its permissions
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -135,7 +158,5 @@ func TestAtomicWriteFile_RegularFileUnchanged(t *testing.T) {
 	if err := AtomicWriteFile(fresh, []byte("x"), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	if info, _ := os.Stat(fresh); info.Mode().Perm() != 0o640 {
-		t.Fatalf("a new file gets perm, got %v", info.Mode().Perm())
-	}
+	assertPerm(t, fresh, 0o640) // a new file gets perm
 }

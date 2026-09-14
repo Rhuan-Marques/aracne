@@ -222,7 +222,7 @@ func collectJavaFiles(root string) []string {
 		files = append(files, path)
 		return nil
 	})
-	sort.Strings(files)
+	sortByPortablePath(files)
 	return files
 }
 
@@ -271,7 +271,7 @@ func declaringFile(gt *java.JavaTopology, fqn string, files []string) string {
 	} else if t, ok := gt.Interfaces[fqn]; ok {
 		kept = t.Loc.Path
 	}
-	sort.Strings(files)
+	sortByPortablePath(files)
 	var live []string
 	for _, f := range files {
 		if _, err := os.Stat(f); err == nil {

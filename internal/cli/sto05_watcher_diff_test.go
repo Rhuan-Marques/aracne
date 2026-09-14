@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -67,6 +68,12 @@ func TestSTO05_WatcherSeesTheLastFileOfALanguageDeleted(t *testing.T) {
 }
 
 func TestSTO05_WatcherSkipsAFailingLanguageInsteadOfAborting(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// The fixture makes one language's walk fail by removing a directory's list
+		// permission. os.Chmod on Windows only toggles the read-only attribute, so the walk
+		// succeeds and there is no failing language to skip.
+		t.Skip("a directory cannot be made unlistable by chmod on Windows")
+	}
 	if os.Geteuid() == 0 {
 		t.Skip("root ignores the permission bits this fixture relies on")
 	}

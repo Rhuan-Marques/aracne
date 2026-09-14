@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -150,9 +151,58 @@ var fixturePaths = []string{
 
 // --- runners ---------------------------------------------------------------
 
+// grepFamily reports what the `grep` on PATH is, as its own --version says, resolved once.
+var grepFamily = sync.OnceValue(func() string {
+	bin, err := exec.LookPath("grep")
+	if err != nil {
+		return ""
+	}
+	out, _ := exec.Command(bin, "--version").Output()
+	return string(out)
+})
+
+// requireGNUFamilyGrep skips when the system grep is the BSD one.
+//
+// PARITY IS AGAINST A FAMILY, NOT AGAINST WHATEVER IS INSTALLED. This package models GNU grep,
+// which is what `grep` is on Linux and in CI, and what ripgrep and ugrep also follow closely
+// enough to agree row for row. macOS ships BSD grep, and the two genuinely disagree on the
+// things these tests assert: a path-less `-r` prefixes `./`, `-c` on a binary file answers 0
+// and exits 1 where GNU counts the runs, `-r` and `-R` differ about following symlinks,
+// --include and --exclude have their own precedence, the walk emits a directory in readdir
+// order, and the "binary file matches" notice goes to stdout where GNU grep 3.5+ sends it to
+// stderr (which is why the fixtures' own .aracne/topology.db shows up in the expectation on a
+// Mac and not on Linux).
+//
+// Skipping is the honest answer and not a repair: it says these rows are not modelled against
+// this binary. The divergence itself is real and belongs in a decision about what an
+// intercepted search promises on macOS -- not in a test that fails for everyone who runs the
+// suite there.
+func requireGNUFamilyGrep(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		// There is no system grep on Windows to be at parity WITH. Whatever answers on PATH
+		// comes from whichever Git-for-Windows or MSYS install happens to be there, in
+		// whichever version, and it has already been seen to differ from the GNU grep these
+		// rows are written against (`-m1 -A3` printed no trailing context). The surface this
+		// package models is a POSIX shell's.
+		t.Skip("no system grep is part of this platform")
+	}
+	version := grepFamily()
+	if version == "" {
+		t.Skip("grep is not installed")
+	}
+	// "BSD grep, GNU compatible" is how recent macOS spells it, so BSD has to be tested for
+	// before GNU, not after.
+	if strings.Contains(version, "BSD") {
+		t.Skipf("the grep on PATH is BSD grep, whose semantics this package does not model: %s",
+			strings.SplitN(strings.TrimSpace(version), "\n", 2)[0])
+	}
+}
+
 // runGrep runs the real grep and returns stdout and its exit status.
 func runGrep(t *testing.T, dir string, argv ...string) (string, int) {
 	t.Helper()
+	requireGNUFamilyGrep(t)
 	bin, err := exec.LookPath("grep")
 	if err != nil {
 		t.Skip("grep is not installed")

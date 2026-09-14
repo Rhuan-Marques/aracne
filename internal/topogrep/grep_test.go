@@ -369,7 +369,14 @@ func TestAnnotationIsDroppedWhenTooManyDistinctResources(t *testing.T) {
 	// Annotation earns its bytes only at triage scale. A sweep spanning hundreds of
 	// functions gets one header per match, which is the per-line overhead that made this
 	// tool 2.1x `grep -rn`. Above the limit it degrades to plain grep and says so.
+	// Rooted at "." from inside the tree, which is how a real search runs and what makes the
+	// budget below deterministic. annotationFits weighs the annotation against the bytes of the
+	// rows it would sit above, and a row carries the path as rendered -- relative here, absolute
+	// under an absolute root. Rooting this at `dir` put a whole absolute temp path into the
+	// content side of that budget and made the last assertion a function of how long $TMPDIR
+	// happens to be: it held under /tmp and broke under macOS's /var/folders/<32 chars>/T.
 	dir := t.TempDir()
+	t.Chdir(dir)
 	var body strings.Builder
 	resources := map[string]domain.Resource{}
 	path := filepath.Join(dir, "big.go")
@@ -384,7 +391,7 @@ func TestAnnotationIsDroppedWhenTooManyDistinctResources(t *testing.T) {
 	}
 	writeTree(t, dir, map[string]string{"big.go": body.String()})
 
-	res, err := SearchWith(Options{Pattern: "needle", Root: dir, HeadLimit: -1},
+	res, err := SearchWith(Options{Pattern: "needle", Root: ".", HeadLimit: -1},
 		&domain.Topology{Resources: resources})
 	if err != nil {
 		t.Fatal(err)

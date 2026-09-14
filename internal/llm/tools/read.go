@@ -82,23 +82,13 @@ func ResourceSource(mgr *topology.TopologyManager, resourceID string) (string, e
 	return "", fmt.Errorf("resource %q not found in topology", resourceID)
 }
 
-// readPathCandidates returns the input followed by alternative path forms to try
-// when resolving a file: its absolute form, and (for a relative input) its form
-// joined onto the topology root. Duplicates are removed while preserving order.
+// readPathCandidates returns the input followed by alternative path forms to try when
+// resolving a file: its absolute form, its form joined onto the topology root, and the
+// canonical (symlink-resolved) form of each.
+//
+// The list itself lives in helper.PathCandidates. It was written out here and again in
+// universaltools, and the two copies are how the read side came to be one spelling short of
+// the write side: the scan canonicalizes, these did not.
 func readPathCandidates(id, root string) []string {
-	candidates := []string{id}
-	seen := map[string]bool{id: true}
-	add := func(p string) {
-		if p != "" && !seen[p] {
-			seen[p] = true
-			candidates = append(candidates, p)
-		}
-	}
-	if abs, err := filepath.Abs(id); err == nil {
-		add(abs)
-	}
-	if root != "" && !filepath.IsAbs(id) {
-		add(filepath.Join(root, id))
-	}
-	return candidates
+	return helper.PathCandidates(id, root)
 }

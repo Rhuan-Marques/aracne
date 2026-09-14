@@ -571,6 +571,11 @@ func describeNowQuestion(defaultNow bool) tui.Question {
 				Detail: []string{
 					"The whole cost is paid up front, and aracne is as effective as it can be " +
 						"right away.",
+					"",
+					"This is not the only way to sweep: `/descriptions-generate` in your " +
+						"harness describes them all in one go too, on the harness's own " +
+						"agents rather than the describer configured here. To do it that " +
+						"way, answer Lazily now and run it once aracne is set up.",
 				},
 			},
 			{
@@ -582,7 +587,9 @@ func describeNowQuestion(defaultNow bool) tui.Question {
 						"show, so the repo warms up as you work in it -- cold reads are " +
 						"slower until it does.",
 					"",
-					"You can use `arac descriptions generate` later to sweep all missing descriptions in one go, any time.",
+					"You can sweep all the missing ones in one go later, any time: " +
+						"`/descriptions-generate` in your harness, or " +
+						"`arac descriptions generate` from the shell.",
 				},
 			},
 		},

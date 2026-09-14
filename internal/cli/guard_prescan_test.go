@@ -114,7 +114,19 @@ func TestPreToolScanLeavesTheDecisionAlone(t *testing.T) {
 
 	out := firePreToolUse(t, root, "Bash", map[string]interface{}{"command": command})
 
-	if !strings.Contains(out, "updatedInput") || !strings.Contains(out, "cmd -- "+command) {
+	// Decoded, not matched as text: `out` is JSON, so every separator in a Windows path is
+	// escaped in it and a search for the raw command finds nothing there.
+	var payload struct {
+		HookSpecificOutput struct {
+			UpdatedInput struct {
+				Command string `json:"command"`
+			} `json:"updatedInput"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("hook output is not JSON (%v): %s", err, out)
+	}
+	if got := payload.HookSpecificOutput.UpdatedInput.Command; !strings.Contains(got, "cmd -- "+command) {
 		t.Fatalf("interception did not survive the pre-tool scan, got: %s", out)
 	}
 }

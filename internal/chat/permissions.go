@@ -29,9 +29,14 @@ type PermissionPolicy struct {
 
 // Creates a permission policy enforcer scoped to an absolute workspace path.
 func NewPermissionPolicy(workspace string) PermissionPolicy {
-	abs, err := filepath.Abs(workspace)
-	if err == nil {
-		workspace = abs
+	// Resolved only if it is actually relative. filepath.Abs on Windows qualifies a workspace
+	// given as `/tmp/ws` with the current drive, and the paths it is then compared against --
+	// which arrive in the caller's own spelling -- can never be under it, so every read in the
+	// workspace read as a read outside it.
+	if !toolspec.ShellPathIsAbs(workspace) {
+		if abs, err := filepath.Abs(workspace); err == nil {
+			workspace = abs
+		}
 	}
 	return PermissionPolicy{workspace: filepath.Clean(workspace)}
 }
@@ -147,7 +152,10 @@ func stringValues(v any) []string {
 // against the workspace and is inside it by construction, which is the same rule the `command`
 // branch below applies.
 func pathShapedToken(tok string) bool {
-	return filepath.IsAbs(tok)
+	// Absolute AS THE CALLER WROTE IT. filepath.IsAbs is false on Windows for `/etc/passwd`
+	// -- rooted, but carrying no volume -- so an id like that was not even judged path-shaped
+	// there, and the workspace-scope check this feeds never saw it.
+	return toolspec.ShellPathIsAbs(tok)
 }
 
 // Checks whether a file path is contained within the configured workspace directory.
@@ -155,19 +163,22 @@ func (p PermissionPolicy) insideWorkspace(path string) bool {
 	if path == "." {
 		return true
 	}
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(p.workspace, path)
+	// ONE DIALECT ON BOTH SIDES. The workspace comes from this process and the path comes from
+	// the caller, so on Windows they arrive spelled differently -- filepath.Rel then answers
+	// with an error rather than a relationship, and `/etc/passwd` was read as a RELATIVE path
+	// and joined onto the workspace, which is how a read outside it was auto-allowed. Judging
+	// both in the shell's spelling settles it either way: a POSIX path is inside a POSIX
+	// workspace and outside a Windows one, which is exactly what each means.
+	workspace := p.workspace
+	if !toolspec.ShellPathIsAbs(workspace) {
+		if abs, err := filepath.Abs(workspace); err == nil {
+			workspace = abs
+		}
 	}
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return false
+	if !toolspec.ShellPathIsAbs(path) {
+		path = toolspec.ShellPathJoin(workspace, path)
 	}
-	abs = filepath.Clean(abs)
-	rel, err := filepath.Rel(p.workspace, abs)
-	if err != nil {
-		return false
-	}
-	return rel == "." || (!strings.HasPrefix(rel, "..") && !filepath.IsAbs(rel))
+	return toolspec.ShellPathUnder(path, workspace)
 }
 
 // Checks if a tool name is read-only (safe for unprivileged access).

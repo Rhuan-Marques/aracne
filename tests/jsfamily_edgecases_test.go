@@ -52,7 +52,8 @@ func jtFind(topo *domain.Topology, idSuffix string) (domain.Resource, bool) {
 	var hit domain.Resource
 	count := 0
 	for id := range topo.Resources {
-		if strings.HasSuffix(id, idSuffix) {
+		// Slash-normalized: a file's resource id IS its OS path (backslashes on Windows).
+		if strings.HasSuffix(filepath.ToSlash(id), idSuffix) {
 			hit = topo.Resources[id]
 			count++
 		}

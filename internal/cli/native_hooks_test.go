@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -207,8 +208,12 @@ func TestWriteClaudeGuardHookMerges(t *testing.T) {
 		}
 	}
 
-	// Both script files were written.
-	for _, name := range []string{"arac-update-file.sh", "arac-guard.sh"} {
+	// Both script files were written, under the names this platform uses: PowerShell on
+	// Windows, shell everywhere else (claudeGuardHookForOS).
+	for _, name := range []string{
+		claudeNativeEditHookForOS(runtime.GOOS, hooksDir, false).scriptName,
+		claudeGuardHookForOS(runtime.GOOS, hooksDir, false).scriptName,
+	} {
 		if _, err := os.Stat(filepath.Join(hooksDir, name)); err != nil {
 			t.Fatalf("expected hook script %s: %v", name, err)
 		}
@@ -340,7 +345,11 @@ func TestOpenCodeNativeEditPluginHandlesNativeAndWatcherEdits(t *testing.T) {
 // a path that stops existing is a server that silently fails to start. EvalSymlinks turned a
 // stable `bin/arac` into the versioned file behind it, which the next upgrade deletes.
 func TestAracBinaryPrefersAStablePathNameForTheSameFile(t *testing.T) {
-	dir := t.TempDir()
+	// CANONICAL, so the only symlink in play is the Cellar one this test is about:
+	// aracBinaryFrom resolves the executable path, and a temp dir that is itself reached
+	// through a link (macOS /var -> /private/var) would be resolved along with it and fail
+	// every comparison below for a reason that has nothing to do with the behaviour pinned here.
+	dir := helper.CanonicalPath(t.TempDir())
 	versioned := filepath.Join(dir, "Cellar", "arac", "1.0.0", "bin", "arac")
 	if err := os.MkdirAll(filepath.Dir(versioned), 0755); err != nil {
 		t.Fatal(err)

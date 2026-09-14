@@ -43,7 +43,9 @@ func connHasSuffix(res *domain.Resource, conn, suffix string) bool {
 		return false
 	}
 	for _, target := range res.Connections[conn] {
-		if strings.HasSuffix(target, suffix) {
+		// Slash-normalized: a module target is an OS path (backslashes on Windows) while every
+		// suffix written in these tests is forward-slash.
+		if strings.HasSuffix(filepath.ToSlash(target), suffix) {
 			return true
 		}
 	}

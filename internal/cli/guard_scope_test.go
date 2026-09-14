@@ -61,8 +61,12 @@ func TestPrefixSiblingIsNotInsideTheProject(t *testing.T) {
 }
 
 func TestProjectRootIsDerivedFromTheDatabasePath(t *testing.T) {
+	// Compared in the shell's spelling, which is the one this root is ever measured against:
+	// filepath.Join hands projectRoot a `\`-separated path on Windows and it keeps that
+	// spelling, while every path it is compared with comes out of a command. ShellPathUnder
+	// reduces both sides the same way, so only this string equality ever saw the difference.
 	got := projectRoot(filepath.Join(root, ".aracne", "topology.db"))
-	if got != root {
+	if toolspec.ShellPathClean(got) != toolspec.ShellPathClean(root) {
 		t.Errorf("projectRoot = %q, want %q", got, root)
 	}
 	if projectRoot("/somewhere/else/topology.db") != "" {

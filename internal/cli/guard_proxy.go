@@ -190,7 +190,14 @@ func soleReadTarget(command, root string) readTarget {
 	// the other side of the hook do not: `arac cmd` is handed argv a real shell already
 	// split and globbed. So an unexpanded glob or a variable reaches here as one operand
 	// standing for an unknown number of files, and there is no single answer to proxy.
-	if strings.ContainsAny(operand, "*?[]$`~") {
+	//
+	// `~` ONLY WHERE THE SHELL EXPANDS IT, which is the first character. Anywhere else it is
+	// an ordinary filename character, and on Windows an ordinary one in every path under a
+	// shortened directory: `C:\Users\RUNNER~1\...` is what an 8.3 name looks like, and
+	// `PROGRA~1` is the other one everybody has. Treating those as unexpanded globs refused
+	// to proxy any read under them -- every windowed read on such a machine fell through to
+	// the real command, silently.
+	if strings.ContainsAny(operand, "*?[]$`") || strings.HasPrefix(operand, "~") {
 		return readTarget{}
 	}
 	// The same resolver every other guard path uses: absolute as it stands, relative against

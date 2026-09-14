@@ -387,7 +387,8 @@ func connHasSuffix(topo *domain.Topology, id, conn, targetSuffix string) bool {
 		return false
 	}
 	for _, tgt := range r.Connections[conn] {
-		if strings.HasSuffix(tgt, targetSuffix) {
+		// Slash-normalized: a module target is an OS path (backslashes on Windows).
+		if strings.HasSuffix(filepath.ToSlash(tgt), targetSuffix) {
 			return true
 		}
 	}
@@ -400,7 +401,9 @@ func idEndingWith(t *testing.T, topo *domain.Topology, suffix string) string {
 	t.Helper()
 	var found []string
 	for id := range topo.Resources {
-		if strings.HasSuffix(id, suffix) {
+		// Slash-normalized: a file's resource id IS its OS path, so on Windows it carries
+		// backslashes while every suffix written in these tests is forward-slash.
+		if strings.HasSuffix(filepath.ToSlash(id), suffix) {
 			found = append(found, id)
 		}
 	}

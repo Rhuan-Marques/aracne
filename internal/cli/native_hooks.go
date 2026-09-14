@@ -419,7 +419,11 @@ func hookScriptRef(hooksDir, name string, global bool) string {
 		return "${CLAUDE_PROJECT_DIR}/.claude/hooks/" + name
 	}
 	path := filepath.Join(hooksDir, name)
-	if abs, err := filepath.Abs(path); err == nil {
+	// shellAbs, not filepath.Abs: this reference is written into a config for a SHELL to run,
+	// which is why it leaves here slash-spelled, and a hooks directory that is already
+	// absolute must not be re-rooted. filepath.Abs on Windows qualifies `/Users/x/repo` with
+	// the current drive, turning a path the caller gave in full into one under D:.
+	if abs := shellAbs(path); abs != "" {
 		path = abs
 	}
 	return filepath.ToSlash(path)

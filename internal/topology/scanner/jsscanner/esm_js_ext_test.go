@@ -74,23 +74,32 @@ export function App(): number { return Button(); }
 // TypeScript fallback only applies when it does not. JS and TS are independent
 // topologies, so a JavaScript project never reaches a `.ts` file through it.
 func TestResolveSpecifierPrefersExistingJSFile(t *testing.T) {
-	gt := newTopology("/p")
-	gt.Modules["/p/x.js"] = js.JavaScriptModule{ID: "/p/x.js"}
-	gt.Modules["/p/x.ts"] = js.JavaScriptModule{ID: "/p/x.ts"}
-	gt.Modules["/p/y.ts"] = js.JavaScriptModule{ID: "/p/y.ts"}
+	// An absolute root valid on every platform: resolveSpecifier joins the importer's
+	// directory with the specifier through path/filepath, so a module keyed "/p/x.js" -- rooted
+	// but with no VOLUME -- is unreachable on Windows, where that join yields a drive-qualified
+	// path and nothing in this map matched.
+	root, err := filepath.Abs(filepath.FromSlash("/p"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mod := func(name string) string { return filepath.Join(root, name) }
+	gt := newTopology(root)
+	for _, name := range []string{"x.js", "x.ts", "y.ts"} {
+		gt.Modules[mod(name)] = js.JavaScriptModule{ID: mod(name)}
+	}
 
 	cases := []struct {
 		spec, want string
 		ok         bool
 	}{
-		{"./x.js", "/p/x.js", true}, // the real .js file wins
-		{"./x", "/p/x.ts", true},    // extensionless: unchanged TS-first order
-		{"./y.js", "/p/y.ts", true}, // no y.js: its TS source
-		{"./y.mjs", "", false},      // .mjs maps to .mts only
-		{"./z.js", "", false},       // nothing to resolve to
+		{"./x.js", mod("x.js"), true}, // the real .js file wins
+		{"./x", mod("x.ts"), true},    // extensionless: unchanged TS-first order
+		{"./y.js", mod("y.ts"), true}, // no y.js: its TS source
+		{"./y.mjs", "", false},        // .mjs maps to .mts only
+		{"./z.js", "", false},         // nothing to resolve to
 	}
 	for _, c := range cases {
-		got, ok := resolveSpecifier("/p/main.ts", c.spec, gt)
+		got, ok := resolveSpecifier(mod("main.ts"), c.spec, gt)
 		if got != c.want || ok != c.ok {
 			t.Errorf("resolveSpecifier(%q) = (%q, %v), want (%q, %v)", c.spec, got, ok, c.want, c.ok)
 		}

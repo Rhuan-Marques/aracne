@@ -11,12 +11,23 @@ import (
 	"github.com/Rhuan-Marques/aracne/internal/toolspec"
 )
 
+// setHome points os.UserHomeDir at dir on every platform: it reads USERPROFILE on Windows and
+// HOME everywhere else, so setting only HOME sent a --global setup into the REAL user profile
+// there -- the fixture stayed empty and the run wrote outside the test.
+func setHome(t *testing.T, dir string) {
+	t.Helper()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+}
+
 func TestOpenCodePaths_Local(t *testing.T) {
 	// Hermetic: a project install is rooted at the project the working directory is in.
 	t.Chdir(t.TempDir())
 	configPath, configDir, agentsMdPath := opencodePaths(false)
-	if configPath != ".opencode/opencode.json" {
-		t.Fatalf("configPath = %q, want .opencode/opencode.json", configPath)
+	// filepath.Join, because that is what builds them: these paths are opened, not printed,
+	// and the separator is the platform's.
+	if want := filepath.Join(".opencode", "opencode.json"); configPath != want {
+		t.Fatalf("configPath = %q, want %q", configPath, want)
 	}
 	if configDir != ".opencode" {
 		t.Fatalf("configDir = %q, want .opencode", configDir)
@@ -28,7 +39,7 @@ func TestOpenCodePaths_Local(t *testing.T) {
 
 func TestOpenCodePaths_Global(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 
 	configPath, configDir, agentsMdPath := opencodePaths(true)
 	wantConfigPath := filepath.Join(home, ".config", "opencode", "opencode.json")
@@ -52,11 +63,11 @@ func TestClaudePaths_Local(t *testing.T) {
 	if mcpPath != ".mcp.json" {
 		t.Fatalf("mcpPath = %q, want .mcp.json", mcpPath)
 	}
-	if commandsDir != ".claude/commands" {
-		t.Fatalf("commandsDir = %q, want .claude/commands", commandsDir)
+	if want := filepath.Join(".claude", "commands"); commandsDir != want {
+		t.Fatalf("commandsDir = %q, want %q", commandsDir, want)
 	}
-	if agentsDir != ".claude/agents" {
-		t.Fatalf("agentsDir = %q, want .claude/agents", agentsDir)
+	if want := filepath.Join(".claude", "agents"); agentsDir != want {
+		t.Fatalf("agentsDir = %q, want %q", agentsDir, want)
 	}
 	if claudeMdPath != "CLAUDE.md" {
 		t.Fatalf("claudeMdPath = %q, want CLAUDE.md", claudeMdPath)
@@ -65,7 +76,7 @@ func TestClaudePaths_Local(t *testing.T) {
 
 func TestClaudePaths_Global(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 
 	mcpPath, commandsDir, agentsDir, claudeMdPath := claudePaths(true)
 	wantMcpPath := filepath.Join(home, ".claude.json")
@@ -587,7 +598,7 @@ func TestSetupRendersTheWizardModelEachHarnessCanRun(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			t.Chdir(dir)
-			t.Setenv("HOME", filepath.Join(dir, "home"))
+			setHome(t, filepath.Join(dir, "home"))
 			cfg := helper.DefaultConfig()
 			initAnswers{
 				Harness: harnessBoth, Mode: helper.ModeCLI, Verbosity: helper.ContractVerbosityLow,

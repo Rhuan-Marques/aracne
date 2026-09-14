@@ -14,7 +14,12 @@ import (
 // beside it, exactly as a scan that just read them would. It returns the root and manifest path.
 func writeDiffFixture(t *testing.T, files map[string]string) (string, string) {
 	t.Helper()
-	dir := t.TempDir()
+	// CANONICAL, because that is what a manifest written by a real scan holds: every scan verb
+	// resolves its root through CanonicalPath before it walks, and DiffScanFiles resolves the
+	// root it is handed for the same reason. A fixture that stamps a manifest under an
+	// unresolved temp dir -- macOS hands every t.TempDir() out under /var, a symlink to
+	// /private/var -- is diffing two spellings of one tree against each other.
+	dir := CanonicalPath(t.TempDir())
 	var paths []string
 	for rel, body := range files {
 		p := filepath.Join(dir, filepath.FromSlash(rel))

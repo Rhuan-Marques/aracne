@@ -33,7 +33,7 @@ func setupResumeTest(t *testing.T, serverURL string) (*Manager, *Session, func()
 	dbPath := filepath.Join(dir, "topology.db")
 
 	collect := func(e Event) {}
-	manager, mgrErr := NewManager(dbPath, dir, collect)
+	manager, mgrErr := newTestManager(t, dbPath, dir, collect)
 	if mgrErr != nil {
 		t.Fatalf("NewManager: %v", mgrErr)
 	}
