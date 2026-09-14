@@ -157,7 +157,12 @@ func cdTarget(seg commandSegment, command string) (dir string, isCd, known bool)
 		}
 		target = filepath.Join(home, strings.TrimPrefix(target, "~"))
 	}
-	if target == "" || target == "-" || strings.ContainsAny(target, "$`*?[~") {
+	// `~` ONLY AT THE FRONT, where the shell expands it -- the two forms it can expand are
+	// resolved just above, so a leading one left here is `~user`, which this cannot resolve.
+	// Anywhere else it is an ordinary filename character, and on Windows an ordinary one in
+	// every 8.3 path: `cd C:\Users\RUNNER~1\...` read as unknowable, so the operands after
+	// it were never rebased and a read in another directory was judged against the project.
+	if target == "" || target == "-" || strings.ContainsAny(target, "$`*?[") || strings.HasPrefix(target, "~") {
 		return "", true, false
 	}
 	return target, true, true

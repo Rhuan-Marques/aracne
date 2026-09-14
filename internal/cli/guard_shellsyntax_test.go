@@ -15,6 +15,14 @@ import (
 // spliced `arac cmd --` into what bash hands echo as an argument: the output the command
 // printed changed, with nothing to show it had.
 func TestBackslashEscapesDoNotSplitCommands(t *testing.T) {
+	// THE POSIX READING, pinned rather than inherited: on Windows a backslash is a path
+	// separator and splitCommandSegments does not treat it as an escape at all (see
+	// backslashEscapes). What this test is about is the escape itself, so it asks for the
+	// reading it is describing and gets it on every platform.
+	orig := backslashEscapes
+	backslashEscapes = true
+	t.Cleanup(func() { backslashEscapes = orig })
+
 	texts := func(command string) []string {
 		var out []string
 		for _, s := range splitCommandSegments(command) {
@@ -58,6 +66,14 @@ func TestBackslashEscapesDoNotSplitCommands(t *testing.T) {
 // The rewrite end to end: an escaped separator no longer produces a splice, a real one still
 // does, and the command text around the splice is the model's own, byte for byte.
 func TestEscapedSeparatorsAreNotRewrittenInto(t *testing.T) {
+	// THE POSIX READING, pinned rather than inherited: on Windows a backslash is a path
+	// separator and splitCommandSegments does not treat it as an escape at all (see
+	// backslashEscapes). What this test is about is the escape itself, so it asks for the
+	// reading it is describing and gets it on every platform.
+	orig := backslashEscapes
+	backslashEscapes = true
+	t.Cleanup(func() { backslashEscapes = orig })
+
 	root, dbPath := scannedProject(t)
 	app := filepath.Join(root, "app.go")
 

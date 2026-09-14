@@ -29,9 +29,14 @@ type PermissionPolicy struct {
 
 // Creates a permission policy enforcer scoped to an absolute workspace path.
 func NewPermissionPolicy(workspace string) PermissionPolicy {
-	abs, err := filepath.Abs(workspace)
-	if err == nil {
-		workspace = abs
+	// Resolved only if it is actually relative. filepath.Abs on Windows qualifies a workspace
+	// given as `/tmp/ws` with the current drive, and the paths it is then compared against --
+	// which arrive in the caller's own spelling -- can never be under it, so every read in the
+	// workspace read as a read outside it.
+	if !toolspec.ShellPathIsAbs(workspace) {
+		if abs, err := filepath.Abs(workspace); err == nil {
+			workspace = abs
+		}
 	}
 	return PermissionPolicy{workspace: filepath.Clean(workspace)}
 }
