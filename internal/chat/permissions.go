@@ -158,25 +158,22 @@ func (p PermissionPolicy) insideWorkspace(path string) bool {
 	if path == "." {
 		return true
 	}
+	// ONE DIALECT ON BOTH SIDES. The workspace comes from this process and the path comes from
+	// the caller, so on Windows they arrive spelled differently -- filepath.Rel then answers
+	// with an error rather than a relationship, and `/etc/passwd` was read as a RELATIVE path
+	// and joined onto the workspace, which is how a read outside it was auto-allowed. Judging
+	// both in the shell's spelling settles it either way: a POSIX path is inside a POSIX
+	// workspace and outside a Windows one, which is exactly what each means.
+	workspace := p.workspace
+	if !toolspec.ShellPathIsAbs(workspace) {
+		if abs, err := filepath.Abs(workspace); err == nil {
+			workspace = abs
+		}
+	}
 	if !toolspec.ShellPathIsAbs(path) {
-		path = filepath.Join(p.workspace, path)
-	} else if !filepath.IsAbs(path) {
-		// Rooted in the caller's dialect but not in this platform's: a POSIX path on Windows.
-		// It names somewhere outside any workspace this process has, and joining it onto the
-		// workspace -- which is what the branch above would do -- is how `/etc/passwd` came
-		// back as an in-workspace read there.
-		return false
+		path = toolspec.ShellPathJoin(workspace, path)
 	}
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return false
-	}
-	abs = filepath.Clean(abs)
-	rel, err := filepath.Rel(p.workspace, abs)
-	if err != nil {
-		return false
-	}
-	return rel == "." || (!strings.HasPrefix(rel, "..") && !filepath.IsAbs(rel))
+	return toolspec.ShellPathUnder(path, workspace)
 }
 
 // Checks if a tool name is read-only (safe for unprivileged access).

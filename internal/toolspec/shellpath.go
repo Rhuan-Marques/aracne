@@ -23,8 +23,13 @@ import (
 // why nothing there can change.
 
 // ShellPathIsAbs reports whether p is absolute as the command that carries it means it.
+//
+// The leading-separator test covers BOTH dialects, which matters for a path that has been
+// through filepath.Join on Windows: joining onto "/repo" yields `\repo\...`, rooted but
+// carrying no volume, and filepath.IsAbs calls that relative. Resolving it against the working
+// directory then bolts the current drive onto a path the caller had already given in full.
 func ShellPathIsAbs(p string) bool {
-	return strings.HasPrefix(p, "/") || filepath.IsAbs(p)
+	return strings.HasPrefix(p, "/") || strings.HasPrefix(p, string(filepath.Separator)) || filepath.IsAbs(p)
 }
 
 // ShellPathHasSeparator reports whether p carries a directory separator of either dialect.

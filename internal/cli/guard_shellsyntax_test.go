@@ -174,3 +174,37 @@ func TestACdOutOfTheProjectIsNeitherRefusedNorNudged(t *testing.T) {
 		t.Errorf("%q reads an indexed file and keeps its nudge", home)
 	}
 }
+
+// TestABackslashIsAPathSeparatorWhereItIsOne pins the fork in splitCommandSegments, from both
+// sides, on any platform.
+//
+// A Windows agent writes `head -5 C:\Users\me\repo\a.go`, and read as a POSIX shell would read
+// it that is the single word `C:Usersmerepoa.go` -- a file that does not exist, so the guard
+// could not tell the read was of an indexed file, could not place a `cd`, and could not proxy a
+// window. Interception stopped there for every natively-spelled path. The variable is what lets
+// this be tested where the bug is not.
+func TestABackslashIsAPathSeparatorWhereItIsOne(t *testing.T) {
+	const command = `head -5 C:\Users\me\repo\CHANGELOG.md`
+	orig := backslashEscapes
+	t.Cleanup(func() { backslashEscapes = orig })
+
+	backslashEscapes = false // the Windows reading
+	segs := splitCommandSegments(command)
+	if len(segs) != 1 {
+		t.Fatalf("one command, got %d segments: %+v", len(segs), segs)
+	}
+	argv := segmentArgv(segs[0])
+	if len(argv) != 3 || argv[2] != `C:\Users\me\repo\CHANGELOG.md` {
+		t.Errorf("argv = %q, want the path whole", argv)
+	}
+
+	backslashEscapes = true // the POSIX reading, which is what Unix must keep
+	argv = segmentArgv(splitCommandSegments(command)[0])
+	if len(argv) != 3 || argv[2] != "C:UsersmerepoCHANGELOG.md" {
+		t.Errorf("argv = %q, want the escapes consumed as a shell consumes them", argv)
+	}
+	// And the case the escape handling exists for keeps working under that reading.
+	if got := len(splitCommandSegments(`echo \; grep x f`)); got != 1 {
+		t.Errorf("an escaped `;` splits nothing: got %d segments", got)
+	}
+}
