@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"runtime/debug"
 
 	"github.com/Rhuan-Marques/aracne/internal/buildinfo"
 	"github.com/Rhuan-Marques/aracne/internal/cli"
@@ -14,13 +15,35 @@ import (
 //
 // An un-stamped build reports "dev". `arac --version` previously printed the usage banner,
 // so nothing — including the benchmark harness's fixture provenance — could record which
-// binary produced a topology. RELEASE_PLAN §6 lists this as a v1 prerequisite.
+// binary produced a topology.
 var Version = "dev"
+
+// version is Version, or the module version the toolchain recorded when no ldflags were
+// passed.
+//
+// `go install github.com/Rhuan-Marques/aracne/cmd/arac@<tag>` -- the install the README
+// documents, and so the one most people run -- does not pass ldflags, so v1.0.0-rc.1
+// installed that way reported "dev" while the binary downloaded from that same release
+// reported the tag. Two classes of released binary, and the headline path produced the
+// useless one. The toolchain had the answer all along: it stamps the module version into
+// build info, and nothing read it.
+func version() string {
+	if Version != "dev" {
+		return Version // an ldflags build -- the Makefile and release.yml both pass it
+	}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		// "(devel)" is what a plain `go build` in a checkout records: no better than "dev".
+		if v := info.Main.Version; v != "" && v != "(devel)" {
+			return v
+		}
+	}
+	return Version
+}
 
 // main dispatches Aracne subcommands
 func main() {
 	// Hand the stamped version to the packages that report it over a protocol.
-	buildinfo.Version = Version
+	buildinfo.Version = version()
 	if len(os.Args) < 2 {
 		cli.PrintUsage()
 		return
@@ -28,7 +51,7 @@ func main() {
 
 	switch os.Args[1] {
 	case "--version", "-v", "version":
-		fmt.Printf("arac %s\n", Version)
+		fmt.Printf("arac %s\n", version())
 	case "--help", "-h", "help":
 		// Asked for, so stdout and status 0 -- like a bare `arac`, unlike a typo below.
 		cli.PrintUsage()
