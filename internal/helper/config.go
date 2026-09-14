@@ -378,7 +378,40 @@ type FeaturesSection struct {
 	// This gates the COMMAND, not internal/llm/agent -- `arac descriptions generate` runs
 	// its executors through the same package and is a shipping 1.0 feature.
 	Agent bool `json:"agent"`
+
+	// WarningReads attaches the FULL read of the code a topology warning names to the
+	// warning report itself, instead of the one line naming the two ids.
+	//
+	// WHAT IT BUYS. The report an edit comes back with is a summary -- "[signature_changed]
+	// f changed signature, verify caller g (source: ..., target: ...)". Acting on it means
+	// reading g, which is another turn, and every turn re-sends the whole transcript. The
+	// code is already resolvable from the ids the warning carries, so the expansion is one
+	// batched `arac read` of the sites to fix: the model can go straight to the edit.
+	//
+	// Off by default because it is not free. A warning report is emitted after an edit, on
+	// the agent's critical path, and expanding it spends bytes on code the model may
+	// already have in context. WarningReadLimit is the ceiling that keeps a wide breakage
+	// from dumping a subgraph.
+	WarningReads bool `json:"warning_reads"`
+
+	// WarningReadLimit caps how many warnings WarningReads expands. The rest still appear
+	// in the summary above the reads, and `arac warnings list` still has all of them.
+	//
+	// THREE STATES, and 0 is not the default. Absent (nil) means
+	// DefaultWarningReadLimit; a value of 0 or lower means NO limit, which is a deliberate
+	// choice a project makes and not what an untouched config should silently mean.
+	// EffectiveWarningReadLimit() is the only reader.
+	WarningReadLimit *int `json:"warning_read_limit,omitempty"`
 }
+
+// DefaultWarningReadLimit is how many warnings features.warning_reads expands when
+// features.warning_read_limit is absent.
+//
+// Five, because the expansion competes with the transcript it saves. A signature change with
+// eleven callers is the case this feature exists for AND the case that would bury the report
+// it is attached to; five sites is enough to fix the common breakage in one turn, and the
+// summary above still names every one of them.
+const DefaultWarningReadLimit = 5
 
 // The four modes of Config.Mode.
 //
@@ -1501,6 +1534,22 @@ func (c *Config) ChatEnabled() bool { return c.Features.Chat }
 
 // AgentEnabled reports whether `arac agent` is turned on for this project.
 func (c *Config) AgentEnabled() bool { return c.Features.Agent }
+
+// WarningReadsEnabled reports whether a topology warning is reported with the full read of
+// the code it names attached.
+func (c *Config) WarningReadsEnabled() bool { return c.Features.WarningReads }
+
+// EffectiveWarningReadLimit resolves features.warning_read_limit. It returns 0 for "no
+// limit", so the one comparison a caller needs is `limit > 0 && len(ws) > limit`.
+func (c *Config) EffectiveWarningReadLimit() int {
+	if c.Features.WarningReadLimit == nil {
+		return DefaultWarningReadLimit
+	}
+	if n := *c.Features.WarningReadLimit; n > 0 {
+		return n
+	}
+	return 0
+}
 
 // Applies defaults to config fields for scan modes, file limits, visibility filters, descriptions, optimization rules, and LLM agents.
 func normalizeConfig(c *Config) {

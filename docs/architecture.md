@@ -427,6 +427,18 @@ shell command happened to be unclassified, and blamed on it. The header says
 "Topology re-synced." and nothing about a cause, because the reporter reports what is new in
 the table however it got there.
 
+Every entrance to that report — `arac edit`, `arac write`, `arac update-file` and the drift
+check — funnels through `driftWarningReport` (`internal/cli/warning_reads.go`), so a warning
+reads identically whichever produced the change. Behind `features.warning_reads` (off by
+default) it also attaches the **full read of the code the warnings name**: the fix site first,
+then the counterpart it has to match — the caller and the re-signatured callee, the implementer
+and the interface it no longer satisfies. `features.warning_read_limit` caps how many warnings
+are expanded (5; `0` or lower means no limit). It is ONE batched `Read.ReadIDs` call for the
+whole report, which is what lets the shared render ledger (§8, `renderstate`) emit a callee
+named by eleven warnings exactly once. Ids the graph no longer holds are dropped before the
+call — `node_removed` and `use_missing_node` name a missing target by construction — so the
+report never comes back with an `# UNRESOLVED:` block about its own warning.
+
 ## 10. Languages & known quirks
 
 - **Go** — stdlib `go/ast` parser; richest support (cross-package return-type

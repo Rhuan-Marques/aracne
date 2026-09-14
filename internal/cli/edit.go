@@ -65,7 +65,7 @@ func RunEdit() {
 		os.Exit(1)
 	}
 	fmt.Println(out)
-	if msg := formatDriftWarnings(unreportedWarnings(manager.DbPath())); msg != "" {
+	if msg := driftWarningReport(manager.DbPath(), unreportedWarnings(manager.DbPath())); msg != "" {
 		fmt.Println()
 		fmt.Println(msg)
 	}

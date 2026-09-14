@@ -26,9 +26,10 @@ const guardScanTimeout = 20 * time.Second
 // report -- the channel the contract says has no substitute.
 //
 // driftCheck now shares ONE budget across its two stages (see driftCheckBudget), so the two
-// paths cost at most guardScanTimeout plus the small checks around them. This leaves margin
-// over that rather than tracking it exactly: the number is a ceiling on a pathological run, not
-// a target.
+// paths cost at most guardScanTimeout plus the small checks around them -- and, where
+// features.warning_reads is on, warningReadBudget on top of it, for a post-tool worst case of
+// 20 + 10. This leaves margin over that rather than tracking it exactly: the number is a
+// ceiling on a pathological run, not a target.
 const GuardHookTimeoutSeconds = 45
 
 // driftCheckBudget is the wall clock the whole post-tool drift check may spend, SHARED by the
@@ -179,7 +180,7 @@ func driftCheck(dbPath, toolName string) string {
 	// Recorded here because nothing downstream can see it: hook output reaches the model as
 	// additionalContext, which the transcript does not carry. See logGuardWarnings.
 	logGuardWarnings(toolName, fresh)
-	return formatDriftWarnings(fresh)
+	return driftWarningReport(dbPath, fresh)
 }
 
 // indexHasDrifted reports whether any file on disk differs from what the manifest recorded.

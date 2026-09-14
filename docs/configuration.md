@@ -210,6 +210,8 @@ here never turns something on for an existing user.
 | `bug_management` | `false` | The bug pipeline: `arac setup` writes the hunter/judge/solver agents and their commands, the `bug_*` tools become servable, the `arac bug` usage block prints, and viz exposes `/api/bugs`. `arac bug` stays dispatchable either way. |
 | `chat` | `false` | The viz Chat tab: the `/api/chat`, `/api/chat/` and `/api/context-graph` routes, and the Chat nav item. |
 | `agent` | `false` | `arac agent`, the self-contained REPL. This gates the *command*, not `internal/llm/agent` — `descriptions generate` runs its executors through the same package. |
+| `warning_reads` | `false` | Attaches the full `arac read` of the code a topology warning names to the warning report itself, instead of the line naming its two ids. The model fixes the breakage from that read instead of spending a turn opening the caller. One batched read for the whole report, so the [render ledger](architecture.md) still emits a shared callee, import block or context entry once. |
+| `warning_read_limit` | `5` | How many warnings `warning_reads` expands. `0` or lower means **no limit**; an absent key means 5, so only a value a project actually writes switches the ceiling off. The warnings past the limit still appear in the summary above the reads, and `arac warnings list` still has all of them. |
 
 > A new flag needs adding to `validConfig` as well as to the struct. See the comment there for
 > the silent failure that omission causes.

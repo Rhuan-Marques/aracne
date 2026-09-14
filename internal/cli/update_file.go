@@ -35,7 +35,7 @@ func RunUpdateFile(args []string) {
 		os.Exit(1)
 	}
 	fmt.Printf("Warning number %d\n", len(warnings))
-	if msg := formatDriftWarnings(warnings); msg != "" {
+	if msg := driftWarningReport(dbPath, warnings); msg != "" {
 		fmt.Println(msg)
 	}
 }
@@ -94,7 +94,7 @@ func runClaudeUpdateFileHook(input io.Reader, output io.Writer) {
 	}
 	// Rendered the way the guard renders the same list, so a warning reads identically
 	// whichever path produced the change.
-	if msg := formatDriftWarnings(unreportedWarnings(dbPath)); msg != "" {
+	if msg := driftWarningReport(dbPath, unreportedWarnings(dbPath)); msg != "" {
 		parts = append(parts, msg)
 	}
 	if len(parts) == 0 {

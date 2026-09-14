@@ -177,3 +177,87 @@ func TestFeaturesOnlyChatAndAgentSurviveEnsureConfig(t *testing.T) {
 		})
 	}
 }
+
+// TestWarningReadsDefaultOff pins the default for the expansion feature. It is attached to
+// every warning report, on the agent's critical path, so an existing project must not start
+// paying for it by upgrading.
+func TestWarningReadsDefaultOff(t *testing.T) {
+	if DefaultConfig().WarningReadsEnabled() {
+		t.Error("features.warning_reads must default to false")
+	}
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"read":{"max_file_size":1024}}`), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if LoadConfig(path).WarningReadsEnabled() {
+		t.Fatal("a config with no features key must decode with warning_reads off")
+	}
+}
+
+// TestFeaturesOnlyWarningReadsSurvivesEnsureConfig runs the migration edge for the new flag:
+// turning a feature on by hand is the single edit a user makes to this file, and a config whose
+// only non-zero field is `features` must not be judged legacy and replaced with defaults.
+func TestFeaturesOnlyWarningReadsSurvivesEnsureConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"features":{"warning_reads":true}}`), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if !LoadConfig(path).WarningReadsEnabled() {
+		t.Fatal("a features-only config must load with the feature on")
+	}
+	if !EnsureConfig(path).WarningReadsEnabled() {
+		t.Fatal("EnsureConfig overwrote a hand-enabled feature with defaults")
+	}
+	if !LoadConfig(path).WarningReadsEnabled() {
+		t.Fatal("the on-disk file lost the feature after EnsureConfig")
+	}
+}
+
+// TestEffectiveWarningReadLimit pins the three states. ABSENT IS NOT ZERO: an untouched config
+// means DefaultWarningReadLimit, and only a value a project actually wrote -- 0 or lower --
+// means no limit at all.
+func TestEffectiveWarningReadLimit(t *testing.T) {
+	if got := DefaultConfig().EffectiveWarningReadLimit(); got != DefaultWarningReadLimit {
+		t.Errorf("an absent warning_read_limit = %d, want %d", got, DefaultWarningReadLimit)
+	}
+	for _, tc := range []struct {
+		name string
+		json string
+		want int
+	}{
+		{"absent", `{"features":{"warning_reads":true}}`, DefaultWarningReadLimit},
+		{"explicit", `{"features":{"warning_reads":true,"warning_read_limit":3}}`, 3},
+		{"zero is unlimited", `{"features":{"warning_reads":true,"warning_read_limit":0}}`, 0},
+		{"negative is unlimited", `{"features":{"warning_reads":true,"warning_read_limit":-1}}`, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(path, []byte(tc.json), 0o644); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			if got := LoadConfig(path).EffectiveWarningReadLimit(); got != tc.want {
+				t.Errorf("EffectiveWarningReadLimit() = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestWarningReadLimitRoundTrips checks the pointer survives save/load -- an explicit 0 must
+// come back as an explicit 0 and not as the default.
+func TestWarningReadLimitRoundTrips(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfg := DefaultConfig()
+	cfg.Features.WarningReads = true
+	zero := 0
+	cfg.Features.WarningReadLimit = &zero
+	if err := SaveConfig(cfg, path); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+	loaded := LoadConfig(path)
+	if !loaded.WarningReadsEnabled() {
+		t.Fatal("features.warning_reads did not round-trip")
+	}
+	if got := loaded.EffectiveWarningReadLimit(); got != 0 {
+		t.Fatalf("an explicit 0 came back as %d -- the default was substituted for it", got)
+	}
+}
