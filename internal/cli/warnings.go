@@ -70,6 +70,16 @@ func RunWarningsList(args []string) {
 				kind = k
 				i++
 			}
+		default:
+			// A TYPO IS A FAILURE, for the reason --kind above is validated: the failure
+			// mode is silence. `arac warnings list --raed` printed the listing, ignored the
+			// flag and exited 0 -- indistinguishable from a flag that ran and found nothing,
+			// which is the reading a caller is most likely to believe. It cost a real
+			// debugging session: `--read` typed at an older binary that predates the flag
+			// looked exactly like a broken feature.
+			fmt.Fprintf(os.Stderr, "Error: unknown argument %q\n", args[i])
+			fmt.Fprintln(os.Stderr, "Usage: arac warnings list [--db <path>] [--source <id>] [--target <id>] [--kind <kind>] [--read]")
+			os.Exit(1)
 		}
 	}
 

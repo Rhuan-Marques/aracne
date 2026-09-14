@@ -2,6 +2,7 @@ package cli
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -252,5 +253,38 @@ func TestWarningsListToolReadMatchesTheOtherSurfaces(t *testing.T) {
 	}
 	if strings.Contains(without, "Warned code") {
 		t.Fatalf("the tool expanded without read=true:\n%s", without)
+	}
+}
+
+// An unrecognized argument must FAIL, for the reason --kind is validated: the failure mode is
+// silence. `arac warnings list --raed` printed the listing, ignored the flag and exited 0 --
+// which reads as "the flag ran and found nothing", and cost a real debugging session when
+// `--read` was typed at a binary that predated the flag.
+//
+// Driven as a subprocess because the failure is an os.Exit(1), which a normal call would take
+// the test binary down with.
+func TestWarningsListRejectsAnUnknownFlag(t *testing.T) {
+	if os.Getenv("ARAC_WARNINGS_FLAG_CHILD") == "1" {
+		RunWarningsList([]string{"--raed"})
+		return
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(exe, "-test.run=TestWarningsListRejectsAnUnknownFlag")
+	cmd.Env = append(os.Environ(), "ARAC_WARNINGS_FLAG_CHILD=1")
+	cmd.Dir = warnReadProject(t, "", "CallA")
+	out, err := cmd.CombinedOutput()
+
+	if err == nil {
+		t.Fatalf("an unknown flag exited 0:\n%s", out)
+	}
+	if !strings.Contains(string(out), `unknown argument "--raed"`) {
+		t.Errorf("the error does not name the argument:\n%s", out)
+	}
+	// And the usage line has to carry the real flags, or the message is a dead end.
+	if !strings.Contains(string(out), "--read") {
+		t.Errorf("the usage line does not list the flags:\n%s", out)
 	}
 }

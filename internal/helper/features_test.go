@@ -3,6 +3,7 @@ package helper
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
@@ -259,5 +260,51 @@ func TestWarningReadLimitRoundTrips(t *testing.T) {
 	}
 	if got := loaded.EffectiveWarningReadLimit(); got != 0 {
 		t.Fatalf("an explicit 0 came back as %d -- the default was substituted for it", got)
+	}
+}
+
+// TestValidateRejectsAnUnknownFeatureKey is the "silent failure" guard for the one section the
+// documentation asks users to hand-edit.
+//
+// Every feature is a bool defaulting to off, so a misspelled key is indistinguishable from a
+// key that is working and set to false: encoding/json drops it without a word and the feature
+// simply never turns on. Measured on a real session -- `"warnings_reads": true`, plural, was
+// written and the feature's absence was then reported as a bug in the feature.
+func TestValidateRejectsAnUnknownFeatureKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"features":{"warnings_reads":true}}`), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	err := LoadConfig(path).Validate()
+	if err == nil {
+		t.Fatal("a misspelled feature key validated clean")
+	}
+	// By name, and with the alternatives: the whole point is that the user can see the typo.
+	if !strings.Contains(err.Error(), `"warnings_reads"`) {
+		t.Errorf("the error does not name the offending key: %v", err)
+	}
+	if !strings.Contains(err.Error(), "warning_reads") {
+		t.Errorf("the error does not name the key that was meant: %v", err)
+	}
+}
+
+// The check must not fire on the keys the section really has, on an absent features block, or
+// on a config built in code -- Validate runs on the way into setup, init, serve and chat.
+func TestValidateAcceptsTheRealFeatureKeys(t *testing.T) {
+	for _, body := range []string{
+		`{"features":{"warning_reads":true,"warning_read_limit":3,"bug_management":true,"chat":true,"agent":true}}`,
+		`{"features":{}}`,
+		`{"read":{"max_file_size":1024}}`,
+	} {
+		path := filepath.Join(t.TempDir(), "config.json")
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		if err := LoadConfig(path).Validate(); err != nil {
+			t.Errorf("%s: %v", body, err)
+		}
+	}
+	if err := DefaultConfig().Validate(); err != nil {
+		t.Errorf("a config built in code must validate: %v", err)
 	}
 }

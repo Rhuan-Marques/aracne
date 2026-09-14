@@ -548,6 +548,57 @@ type Config struct {
 	// spelled is what the file said for the three enum keys normalizeConfig coerces, captured
 	// before it coerced them. Nil on a config built in code rather than loaded. See Validate.
 	spelled *spelledEnums
+
+	// unknownFeatures is the keys the `features` object carried that FeaturesSection has no
+	// field for, captured at decode time because nothing downstream can see them: an unknown
+	// JSON key is dropped by Unmarshal without a word.
+	//
+	// WHY THIS ONE SECTION. Turning a feature on is the single edit the documentation asks a
+	// user to make to this file by hand, and every feature is a bool that defaults to off --
+	// so a misspelled key is indistinguishable from a key that is working and set to false.
+	// Measured on a real session: `"warnings_reads": true` (plural) was written, silently
+	// dropped, and the feature's absence was reported as a bug in the feature. See Validate.
+	unknownFeatures []string
+}
+
+// featuresSchemaKeys is the key set FeaturesSection actually declares, read off its own tags so
+// it cannot fall behind a field added later -- the same reflection configSchemaKeys uses.
+var featuresSchemaKeys = func() map[string]bool {
+	out := map[string]bool{}
+	t := reflect.TypeOf(FeaturesSection{})
+	for i := 0; i < t.NumField(); i++ {
+		if name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ","); name != "" && name != "-" {
+			out[name] = true
+		}
+	}
+	return out
+}()
+
+// unknownFeatureKeys returns the keys under `features` that FeaturesSection does not declare.
+func unknownFeatureKeys(raw []byte) []string {
+	var doc struct {
+		Features map[string]json.RawMessage `json:"features"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil
+	}
+	var unknown []string
+	for key := range doc.Features {
+		if !featuresSchemaKeys[key] {
+			unknown = append(unknown, key)
+		}
+	}
+	sort.Strings(unknown)
+	return unknown
+}
+
+// quoteAll renders a key list for an error message.
+func quoteAll(xs []string) []string {
+	out := make([]string, len(xs))
+	for i, x := range xs {
+		out[i] = fmt.Sprintf("%q", x)
+	}
+	return out
 }
 
 // spelledEnums pairs each coerced enum with the value it was coerced FROM and TO. The "to" half
@@ -842,6 +893,19 @@ func (c *Config) spelledValues() (mode, verbosity, contextFilter string) {
 func (c *Config) Validate() error {
 	if err := ValidateReadKinds(c.Read.Kinds); err != nil {
 		return fmt.Errorf("read.kinds: %w", err)
+	}
+	// Reported by NAME, with the nearest real key, because the alternative is what actually
+	// happens: the flag is dropped, the feature stays off, and the user reads that as the
+	// feature being broken.
+	if len(c.unknownFeatures) > 0 {
+		known := make([]string, 0, len(featuresSchemaKeys))
+		for k := range featuresSchemaKeys {
+			known = append(known, k)
+		}
+		sort.Strings(known)
+		return fmt.Errorf("features: unknown key(s) %s -- a key this section does not declare is "+
+			"dropped silently and its feature stays off (valid: %s)",
+			strings.Join(quoteAll(c.unknownFeatures), ", "), strings.Join(known, ", "))
 	}
 	mode, verbosity, contextFilter := c.spelledValues()
 	switch strings.ToLower(strings.TrimSpace(mode)) {
@@ -1674,6 +1738,7 @@ func LoadConfigRead(path string) (cfg *Config, ok bool, readErr error) {
 	if err := json.Unmarshal(data, &loaded); err != nil {
 		return DefaultConfig(), false, nil
 	}
+	loaded.unknownFeatures = unknownFeatureKeys(data)
 	normalizeConfig(&loaded)
 	return &loaded, true, nil
 }
