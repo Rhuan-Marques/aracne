@@ -34,3 +34,8 @@ go.work.sum
 .claude/
 .opencode/
 .rtk/
+
+# Internal defect registers and audit reports. Kept locally, never published:
+# they are working notes about this repo's own bugs, not documentation.
+docs/audits/
+bin/
