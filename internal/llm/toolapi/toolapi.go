@@ -1,4 +1,16 @@
-package tools
+// Package toolapi is the contract an LLM-callable tool implements, and nothing else.
+//
+// WHY IT IS ITS OWN PACKAGE. This lived in internal/llm/tools beside the twelve tool
+// IMPLEMENTATIONS, so every package that wanted to describe a tool had to import every tool
+// that exists. Six packages under internal/llm/languages did exactly that, each for the single
+// Parameter struct -- and that import is what pinned internal/llm/tools BELOW universaltools in
+// the dependency order. The visible cost was that a tool could not call the read path:
+// warnings_list wanted the topology read its own listing describes, could not reach it, and had
+// the whole capability handed in as a closure by the wiring three layers up.
+//
+// A contract and its implementations are not one package. This one has no dependency but the
+// standard library, and nothing may be added here that does.
+package toolapi
 
 import (
 	"encoding/json"

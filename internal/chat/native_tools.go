@@ -14,7 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/Rhuan-Marques/aracne/internal/llm/tools"
+	"github.com/Rhuan-Marques/aracne/internal/llm/toolapi"
 	"github.com/Rhuan-Marques/aracne/internal/topology"
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 	"github.com/Rhuan-Marques/aracne/internal/topology/scanner"
@@ -54,8 +54,8 @@ func (b *BashTool) Description() string {
 }
 
 // Returns parameters schema: command (string, required), workdir (string, optional), timeout_ms (number, optional)
-func (b *BashTool) Parameters() []tools.Parameter {
-	return []tools.Parameter{
+func (b *BashTool) Parameters() []toolapi.Parameter {
+	return []toolapi.Parameter{
 		{Name: "command", Type: "string", Description: "Command to execute", Required: true},
 		{Name: "workdir", Type: "string", Description: "Working directory. Defaults to the workspace root", Required: false},
 		{Name: "timeout_ms", Type: "number", Description: "Timeout in milliseconds. Defaults to 120000", Required: false},
@@ -122,8 +122,8 @@ func (g *GlobTool) Description() string {
 }
 
 // Returns parameter schema for glob file search with pattern and path
-func (g *GlobTool) Parameters() []tools.Parameter {
-	return []tools.Parameter{
+func (g *GlobTool) Parameters() []toolapi.Parameter {
+	return []toolapi.Parameter{
 		{Name: "pattern", Type: "string", Description: "Glob pattern, for example **/*.go", Required: true},
 		{Name: "path", Type: "string", Description: "Directory to search. Defaults to the workspace root", Required: false},
 	}
@@ -180,8 +180,8 @@ func (a *AskUserQuestionTool) Description() string {
 }
 
 // Returns tool parameters: question (required), options (optional array), and multiple (optional boolean).
-func (a *AskUserQuestionTool) Parameters() []tools.Parameter {
-	return []tools.Parameter{
+func (a *AskUserQuestionTool) Parameters() []toolapi.Parameter {
+	return []toolapi.Parameter{
 		{Name: "question", Type: "string", Description: "Question to ask the user", Required: true},
 		{Name: "options", Type: "array", Description: "Optional answer choices", Required: false},
 		{Name: "multiple", Type: "boolean", Description: "Whether multiple options may be selected", Required: false},

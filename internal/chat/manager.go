@@ -17,7 +17,7 @@ import (
 	"github.com/Rhuan-Marques/aracne/internal/helper"
 	"github.com/Rhuan-Marques/aracne/internal/llm"
 	"github.com/Rhuan-Marques/aracne/internal/llm/providers"
-	"github.com/Rhuan-Marques/aracne/internal/llm/tools"
+	"github.com/Rhuan-Marques/aracne/internal/llm/toolapi"
 	"github.com/Rhuan-Marques/aracne/internal/topology"
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 	"github.com/Rhuan-Marques/aracne/internal/topology/scanner"
@@ -33,8 +33,8 @@ type Manager struct {
 	manager           *topology.TopologyManager
 	scanners          *scanner.Registry
 	config            *helper.Config
-	registry          *tools.Registry
-	agentToolRegistry *tools.Registry
+	registry          *toolapi.Registry
+	agentToolRegistry *toolapi.Registry
 	policy            PermissionPolicy
 	emit              func(Event)
 
@@ -1231,7 +1231,7 @@ func (m *Manager) systemPrompt(mode Mode, sessionAgent string) string {
 }
 
 // Creates an LLM provider instance from settings, applying defaults and configuring reasoning/thinking budgets.
-func toToolDefinitions(toolList []tools.Tool) []llm.ToolDefinition {
+func toToolDefinitions(toolList []toolapi.Tool) []llm.ToolDefinition {
 	defs := make([]llm.ToolDefinition, 0, len(toolList))
 	for _, tool := range toolList {
 		params := llm.Parameters{Type: "object", Properties: make(map[string]llm.Property)}

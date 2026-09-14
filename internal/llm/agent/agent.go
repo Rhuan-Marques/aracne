@@ -6,7 +6,7 @@ import (
 
 	"github.com/Rhuan-Marques/aracne/internal/helper"
 	"github.com/Rhuan-Marques/aracne/internal/llm"
-	"github.com/Rhuan-Marques/aracne/internal/llm/tools"
+	"github.com/Rhuan-Marques/aracne/internal/llm/toolapi"
 )
 
 // Default maximum number of tool-calling iterations (20) the agent loop can execute before returning.
@@ -15,7 +15,7 @@ const defaultMaxIterations = 20
 // Represents the AI agent loop that manages LLM interactions, tool execution, and conversation history. Key fields: provider (LLM API client), registry (available tools), messages (conversation history), and maxIterations (tool-call loop limit).
 type Agent struct {
 	provider      llm.Provider
-	registry      *tools.Registry
+	registry      *toolapi.Registry
 	messages      []llm.Message
 	maxIterations int
 }
@@ -26,7 +26,7 @@ type Agent struct {
 // It takes the config rather than a bare language string because the system prompt IS the
 // project's contract now (see BuildPrompt): the mode decides which capabilities it may name and
 // contract_verbosity decides how much it says about them, and both live in the config.
-func New(provider llm.Provider, registry *tools.Registry, cfg *helper.Config, languages []string) *Agent {
+func New(provider llm.Provider, registry *toolapi.Registry, cfg *helper.Config, languages []string) *Agent {
 	return &Agent{
 		provider:      provider,
 		registry:      registry,
@@ -101,8 +101,8 @@ func (a *Agent) Run(input string) error {
 }
 
 // Runs a sub-agent loop with a separate tool set and system prompt. Delegates to the LLM provider, processes tool calls, and returns the final response or an error if max iterations are exceeded.
-func (a *Agent) RunSubAgent(systemPrompt, input string, toolMap map[string]tools.Tool) (string, error) {
-	subRegistry := tools.NewRegistry()
+func (a *Agent) RunSubAgent(systemPrompt, input string, toolMap map[string]toolapi.Tool) (string, error) {
+	subRegistry := toolapi.NewRegistry()
 	for _, t := range toolMap {
 		subRegistry.Register(t)
 	}
@@ -163,7 +163,7 @@ func (a *Agent) RunSubAgent(systemPrompt, input string, toolMap map[string]tools
 }
 
 // Converts a slice of Tool instances into LLM ToolDefinition objects by extracting each tool's name, description, and typed parameter schema with required flags. Returns the definitions slice.
-func toToolDefinitions(toolList []tools.Tool) []llm.ToolDefinition {
+func toToolDefinitions(toolList []toolapi.Tool) []llm.ToolDefinition {
 	defs := make([]llm.ToolDefinition, 0, len(toolList))
 	for _, t := range toolList {
 		props := make(map[string]llm.Property)

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/llm/warnread"
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
@@ -130,9 +131,9 @@ func printWarningReads(dbPath string, warnings []domain.TopologyWarning) {
 		fmt.Println("--read did nothing: features.warning_reads is off in .aracne/config.json.")
 		return
 	}
-	// warningReadNoBudget, not the hook's deadline: the caller asked for exactly this and is
+	// warnread.NoBudget, not the hook's deadline: the caller asked for exactly this and is
 	// waiting for it. See the constant.
-	section := warningReadSection(dbPath, warnings, warningReadNoBudget)
+	section := warnread.Section(dbPath, NewScannerRegistry(), warnings, warnread.NoBudget)
 	if section == "" {
 		fmt.Println("--read found nothing to read: every warning names code the graph no longer holds,")
 		fmt.Println("or a kind read.kinds does not allow.")

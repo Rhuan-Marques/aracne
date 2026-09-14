@@ -8,6 +8,7 @@ import (
 
 	"github.com/Rhuan-Marques/aracne/internal/helper"
 	"github.com/Rhuan-Marques/aracne/internal/llm/tools"
+	"github.com/Rhuan-Marques/aracne/internal/llm/warnread"
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
@@ -163,32 +164,31 @@ func TestWarningsLeftNoteOnlyAppearsWhenTheCapBit(t *testing.T) {
 // a tool and pointing it at a shell command would be pointing away from its own toolbox.
 func TestWarningsLeftNoteNamesTheProjectsSurface(t *testing.T) {
 	cli := &helper.Config{Mode: helper.ModeCLI}
-	if got := warningsLeftNote(cli, 3); !strings.Contains(got, "`arac warnings list --read`") {
+	if got := warnread.LeftNote(cli, 3); !strings.Contains(got, "`arac warnings list --read`") {
 		t.Errorf("cli mode note = %q, want the CLI verb", got)
 	}
 	mcp := &helper.Config{Mode: helper.ModeMCP}
-	if got := warningsLeftNote(mcp, 3); !strings.Contains(got, "`warnings_list` with `read: true`") {
+	if got := warnread.LeftNote(mcp, 3); !strings.Contains(got, "`warnings_list` with `read: true`") {
 		t.Errorf("mcp mode note = %q, want the tool", got)
 	}
-	if got := warningsLeftNote(cli, 1); !strings.Contains(got, "1 warning left") {
+	if got := warnread.LeftNote(cli, 1); !strings.Contains(got, "1 warning left") {
 		t.Errorf("note = %q, want a singular noun", got)
 	}
-	if got := warningsLeftNote(cli, 0); got != "" {
+	if got := warnread.LeftNote(cli, 0); got != "" {
 		t.Errorf("nothing is left, so the note must be empty, got %q", got)
 	}
 }
 
-// The registry only wires the expander where the project turned the feature on, which is what
-// keeps the `read` property out of the schema everywhere else.
-func TestWarningsListToolGetsTheExpanderOnlyWhenEnabled(t *testing.T) {
+// The tool reads its own config, so the `read` property is out of the schema wherever the
+// project did not turn the feature on -- including a nil config.
+func TestWarningsListToolOffersReadOnlyWhenEnabled(t *testing.T) {
 	dir := warnReadProject(t, `{"features":{"warning_reads":true}}`, "CallA")
 	breakAdd(t, dir) // builds the topology
 
 	dbPath := filepath.Join(dir, ".aracne", "topology.db")
 	hasRead := func(cfg *helper.Config) bool {
 		mgr, _ := InitRegistry(dbPath)
-		tool := newWarningsListTool(toolDeps{manager: mgr, cfg: cfg})
-		for _, p := range tool.(*tools.WarningsList).Parameters() {
+		for _, p := range tools.NewWarningsList(mgr, cfg, NewScannerRegistry()).Parameters() {
 			if p.Name == "read" {
 				return true
 			}
@@ -224,7 +224,7 @@ func TestWarningsListToolReadMatchesTheOtherSurfaces(t *testing.T) {
 	dbPath := filepath.Join(dir, ".aracne", "topology.db")
 	cfg := helper.LoadConfig(helper.ConfigPath(dbPath))
 	mgr, _ := InitRegistry(dbPath)
-	tool := newWarningsListTool(toolDeps{manager: mgr, cfg: cfg}).(*tools.WarningsList)
+	tool := tools.NewWarningsList(mgr, cfg, NewScannerRegistry())
 
 	withRead, err := tool.Run([]byte(`{"read":true}`))
 	if err != nil {
@@ -234,7 +234,7 @@ func TestWarningsListToolReadMatchesTheOtherSurfaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	direct := warningReadSection(dbPath, warnings, warningReadNoBudget)
+	direct := warnread.Section(dbPath, NewScannerRegistry(), warnings, warnread.NoBudget)
 	if direct == "" {
 		t.Fatal("precondition: the shared expansion produced nothing")
 	}

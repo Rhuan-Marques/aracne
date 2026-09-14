@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/Rhuan-Marques/aracne/internal/llm/toolapi"
 	"github.com/Rhuan-Marques/aracne/internal/topology"
 )
 
@@ -28,8 +29,8 @@ func (b *BugReport) Description() string {
 }
 
 // Defines bug report parameters: node_id and description, both required strings.
-func (b *BugReport) Parameters() []Parameter {
-	return []Parameter{
+func (b *BugReport) Parameters() []toolapi.Parameter {
+	return []toolapi.Parameter{
 		{Name: "node_id", Type: "string", Description: "The resource ID of the node at the root of the bug — the resource whose code must change to fix it, not a node that merely exhibits the symptom", Required: true},
 		{Name: "description", Type: "string", Description: "Clear description of the bug", Required: true},
 	}

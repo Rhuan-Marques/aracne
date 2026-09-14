@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/Rhuan-Marques/aracne/internal/llm"
-	"github.com/Rhuan-Marques/aracne/internal/llm/tools"
+	"github.com/Rhuan-Marques/aracne/internal/llm/toolapi"
 )
 
 const (
@@ -362,7 +362,7 @@ func (m *Manager) runAgentTask(ctx context.Context, sessionID, groupID, taskID s
 }
 
 // Executes a tool from an allowed tool map and returns its result or error status.
-func runAllowedTaskTool(toolMap map[string]tools.Tool, tc llm.ToolCall) (string, string) {
+func runAllowedTaskTool(toolMap map[string]toolapi.Tool, tc llm.ToolCall) (string, string) {
 	tool, ok := toolMap[tc.Function.Name]
 	if !ok {
 		return fmt.Sprintf("Error: unknown tool %q", tc.Function.Name), "error"
@@ -411,7 +411,7 @@ func chatAgentModelID(model string) string {
 }
 
 // Resolves the set of available tools for an agent kind from config or agent markdown, with validation.
-func (m *Manager) toolsForAgentKind(kind AgentKind) (map[string]tools.Tool, error) {
+func (m *Manager) toolsForAgentKind(kind AgentKind) (map[string]toolapi.Tool, error) {
 	// The config's viz.chat.agents.<name>.tools is authoritative; the agent
 	// markdown's tools: frontmatter is the fallback. viz.chat never inherits
 	// from the llm section.
@@ -438,13 +438,13 @@ func (m *Manager) toolsForAgentKind(kind AgentKind) (map[string]tools.Tool, erro
 }
 
 // Returns tools from a map as a sorted slice by name.
-func sortedTools(toolMap map[string]tools.Tool) []tools.Tool {
+func sortedTools(toolMap map[string]toolapi.Tool) []toolapi.Tool {
 	names := make([]string, 0, len(toolMap))
 	for name := range toolMap {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	result := make([]tools.Tool, 0, len(names))
+	result := make([]toolapi.Tool, 0, len(names))
 	for _, name := range names {
 		result = append(result, toolMap[name])
 	}

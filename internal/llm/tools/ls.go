@@ -7,9 +7,11 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/Rhuan-Marques/aracne/internal/llm/toolapi"
 )
 
-// Implements the Tool interface for listing files and directories, exposing a "ls" tool to the LLM agent.
+// Implements the toolapi.Tool interface for listing files and directories, exposing a "ls" tool to the LLM agent.
 type Ls struct{}
 
 // Returns the tool name string "ls" for the Ls tool.
@@ -21,8 +23,8 @@ func (l *Ls) Description() string {
 }
 
 // Returns the parameter definitions for the ls tool: path (optional directory) and recursive (optional boolean flag).
-func (l *Ls) Parameters() []Parameter {
-	return []Parameter{
+func (l *Ls) Parameters() []toolapi.Parameter {
+	return []toolapi.Parameter{
 		{Name: "path", Type: "string", Description: "Directory path to list (default '.')", Required: false},
 		{Name: "recursive", Type: "boolean", Description: "List recursively if true", Required: false},
 	}

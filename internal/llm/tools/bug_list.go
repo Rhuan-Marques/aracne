@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Rhuan-Marques/aracne/internal/llm/toolapi"
 	"github.com/Rhuan-Marques/aracne/internal/topology"
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
@@ -30,8 +31,8 @@ func (b *BugList) Description() string {
 }
 
 // Returns tool parameters: optional node_id and state filters for querying bugs.
-func (b *BugList) Parameters() []Parameter {
-	return []Parameter{
+func (b *BugList) Parameters() []toolapi.Parameter {
+	return []toolapi.Parameter{
 		{Name: "node_id", Type: "string", Description: "Filter bugs by resource node ID", Required: false},
 		{Name: "state", Type: "string", Description: "Filter by state: pending, acknowledged, dismissed", Required: false},
 	}

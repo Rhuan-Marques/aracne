@@ -18,7 +18,7 @@ import (
 	"github.com/Rhuan-Marques/aracne/internal/llm/languages/readunit"
 	"github.com/Rhuan-Marques/aracne/internal/llm/languages/renderstate"
 	"github.com/Rhuan-Marques/aracne/internal/llm/languages/rusttools"
-	"github.com/Rhuan-Marques/aracne/internal/llm/tools"
+	"github.com/Rhuan-Marques/aracne/internal/llm/toolapi"
 	"github.com/Rhuan-Marques/aracne/internal/toolspec"
 	"github.com/Rhuan-Marques/aracne/internal/topology"
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
@@ -139,12 +139,12 @@ func (r *Read) Description() string {
 
 // Parameters is a single list. There is deliberately no start_line/end_line: walking a file in
 // ranges was the most expensive habit benchmarking found, costing a turn per window.
-func (r *Read) Parameters() []tools.Parameter {
+func (r *Read) Parameters() []toolapi.Parameter {
 	desc := "Resource IDs to read (functions, methods, structs/classes, interfaces). Duplicates are ignored."
 	if r.readsFiles() {
 		desc = "Resource IDs or file paths to read. Prefer resource IDs over file paths. Duplicates are ignored."
 	}
-	params := []tools.Parameter{
+	params := []toolapi.Parameter{
 		{Name: "ids", Type: "array", Items: "string", Description: desc, Required: true},
 	}
 	// Only worth advertising when something is abridged; otherwise it is a no-op knob and every
@@ -167,7 +167,7 @@ func (r *Read) Parameters() []tools.Parameter {
 			d = "Return a symbol over the line cap in full instead of abridged. " +
 				"Use when you need exact text to edit."
 		}
-		params = append(params, tools.Parameter{Name: "full", Type: "boolean", Required: false, Description: d})
+		params = append(params, toolapi.Parameter{Name: "full", Type: "boolean", Required: false, Description: d})
 	}
 	return params
 }

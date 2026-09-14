@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Rhuan-Marques/aracne/internal/llm/tools"
+	"github.com/Rhuan-Marques/aracne/internal/llm/toolapi"
 )
 
 func TestRequestJSON(t *testing.T) {
@@ -200,7 +200,7 @@ func rawID(n int) json.RawMessage {
 // client sending `"id": "1"` -- legal, and what several hosts send -- failed to unmarshal and
 // got a parse error carrying no id at all, which it could not correlate with anything.
 func TestStringIDsSurviveAndAreEchoedBack(t *testing.T) {
-	srv := NewServer(tools.NewRegistry())
+	srv := NewServer(toolapi.NewRegistry())
 	for _, id := range []string{`"call-1"`, `7`, `"0"`} {
 		var req Request
 		line := `{"jsonrpc":"2.0","id":` + id + `,"method":"tools/list"}`
@@ -220,7 +220,7 @@ func TestStringIDsSurviveAndAreEchoedBack(t *testing.T) {
 // `ping` is part of the base protocol and is how a client checks the server is alive.
 // Answering "method not found" to a liveness probe is a fine way to be judged dead.
 func TestPingIsAnswered(t *testing.T) {
-	srv := NewServer(tools.NewRegistry())
+	srv := NewServer(toolapi.NewRegistry())
 	var req Request
 	if err := json.Unmarshal([]byte(`{"jsonrpc":"2.0","id":3,"method":"ping"}`), &req); err != nil {
 		t.Fatal(err)
@@ -234,7 +234,7 @@ func TestPingIsAnswered(t *testing.T) {
 // An error raised before the id could be read carries `"id": null`, which is what the spec
 // asks for. Omitting the member is a different message.
 func TestParseErrorCarriesANullID(t *testing.T) {
-	srv := NewServer(tools.NewRegistry())
+	srv := NewServer(toolapi.NewRegistry())
 	resp := srv.errorResponse(nil, -32700, "Parse error")
 	data, err := json.Marshal(resp)
 	if err != nil {
@@ -252,8 +252,8 @@ type optionalArgsTool struct{ ran bool }
 
 func (o *optionalArgsTool) Name() string        { return "warnings_list" }
 func (o *optionalArgsTool) Description() string { return "list warnings" }
-func (o *optionalArgsTool) Parameters() []tools.Parameter {
-	return []tools.Parameter{{Name: "kind", Type: "string", Required: false}}
+func (o *optionalArgsTool) Parameters() []toolapi.Parameter {
+	return []toolapi.Parameter{{Name: "kind", Type: "string", Required: false}}
 }
 func (o *optionalArgsTool) Run(args json.RawMessage) (string, error) {
 	var p struct {
@@ -277,7 +277,7 @@ func TestCallToolAcceptsOmittedArguments(t *testing.T) {
 		`{"name":"warnings_list","arguments":null}`,
 		`{"name":"warnings_list","arguments":{}}`,
 	} {
-		reg := tools.NewRegistry()
+		reg := toolapi.NewRegistry()
 		tool := &optionalArgsTool{}
 		reg.Register(tool)
 		srv := NewServer(reg)
@@ -307,7 +307,7 @@ func TestCallToolAcceptsOmittedArguments(t *testing.T) {
 // A tools/call with no params at all, or with no tool name, is a client error and must be
 // reported as one -- not as whatever json.Unmarshal says about nil input.
 func TestCallToolRejectsAMissingName(t *testing.T) {
-	srv := NewServer(tools.NewRegistry())
+	srv := NewServer(toolapi.NewRegistry())
 	for _, line := range []string{
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call"}`,
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{}}`,

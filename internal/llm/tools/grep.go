@@ -7,6 +7,7 @@ import (
 
 	"github.com/Rhuan-Marques/aracne/internal/helper"
 	"github.com/Rhuan-Marques/aracne/internal/lazydesc"
+	"github.com/Rhuan-Marques/aracne/internal/llm/toolapi"
 	"github.com/Rhuan-Marques/aracne/internal/topogrep"
 	"github.com/Rhuan-Marques/aracne/internal/topology"
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
@@ -47,8 +48,8 @@ func (g *Grep) Description() string {
 }
 
 // Returns parameter definitions for the grep tool.
-func (g *Grep) Parameters() []Parameter {
-	return []Parameter{
+func (g *Grep) Parameters() []toolapi.Parameter {
+	return []toolapi.Parameter{
 		{Name: "pattern", Type: "string", Description: "Regex to match", Required: true},
 		{Name: "path", Type: "string", Description: "File or directory to search (default '.')", Required: false},
 		{Name: "glob", Type: "string", Description: "Filename glob, e.g. '*.go', '**/*_test.ts'", Required: false},

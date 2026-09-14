@@ -62,9 +62,15 @@ internal/
     provider.go     Provider interface (Chat / StreamChat) + message/tool types
     providers/      anthropic, openai, deepseek implementations
     agent/          Internal REPL agent loop + sub-agent runner
-    tools/          Tool implementations (read, bug_*, warnings_list, update_description, …) +
-                    Registry. grep/edit/write live here too but are no longer MCP tools: they
+    toolapi/        The tool CONTRACT — Tool, Parameter, Registry — and nothing else. A leaf
+                    package on purpose: it used to live in tools/, so the six languages/*
+                    packages imported twelve tool implementations to get one struct, which
+                    pinned tools/ below universaltools and left a tool unable to call a read.
+    tools/          Tool implementations (read, bug_*, warnings_list, update_description, …).
+                    grep/edit/write live here too but are no longer MCP tools: they
                     back the chat harness and the `arac edit`/`arac write` verbs — see §6.
+    warnread/       The warning→source expansion, below both its callers (cli and tools) so all
+                    three surfaces that offer it run one implementation
     languages/      Per-language tool flavors: gotools / jstools / pythontools / rusttools /
                     javatools / universaltools, over two shared pieces —
       readunit/       the language-neutral shape one resolved resource takes into a response
@@ -443,8 +449,7 @@ The cap is a **page, not a truncation**. Whatever it left out is counted in a no
 read — `... 3 warnings left. Use \`arac warnings list --read\` to continue fixing.`, naming the
 `warnings_list` tool instead in `mcp` mode — and the same expansion backs all three surfaces
 that show it: the post-edit report, `arac warnings list --read`, and the `read` parameter the
-`warnings_list` tool grows when the feature is on (injected at registry-build time, since
-`universaltools` imports `internal/llm/tools` and the tool cannot reach the read path itself).
+`warnings_list` tool grows when the feature is on, reading its own config to decide.
 No cursor is stored: the page advances because a *fixed* warning has retired itself from the
 table by the next call, so the model never loses the code for something it has not fixed yet.
 Every surface orders the list through `domain.SortWarnings`, which is what makes "the first

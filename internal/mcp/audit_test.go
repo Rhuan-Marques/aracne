@@ -7,16 +7,16 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Rhuan-Marques/aracne/internal/llm/tools"
+	"github.com/Rhuan-Marques/aracne/internal/llm/toolapi"
 )
 
 // noArgTool stands in for node_list_no_description: a real registered tool that takes no
 // parameters, so a client has nothing to put in `arguments`.
 type noArgTool struct{ saw json.RawMessage }
 
-func (n *noArgTool) Name() string                  { return "no_args" }
-func (n *noArgTool) Description() string           { return "takes nothing" }
-func (n *noArgTool) Parameters() []tools.Parameter { return nil }
+func (n *noArgTool) Name() string                    { return "no_args" }
+func (n *noArgTool) Description() string             { return "takes nothing" }
+func (n *noArgTool) Parameters() []toolapi.Parameter { return nil }
 func (n *noArgTool) Run(args json.RawMessage) (string, error) {
 	n.saw = args
 	return "ran", nil
@@ -28,7 +28,7 @@ func (n *noArgTool) Run(args json.RawMessage) (string, error) {
 // explains that the id was made raw JSON for exactly this class of host-specific breakage.
 func TestAudit_ToolsCallWithoutArgumentsStillRuns(t *testing.T) {
 	tool := &noArgTool{}
-	reg := tools.NewRegistry()
+	reg := toolapi.NewRegistry()
 	reg.Register(tool)
 	s := NewServer(reg)
 
