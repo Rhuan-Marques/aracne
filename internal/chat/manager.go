@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Rhuan-Marques/aracne/internal/helper"
@@ -50,6 +51,108 @@ type Manager struct {
 	provider           ProviderSettings
 	providerConfig     ProviderConfig
 	providerConfigPath string
+
+	// Background-run lifecycle. A manager answers a request by starting work that OUTLIVES
+	// it -- a run loop, a task group, a forced workflow, a title generation -- and until Close
+	// existed there was no way to stop that work or to know when it had stopped. The process
+	// simply exited from under it, mid-write, into the chat store and the topology database;
+	// in a test the temp directory was removed while it was still being written into, which is
+	// what "TempDir RemoveAll cleanup: directory not empty" was.
+	//
+	// bgMu guards only these three, and is deliberately NOT m.mu: goBackground is called from
+	// paths that hold no lock and from inside other background goroutines, and a Close that
+	// waited while holding the manager's main lock could not be finished by the goroutines it
+	// is waiting for.
+	bgMu     sync.Mutex
+	bgClosed bool
+	bg       sync.WaitGroup
+	bgActive atomic.Int64
+}
+
+// closeGrace bounds Close. Everything it waits for is cancellable, so the grace is a backstop
+// against a goroutine that does not honour its context rather than an expected cost -- and it
+// is a backstop rather than an infinite wait because Close is what a test cleanup and a server
+// shutdown call, and neither may hang forever on a hung provider request.
+const closeGrace = 10 * time.Second
+
+// goBackground runs fn in a goroutine Close will wait for, and reports whether it started one.
+//
+// It refuses after Close: a run that begins while the manager is shutting down would write into
+// a store that is going away, and -- the mechanical reason -- a WaitGroup.Add racing a Wait is
+// a data race however the writes turn out. Callers that hold state for the goroutine to clear
+// must undo it when this returns false; see startRun.
+func (m *Manager) goBackground(fn func()) bool {
+	m.bgMu.Lock()
+	if m.bgClosed {
+		m.bgMu.Unlock()
+		return false
+	}
+	m.bg.Add(1)
+	m.bgActive.Add(1)
+	m.bgMu.Unlock()
+	go func() {
+		defer func() {
+			m.bgActive.Add(-1)
+			m.bg.Done()
+		}()
+		fn()
+	}()
+	return true
+}
+
+// Close stops every background run this manager started and waits for them to return.
+//
+// After it returns, nothing this manager owns is still writing: no run loop, no task group and
+// none of its workers, no forced workflow, no title generation. That is the property a caller
+// needs before it removes the workspace, closes the database, or exits -- and the property a
+// test needs before its temp directory is deleted.
+//
+// It is idempotent, and safe to call while runs are in flight: every in-flight LLM call and
+// task group is cancelled first, so the goroutines unwind rather than being waited out. An
+// error means the grace expired with work still running, which is a goroutine ignoring its
+// context -- worth reporting, never worth hanging for.
+func (m *Manager) Close() error {
+	m.bgMu.Lock()
+	first := !m.bgClosed
+	m.bgClosed = true
+	m.bgMu.Unlock()
+	if first {
+		m.cancelAllRuns()
+	}
+	done := make(chan struct{})
+	// chat:untracked -- this one waits ON the group, so tracking it would deadlock.
+	go func() {
+		m.bg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-time.After(closeGrace):
+		return fmt.Errorf("chat: %d background run(s) still active %s after close", m.bgActive.Load(), closeGrace)
+	}
+}
+
+// cancelAllRuns is StopSession's reach, applied to every session at once: refuse further LLM
+// calls, cancel the ones in flight, and cancel every task group so its workers stop between
+// tasks.
+func (m *Manager) cancelAllRuns() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for sessionID := range m.running {
+		m.stopRequested[sessionID] = true
+	}
+	for _, cancel := range m.runningCancels {
+		if cancel != nil {
+			cancel()
+		}
+	}
+	for key, cancel := range m.taskGroupCancels {
+		m.stoppedTaskGroups[key] = true
+		if cancel != nil {
+			cancel()
+		}
+	}
 }
 
 // Initializes a chat manager with topology database, config, scanner registry, tool registry, and session storage.
@@ -425,7 +528,7 @@ func (m *Manager) Send(sessionID string, req SendRequest) (*Session, error) {
 
 	m.recordEvent(sessionID, "message", map[string]any{"message": msg})
 	if firstPrompt {
-		go m.generateTitle(sessionID, req.Content)
+		m.goBackground(func() { m.generateTitle(sessionID, req.Content) })
 	}
 	m.startRun(sessionID)
 	return m.GetSession(sessionID)
@@ -512,7 +615,7 @@ func (m *Manager) startRun(sessionID string) {
 	m.running[sessionID] = true
 	m.mu.Unlock()
 	m.recordEvent(sessionID, "run_started", map[string]any{"active": true})
-	go func() {
+	started := m.goBackground(func() {
 		defer func() {
 			m.mu.Lock()
 			if cancel := m.runningCancels[sessionID]; cancel != nil {
@@ -526,7 +629,16 @@ func (m *Manager) startRun(sessionID string) {
 			m.recordEvent(sessionID, "run_completed", map[string]any{"active": false})
 		}()
 		m.runLoop(sessionID)
-	}()
+	})
+	if !started {
+		// The manager is closing, so the goroutine that would have cleared this never ran.
+		// Leaving the session marked running would make it unstartable for the rest of the
+		// process and report an active run that does not exist.
+		m.mu.Lock()
+		delete(m.running, sessionID)
+		m.mu.Unlock()
+		m.recordEvent(sessionID, "run_completed", map[string]any{"active": false})
+	}
 }
 
 // Marks a session for stop, cancels its LLM context and running tasks, interrupts a non-CreateTasks tool call, and records the stop event.

@@ -44,7 +44,7 @@ func (m *Manager) ResumeTaskGroup(sessionID, groupID string) (*Session, error) {
 	toolCallID := group.ToolCallID
 	m.mu.Unlock()
 
-	go func() {
+	m.goBackground(func() {
 		result, status := m.runTaskGroup(sessionID, groupID)
 		if status == "interrupted" {
 			return
@@ -52,7 +52,7 @@ func (m *Manager) ResumeTaskGroup(sessionID, groupID string) (*Session, error) {
 		tc := llm.ToolCall{ID: toolCallID, Type: "function", Function: llm.ToolCallFunction{Name: "CreateTasks"}}
 		m.appendToolResult(sessionID, tc, result, status)
 		m.startRun(sessionID)
-	}()
+	})
 	return m.GetSession(sessionID)
 }
 

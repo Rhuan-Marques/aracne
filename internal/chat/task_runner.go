@@ -175,9 +175,14 @@ func (m *Manager) runTaskGroup(sessionID, groupID string) (string, string) {
 		if workers > len(taskIDs) {
 			workers = len(taskIDs)
 		}
+		// TRACKED BY THE MANAGER AS WELL AS BY wg. The local WaitGroup is what `done` reports,
+		// but the select below abandons it on ctx.Done: a cancelled group returns
+		// "interrupted" while a worker is still inside runAgentTask, writing. Only
+		// Manager.Close waits for that worker, so only Manager.Close can promise the store is
+		// quiet.
 		for i := 0; i < workers; i++ {
 			wg.Add(1)
-			go func() {
+			if !m.goBackground(func() {
 				defer wg.Done()
 				for taskID := range jobs {
 					if ctx.Err() != nil {
@@ -185,9 +190,11 @@ func (m *Manager) runTaskGroup(sessionID, groupID string) (string, string) {
 					}
 					m.runAgentTask(ctx, sessionID, groupID, taskID)
 				}
-			}()
+			}) {
+				wg.Done()
+			}
 		}
-		go func() {
+		if !m.goBackground(func() {
 			defer close(jobs)
 			for _, taskID := range taskIDs {
 				select {
@@ -196,11 +203,15 @@ func (m *Manager) runTaskGroup(sessionID, groupID string) (string, string) {
 				case jobs <- taskID:
 				}
 			}
-		}()
-		go func() {
+		}) {
+			close(jobs)
+		}
+		if !m.goBackground(func() {
 			wg.Wait()
 			close(done)
-		}()
+		}) {
+			close(done)
+		}
 		select {
 		case <-ctx.Done():
 			m.recordTaskGroupProgress(sessionID, groupID)

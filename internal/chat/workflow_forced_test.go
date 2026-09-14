@@ -82,7 +82,7 @@ func setupWorkflowManager(t *testing.T, serverURL string, populateTopo bool) *Ma
 	dbPath := filepath.Join(dir, "topology.db")
 
 	collect := func(e Event) {}
-	manager, err := NewManager(dbPath, dir, collect)
+	manager, err := newTestManager(t, dbPath, dir, collect)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}

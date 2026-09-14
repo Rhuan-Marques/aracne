@@ -22,6 +22,24 @@ func (s *Server) chatManager() (*chat.Manager, error) {
 	return s.chatMgr, s.chatErr
 }
 
+// Close shuts the chat manager down, waiting for the runs it started to stop.
+//
+// The chat manager answers a request by starting work that outlives it, and that work writes to
+// the chat store and the topology database throughout. An embedder that is finished with a
+// Server -- a test, a host process replacing it, anything that is about to remove or reopen the
+// workspace -- has to be able to say "stop, and tell me when you have", and until Manager.Close
+// existed there was nothing to call. `Listen` does not call this: it owns the process for its
+// whole life and exits with it.
+func (s *Server) Close() error {
+	s.chatMu.Lock()
+	mgr := s.chatMgr
+	s.chatMu.Unlock()
+	if mgr == nil {
+		return nil
+	}
+	return mgr.Close()
+}
+
 // Router for /api/chat endpoints that delegates to provider, agents, sessions, or workflow handlers.
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	mgr, err := s.chatManager()

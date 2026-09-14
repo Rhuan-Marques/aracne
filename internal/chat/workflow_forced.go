@@ -47,7 +47,11 @@ func (m *Manager) StartForcedWorkflow(req WorkflowRequest) (string, error) {
 		return "", err
 	}
 	m.recordEvent(req.SessionID, "workflow_started", map[string]any{"job_id": groupID, "type": req.Type})
-	go func() {
+	// Tracked, because this is the whole run: the caller gets the group id back immediately
+	// and everything the workflow does -- the tasks, the follow-up rounds, the run that
+	// reports them -- happens in here, writing to the chat store throughout. See
+	// Manager.goBackground.
+	m.goBackground(func() {
 		result, status := m.runTaskGroup(req.SessionID, groupID)
 		if status == "interrupted" {
 			return
@@ -60,7 +64,7 @@ func (m *Manager) StartForcedWorkflow(req WorkflowRequest) (string, error) {
 			m.runDescriptionsFollowupRounds(req, descPrevRemaining)
 		}
 		m.startRun(req.SessionID)
-	}()
+	})
 	return groupID, nil
 }
 
