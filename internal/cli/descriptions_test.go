@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"reflect"
+	"runtime"
 	"sync"
 	"time"
 
@@ -240,7 +242,7 @@ func TestCLIDescriptionRunnerWritesWhatCameBack(t *testing.T) {
 		{ID: "fn:alpha", Name: "Alpha", Kind: domain.ResourceFunction},
 		{ID: "fn:beta", Name: "Beta", Kind: domain.ResourceFunction},
 	}
-	text, err := runner.Run(batch, nil, 0)
+	text, err := runner.Run(context.Background(), batch, nil, 0)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -445,7 +447,7 @@ type blockingRunner struct {
 	done    chan struct{} // closed once the fast batch has been answered
 }
 
-func (r *blockingRunner) Run(batch []descriptionResource, _ *domain.Topology, _ int) (string, error) {
+func (r *blockingRunner) Run(_ context.Context, batch []descriptionResource, _ *domain.Topology, _ int) (string, error) {
 	fast := false
 	r.first.Do(func() {
 		fast = true
@@ -475,7 +477,9 @@ func TestBatchWaveAdvancesTheBarBeforeTheWaveEnds(t *testing.T) {
 	bar.StartPhase("describing", len(batches))
 
 	collected := make(chan []descriptionBatchResult, 1)
-	go func() { collected <- runDescriptionBatchWave(runner, batches, 3, nil, 0, &bar) }()
+	go func() {
+		collected <- runDescriptionBatchWave(context.Background(), runner, batches, 3, nil, 0, &bar, nil)
+	}()
 
 	<-runner.done
 	// The fast batch is answered; the other two are still blocked. Give the collector a
@@ -517,7 +521,7 @@ func TestBatchWaveCountsFailedBatches(t *testing.T) {
 	bar.SetEnabled(true)
 	bar.StartPhase("describing", 3)
 
-	results := runDescriptionBatchWave(runner, batches, 2, nil, 0, &bar)
+	results := runDescriptionBatchWave(context.Background(), runner, batches, 2, nil, 0, &bar, nil)
 	if len(results) != 2 {
 		t.Fatalf("collected %d results, want 2", len(results))
 	}
@@ -528,6 +532,89 @@ func TestBatchWaveCountsFailedBatches(t *testing.T) {
 
 type failingRunner struct{}
 
-func (failingRunner) Run([]descriptionResource, *domain.Topology, int) (string, error) {
+func (failingRunner) Run(context.Context, []descriptionResource, *domain.Topology, int) (string, error) {
 	return "", errors.New("executor blew up")
+}
+
+// countingRunner records how many batches actually reached a provider.
+type countingRunner struct {
+	mu   sync.Mutex
+	runs int
+}
+
+func (r *countingRunner) Run(_ context.Context, batch []descriptionResource, _ *domain.Topology, _ int) (string, error) {
+	r.mu.Lock()
+	r.runs++
+	r.mu.Unlock()
+	return "described", nil
+}
+
+func (r *countingRunner) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.runs
+}
+
+// A cancelled wave must spend nothing and still account for everything.
+//
+// Both halves matter to a detached worker. Spending nothing is why cancellation is worth having
+// at all; accounting for everything is why the collector cannot hang -- it drains one result per
+// batch, so a batch that quietly went missing would block it forever, and the worker holding
+// those claims would never settle them.
+func TestCancelledWaveRunsNothingAndReportsEveryBatch(t *testing.T) {
+	batches := [][]descriptionResource{
+		{{ID: "pkg.A", Kind: domain.ResourceFunction}},
+		{{ID: "pkg.B", Kind: domain.ResourceFunction}},
+		{{ID: "pkg.C", Kind: domain.ResourceFunction}},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	runner := &countingRunner{}
+	var bar progress.Reporter
+	var settled int
+	results := runDescriptionBatchWave(ctx, runner, batches, 2, nil, 0, &bar,
+		func([]descriptionResource, error) { settled++ })
+
+	if runner.count() != 0 {
+		t.Errorf("a cancelled wave must not call the provider, got %d calls", runner.count())
+	}
+	if len(results) != len(batches) {
+		t.Fatalf("every batch must come back, got %d of %d", len(results), len(batches))
+	}
+	if settled != len(batches) {
+		t.Errorf("onBatch must fire for every batch so claims can be settled, got %d", settled)
+	}
+	for _, r := range results {
+		if r.Err == nil {
+			t.Errorf("a cancelled batch must report an error, got %+v", r)
+		}
+	}
+}
+
+// The feeder goroutine sends into an unbuffered channel. Cancelling a wave mid-flight used to
+// be able to leave it blocked on a send nobody would ever receive -- one leaked goroutine per
+// cancelled wave, in a process whose whole job is to be able to end.
+func TestCancelledWaveLeaksNoGoroutines(t *testing.T) {
+	batches := make([][]descriptionResource, 0, 50)
+	for i := 0; i < 50; i++ {
+		batches = append(batches, []descriptionResource{
+			{ID: fmt.Sprintf("pkg.R%d", i), Kind: domain.ResourceFunction},
+		})
+	}
+	before := runtime.NumGoroutine()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var bar progress.Reporter
+	runDescriptionBatchWave(ctx, &countingRunner{}, batches, 4, nil, 0, &bar, nil)
+
+	// The feeder and the closer are the last to go; give them a moment rather than racing them.
+	deadline := time.Now().Add(2 * time.Second)
+	for runtime.NumGoroutine() > before && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := runtime.NumGoroutine(); got > before {
+		t.Errorf("a cancelled wave leaked goroutines: %d before, %d after", before, got)
+	}
 }

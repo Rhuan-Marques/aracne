@@ -154,7 +154,11 @@ func RunGenerateDescriptions(args []string) {
 	var bar progress.Reporter
 	bar.SetEnabled(showDescriptionProgress(*progressFlag, stderrIsTerminal(), len(pending)))
 
-	if err := runDescriptionGeneration(manager, runner, cfg.Descriptions.Kinds, *batchSize, *parallel, *maxRetries, cfg.Descriptions.StyleExemplars, filter, includeNotVisible, *regenOversized, &bar); err != nil {
+	// The sweep re-lists the whole repository every wave: that is what makes it converge on a
+	// project where describing one resource reveals another. A worker uses a claim-scoped lister
+	// instead -- see wholeRepoPending.
+	pendingFn := wholeRepoPending(manager, cfg.Descriptions.Kinds, filter, includeNotVisible, *regenOversized)
+	if err := runDescriptionGeneration(context.Background(), manager, runner, pendingFn, *batchSize, *parallel, *maxRetries, cfg.Descriptions.StyleExemplars, *regenOversized, nil, &bar); err != nil {
 		fmt.Fprintf(os.Stderr, "\nError: %v\n", err)
 		os.Exit(1)
 	}
@@ -359,7 +363,10 @@ var (
 // Everything around the call is shared: the same pending set, the same batching, the same
 // re-list-and-retry loop, the same budget check on the write. Only the call is different.
 type descriptionRunner interface {
-	Run(batch []descriptionResource, topo *domain.Topology, exemplarLimit int) (string, error)
+	// Run describes one batch. The context bounds the call: it is what lets a detached worker
+	// stop a provider that is never going to answer, and it is why cliDescriptionRunner no
+	// longer hands exec.CommandContext a background context it can never cancel.
+	Run(ctx context.Context, batch []descriptionResource, topo *domain.Topology, exemplarLimit int) (string, error)
 }
 
 // sweepDescriptionRunner builds the sweep's runner with `--cli` applied.
@@ -422,6 +429,8 @@ func newDescriptionRunner(manager *topology.TopologyManager, reg *scanner.Regist
 		// constructor: a runner that fabricated a config to satisfy it would be the
 		// place a real caller later inherited the wrong contract from.
 		languages: TopologyLanguagesFor(manager),
+		// Zero unless a project named one, in which case it replaces the per-batch formula.
+		maxAgentTurns: descCfg.MaxAgentTurns,
 	}, model, nil
 }
 
@@ -451,18 +460,26 @@ func unresolvedProviderError(descCfg helper.ResolvedLazyDescriptions) error {
 // agentDescriptionRunner is the API-provider runner: a sub-agent per batch, writing through
 // the update_description tool.
 type agentDescriptionRunner struct {
-	provider  llm.Provider
-	manager   *topology.TopologyManager
-	toolMap   map[string]tools.Tool
-	cfg       *helper.Config
-	languages []string
+	provider      llm.Provider
+	manager       *topology.TopologyManager
+	toolMap       map[string]tools.Tool
+	cfg           *helper.Config
+	languages     []string
+	maxAgentTurns int
 }
 
-func (r *agentDescriptionRunner) Run(batch []descriptionResource, topo *domain.Topology, exemplarLimit int) (string, error) {
+func (r *agentDescriptionRunner) Run(ctx context.Context, batch []descriptionResource, topo *domain.Topology, exemplarLimit int) (string, error) {
 	a := agent.New(r.provider, tools.NewRegistry(), r.cfg, r.languages)
-	a.SetMaxIterations(len(batch)*4 + 10)
+	// The turn cap scales with the batch, because what the executor has to do is proportional
+	// to how much it was given. maxAgentTurns overrides it outright for a project that would
+	// rather name one number; zero leaves the formula alone.
+	turns := len(batch)*4 + 10
+	if r.maxAgentTurns > 0 {
+		turns = r.maxAgentTurns
+	}
+	a.SetMaxIterations(turns)
 	input := descriptionExecutorInput(batch, makeResourceReader(r.manager), batchExemplars(batch, topo, exemplarLimit))
-	return a.RunSubAgent(prompts.DescriptionsGenerationExecutorPrompt(), input, r.toolMap)
+	return a.RunSubAgentContext(ctx, prompts.DescriptionsGenerationExecutorPrompt(), input, r.toolMap)
 }
 
 // cliDescriptionRunner is the CLI-provider runner: one completion per batch, parsed and
@@ -482,7 +499,7 @@ type cliDescriptionRunner struct {
 	manager *topology.TopologyManager
 }
 
-func (r *cliDescriptionRunner) Run(batch []descriptionResource, topo *domain.Topology, exemplarLimit int) (string, error) {
+func (r *cliDescriptionRunner) Run(ctx context.Context, batch []descriptionResource, topo *domain.Topology, exemplarLimit int) (string, error) {
 	read := makeResourceReader(r.manager)
 	requests := make([]lazydesc.Request, 0, len(batch))
 	for _, res := range batch {
@@ -490,7 +507,7 @@ func (r *cliDescriptionRunner) Run(batch []descriptionResource, topo *domain.Top
 			ID: res.ID, Name: res.Name, Kind: res.Kind, Source: read(res.ID),
 		})
 	}
-	descriptions, err := r.gen.Describe(context.Background(), lazydesc.Batch{
+	descriptions, err := r.gen.Describe(ctx, lazydesc.Batch{
 		Resources: requests,
 		Exemplars: batchExemplars(batch, topo, exemplarLimit),
 	})
@@ -539,12 +556,25 @@ func batchExemplars(batch []descriptionResource, topo *domain.Topology, exemplar
 // still qualifies is re-batched. That works for a rewrite because update_description REJECTS
 // an over-budget write, so a failed shrink leaves the old description standing and the
 // resource simply comes back in the next round instead of leaving a hole.
-func runDescriptionGeneration(manager *topology.TopologyManager, runner descriptionRunner, targets []domain.ResourceKind, batchSize, parallel, maxRetries, exemplarLimit int, filter domain.ContextFilter, includeNotVisible, regenOversized bool, bar *progress.Reporter) error {
+//
+// `pending` is how the run says what is still left to do, and it is a closure rather than a
+// filter because the two callers mean different things by it. The sweep re-lists the WHOLE
+// repository every wave, which is what makes it converge. A detached worker must re-list only
+// the resources it claimed -- it has no mandate over anything else, and another worker may be
+// describing the rest at the same moment.
+//
+// `onBatch` fires as each batch lands rather than at the end of the wave, so a worker can settle
+// its claims incrementally. That is what bounds the damage when a worker is killed: everything
+// already written is already settled, and at most one batch in flight is lost.
+func runDescriptionGeneration(ctx context.Context, manager *topology.TopologyManager, runner descriptionRunner, pending func() ([]descriptionResource, error), batchSize, parallel, maxRetries, exemplarLimit int, regenOversized bool, onBatch func([]descriptionResource, error), bar *progress.Reporter) error {
 	attempts := make(map[string]int)
 	failed := make(map[string]string)
 
 	for {
-		pending, err := pendingDescriptionResources(manager, targets, filter, includeNotVisible, regenOversized)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		pending, err := pending()
 		if err != nil {
 			return err
 		}
@@ -589,7 +619,7 @@ func runDescriptionGeneration(manager *topology.TopologyManager, runner descript
 			label = "rewriting"
 		}
 		bar.StartPhase(label, len(retryable))
-		results := runDescriptionBatchWave(runner, batches, parallel, topo, exemplarLimit, bar)
+		results := runDescriptionBatchWave(ctx, runner, batches, parallel, topo, exemplarLimit, bar, onBatch)
 		bar.EndPhase()
 		for _, result := range results {
 			if result.Err != nil {
@@ -605,7 +635,7 @@ func runDescriptionGeneration(manager *topology.TopologyManager, runner descript
 
 // Runs description generation for resource batches in parallel through the run's runner and
 // collects results, advancing bar as each batch lands.
-func runDescriptionBatchWave(runner descriptionRunner, batches [][]descriptionResource, parallel int, topo *domain.Topology, exemplarLimit int, bar *progress.Reporter) []descriptionBatchResult {
+func runDescriptionBatchWave(ctx context.Context, runner descriptionRunner, batches [][]descriptionResource, parallel int, topo *domain.Topology, exemplarLimit int, bar *progress.Reporter, onBatch func([]descriptionResource, error)) []descriptionBatchResult {
 	if parallel > len(batches) {
 		parallel = len(batches)
 	}
@@ -618,7 +648,15 @@ func runDescriptionBatchWave(runner descriptionRunner, batches [][]descriptionRe
 		go func() {
 			defer wg.Done()
 			for batch := range jobs {
-				text, err := runner.Run(batch, topo, exemplarLimit)
+				// A cancelled wave still reports every batch it was given, as a failure. The
+				// collector below drains `results` to completion, so a batch that silently
+				// went missing would hang it -- and onBatch would never hear about claims the
+				// caller is holding.
+				if err := ctx.Err(); err != nil {
+					results <- descriptionBatchResult{Batch: batch, Err: err}
+					continue
+				}
+				text, err := runner.Run(ctx, batch, topo, exemplarLimit)
 				results <- descriptionBatchResult{Batch: batch, Text: text, Err: err}
 			}
 		}()
@@ -631,12 +669,32 @@ func runDescriptionBatchWave(runner descriptionRunner, batches [][]descriptionRe
 	// the slowest one does. The results channel stays buffered, so a worker never waits on
 	// the consumer either way.
 	go func() {
-		for _, batch := range batches {
-			jobs <- batch
+		defer func() {
+			close(jobs)
+			wg.Wait()
+			close(results)
+		}()
+		for i, batch := range batches {
+			// Selecting on ctx matters for the feeder specifically: `jobs` is unbuffered, so a
+			// wave cancelled while every worker is stuck inside a provider call that ignores
+			// its context would leave this goroutine blocked on a send nobody will ever
+			// receive -- a leaked goroutine per cancelled wave, in a process whose whole job is
+			// to be able to end.
+			//
+			// Giving up on the send is not the same as giving up on the BATCH. Whatever is
+			// still unfed is reported as failed right here, because the collector drains one
+			// result per batch and the caller settles its claims from those results: a batch
+			// that quietly went missing would hang the first and strand the second. The
+			// results channel is buffered to len(batches), so none of these sends can block.
+			select {
+			case jobs <- batch:
+			case <-ctx.Done():
+				for _, missed := range batches[i:] {
+					results <- descriptionBatchResult{Batch: missed, Err: ctx.Err()}
+				}
+				return
+			}
 		}
-		close(jobs)
-		wg.Wait()
-		close(results)
 	}()
 
 	collected := make([]descriptionBatchResult, 0, len(batches))
@@ -646,9 +704,23 @@ func runDescriptionBatchWave(runner descriptionRunner, batches [][]descriptionRe
 		// in the summary the caller prints and in the next wave, which re-lists whatever is
 		// still missing.
 		bar.Add(len(result.Batch))
+		if onBatch != nil {
+			onBatch(result.Batch, result.Err)
+		}
 		collected = append(collected, result)
 	}
 	return collected
+}
+
+// wholeRepoPending is the sweep's lister: everything in the project that still qualifies.
+//
+// It exists as a closure so runDescriptionGeneration can be driven by a DIFFERENT idea of
+// "pending" -- a detached worker lists only the ids it claimed, because it has no mandate over
+// the rest and another worker may be describing them at the same moment.
+func wholeRepoPending(manager *topology.TopologyManager, targets []domain.ResourceKind, filter domain.ContextFilter, includeNotVisible, regenOversized bool) func() ([]descriptionResource, error) {
+	return func() ([]descriptionResource, error) {
+		return pendingDescriptionResources(manager, targets, filter, includeNotVisible, regenOversized)
+	}
 }
 
 // Returns the resources a generation run has left to do, sorted by kind, name, and ID:

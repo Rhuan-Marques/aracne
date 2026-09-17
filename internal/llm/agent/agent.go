@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -102,6 +103,23 @@ func (a *Agent) Run(input string) error {
 
 // Runs a sub-agent loop with a separate tool set and system prompt. Delegates to the LLM provider, processes tool calls, and returns the final response or an error if max iterations are exceeded.
 func (a *Agent) RunSubAgent(systemPrompt, input string, toolMap map[string]tools.Tool) (string, error) {
+	return a.RunSubAgentContext(context.Background(), systemPrompt, input, toolMap)
+}
+
+// RunSubAgentContext is RunSubAgent with a deadline that can actually end it.
+//
+// WHY IT EXISTS. `arac descriptions generate` has no wall-clock bound of any kind: the only
+// backstop anywhere is the shared HTTP client's ten-minute timeout, which does not cover the CLI
+// transport at all. That was survivable while a person was watching the sweep and could press
+// ctrl-c. A DETACHED description worker has nobody watching it, so an agent loop that cannot be
+// told to stop is an agent loop that runs until something kills the process.
+//
+// Cancellation lands BETWEEN iterations, and between the tool calls inside one. That is enough:
+// it bounds the loop without needing the provider layer to learn about contexts, and the worker
+// carries a watchdog underneath this for the case where one provider call hangs anyway. What it
+// buys over killing the process is that the deferred work still runs -- claims are settled
+// rather than left to go stale, and descriptions already written are already committed.
+func (a *Agent) RunSubAgentContext(ctx context.Context, systemPrompt, input string, toolMap map[string]tools.Tool) (string, error) {
 	subRegistry := tools.NewRegistry()
 	for _, t := range toolMap {
 		subRegistry.Register(t)
@@ -113,6 +131,9 @@ func (a *Agent) RunSubAgent(systemPrompt, input string, toolMap map[string]tools
 	}
 
 	for i := 0; i < a.maxIterations; i++ {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		toolDefs := toToolDefinitions(subRegistry.List())
 
 		resp, err := a.provider.Chat(messages, toolDefs)
@@ -132,6 +153,9 @@ func (a *Agent) RunSubAgent(systemPrompt, input string, toolMap map[string]tools
 		})
 
 		for _, tc := range resp.ToolCalls {
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
 			tool, ok := subRegistry.Get(tc.Function.Name)
 			if !ok {
 				messages = append(messages, llm.Message{

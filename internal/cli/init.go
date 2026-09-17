@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -431,9 +432,10 @@ func sweepDescriptions(manager *topology.TopologyManager, reg *scanner.Registry,
 
 	var bar progress.Reporter
 	bar.SetEnabled(true)
-	if err := runDescriptionGeneration(manager, runner, cfg.Descriptions.Kinds, batchSize,
+	pendingFn := wholeRepoPending(manager, cfg.Descriptions.Kinds, filter, includeNotVisible, false)
+	if err := runDescriptionGeneration(context.Background(), manager, runner, pendingFn, batchSize,
 		defaultDescriptionParallel, defaultDescriptionMaxRetries, cfg.Descriptions.StyleExemplars,
-		filter, includeNotVisible, false, &bar); err != nil {
+		false, nil, &bar); err != nil {
 		fmt.Fprintf(os.Stderr, "\nThe sweep stopped: %v\n", err)
 		fmt.Fprintln(os.Stderr, "Descriptions already written stay written. Re-run "+
 			"`arac descriptions generate` to finish.")
