@@ -473,3 +473,47 @@ func joinPath(module []string, name string) string {
 	}
 	return strings.Join(module, "::") + "::" + name
 }
+
+// missingBinding is the absolute id a bare name is bound to by `use` when that path points into a
+// module of this workspace that declares no such item -- `use crate::a::fun2;` with a.rs indexed and
+// no fun2 in it. "" when the name is unbound, bound outside the workspace, or names a module or any
+// item that exists. See domain.MissingRefsConn.
+func (sc rustScope) missingBinding(name string) string {
+	segs := splitPath(name)
+	if len(segs) != 1 {
+		return sc.missingInModule(segs[:len(segs)-1], segs[len(segs)-1])
+	}
+	for _, p := range sc.imp.binds[segs[0]] {
+		for _, abs := range sc.expand(p, 1) {
+			if len(abs) < 2 || !sc.ix.modules[strings.Join(abs[:len(abs)-1], "::")] {
+				continue
+			}
+			id := strings.Join(abs, "::")
+			if sc.ix.modules[id] || isInternalSymbol(sc.ix.gt, id) {
+				return ""
+			}
+			return id
+		}
+	}
+	return ""
+}
+
+// missingInModule is missingBinding for a qualified call, `a::fun2()` or `crate::a::fun2()`: the id,
+// when the path names a module of this workspace that declares no such item.
+func (sc rustScope) missingInModule(path []string, name string) string {
+	if len(path) == 0 || name == "" {
+		return ""
+	}
+	for _, abs := range sc.expand(path, 0) {
+		mod := strings.Join(abs, "::")
+		if !sc.ix.modules[mod] {
+			continue
+		}
+		id := mod + "::" + name
+		if sc.ix.modules[id] || isInternalSymbol(sc.ix.gt, id) {
+			return ""
+		}
+		return id
+	}
+	return ""
+}

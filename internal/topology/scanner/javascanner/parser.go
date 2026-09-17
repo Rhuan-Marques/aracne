@@ -374,7 +374,8 @@ func (st *parseState) parseClassLike(n *sitter.Node, fqn, topLevelFQN string) {
 		}
 	}
 	if iflist := n.ChildByFieldName("interfaces"); iflist != nil {
-		for _, t := range typeListTypes(iflist, st.src) {
+		cls.Interfaces = typeListTypes(iflist, st.src)
+		for _, t := range cls.Interfaces {
 			st.pr.HierRecords = append(st.pr.HierRecords, hierRec{ChildID: fqn, ParentName: t, Kind: hkImplements})
 		}
 	}
@@ -923,7 +924,8 @@ func (st *parseState) buildLocalClass(node *sitter.Node, localFQN, topLevelFQN s
 		}
 	}
 	if iflist := node.ChildByFieldName("interfaces"); iflist != nil {
-		for _, t := range typeListTypes(iflist, st.src) {
+		cls.Interfaces = typeListTypes(iflist, st.src)
+		for _, t := range cls.Interfaces {
 			st.pr.HierRecords = append(st.pr.HierRecords, hierRec{ChildID: localFQN, ParentName: t, Kind: hkImplements})
 		}
 	}

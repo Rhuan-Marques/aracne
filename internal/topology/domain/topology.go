@@ -40,6 +40,56 @@ type TopologyWarning struct {
 	// keeps Baseline A, because A is still what the callers were written
 	// against. See PreserveSignatureBaselines.
 	Baseline string
+
+	// Transient marks a warning REPORTED to the agent and never stored.
+	//
+	// It is the answer to a call the rules could not judge: a parameter whose type moved,
+	// against an argument the scanner never recorded a type for. Saying nothing there is
+	// what let the most common breaking edit in a typed language report nothing at all;
+	// saying it in the warnings table would be worse. A stored warning asserts a break,
+	// and this one is a maybe -- and it has no discharge event, because the argument that
+	// could not be read this scan cannot be read the next one either, so it would stand
+	// forever and be cleared by hand.
+	//
+	// Never written to SQLite. It reaches the model through the post-edit report only, so
+	// `arac warnings list` keeps meaning "these are actually broken".
+	Transient bool
+
+	// State fingerprints both endpoints of a transient as they stood when it was raised --
+	// see helper.TransientState. A transient is reported once PER STATE: the same id raised
+	// again over the same caller and callee is a finding the agent already has, and one
+	// raised over a changed caller or callee is a new question. Empty on stored warnings.
+	State string
+}
+
+// SignatureChangedMessage and SignatureUnverifiedMessage are the two sentences a changed
+// signature produces, and the ONLY two places either is written.
+//
+// They were built in two producers with different wording -- goscanner emitted one shape and
+// helper.ExpandSignatureWarnings another for every other language -- so the same event read
+// differently depending on which scanner saw it. They are here, in the package both import,
+// because the difference between them is the entire point of the transient channel: one says
+// go fix this, the other says go look at this. A reader has to be able to tell them apart at
+// a glance, which they cannot do if the wording drifts.
+func SignatureChangedMessage(calleeName, callerID string) string {
+	return "function " + calleeName + " changed, fix caller " + callerID
+}
+
+// SignatureUnverifiedMessage is deliberately a different SENTENCE, not the one above with a
+// caveat bolted on. "Fix this" and "check whether this still works" are different instructions,
+// and a suffix on a sentence that already said "fix" reads as the first one.
+func SignatureUnverifiedMessage(calleeName, callerID string) string {
+	return "function " + calleeName + " changed, check if caller " + callerID + " still supports it"
+}
+
+// WarningLabel is the bracketed tag a warning prints under, on every surface. A transient is
+// marked in the tag rather than in the prose so it survives truncation and reads the same in
+// a summary line and on an annotated line of source.
+func WarningLabel(w TopologyWarning) string {
+	if w.Transient {
+		return string(w.Kind) + " | UNVERIFIED"
+	}
+	return string(w.Kind)
 }
 
 // SortWarnings puts a warning list in the one order every surface prints it in: kind, then
@@ -51,7 +101,7 @@ type TopologyWarning struct {
 // was merely untidy while the whole list was printed. It stops being untidy the moment
 // something takes the FIRST N of it -- the warning-read expansion does, and "the first five"
 // has to be the same five each time, and the same five the surface that continues the fixing
-// loop picks up. See cli.warningReadSection.
+// loop picks up. See warnread.Section.
 func SortWarnings(ws []TopologyWarning) {
 	sort.SliceStable(ws, func(i, j int) bool {
 		a, b := ws[i], ws[j]

@@ -84,6 +84,9 @@ func FromGeneric(topo *domain.Topology) *JavaTopology {
 			if v, ok := res.Properties["bases"]; ok {
 				jsonConvert(v, &s.Bases)
 			}
+			if v, ok := res.Properties["interfaces"]; ok {
+				jsonConvert(v, &s.Interfaces)
+			}
 			if v, ok := res.Properties["generics"]; ok {
 				jsonConvert(v, &s.Generics)
 			}
@@ -193,6 +196,7 @@ func ToGeneric(gt *JavaTopology, language string) *domain.Topology {
 			"components":   s.Components,
 			"permits":      s.Permits,
 			"bases":        s.Bases,
+			"interfaces":   s.Interfaces,
 			"generics":     s.Generics,
 			"is_enum":      s.IsEnum,
 			"is_record":    s.IsRecord,

@@ -161,7 +161,7 @@ func splitSignature(cut string) (head string, elidedLines int) {
 		// body starts. `// TODO:` and `/// Panics:` end in a colon, which made the head the
 		// comment alone and swallowed the declaration itself into the elision -- a skeleton
 		// showing a comment where a signature should be.
-		if isCommentLine(t) {
+		if IsCommentLine(t) {
 			continue
 		}
 		// A brace or colon at end of line opens the body in every language aracne scans.
@@ -182,9 +182,11 @@ func splitSignature(cut string) (head string, elidedLines int) {
 	return lines[0], len(lines) - 1
 }
 
-// isCommentLine reports whether an already-trimmed line opens or continues a comment in any
-// language aracne scans. Used to keep a declaration's doc comment out of the signature split.
-func isCommentLine(trimmed string) bool {
+// IsCommentLine reports whether an already-trimmed line opens or continues a comment in any
+// language aracne scans. Used to keep a declaration's doc comment out of the signature split,
+// and -- by warnread -- to keep a doc comment that merely MENTIONS a missing symbol from being
+// mistaken for the reference that is broken.
+func IsCommentLine(trimmed string) bool {
 	switch {
 	case strings.HasPrefix(trimmed, "//"), strings.HasPrefix(trimmed, "/*"),
 		strings.HasPrefix(trimmed, "#"):
@@ -234,7 +236,14 @@ func itoa(n int) string {
 // Files are left alone here: fileUnit has already applied file_mode to them, and re-abridging
 // a skeleton would elide the signatures that ARE the skeleton. The marker names the id and the
 // `full: true` escape hatch, so the exact bytes are always one call away.
-func abridgeSymbolBody(u readunit.Unit, maxLines int) string {
+//
+// ANNOTATIONS CHANGE THE SHAPE OF THE CUT, not whether it happens. A caller that asked for a
+// line to be marked asked for that line to be VISIBLE, and "signature plus a marker" is
+// precisely the answer that hides it -- a warning 300 lines into a long function would be
+// reported by showing a signature the warned line is not in. An annotated over-cap body keeps
+// the signature plus a band around each anchor instead. An empty anns takes the original path
+// byte for byte, which is every read in the product that is not a warning report.
+func abridgeSymbolBody(u readunit.Unit, maxLines int, anns []readunit.Annotation, window int) string {
 	if maxLines <= 0 || u.Kind == domain.ResourceFile || countLines(u.Body) <= maxLines {
 		return u.Body
 	}
@@ -247,10 +256,170 @@ func abridgeSymbolBody(u readunit.Unit, maxLines int) string {
 	if elided <= 0 {
 		return u.Body
 	}
+	if windowed, ok := windowTail(tail, head, anns, window, u.ID); ok {
+		return lead + windowed
+	}
 	if !strings.HasSuffix(head, "\n") {
 		head += "\n"
 	}
 	return lead + head + abridgedMarker(u.ID, elided)
+}
+
+// signatureOnlyBody cuts a symbol's body down to its signature, for ReadIDsOptions.SignatureOnly.
+//
+// Same split as abridgeSymbolBody, so a method keeps the enclosing type rendered above it: the
+// render ledger has already recorded that type as shown, and a later method of it would
+// back-reference a declaration that was never printed. ok is false when there is no body to
+// leave out -- a one-line declaration is its own signature.
+func signatureOnlyBody(u readunit.Unit) (string, bool) {
+	lead, tail := splitLastDeclaration(u.Body)
+	head, elided := splitSignature(tail)
+	if elided <= 0 {
+		return "", false
+	}
+	if !strings.HasSuffix(head, "\n") {
+		head += "\n"
+	}
+	return lead + head + signatureOnlyMarker(u.ID, elided), true
+}
+
+// signatureOnlyMarker stands in for a body left out because only the signature was asked for.
+// Unlike abridgedMarker, reading the id again DOES return the body -- this response chose to
+// omit it, the read did not cap it -- so that is the way back it names, worded like
+// renderstate.ElisionMarker so it holds under either tool name (MCP read or `arac read`).
+func signatureOnlyMarker(id string, elided int) string {
+	return fmt.Sprintf("⋯ body not shown (%s) — read %s for its source ⋯\n\n", pluralLines(elided), id)
+}
+
+// windowTail keeps the signature, a band of `radius` lines either side of every anchored line,
+// and the declaration's closing line -- eliding the runs between them.
+//
+// ok is false when there is nothing to window: no anchors, radius 0, or no anchor found in
+// this body. That is the caller's signal to fall back to the plain marker rather than invent a
+// shape, and it is what makes an ordinary read identical to what it was before.
+//
+// A KEEP-MASK rather than interval arithmetic, because overlap is the common case and a mask
+// merges it for free: two anchors four lines apart with radius six are one contiguous run, no
+// sorting and no boundary conditions to get wrong.
+func windowTail(tail, head string, anns []readunit.Annotation, radius int, id string) (string, bool) {
+	if len(anns) == 0 || radius <= 0 {
+		return "", false
+	}
+	lines := strings.Split(strings.TrimRight(tail, "\n"), "\n")
+	keep := make([]bool, len(lines))
+
+	// The signature always survives, exactly as it does on the unwindowed path.
+	for i := 0; i < countLines(head) && i < len(keep); i++ {
+		keep[i] = true
+	}
+
+	found := false
+	for _, a := range anns {
+		i := readunit.AnchorIndex(lines, a)
+		if i < 0 {
+			continue
+		}
+		found = true
+		for j := max(0, i-radius); j <= min(len(lines)-1, i+radius); j++ {
+			keep[j] = true
+		}
+	}
+	if !found {
+		return "", false
+	}
+
+	// The closing line. A body that stops mid-air reads as truncated output rather than as an
+	// elision, and the closer costs one line. In Python there is no closer and this keeps the
+	// final statement, which is just as useful and needs no per-language branch.
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.TrimSpace(lines[i]) != "" {
+			keep[i] = true
+			break
+		}
+	}
+
+	// Pinhole gaps. An elision marker costs a line of its own, so standing it in for one or
+	// two real lines is a net loss that reads as noise.
+	for i := 0; i < len(keep); i++ {
+		if keep[i] {
+			continue
+		}
+		j := i
+		for j < len(keep) && !keep[j] {
+			j++
+		}
+		if j-i <= 2 {
+			for k := i; k < j; k++ {
+				keep[k] = true
+			}
+		}
+		i = j
+	}
+
+	var b strings.Builder
+	elided := 0
+	for i := 0; i < len(lines); i++ {
+		if keep[i] {
+			b.WriteString(lines[i])
+			b.WriteString("\n")
+			continue
+		}
+		j := i
+		for j < len(lines) && !keep[j] {
+			j++
+		}
+		elided += j - i
+		// Indented to match the code around it, so the marker sits inside the block rather
+		// than jutting out to column zero.
+		b.WriteString(gapIndent(lines, i, j))
+		b.WriteString(windowElision(j - i))
+		b.WriteString("\n")
+		i = j - 1
+	}
+	if elided == 0 {
+		return "", false
+	}
+	b.WriteString("\n")
+	b.WriteString(abridgedMarker(id, elided))
+	return b.String(), true
+}
+
+// windowElision stands in for one run of lines a WINDOWED abridgement skipped over.
+//
+// Short on purpose: it can appear several times in one body, and the only thing the reader
+// needs at each gap is its size. What was elided, which cap did it, and the way back to the
+// exact bytes are said once, by abridgedMarker, under the whole body. It keeps the leading
+// U+22EF for the reason renderstate.ElisionMarker documents -- a marker styled like a
+// plausible comment invites a model to build an `edit` old_string out of text that was never
+// in the file.
+func windowElision(n int) string {
+	return fmt.Sprintf("⋯ %s not shown ⋯", pluralLines(n))
+}
+
+// gapIndent is how far in an elision marker for lines[start:end) should sit: the DEEPER of the
+// code on either side of it.
+//
+// Not simply the following line's indent, which reads wrong for the last gap in a body -- the
+// line after it is the closing brace at column zero, so the marker standing in for fifty lines
+// of function body would jut out to the margin as though it were a sibling declaration.
+func gapIndent(lines []string, start, end int) string {
+	before := indentAt(lines, start-1, -1)
+	after := indentAt(lines, end, 1)
+	if len(before) > len(after) {
+		return before
+	}
+	return after
+}
+
+// indentAt is the leading whitespace of the first non-blank line from i, walking in step.
+func indentAt(lines []string, i, step int) string {
+	for ; i >= 0 && i < len(lines); i += step {
+		if strings.TrimSpace(lines[i]) == "" {
+			continue
+		}
+		return lines[i][:len(lines[i])-len(strings.TrimLeft(lines[i], " \t"))]
+	}
+	return ""
 }
 
 // abridgedMarker stands in for the body a symbol read left out over the line cap.
@@ -280,11 +449,13 @@ var declStart = regexp.MustCompile(`^\s*(?:pub\s+|pub\([^)]*\)\s+|async\s+|unsaf
 // opening brace would keep the type and elide the method the model actually asked for -- the
 // exact opposite of the point.
 //
-// Indentation is deliberately ignored rather than used to find a "top level". Ignoring it is
-// safe in both directions: on a nested closure late in a long function the split lands there
-// and simply elides less, which costs tokens and never costs the model its answer. Preferring
-// column zero would have been wrong for Python, where the method is always indented inside its
-// class and the class line would win every time.
+// An INDENTED declaration counts only when the line that structurally encloses it -- the nearest
+// line above with less indentation -- opens a container (see enclosedByContainer). Column zero
+// would be wrong for Python, where the method is always indented inside its class and the class
+// line would win every time. But ignoring indentation outright let a local statement win: a Go
+// `var x T` sixty lines into a function moved the split there, and everything above it became
+// `lead`, which is printed in full and never windowed. One local `var` turned a capped method
+// into its first hundred lines, and a warning report aimed at line 95 carried all 95.
 func splitLastDeclaration(body string) (lead, last string) {
 	lines := strings.Split(body, "\n")
 	idx := 0
@@ -292,7 +463,7 @@ func splitLastDeclaration(body string) (lead, last string) {
 		if strings.TrimSpace(l) == "" {
 			continue
 		}
-		if declStart.MatchString(l) {
+		if declStart.MatchString(l) && enclosedByContainer(lines, i) {
 			idx = i
 		}
 	}
@@ -300,4 +471,31 @@ func splitLastDeclaration(body string) (lead, last string) {
 		return "", body
 	}
 	return strings.Join(lines[:idx], "\n") + "\n", strings.Join(lines[idx:], "\n")
+}
+
+// containerDecl matches a declaration whose body holds other declarations: the only thing an
+// indented declaration may sit inside and still be a member rather than a local.
+var containerDecl = regexp.MustCompile(`^\s*(?:pub\s+|pub\([^)]*\)\s+|unsafe\s+|export\s+|default\s+|static\s+|final\s+|public\s+|private\s+|protected\s+|abstract\s+)*(?:class|struct|enum|trait|impl|interface)\b`)
+
+// enclosedByContainer reports whether lines[i] is at the top level of the body, or sits directly
+// inside a class-like declaration. The enclosing line is the nearest non-blank line above with
+// less indentation, which is a structural parent in every language aracne renders -- a
+// function signature, an `if`, the `) {` closing a multi-line signature, or a class header.
+// Only the last of those makes an indented `def`/`fn`/`const` a member; the rest make it a local.
+func enclosedByContainer(lines []string, i int) bool {
+	indent := leadingWhitespace(lines[i])
+	if indent == 0 {
+		return true
+	}
+	for j := i - 1; j >= 0; j-- {
+		if strings.TrimSpace(lines[j]) == "" || leadingWhitespace(lines[j]) >= indent {
+			continue
+		}
+		return containerDecl.MatchString(lines[j])
+	}
+	return true // nothing encloses it: the body itself starts indented
+}
+
+func leadingWhitespace(s string) int {
+	return len(s) - len(strings.TrimLeft(s, " \t"))
 }

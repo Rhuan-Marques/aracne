@@ -84,6 +84,9 @@ func carryForwardWarnings(oldTopo, newTopo *domain.Topology, aliases map[string]
 
 	helper.CleanupOrphanedWarnings(newTopo)
 	helper.ResolveReferrerWarnings(newTopo)
+	// Transients are dropped here on purpose: a carry-forward is a full rescan, not an edit,
+	// and an unverified report is news about a change the agent just made. Repeating it for
+	// every warning carried across an unrelated rescan is how a channel gets ignored.
 	helper.ReconcileSignatureWarnings(newTopo)
 	helper.DischargeSignatureWarnings(newTopo)
 }

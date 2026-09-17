@@ -1,11 +1,15 @@
 package jsscanner
 
 import (
+	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/Rhuan-Marques/aracne/internal/topology/contract"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 	js "github.com/Rhuan-Marques/aracne/internal/topology/javascript"
 )
 
@@ -582,7 +586,91 @@ func resolveDirectCall(name, scope string, pr *ParseResult, gt *js.JavaScriptTop
 			return
 		}
 	}
+	if missing := missingExport(info, abs, info.ImportedName, gt); missing != "" {
+		add(js.ConnectionKind(domain.MissingRefsConn), missing)
+	}
 }
+
+// missingExport is the id a named ES import expects when the project module it names exports no
+// such symbol, following every re-export resolveExport follows -- `import { fun2 } from './a'`
+// with a.ts in the graph and no fun2 anywhere behind it. "" for anything this resolver cannot judge:
+// a CommonJS binding or target (exports can be assigned at run time), a default import, or a
+// module whose re-exports leave the project. See domain.MissingRefsConn.
+func missingExport(info importInfo, abs, name string, gt *js.JavaScriptTopology) string {
+	if !info.ESM || !info.Internal || name == "" || name == "default" || strings.Contains(name, ".") {
+		return ""
+	}
+	if strings.HasSuffix(abs, ".cjs") {
+		return ""
+	}
+	mod, ok := gt.Modules[abs]
+	if !ok {
+		return ""
+	}
+	if _, reexported := mod.ReExportsNamed[name]; reexported {
+		return ""
+	}
+	// The export resolver knows the declarations this scanner models, and a module can export a
+	// name in ways it does not: `export const { a, b } = slice.actions` (every Redux Toolkit
+	// reducers file), `export enum`, `export namespace`, `export declare`, a type-only export. On a
+	// real Grafana checkout the first of those alone produced 382 "references X, which does not
+	// exist" warnings, all false. So a name is only judged missing when the module's source does
+	// not contain it as an identifier at all: the case this warning exists for, an export that was
+	// removed or renamed, still is.
+	if moduleMentions(abs, name) {
+		return ""
+	}
+	return moduleKey(gt, abs) + "." + name
+}
+
+// moduleMentions reports whether the file at abs contains name as a whole identifier. Unreadable
+// counts as mentioned: a warning must never rest on a file this scan could not read.
+func moduleMentions(abs, name string) bool {
+	idents, ok := moduleIdentifiers(abs)
+	if !ok {
+		return true
+	}
+	return idents[name]
+}
+
+// moduleIdentifiers is the identifier set of a file, cached per path and modification time: one
+// scan resolves many imports from the same module.
+func moduleIdentifiers(abs string) (map[string]bool, bool) {
+	info, err := os.Stat(abs)
+	if err != nil {
+		return nil, false
+	}
+	key := identCacheKey{path: abs, size: info.Size(), mod: info.ModTime().UnixNano()}
+	identCacheMu.Lock()
+	defer identCacheMu.Unlock()
+	if set, ok := identCache[key]; ok {
+		return set, true
+	}
+	raw, err := os.ReadFile(abs)
+	if err != nil {
+		return nil, false
+	}
+	set := make(map[string]bool)
+	for _, m := range jsIdentRe.FindAll(raw, -1) {
+		set[string(m)] = true
+	}
+	if len(identCache) > 512 {
+		identCache = make(map[identCacheKey]map[string]bool)
+	}
+	identCache[key] = set
+	return set, true
+}
+
+type identCacheKey struct {
+	path      string
+	size, mod int64
+}
+
+var (
+	jsIdentRe    = regexp.MustCompile(`[A-Za-z_$][A-Za-z0-9_$]*`)
+	identCacheMu sync.Mutex
+	identCache   = make(map[identCacheKey]map[string]bool)
+)
 
 // resolveFunctionID resolves a called name to the topology FunctionID it refers to: a local
 // function in the current file, or an imported function resolved through the import map and the
@@ -631,6 +719,9 @@ func resolveMethodCall(call jsBodyCall, pr *ParseResult, gt *js.JavaScriptTopolo
 				// `const Circle = require('./circle'); Circle.unit()`: the binding is the
 				// module's value, a class, and the member is its static method.
 				addStaticCall(cid, call.MethodName, gt, add)
+			} else if missing := missingExport(info, abs, call.MethodName, gt); missing != "" {
+				// `import * as ns from './a'; ns.fun2()` with no fun2 exported by a.
+				add(js.ConnectionKind(domain.MissingRefsConn), missing)
 			}
 		}
 		return

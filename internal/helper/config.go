@@ -160,6 +160,16 @@ type ReadSection struct {
 	// largest single tool result across two benchmark runs -- because `into_config` is one
 	// enormous function. 0 or negative disables the cap.
 	MaxSymbolLines *int `json:"max_symbol_lines,omitempty"`
+	// AnnotationWindow is how many lines of context an abridged body keeps ON EACH SIDE of a
+	// line the caller asked to annotate. It is a radius, not a total.
+	//
+	// It exists because MaxSymbolLines and an annotation want opposite things: the cap says
+	// "the signature is enough", the annotation says "this specific line must be on screen".
+	// Without a window a topology warning landing 300 lines into a long function would be
+	// reported by showing a signature the warned line is not in -- which is the one thing the
+	// report must not do. 0 or negative keeps the signature alone, the behaviour that predates
+	// annotations and a legitimate choice for a project that wants the tightest report.
+	AnnotationWindow *int `json:"annotation_window,omitempty"`
 }
 
 // Configuration for the live/incremental scanner (`arac scanner run`).
@@ -382,36 +392,37 @@ type FeaturesSection struct {
 	// WarningReads attaches the FULL read of the code a topology warning names to the
 	// warning report itself, instead of the one line naming the two ids.
 	//
-	// WHAT IT BUYS. The report an edit comes back with is a summary -- "[signature_changed]
-	// f changed signature, verify caller g (source: ..., target: ...)". Acting on it means
-	// reading g, which is another turn, and every turn re-sends the whole transcript. The
-	// code is already resolvable from the ids the warning carries, so the expansion is one
-	// batched `arac read` of the sites to fix: the model can go straight to the edit.
+	// The report an edit comes back with then carries the code to fix: every warned call site
+	// annotated on its line, in one batched `arac read` of the callers and the callee, so the
+	// model can go straight to the edit. WarningReadMaxBytes caps how much of it one report
+	// carries.
 	//
-	// Off by default because it is not free. A warning report is emitted after an edit, on
-	// the agent's critical path, and expanding it spends bytes on code the model may
-	// already have in context. WarningReadLimit is the ceiling that keeps a wide breakage
-	// from dumping a subgraph.
-	WarningReads bool `json:"warning_reads"`
+	// ON unless set: absent (nil) means on, and only an explicit false turns it off, which
+	// reports the plain one-line summary instead. WarningReadsEnabled() is the only reader.
+	WarningReads *bool `json:"warning_reads,omitempty"`
 
-	// WarningReadLimit caps how many warnings WarningReads expands. The rest still appear
-	// in the summary above the reads, and `arac warnings list` still has all of them.
+	// WarningReadMaxBytes caps how many BYTES one warning report may occupy -- the whole
+	// message the model receives, reads, CONTEXT, notes and whatever the surface prints around
+	// it. The expansion shows the longest prefix of the ordered warnings that fits and names
+	// the rest in a note; `arac warnings list --read` pages through them.
 	//
 	// THREE STATES, and 0 is not the default. Absent (nil) means
-	// DefaultWarningReadLimit; a value of 0 or lower means NO limit, which is a deliberate
+	// DefaultWarningReadMaxBytes; a value of 0 or lower means NO limit, which is a deliberate
 	// choice a project makes and not what an untouched config should silently mean.
-	// EffectiveWarningReadLimit() is the only reader.
-	WarningReadLimit *int `json:"warning_read_limit,omitempty"`
+	// EffectiveWarningReadMaxBytes() is the only reader.
+	WarningReadMaxBytes *int `json:"warning_read_max_bytes,omitempty"`
 }
 
-// DefaultWarningReadLimit is how many warnings features.warning_reads expands when
-// features.warning_read_limit is absent.
+// DefaultWarningReadMaxBytes is the byte budget of one warning report when
+// features.warning_read_max_bytes is absent.
 //
-// Five, because the expansion competes with the transcript it saves. A signature change with
-// eleven callers is the case this feature exists for AND the case that would bury the report
-// it is attached to; five sites is enough to fix the common breakage in one turn, and the
-// summary above still names every one of them.
-const DefaultWarningReadLimit = 5
+// 10,000, because that is where Claude Code stops injecting hook context: anything longer is
+// saved to a file and replaced by a 2 KB preview, and on a measured benchmark run the model never
+// opened the file -- a 14-warning report arrived with 2 of its annotations visible. The limit is
+// in characters; a byte is never fewer than a character, so a report within this many bytes is
+// within the limit whatever it contains. It was a count of five warnings, which bounded nothing:
+// one warning in a 300-line method is not the same size as one in a one-liner.
+const DefaultWarningReadMaxBytes = 10000
 
 // The four modes of Config.Mode.
 //
@@ -745,6 +756,27 @@ func (c *Config) EffectiveSkeletonThreshold() int {
 		return DefaultSkeletonThreshold
 	}
 	return *c.Read.SkeletonThreshold
+}
+
+// DefaultAnnotationWindow is the radius an annotated over-cap body keeps around each marked
+// line.
+//
+// Six: a signature, thirteen lines and two markers per warning, so a handful of warnings is
+// roughly eighty lines -- well inside features.warning_read_max_bytes, which a post-edit report
+// has to fit. Six above is enough to see the enclosing statement, six below enough to see
+// what the line feeds.
+const DefaultAnnotationWindow = 6
+
+// EffectiveAnnotationWindow resolves read.annotation_window. Absent is
+// DefaultAnnotationWindow; a configured 0 or negative means no window at all.
+func (c *Config) EffectiveAnnotationWindow() int {
+	if c.Read.AnnotationWindow == nil {
+		return DefaultAnnotationWindow
+	}
+	if *c.Read.AnnotationWindow <= 0 {
+		return 0
+	}
+	return *c.Read.AnnotationWindow
 }
 
 // EffectiveMaxSymbolLines resolves read.max_symbol_lines. A configured 0 or negative disables
@@ -1601,15 +1633,17 @@ func (c *Config) AgentEnabled() bool { return c.Features.Agent }
 
 // WarningReadsEnabled reports whether a topology warning is reported with the full read of
 // the code it names attached.
-func (c *Config) WarningReadsEnabled() bool { return c.Features.WarningReads }
+func (c *Config) WarningReadsEnabled() bool {
+	return c.Features.WarningReads == nil || *c.Features.WarningReads
+}
 
-// EffectiveWarningReadLimit resolves features.warning_read_limit. It returns 0 for "no
-// limit", so the one comparison a caller needs is `limit > 0 && len(ws) > limit`.
-func (c *Config) EffectiveWarningReadLimit() int {
-	if c.Features.WarningReadLimit == nil {
-		return DefaultWarningReadLimit
+// EffectiveWarningReadMaxBytes resolves features.warning_read_max_bytes. It returns 0 for "no
+// limit".
+func (c *Config) EffectiveWarningReadMaxBytes() int {
+	if c.Features.WarningReadMaxBytes == nil {
+		return DefaultWarningReadMaxBytes
 	}
-	if n := *c.Features.WarningReadLimit; n > 0 {
+	if n := *c.Features.WarningReadMaxBytes; n > 0 {
 		return n
 	}
 	return 0

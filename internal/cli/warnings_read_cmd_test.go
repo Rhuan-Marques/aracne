@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -52,11 +53,19 @@ func TestWarningsListReadPrintsTheWarnedCode(t *testing.T) {
 	breakAdd(t, dir)
 
 	printed := runWarningsList(t, dir, "--read")
-	if !strings.Contains(printed, "Warned code, read in full") {
+	if !strings.Contains(printed, warnread.HeadlinePull) {
 		t.Fatalf("--read printed no expansion:\n%s", printed)
 	}
-	if !strings.Contains(printed, "func CallA() int { return lib.Add(1, 2) }") {
-		t.Fatalf("--read did not print the caller's source:\n%s", printed)
+	// The PULL headline, not the push one: this caller did not necessarily break anything.
+	if strings.Contains(printed, warnread.HeadlinePush) {
+		t.Fatalf("a listing claimed the caller's own changes caused the warnings:\n%s", printed)
+	}
+	if !strings.Contains(printed, "func CallA() int { return lib.Add(1, 2) } <- [signature_changed]") {
+		t.Fatalf("--read did not annotate the caller's call line:\n%s", printed)
+	}
+	// --read REPLACES the listing; the two halves would otherwise say the same thing twice.
+	if strings.Contains(printed, "Found 1 warning(s)") {
+		t.Fatalf("--read printed the plain listing as well as the expansion:\n%s", printed)
 	}
 }
 
@@ -67,7 +76,7 @@ func TestWarningsListWithoutReadIsUnchanged(t *testing.T) {
 	breakAdd(t, dir)
 
 	printed := runWarningsList(t, dir)
-	if strings.Contains(printed, "Warned code") {
+	if strings.Contains(printed, warnread.HeadlinePull) {
 		t.Fatalf("the plain listing expanded anything at all:\n%s", printed)
 	}
 	if !strings.Contains(printed, "signature_changed") {
@@ -78,7 +87,7 @@ func TestWarningsListWithoutReadIsUnchanged(t *testing.T) {
 // A flag that silently does nothing is worse than no flag: the caller cannot tell "nothing to
 // read" from "this project has the feature off".
 func TestWarningsListReadSaysSoWhenTheFeatureIsOff(t *testing.T) {
-	dir := warnReadProject(t, "", "CallA")
+	dir := warnReadProject(t, `{"features":{"warning_reads":false}}`, "CallA")
 	breakAdd(t, dir)
 
 	printed := runWarningsList(t, dir, "--read")
@@ -90,74 +99,82 @@ func TestWarningsListReadSaysSoWhenTheFeatureIsOff(t *testing.T) {
 	}
 }
 
-// THE LOOP, end to end, and the claim the note makes. Seven warnings, a cap of five: the
-// listing expands five and says two are left; fixing those five and asking again expands the
-// other two and says nothing is left.
+// THE LOOP, end to end, and the claim the note makes. Seven warnings under a budget that cannot
+// hold them all: each page expands a prefix of what is still broken and says how many are left;
+// fixing that page and asking again expands the next, until nothing is left and the note is gone.
 //
 // No cursor is stored anywhere, deliberately -- the page advances because a FIXED warning has
-// retired itself from the table. A remembered page would have shown warnings 6-7 while 1-5 were
-// still broken.
+// retired itself from the table. A remembered page would have shown later warnings while the
+// first ones were still broken.
 func TestWarningsListReadAdvancesAsWarningsAreFixed(t *testing.T) {
 	callers := []string{"CallA", "CallB", "CallC", "CallD", "CallE", "CallF", "CallG"}
-	dir := warnReadProject(t, `{"features":{"warning_reads":true,"warning_read_limit":5}}`, callers...)
+	dir := warnReadProject(t, `{"features":{"warning_reads":true,"warning_read_max_bytes":0}}`, callers...)
 	breakAdd(t, dir)
 
-	first := runWarningsList(t, dir, "--read")
-	for _, want := range callers[:5] {
-		if !strings.Contains(first, "func "+want+"() int") {
-			t.Fatalf("%s is in the first page and was not expanded:\n%s", want, first)
-		}
-	}
-	for _, unwanted := range callers[5:] {
-		if strings.Contains(first, "func "+unwanted+"() int") {
-			t.Fatalf("%s is past the cap and was expanded anyway:\n%s", unwanted, first)
-		}
-	}
-	if !strings.Contains(first, "... 2 warnings left. Use `arac warnings list --read` to continue fixing.") {
-		t.Fatalf("the first page did not say what was left, or how to get it:\n%s", first)
-	}
+	// Room for roughly half the report, so the loop has to take more than one page.
+	budget := len(runWarningsList(t, dir, "--read")) / 2
+	setWarningBudget(t, dir, budget)
 
-	// Fix the first five the way the model would: from the code the page just handed over,
-	// through a surface that re-syncs the topology. Writing the file behind aracne's back
-	// would leave the warnings standing, which is a statement about the index rather than
-	// about this feature.
-	var edits []string
-	for _, name := range callers[:5] {
-		edits = append(edits, `{"file_path":"main.go",`+
-			`"old_string":"func `+name+`() int { return lib.Add(1, 2) }",`+
-			`"new_string":"func `+name+`() int { return lib.Add(1, 2, 3) }"}`)
-	}
-	runCLIWithStdin(t, dir, `{"edits":[`+strings.Join(edits, ",")+`]}`, RunEdit)
+	remaining := append([]string(nil), callers...)
+	pages := 0
+	for len(remaining) > 0 {
+		if pages++; pages > len(callers) {
+			t.Fatalf("still %v left after %d pages; the loop is not advancing", remaining, pages)
+		}
+		page := runWarningsList(t, dir, "--read")
+		if len(page) > budget {
+			t.Fatalf("page %d is %d bytes, over the %d budget:\n%s", pages, len(page), budget, page)
+		}
+		shown := expandedCallers(page, callers)
+		if len(shown) == 0 {
+			t.Fatalf("page %d expanded nothing with %v still broken:\n%s", pages, remaining, page)
+		}
+		for i, name := range shown {
+			if i >= len(remaining) || name != remaining[i] {
+				t.Fatalf("page %d expanded %v, not a prefix of what is left %v:\n%s", pages, shown, remaining, page)
+			}
+		}
+		left := len(remaining) - len(shown)
+		if left > 0 && !strings.Contains(page, fmt.Sprintf("... %d warning", left)+"") {
+			t.Fatalf("page %d did not say %d were left:\n%s", pages, left, page)
+		}
+		if left == 0 && strings.Contains(page, "left. Use") {
+			t.Fatalf("nothing is left after page %d, so the note must be gone:\n%s", pages, page)
+		}
 
-	second := runWarningsList(t, dir, "--read")
-	for _, want := range callers[5:] {
-		if !strings.Contains(second, "func "+want+"() int") {
-			t.Fatalf("%s is the next page and was not expanded:\n%s", want, second)
+		// Fix the page the way the model would: from the code it just handed over, through a
+		// surface that re-syncs the topology. Writing the file behind aracne's back would leave
+		// the warnings standing, which is a statement about the index, not about this feature.
+		var edits []string
+		for _, name := range shown {
+			edits = append(edits, `{"file_path":"main.go",`+
+				`"old_string":"func `+name+`() int { return lib.Add(1, 2) }",`+
+				`"new_string":"func `+name+`() int { return lib.Add(1, 2, 3) }"}`)
 		}
+		runCLIWithStdin(t, dir, `{"edits":[`+strings.Join(edits, ",")+`]}`, RunEdit)
+		remaining = remaining[len(shown):]
 	}
-	for _, fixedName := range callers[:5] {
-		if strings.Contains(second, "func "+fixedName+"() int") {
-			t.Fatalf("%s was fixed and came back on the next page:\n%s", fixedName, second)
-		}
-	}
-	if strings.Contains(second, "warnings left") {
-		t.Fatalf("nothing is left, so the note must be gone:\n%s", second)
+	if pages < 2 {
+		t.Fatalf("the budget held everything in one page; the test did not exercise paging")
 	}
 }
 
 // The note on the post-edit report is the same note, and it is what points at the command
-// above. Under the cap there is nothing left, so there is no note.
-func TestWarningsLeftNoteOnlyAppearsWhenTheCapBit(t *testing.T) {
-	over := warnReadProject(t, `{"features":{"warning_reads":true,"warning_read_limit":2}}`,
-		"CallA", "CallB", "CallC")
+// above. When everything fits there is nothing left, so there is no note.
+func TestWarningsLeftNoteOnlyAppearsWhenTheBudgetBit(t *testing.T) {
+	callers := []string{"CallA", "CallB", "CallC"}
+	full := breakAdd(t, warnReadProject(t,
+		`{"features":{"warning_reads":true,"warning_read_max_bytes":0}}`, callers...))
+	over := warnReadProject(t,
+		fmt.Sprintf(`{"features":{"warning_reads":true,"warning_read_max_bytes":%d}}`, len(full)-40), callers...)
 	if printed := breakAdd(t, over); !strings.Contains(printed,
-		"... 1 warning left. Use `arac warnings list --read` to continue fixing.") {
-		t.Fatalf("the report did not point at the continuation, or miscounted:\n%s", printed)
+		"left. Use `arac warnings list --read` to continue fixing.") {
+		t.Fatalf("the report did not point at the continuation:\n%s", printed)
 	}
 
-	under := warnReadProject(t, `{"features":{"warning_reads":true,"warning_read_limit":5}}`, "CallA")
+	under := warnReadProject(t, `{"features":{"warning_reads":true}}`, "CallA")
 	if printed := breakAdd(t, under); strings.Contains(printed, "warning left") {
-		t.Fatalf("everything was expanded, so nothing should be left:\n%s", printed)
+		t.Fatalf("everything fits the default budget, so nothing should be left:\n%s", printed)
 	}
 }
 
@@ -206,6 +223,8 @@ func TestWarningsListToolOffersReadOnlyWhenEnabled(t *testing.T) {
 	}
 
 	off := helper.DefaultConfig()
+	disabled := false
+	off.Features.WarningReads = &disabled
 	if hasRead(off) {
 		t.Error("features.warning_reads is off and the tool offers read anyway")
 	}
@@ -218,9 +237,11 @@ func TestWarningsListToolOffersReadOnlyWhenEnabled(t *testing.T) {
 // behaviour, three surfaces. If they diverge, a warning reads differently depending on how it
 // was asked for, and the note pointing between them starts lying.
 func TestWarningsListToolReadMatchesTheOtherSurfaces(t *testing.T) {
-	dir := warnReadProject(t, `{"features":{"warning_reads":true,"warning_read_limit":2}}`,
+	dir := warnReadProject(t, `{"features":{"warning_reads":true,"warning_read_max_bytes":0}}`,
 		"CallA", "CallB", "CallC")
 	breakAdd(t, dir)
+	// Short of the whole report, so the shared expansion has to page and print its note.
+	setWarningBudget(t, dir, len(runWarningsList(t, dir, "--read"))-40)
 
 	dbPath := filepath.Join(dir, ".aracne", "topology.db")
 	cfg := helper.LoadConfig(helper.ConfigPath(dbPath))
@@ -235,7 +256,11 @@ func TestWarningsListToolReadMatchesTheOtherSurfaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	direct := warnread.Section(dbPath, NewScannerRegistry(), warnings, warnread.NoBudget)
+	direct := warnread.Section(dbPath, NewScannerRegistry(), warnings, warnread.Options{
+		Budget:   warnread.NoBudget,
+		Headline: warnread.HeadlinePull,
+		Reserve:  1, // the tool's trailing newline, as the tool itself reserves it
+	})
 	if direct == "" {
 		t.Fatal("precondition: the shared expansion produced nothing")
 	}
@@ -243,7 +268,7 @@ func TestWarningsListToolReadMatchesTheOtherSurfaces(t *testing.T) {
 		t.Fatalf("the tool's read is not the shared expansion.\ntool:\n%s\nshared:\n%s", withRead, direct)
 	}
 	// Including the note -- the tool is in a cli-mode project, so it points at the CLI verb.
-	if !strings.Contains(withRead, "... 1 warning left. Use `arac warnings list --read` to continue fixing.") {
+	if !strings.Contains(withRead, "left. Use `arac warnings list --read` to continue fixing.") {
 		t.Fatalf("the tool's read dropped the continuation note:\n%s", withRead)
 	}
 
@@ -251,7 +276,7 @@ func TestWarningsListToolReadMatchesTheOtherSurfaces(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if strings.Contains(without, "Warned code") {
+	if strings.Contains(without, warnread.HeadlinePull) {
 		t.Fatalf("the tool expanded without read=true:\n%s", without)
 	}
 }

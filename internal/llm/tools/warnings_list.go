@@ -63,9 +63,10 @@ func (w *WarningsList) Parameters() []toolapi.Parameter {
 	if w.readsEnabled() {
 		params = append(params, toolapi.Parameter{
 			Name: "read", Type: "boolean", Required: false,
-			Description: "Return the full source of the code the first few warnings name (the count is " +
-				"features.warning_read_limit), so they can be fixed from this reply. Call again after " +
-				"fixing them for the next batch.",
+			Description: "Return the source of the code the first warnings name (as many as fit " +
+				"features.warning_read_max_bytes), each warning written on the line that caused it, so " +
+				"they can be fixed from this reply. Replaces the listing rather than adding to it. " +
+				"Call again after fixing them for the next batch.",
 		})
 	}
 	return params
@@ -113,6 +114,30 @@ func (w *WarningsList) render(warnings []domain.TopologyWarning, read bool) stri
 		counts[warning.Kind]++
 	}
 
+	// `read` REPLACES the listing rather than preceding it: the expansion writes each warning
+	// on the line that caused it, so a listing above it would restate all of it. The listing
+	// is what a plain call returns, and the fallback when the expansion comes back empty.
+	//
+	// `read` on a project that left features.warning_reads off is not reachable -- the
+	// parameter is absent from the schema -- so a model that sent it anyway is answered with
+	// the listing alone rather than an error about a key it was never offered.
+	//
+	// NoBudget: an MCP call is the model asking for exactly this and waiting for it.
+	if read && w.readsEnabled() {
+		// Queued transients are paged too, and drained only as shown -- see printWarningReads,
+		// the CLI spelling of this same call.
+		all := append(append([]domain.TopologyWarning(nil), warnings...), helper.PeekTransients(w.mgr.DbPath())...)
+		section, shown := warnread.SectionPage(w.mgr.DbPath(), w.reg, all, warnread.Options{
+			Budget:   warnread.NoBudget,
+			Headline: warnread.HeadlinePull,
+			Reserve:  1, // the newline appended below
+		})
+		if section != "" {
+			helper.RemoveTransients(w.mgr.DbPath(), shown)
+			return section + "\n"
+		}
+	}
+
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("Found %d warning(s):\n\n", len(warnings)))
 	b.WriteString("Summary:\n")
@@ -129,19 +154,6 @@ func (w *WarningsList) render(warnings []domain.TopologyWarning, read bool) stri
 			b.WriteString(fmt.Sprintf("\n    target: %s", warning.TargetID))
 		}
 		b.WriteString("\n\n")
-	}
-
-	// `read` on a project that left features.warning_reads off is not reachable -- the
-	// parameter is absent from the schema -- so a model that sent it anyway is answered with
-	// the listing alone rather than an error about a key it was never offered.
-	//
-	// NoBudget: an MCP call is the model asking for exactly this and waiting for it.
-	if read && w.readsEnabled() {
-		section := warnread.Section(w.mgr.DbPath(), w.reg, warnings, warnread.NoBudget)
-		if section != "" {
-			b.WriteString(section)
-			b.WriteString("\n")
-		}
 	}
 
 	return b.String()

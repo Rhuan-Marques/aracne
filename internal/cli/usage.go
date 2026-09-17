@@ -217,10 +217,10 @@ Flags for "warnings list":
   --source <id>   Filter by source resource ID
   --target <id>   Filter by target resource ID
   --kind <kind>   Filter by warning kind (use_missing_node, node_removed, signature_changed, interface_conflict)
-  --read          Also print the source of the code the first warnings name, so they can be
-                  fixed without a separate read. Capped at features.warning_read_limit (5);
-                  run it again after fixing those to get the next batch. Needs
-                  features.warning_reads in .aracne/config.json.
+  --read          Print the source of the code the first warnings name, each warning marked
+                  on the line that caused it, instead of the listing. As many as fit
+                  features.warning_read_max_bytes (10000); run it again after fixing those to get the
+                  next batch. Off when features.warning_reads is false.
 
 Flags for "bug report":
   --db <path>            Topology database path (default ".aracne/topology.db")

@@ -114,6 +114,24 @@ testing_ground/   Hand-built multi-language corpus of edge cases (see its README
   does not deliver it. It runs only where that declaration is a claim that can be wrong
   (Rust, Java, TypeScript, Python ABC); Go and Python `Protocol` are structural, so their
   `implements` edge is derived from satisfaction and a broken type simply has no edge.
+
+  **Transients are the one warning with no row.** When a changed position's argument cannot
+  be typed at all — a local assigned from a call, a field selection — the matcher answers
+  `Unverified`. The stored warning is withdrawn and a `Transient` report takes its place: it
+  reaches the model once and is never written to the warnings table. `helper.QueueTransients`
+  files it in `.aracne/pending-transients.json` on the way out of every `TopologyManager`
+  entry point that returns warnings, and only a report drains it (`helper.DrainTransients`,
+  from `unreportedWarnings`), so whichever process scans first — the watcher, a pre-tool scan,
+  `arac scan` — the next report still carries it.
+  Each transient carries a `State` (`helper.TransientState`) in two halves: the callee's
+  current signature, and the caller's recorded calls to it plus its normalised body hash.
+  Drained transients are recorded in `.aracne/reported-transients.json` by id and state. A
+  transient raised again in a reported state is not queued, and removes any queued copy of
+  the same id; a new callee signature is a new key and is reported.
+  `helper.RefreshTransientCallers` runs before each scan queues its transients and moves the
+  caller half of a pair's latest entry to the current caller while the callee still has the
+  reported signature. The ledger holds at most 2000 entries; past that the oldest are dropped
+  down to 1500.
 - **`KnownBug`** — a reported defect on a node with state `pending` →
   `acknowledged` / `dismissed`, driving the bug-hunter/judge/solver workflow.
 
@@ -416,8 +434,7 @@ unconditionally by `arac setup` whose `tool.execute.before` runs `arac guard --p
 and then, for a Bash call, `arac guard --rewrite` — the interception half, in the spelling
 this harness offers. Its `tool.execute.after` runs `arac guard --post-tool` after a shell call
 or a native edit — the drift check described next — and appends what it reports to the tool's
-output, so an OpenCode model hears about warnings the way a Claude Code one does. (It had no
-after-half at all until 2026-09: on a default install no warning reached an OpenCode model.)
+output, so an OpenCode model hears about warnings the way a Claude Code one does.
 Both read the same config key at call time, so `scan.pre_tool: "none"` disables it on
 both surfaces without re-running init. The pre-call scan reports nothing (a PreToolUse
 hook cannot address the model without blocking it); the warnings it finds are persisted
@@ -425,35 +442,57 @@ in the topology and surface through `warnings_list` / `arac warnings list`, and 
 **post**-call drift check reports whatever is new in the warnings table.
 
 That check fires after a Bash command the classifier read as a write (or could not classify
-at all) **and after a native `Edit`/`Write`/`MultiEdit`/`NotebookEdit`**. The native half was
-missing: nothing else reported those, since the `arac update-file` hook that was supposed to
-is behind a plugin flag no shipped path sets — so a native edit produced no warning when it
-broke a caller, and the one the next pre-tool scan found was delivered by whichever later
-shell command happened to be unclassified, and blamed on it. The header says
-"Topology re-synced." and nothing about a cause, because the reporter reports what is new in
-the table however it got there.
+at all) and after a native `Edit`/`Write`/`MultiEdit`/`NotebookEdit`. The header says
+"Topology re-synced." and names no cause: the reporter reports what is new in the table,
+whichever process put it there.
 
 Every entrance to that report — `arac edit`, `arac write`, `arac update-file` and the drift
-check — funnels through `driftWarningReport` (`internal/cli/warning_reads.go`), so a warning
-reads identically whichever produced the change. Behind `features.warning_reads` (off by
-default) it also attaches the **full read of the code the warnings name**: the fix site first,
-then the counterpart it has to match — the caller and the re-signatured callee, the implementer
-and the interface it no longer satisfies. `features.warning_read_limit` caps how many warnings
-are expanded (5; `0` or lower means no limit). It is ONE batched `Read.ReadIDs` call for the
-whole report, which is what lets the shared render ledger (§8, `renderstate`) emit a callee
-named by eleven warnings exactly once. Ids the graph no longer holds are dropped before the
-call — `node_removed` and `use_missing_node` name a missing target by construction — so the
-report never comes back with an `# UNRESOLVED:` block about its own warning.
+check — funnels through `driftWarningReport` (`internal/cli/warning_report.go`), so a warning
+reads identically whichever produced the change. The report is the code the warnings name,
+with each warning written on the line that caused it:
 
-The cap is a **page, not a truncation**. Whatever it left out is counted in a note under the
-read — `... 3 warnings left. Use \`arac warnings list --read\` to continue fixing.`, naming the
+```
+Your changes caused conflicts. Fix these files as soon as possible (…):
+```pkg/dot.go
+func Shout(s string) string {
+	return ToUpper(s) <- [use_missing_node] pkg/dot.ToUpper does not exist
+}
+```
+```
+
+The read is the fix site first, then the counterpart it has to match — the caller and the
+re-signatured callee, the implementer and the interface it no longer satisfies. When nothing
+can be read (every warning names code the graph no longer holds), or when
+`features.warning_reads` is `false`, the report is a plain summary listing each warning's kind
+and ids.
+
+**The anchor line is computed, not stored.** A `domain.TopologyWarning` is two ids, a kind and
+a message. `warnread.anchorFor` finds the line against the file as it is now: the declaration
+line for an `interface_conflict`, and the first non-comment line referencing the missing name
+for the other kinds (`testing_ground/go/dotimport` covers a doc comment that mentions the
+symbol).
+
+The note never enters `Unit.Body`. `readunit.Annotate` applies it in `writeGroup`, on the way
+out, and `dropRepeatedSource`, `bodyBytes` and `renderstate.MarkRendered` compare the body as
+the file has it. `read.annotation_window` (§ configuration) sets the cut of an over-cap body: it
+keeps a band of lines around each marked line instead of collapsing to its signature.
+
+`features.warning_read_max_bytes` caps the bytes of the whole report (10000; `0` or lower means
+no limit). The longest prefix of the sorted warnings whose entire message — headline, reads,
+CONTEXT, notes and whatever the surface prints around it (`warnread.Options.Reserve`) — fits is
+expanded, found by binary search over full renders (`fitPrefix`). A plain-summary report is
+fitted to the same budget. The expansion is one batched `Read.ReadIDs` call for the whole
+report, so the shared render ledger (§8, `renderstate`) emits a callee named by several
+warnings once. Ids the graph no longer holds are dropped before the call, so the report never
+contains an `# UNRESOLVED:` block about its own warning.
+
+The cap is a **page**. The warnings it left out are counted in a note under the read —
+`... 3 warnings left. Use \`arac warnings list --read\` to continue fixing.`, naming the
 `warnings_list` tool instead in `mcp` mode — and the same expansion backs all three surfaces
-that show it: the post-edit report, `arac warnings list --read`, and the `read` parameter the
-`warnings_list` tool grows when the feature is on, reading its own config to decide.
-No cursor is stored: the page advances because a *fixed* warning has retired itself from the
-table by the next call, so the model never loses the code for something it has not fixed yet.
-Every surface orders the list through `domain.SortWarnings`, which is what makes "the first
-five" the same five each time and the next page start where the last one stopped.
+that show it: the post-edit report, `arac warnings list --read`, and the `read` parameter of
+the `warnings_list` tool. No cursor is stored: a fixed warning leaves the table, so the next
+call starts at the next unfixed one. Every surface orders the list through
+`domain.SortWarnings`, so each page starts where the last one stopped.
 
 ## 10. Languages & known quirks
 

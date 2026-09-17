@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/Rhuan-Marques/aracne/internal/topology/contract"
+	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 	"github.com/Rhuan-Marques/aracne/internal/topology/python"
 )
 
@@ -127,6 +128,8 @@ func resolveBodyCallRefs(bodyCalls []pyBodyCall, bodyAssigns []pyBodyAssign, pr 
 					add(python.ConnUsesClass, string(cid))
 				}
 				addConstructorCall(cid, call, gt, add)
+			} else if missing := missingImportedName(call.Func, pr, gt); missing != "" {
+				add(python.ConnectionKind(domain.MissingRefsConn), missing)
 			}
 			continue
 		}
@@ -154,6 +157,8 @@ func resolveBodyCallRefs(bodyCalls []pyBodyCall, bodyAssigns []pyBodyAssign, pr 
 					add(python.ConnUsesClass, string(cid))
 				}
 				addConstructorCall(cid, call, gt, add)
+			} else if missing := missingModuleMember(call.ObjectName, call.MethodName, pr, gt); missing != "" {
+				add(python.ConnectionKind(domain.MissingRefsConn), missing)
 			}
 			continue
 		}
@@ -914,4 +919,49 @@ func containsPyRec(recs []string, rec string) bool {
 		}
 	}
 	return false
+}
+
+// missingImportedName is the id `name` was imported as when that import names a project module
+// the graph holds and the module declares no such name -- `from a import fun2` with a.py present and
+// no fun2 in it. "" whenever the name could be something this resolver does not model: a submodule,
+// an import it cannot place in the project, a module that is not indexed, or a re-export it can
+// still follow. See domain.MissingRefsConn.
+func missingImportedName(name string, pr *ParseResult, gt *python.PythonTopology) string {
+	tgt, ok := pr.ImportTargets[name]
+	if !ok || tgt.Symbol == "" || tgt.SubModulePath != "" || tgt.PkgSymbol != "" || strings.Contains(name, ".") {
+		return ""
+	}
+	stem := strings.TrimSuffix(tgt.FilePath, ".py")
+	if _, ok := findModuleFile(stem, gt); !ok {
+		return ""
+	}
+	if _, ok := findModuleFile(filepath.Join(stem, tgt.Symbol), gt); ok {
+		return ""
+	}
+	id := tgt.ModulePath + "." + tgt.Symbol
+	if pyNameDefined(id, gt) || followReexport(pySymbolRef{Module: tgt.ModulePath, Name: tgt.Symbol}, pr, gt, func(id string) bool { return pyNameDefined(id, gt) }) != "" {
+		return ""
+	}
+	return id
+}
+
+// missingModuleMember is missingImportedName for `mod.name()` through `import mod`: the member id,
+// when mod is an indexed project module that declares no such name.
+func missingModuleMember(alias, member string, pr *ParseResult, gt *python.PythonTopology) string {
+	tgt, ok := pr.ImportTargets[alias]
+	if !ok || tgt.Symbol != "" || tgt.ModulePath == "" || member == "" {
+		return ""
+	}
+	stem := strings.TrimSuffix(tgt.FilePath, ".py")
+	if _, ok := findModuleFile(stem, gt); !ok {
+		return ""
+	}
+	if _, ok := findModuleFile(filepath.Join(stem, member), gt); ok {
+		return ""
+	}
+	id := tgt.ModulePath + "." + member
+	if pyNameDefined(id, gt) {
+		return ""
+	}
+	return id
 }

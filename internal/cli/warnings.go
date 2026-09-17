@@ -100,6 +100,18 @@ func RunWarningsList(args []string) {
 	// true if every surface agrees on the order. See domain.SortWarnings.
 	domain.SortWarnings(warnings)
 
+	// --read REPLACES the listing rather than preceding it: the expansion writes each warning
+	// on the line that caused it, so printing the summary too would say everything twice. The
+	// listing is still what a bare `arac warnings list` prints, and still the fallback when
+	// the expansion comes back empty -- see printWarningReads.
+	if readCode && printWarningReads(dbPath, warnings) {
+		return
+	}
+	printWarningList(warnings)
+}
+
+// printWarningList is the plain listing: counts by kind, then one entry per warning.
+func printWarningList(warnings []domain.TopologyWarning) {
 	counts := make(map[domain.WarningKind]int)
 	for _, w := range warnings {
 		counts[w.Kind]++
@@ -121,33 +133,47 @@ func RunWarningsList(args []string) {
 		}
 		fmt.Println()
 	}
-
-	if readCode {
-		printWarningReads(dbPath, warnings)
-	}
 }
 
-// printWarningReads answers `--read`: the full source of the code the first
-// features.warning_read_limit warnings name, so the listing is something to fix from rather
-// than something to look up.
+// printWarningReads answers `--read`: the full source of the code the longest prefix of the
+// warnings that fits features.warning_read_max_bytes names, so the listing is something to fix
+// from rather than something to look up.
 //
 // AN OFF FEATURE SAYS SO. A flag that silently does nothing is worse than no flag -- the
 // caller typed it, got a plain listing, and has no way to tell "nothing to read" from "this
 // project has the feature off". It is a note rather than an error because the command still
 // did its job: the warnings were listed.
-func printWarningReads(dbPath string, warnings []domain.TopologyWarning) {
+// It reports whether it printed the expansion. False means the caller should fall back to the
+// plain listing, so a --read that could not expand anything still answers the question the
+// command was asked.
+func printWarningReads(dbPath string, warnings []domain.TopologyWarning) bool {
 	cfg := helper.LoadConfig(helper.ConfigPath(dbPath))
 	if !cfg.WarningReadsEnabled() {
 		fmt.Println("--read did nothing: features.warning_reads is off in .aracne/config.json.")
-		return
+		fmt.Println()
+		return false
 	}
 	// warnread.NoBudget, not the hook's deadline: the caller asked for exactly this and is
 	// waiting for it. See the constant.
-	section := warnread.Section(dbPath, NewScannerRegistry(), warnings, warnread.NoBudget)
+	// QUEUED TRANSIENTS ARE PAGED TOO. The plain listing leaves them out on purpose -- it means
+	// "actually broken" (see domain.TopologyWarning.Transient) -- but --read is the surface a
+	// report's "N left" note points at, and a transient the report's budget paged out went back
+	// to the queue for exactly this call. Drained only as they are shown, so the rest stay for
+	// the next page.
+	transients := helper.PeekTransients(dbPath)
+	all := append(append([]domain.TopologyWarning(nil), warnings...), transients...)
+	section, shown := warnread.SectionPage(dbPath, NewScannerRegistry(), all, warnread.Options{
+		Budget:   warnread.NoBudget,
+		Headline: warnread.HeadlinePull,
+		Reserve:  1, // the newline Println ends it with
+	})
 	if section == "" {
 		fmt.Println("--read found nothing to read: every warning names code the graph no longer holds,")
 		fmt.Println("or a kind read.kinds does not allow.")
-		return
+		fmt.Println()
+		return false
 	}
 	fmt.Println(section)
+	helper.RemoveTransients(dbPath, shown)
+	return true
 }

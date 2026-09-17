@@ -83,6 +83,10 @@ type JavaClass struct {
 	// whose methods this scan cannot read -- which is what lets the conformance check tell
 	// "inherits it from somewhere unreadable" apart from "does not have it".
 	Bases []string
+	// Interfaces holds the raw names from an `implements` clause, before resolution, for the same
+	// reason as Bases: a name with no implements edge behind it is an interface this scan cannot
+	// read (Iterable, Comparable), whose default methods a caller may legitimately use.
+	Interfaces []string
 	// Permits holds the names from a `permits` clause (when IsSealed).
 	Permits []string
 	// Generics holds declared type-parameter names, e.g. ["T"].

@@ -121,6 +121,10 @@ type importInfo struct {
 	Internal     bool
 	ImportedName string // "default" for default imports; "" for namespaces
 	Namespace    bool
+	// ESM marks a binding made by an `import` statement. Only those have a static export set to
+	// judge a missing name against: a CommonJS `require` can be satisfied by exports assigned at
+	// run time. See missingExport.
+	ESM bool
 }
 
 // namedReExport records a named ESM re-export (`export {Orig as Exported} from
@@ -571,10 +575,10 @@ func parseImport(node *sitter.Node, src []byte, pr *ParseResult) {
 		c := clause.NamedChild(i)
 		switch c.Type() {
 		case ntIdentifier:
-			pr.ImportMap[nodeText(c, src)] = importInfo{Source: source, Internal: internal, ImportedName: "default"}
+			pr.ImportMap[nodeText(c, src)] = importInfo{Source: source, Internal: internal, ImportedName: "default", ESM: true}
 		case ntNamespaceImport:
 			if id := childByType(c, ntIdentifier); id != nil {
-				pr.ImportMap[nodeText(id, src)] = importInfo{Source: source, Internal: internal, Namespace: true}
+				pr.ImportMap[nodeText(id, src)] = importInfo{Source: source, Internal: internal, Namespace: true, ESM: true}
 			}
 		case ntNamedImports:
 			for j := 0; j < int(c.NamedChildCount()); j++ {
@@ -588,7 +592,7 @@ func parseImport(node *sitter.Node, src []byte, pr *ParseResult) {
 					local = nodeText(alias, src)
 				}
 				if local != "" {
-					pr.ImportMap[local] = importInfo{Source: source, Internal: internal, ImportedName: name}
+					pr.ImportMap[local] = importInfo{Source: source, Internal: internal, ImportedName: name, ESM: true}
 				}
 			}
 		}

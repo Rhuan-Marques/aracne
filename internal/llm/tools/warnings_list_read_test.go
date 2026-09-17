@@ -26,14 +26,23 @@ func hasParam(params []toolapi.Parameter, name string) bool {
 // readsOn is a config with features.warning_reads turned on.
 func readsOn() *helper.Config {
 	cfg := helper.DefaultConfig()
-	cfg.Features.WarningReads = true
+	on := true
+	cfg.Features.WarningReads = &on
+	return cfg
+}
+
+// readsOff is a config with features.warning_reads turned off.
+func readsOff() *helper.Config {
+	cfg := helper.DefaultConfig()
+	off := false
+	cfg.Features.WarningReads = &off
 	return cfg
 }
 
 // A schema property is re-sent on every request, so a project that left features.warning_reads
 // off must not be charged for an option the tool will not honour.
 func TestWarningsListHidesReadWhenTheFeatureIsOff(t *testing.T) {
-	tool := NewWarningsList(nil, helper.DefaultConfig(), nil)
+	tool := NewWarningsList(nil, readsOff(), nil)
 	if hasParam(tool.Parameters(), "read") {
 		t.Error("read is advertised with features.warning_reads off")
 	}

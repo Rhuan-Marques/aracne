@@ -38,7 +38,7 @@ func TestPostToolReportsWarningsOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if msg := post("edit", ""); !strings.Contains(msg, "Topology warnings") {
+	if msg := post("edit", ""); !strings.Contains(msg, "[signature_changed]") {
 		t.Fatalf("a native edit that broke a caller reported nothing: %q", msg)
 	}
 	if msg := post("bash", "ls"); msg != "" {

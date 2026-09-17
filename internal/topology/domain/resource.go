@@ -25,6 +25,10 @@ var (
 // edges they inflate a node's degree (which drives node size and the degree-based graph
 // collapse rules), advertise an "__call_sites" edge type nobody can ask for, and produce
 // detail rows whose ids resolve to nothing.
+// MissingRefsConn is the private connection kind a scanner records a reference to project code
+// under when the code it names does not exist. See helper.SyncMissingReferenceWarnings.
+const MissingRefsConn = "__missing_refs"
+
 func IsPrivateConnType(connType string) bool {
 	return strings.HasPrefix(connType, "__")
 }

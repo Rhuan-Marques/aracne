@@ -23,15 +23,31 @@ func (m tsMatcher) Match(env Env, callee domain.Resource, site CallSite) (Verdic
 	}
 	// A call has to fit ONE of the signatures the callee declares, so a mismatch is only a
 	// mismatch when every one of them says so.
+	//
+	// The whole set is walked rather than returning the first non-Mismatch, because the
+	// verdicts are not interchangeable: an overload that cannot be judged must not mask a
+	// later one that the call demonstrably fits. Best answer wins -- Match, then Unknown
+	// (some signature declined outright), then Unverified, then Mismatch.
 	var why string
+	best := Mismatch
 	for _, params := range tsSignatures(callee) {
 		v, w := tsMatchOne(env, callee.Name, params, site)
-		if v != Mismatch {
-			return v, ""
+		switch v {
+		case Match:
+			return Match, ""
+		case Unknown:
+			best = Unknown
+		case Unverified:
+			if best != Unknown {
+				best = Unverified
+			}
 		}
-		if why == "" {
+		if v == Mismatch && why == "" {
 			why = w // the first signature's complaint, which is the one in source order
 		}
+	}
+	if best != Mismatch {
+		return best, ""
 	}
 	return Mismatch, why
 }
@@ -56,8 +72,11 @@ func tsMatchOne(env Env, name string, params []Param, site CallSite) (Verdict, s
 	if a := PositionalArity(params); !a.Accepts(site.N) {
 		return Mismatch, arityMessage(name, a, site.N)
 	}
-	if v, why := matchTypes(env, params, site, tsTypeOpaque, tsAccepts); v == Mismatch {
+	switch v, why := matchTypes(env, params, site, tsTypeOpaque, tsAccepts); v {
+	case Mismatch:
 		return Mismatch, why
+	case Unverified:
+		return Unverified, why
 	}
 	return Match, ""
 }

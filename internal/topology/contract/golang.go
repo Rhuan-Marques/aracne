@@ -32,8 +32,11 @@ func (m goMatcher) Match(env Env, callee domain.Resource, site CallSite) (Verdic
 		}
 	}
 
-	if v, why := matchTypes(env, params, site, goTypeOpaque, goAccepts); v == Mismatch {
+	switch v, why := matchTypes(env, params, site, goTypeOpaque, goAccepts); v {
+	case Mismatch:
 		return Mismatch, why
+	case Unverified:
+		return Unverified, why
 	}
 	return Match, ""
 }
@@ -155,6 +158,15 @@ func normalizeGoType(t string) string {
 
 // matchTypes walks positions common to both sides, skipping anything either side declines
 // to judge. Shared by every language; only the two predicates differ.
+//
+// THREE OUTCOMES, NOT TWO, and the third is the point. "Every position I judged fits" and
+// "I judged nothing, because the call site never recorded what it passes" used to both
+// leave here as Match -- and Match is what withdraws a warning, so the most common breaking
+// edit in a typed language reported nothing at all. A position that MATTERS and cannot be
+// read now returns Unverified, which the caller reports and does not store.
+//
+// Mattering is decided by env.OldParams: a position whose declared type did not move cannot
+// have broken a caller that already fit, so it is skipped before anything else.
 func matchTypes(
 	env Env,
 	params []Param,
@@ -162,19 +174,43 @@ func matchTypes(
 	opaque func(Env, Param) bool,
 	accepts func(Env, Param, string) bool,
 ) (Verdict, string) {
-	if len(site.Types) == 0 {
-		return Unknown, ""
-	}
 	judged := false
+	unverified := ""
+	// UNVERIFIED NEEDS EVIDENCE, and the baseline is the only thing that carries it. Without
+	// OldParams nothing here knows which positions the edit moved, so calling an unreadable
+	// argument "unverified" would be doubt manufactured from nothing -- every arity-only call
+	// in a language that records only literals would raise one, forever, on every edit.
+	// No baseline therefore means the older behaviour exactly: skip what cannot be read.
+	note := func(i int, p Param) {
+		if env.OldParams != nil && unverified == "" {
+			unverified = unverifiedMessage(p, i)
+		}
+	}
 	for i, param := range positionalParams(params) {
+		if env.unchangedAt(i, param) {
+			continue
+		}
+		// OPACITY IS ASKED FIRST, and the order is the whole of `string -> any`. The
+		// declared type here accepts values whose text will not equal it -- `any`, an
+		// interface, a type parameter -- so what the call passes cannot contradict it and
+		// does not need reading. Asked after the two checks below, as it used to be when
+		// all three merely skipped, a widened parameter reported doubt about every caller
+		// whose argument was unreadable: the exact opposite of the intended answer.
+		if opaque(env, param) {
+			continue
+		}
 		if i >= len(site.Types) {
-			break
+			// The call site recorded fewer positions than the callee declares -- an older
+			// record, or one that could name nothing at all. Arity has already had its say;
+			// what this position now holds is exactly what cannot be known.
+			note(i, param)
+			continue
 		}
 		actual := site.Types[i]
 		if actual == nil || *actual == "" {
-			continue // the call site could not say; that position carries no information
-		}
-		if opaque(env, param) {
+			// The call site could not say. That is not "no information" when the position
+			// is one the edit moved -- it is the information being missing.
+			note(i, param)
 			continue
 		}
 		// A variadic parameter absorbs every remaining argument, all of which must be the
@@ -183,6 +219,7 @@ func matchTypes(
 			for j := i; j < len(site.Types); j++ {
 				a := site.Types[j]
 				if a == nil || *a == "" {
+					note(j, param)
 					continue
 				}
 				judged = true
@@ -197,10 +234,33 @@ func matchTypes(
 			return Mismatch, typeMessage(param, i, *actual)
 		}
 	}
+	// Order matters: an unreadable position is only news once nothing outright contradicted
+	// the signature, and "nothing was judged AND nothing needed judging" is the honest
+	// Unknown the older heuristic falls back on.
+	if unverified != "" {
+		return Unverified, unverified
+	}
 	if !judged {
 		return Unknown, ""
 	}
 	return Match, ""
+}
+
+// unchangedAt reports whether position i holds the same declared type the caller was
+// written against, so nothing about it can have broken.
+//
+// A nil OldParams judges everything -- that is the honest reading of "no baseline", and it
+// costs extra Unverified reports rather than missed ones. A position past the end of the
+// old list is new, and therefore changed.
+func (e Env) unchangedAt(i int, param Param) bool {
+	if e.OldParams == nil {
+		return false
+	}
+	old := positionalParams(e.OldParams)
+	if i >= len(old) {
+		return false
+	}
+	return normalizeGoType(old[i].Typing) == normalizeGoType(param.Typing)
 }
 
 // positionalParams drops keyword-only parameters, which never line up with an argument
@@ -235,6 +295,22 @@ func typeMessage(p Param, pos int, actual string) string {
 		label = fmt.Sprintf("argument %d", pos+1)
 	}
 	return fmt.Sprintf("%s is declared %s, this call passes %s", label, p.Typing, actual)
+}
+
+// unverifiedMessage explains a position the rules could not judge: the parameter moved and
+// the call site never recorded what it passes there.
+//
+// It names the type the argument now has to satisfy, because that is the question the reader
+// has to answer by eye -- the one thing the graph cannot answer for them.
+func unverifiedMessage(p Param, pos int) string {
+	label := p.Name
+	if label == "" {
+		label = fmt.Sprintf("argument %d", pos+1)
+	}
+	if strings.TrimSpace(p.Typing) == "" {
+		return fmt.Sprintf("%s changed type and this call's argument could not be read", label)
+	}
+	return fmt.Sprintf("%s is now %s and this call's argument could not be read", label, p.Typing)
 }
 
 // SameGoTypeText reports whether two rendered Go type texts name the same type.

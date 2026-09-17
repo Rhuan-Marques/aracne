@@ -500,6 +500,34 @@ func StampBodyHashes(topo *domain.Topology, files map[string]bool) {
 	}
 }
 
+// CarryBodyHashes puts back the fingerprints of resources an update REBUILT without re-parsing
+// their file.
+//
+// UpdateFile re-parses one file but re-resolves the files that call into it, and re-resolving
+// replaces those callers' resources with copies that carry no hashes. StampBodyHashes is scoped
+// to what was re-parsed, so the rebuilt rows went to the database with empty fingerprints: every
+// cross-file caller of an edited function silently stopped being matchable after a move, and
+// anything asking whether its body changed saw "unknown" from then on.
+//
+// Only a resource whose file was not re-parsed and whose span did not move is carried: its
+// source is the source the previous row fingerprinted.
+func CarryBodyHashes(topo *domain.Topology, before map[string]domain.Resource, reparsed map[string]bool) {
+	if topo == nil {
+		return
+	}
+	for id, res := range topo.Resources {
+		if res.ExactHash != "" || res.NormHash != "" || reparsed[resourcePath(res)] {
+			continue
+		}
+		prev, ok := before[id]
+		if !ok || prev.NormHash == "" || prev.Location != res.Location {
+			continue
+		}
+		res.ExactHash, res.NormHash, res.NormLines = prev.ExactHash, prev.NormHash, prev.NormLines
+		topo.Resources[id] = res
+	}
+}
+
 // StampBodyHashesSlice is StampBodyHashes for a scoped delta -- the Phase-3 partial path,
 // which never builds a whole topology and hands the writer a plain slice of upserts.
 //

@@ -125,6 +125,9 @@ func (m *TopologyManager) fullScanLocked(root string, reg *scanner.Registry) err
 	// edit, so a cold scan has to find it too -- otherwise `arac scan --all` would be the
 	// one way to make these warnings disappear.
 	syncInterfaceConflicts(topo, nil)
+	// A reference to project code that does not exist is a property of the code too. See
+	// helper.MissingRefsConn.
+	helper.SyncMissingReferenceWarnings(topo)
 	// nil: everything was just parsed, so everything needs a fingerprint.
 	helper.StampBodyHashes(topo, nil)
 	if err := helper.WriteDb(topo, m.dbPath); err != nil {
@@ -179,6 +182,11 @@ func (m *TopologyManager) IncrementalScan(root string, reg *scanner.Registry) ([
 		warnings, err = m.incrementalScanLocked(root, reg)
 		return err
 	})
+	// QUEUED HERE, at the entry point, rather than where the transients are raised. Every
+	// caller of this method may discard what it returns -- RunPreToolScan does, the watcher
+	// does, `arac scan` does -- and a transient exists nowhere else. See helper.QueueTransients.
+	helper.RefreshTransientCallers(m.dbPath)
+	helper.QueueTransients(m.dbPath, warnings)
 	return warnings, err
 }
 
@@ -450,8 +458,11 @@ func (m *TopologyManager) incrementalScanLocked(root string, reg *scanner.Regist
 	// because something it depends on moved is not: every scanner but goscanner drops a
 	// reference it can no longer resolve instead of reporting it, so clearing its warnings here
 	// would erase the one record that the broken reference exists.
+	// The transients it raises are appended after settleSignatureWarnings, which reports only
+	// the STORED copy of a signature warning and would drop them.
+	var clearTransients []domain.TopologyWarning
 	for path := range editedFiles {
-		helper.ClearReferrerWarningsForFile(topo, path)
+		clearTransients = append(clearTransients, helper.ClearReferrerWarningsForFile(topo, path, beforeResources)...)
 	}
 
 	// Symbols removed from files that still exist: RemoveFileResources above
@@ -476,8 +487,13 @@ func (m *TopologyManager) incrementalScanLocked(root string, reg *scanner.Regist
 
 	helper.ResolveReferrerWarnings(topo)
 
+	// Judged on the finished graph, after every file of the batch is in: a callee added by a
+	// file resolved later in this scan answers a reference an earlier file recorded.
+	allWarnings = append(allWarnings, helper.SyncMissingReferenceWarnings(topo)...)
 	helper.CleanupOrphanedWarnings(topo)
 	allWarnings = settleSignatureWarnings(topo, beforeResources, beforeWarnings, allWarnings)
+	allWarnings = append(allWarnings, clearTransients...)
+	allWarnings = standingWarnings(topo, allWarnings)
 	normalizeTopologyLanguages(topo)
 
 	upserts, deletes := helper.DiffResources(beforeSigs, topo.Resources)
@@ -625,6 +641,14 @@ func (m *TopologyManager) tryPartialIncremental(root string, reg *scanner.Regist
 	if err != nil {
 		return false, nil, nil
 	}
+	// A reference to missing project code is judged against the WHOLE graph (see
+	// helper.MissingRefsConn), which this path never loads. While any stands, a file this edit
+	// adds or changes may be the one that answers it, so the full path has to look.
+	for _, w := range preexisting {
+		if w.Kind == domain.WarnUseMissingNode {
+			return false, nil, nil
+		}
+	}
 
 	// Process each changed file in turn, persisting its scoped delta before the
 	// next so cross-file dependencies (and warnings) see prior changes. For the
@@ -650,6 +674,13 @@ func (m *TopologyManager) tryPartialIncremental(root string, reg *scanner.Regist
 		// common edit — adding/removing a local call with no signature/identity
 		// change of a cross-file-referenced symbol — has no such target and
 		// stays on the fast path.
+		// Same reason as the check on preexisting above: a reference this edit could not
+		// resolve can only be judged against the whole graph.
+		for _, r := range upserts {
+			if len(r.Connections[helper.MissingRefsConn]) > 0 {
+				return false, nil, nil
+			}
+		}
 		if m.partialNeedsCrossFileResolve(absPath, upserts, deletes) {
 			return false, nil, nil
 		}
@@ -693,7 +724,7 @@ func (m *TopologyManager) tryPartialIncremental(root string, reg *scanner.Regist
 		// single-file edit path, so it is where an agent's fix to a caller lands; without
 		// this, fixing the call would leave the warning standing until something forced a
 		// full re-resolve.
-		helper.ReconcileSignatureWarningsScoped(m.dbPath, warnings, upserts)
+		_, unverified := helper.ReconcileSignatureWarningsScoped(m.dbPath, warnings, upserts)
 		if err := helper.WriteScopedResources(m.dbPath, upserts, deletes, warnings); err != nil {
 			return true, allWarnings, fmt.Errorf("write topology db: %w", err)
 		}
@@ -709,6 +740,10 @@ func (m *TopologyManager) tryPartialIncremental(root string, reg *scanner.Regist
 				allWarnings = append(allWarnings, w)
 			}
 		}
+		// Unverified reports ride alongside, and deliberately do NOT join preexisting:
+		// nothing stored them, so there is no row for a later file in the batch to
+		// re-surface, and suppressing them would just lose them.
+		allWarnings = append(allWarnings, unverified...)
 	}
 
 	if err := helper.CleanupOrphanedBugsScoped(m.dbPath); err != nil {
@@ -740,6 +775,9 @@ func (m *TopologyManager) FullReScan(root string, reg *scanner.Registry) ([]doma
 		warnings, err = m.fullReScanLocked(root, reg)
 		return err
 	})
+	// See IncrementalScan: `scan.pre_tool: "full"` reaches this one and discards the result.
+	helper.RefreshTransientCallers(m.dbPath)
+	helper.QueueTransients(m.dbPath, warnings)
 	return warnings, err
 }
 
@@ -807,6 +845,8 @@ func (m *TopologyManager) fullReScanLocked(root string, reg *scanner.Registry) (
 	// function rather than FullScan, and missing it here would make a full rescan the one
 	// way to make these warnings disappear.
 	syncInterfaceConflicts(newTopo, nil)
+	// And a reference to project code that does not exist, for the same reason.
+	helper.SyncMissingReferenceWarnings(newTopo)
 
 	if err := helper.WriteDb(newTopo, m.dbPath); err != nil {
 		return nil, err
@@ -955,6 +995,10 @@ func (m *TopologyManager) UpdateFile(path string, reg *scanner.Registry) ([]doma
 		warnings, err = m.updateFileLocked(path, reg)
 		return err
 	})
+	// See IncrementalScan: the edit-sync plugin and `arac edit` both reach this one, and a
+	// caller that suppresses its own warning summary would otherwise destroy the transients.
+	helper.RefreshTransientCallers(m.dbPath)
+	helper.QueueTransients(m.dbPath, warnings)
 	return warnings, err
 }
 
@@ -986,11 +1030,15 @@ func (m *TopologyManager) updateFileLocked(path string, reg *scanner.Registry) (
 	// The files this update re-parsed: absPath, plus whatever removing it had to re-settle.
 	reparsed := map[string]bool{absPath: true}
 
+	// Transients raised by the edited-file clear below. Appended in finish, after
+	// settleSignatureWarnings, which reports only the STORED copy of a signature warning.
+	var clearTransients []domain.TopologyWarning
 	finish := func(warnings []domain.TopologyWarning) ([]domain.TopologyWarning, error) {
 		// Same placement argument as restoreDescriptions below: in finish, so that every exit
 		// path -- including the four that only REMOVE a file's resources -- agrees about what
 		// is fingerprinted.
 		helper.StampBodyHashes(topo, reparsed)
+		helper.CarryBodyHashes(topo, beforeResources, reparsed)
 		// In finish rather than beside the re-parse, so every exit path gets it. A rename
 		// reaches this verb as two calls -- one registering the new path, one removing the old
 		// -- which is how OpenCode's edit-sync plugin and the `arac update-file` hook see one,
@@ -999,8 +1047,10 @@ func (m *TopologyManager) updateFileLocked(path string, reg *scanner.Registry) (
 		for _, w := range warnings {
 			topo.Warnings[w.ID] = w
 		}
+		warnings = append(warnings, helper.SyncMissingReferenceWarnings(topo)...)
 		helper.CleanupOrphanedWarnings(topo)
 		warnings = settleSignatureWarnings(topo, beforeResources, beforeWarnings, warnings)
+		warnings = append(warnings, clearTransients...)
 		upserts, deletes := helper.DiffResources(beforeSigs, topo.Resources)
 		if err := helper.WriteIncremental(m.dbPath, topo, upserts, deletes); err != nil {
 			return nil, fmt.Errorf("write topology db: %w", err)
@@ -1072,7 +1122,24 @@ func (m *TopologyManager) updateFileLocked(path string, reg *scanner.Registry) (
 	// This file was just re-parsed from source, so what it references now is
 	// authoritative: drop node_removed warnings attributed to its own
 	// resources. Anything still broken is re-emitted by the pass below.
-	helper.ClearReferrerWarningsForFile(topo, absPath)
+	//
+	// It runs AFTER the merge above, so it sees the signature warnings this very update
+	// raised -- which is why it needs beforeResources: a caller beside a callee that just
+	// moved is not a caller the agent edited, and must reach the reconciler like it does on
+	// every other route.
+	clearTransients = helper.ClearReferrerWarningsForFile(topo, absPath, beforeResources)
+	// Except what the scanner judged against the NEW version of this file. goscanner warns a
+	// same-file user of a removed var, const or type only if its re-parsed body still names it
+	// (newFunctionNames), and nothing below re-emits it: the referrer pass skips users in the
+	// edited file, and the resolver raises nothing for an unresolved bare name. IncrementalScan
+	// merges these after its clear; this keeps the two routes agreeing.
+	var judged []domain.TopologyWarning
+	for _, w := range scannerWarnings {
+		if w.Kind == domain.WarnNodeRemoved {
+			judged = append(judged, w)
+		}
+	}
+	mergeNewWarnings(topo, judged)
 
 	// Symbols that disappeared in this update get caller-attributed warnings,
 	// for every language. beforeSigs' keys are the pre-update id set.
@@ -1363,7 +1430,7 @@ func settleSignatureWarnings(
 	// look like, which is only ever a proxy for what its callers expect. This one compares
 	// the calls themselves against the signature they now face, so where it can answer, its
 	// answer supersedes theirs.
-	helper.ReconcileSignatureWarnings(topo)
+	_, unverified := helper.ReconcileSignatureWarnings(topo)
 	// And a warning naming a caller the same update made irrelevant -- one that no longer calls
 	// the callee, or was written against its new signature -- goes too.
 	helper.RetireStaleSignatureCallers(topo, beforeResources)
@@ -1391,7 +1458,11 @@ func settleSignatureWarnings(
 	// A conflict raised by THIS update is news the agent needs now -- it usually means the
 	// edit it just made unhooked an implementer. One that was already standing is not, and
 	// repeating it after every unrelated edit is how a channel gets ignored.
-	return append(kept, raised...)
+	kept = append(kept, raised...)
+	// And the unverified ones, which the loop above could not have kept: it reports the
+	// STORED copy of every warning, and these were withdrawn from the table on purpose.
+	// This is their only route to the agent, which is the point of them.
+	return append(kept, unverified...)
 }
 
 // syncInterfaceConflicts replaces every interface_conflict warning with the set the graph
@@ -1676,7 +1747,16 @@ func removeDeletedFiles(topo *domain.Topology, reg *scanner.Registry, deleted []
 
 	var warnings []domain.TopologyWarning
 	for _, path := range deleted {
-		warnings = append(warnings, helper.RemoveFileResources(topo, path)...)
+		for _, w := range helper.RemoveFileResources(topo, path) {
+			// Files are removed one at a time, so a referrer in a file deleted LATER in this batch
+			// is still alive when an earlier file's removal is scanned, and gets told its callee
+			// is gone. It is gone too: `a.Fun1 calls b.Fun2` moved together is `v1.Fun1 calls
+			// v1.Fun2`, and nothing broke. Only referrers that survive the batch are warned.
+			if removed[w.SourceID] {
+				continue
+			}
+			warnings = append(warnings, w)
+		}
 	}
 
 	reparsed := make(map[string]bool)
@@ -2450,4 +2530,39 @@ func (m *TopologyManager) ListWarnings(sourceID, targetID string, kind domain.Wa
 		results = append(results, w)
 	}
 	return results, nil
+}
+
+// standingWarnings is what a scan reports: the warnings its RESULT leaves standing, not every one
+// raised while getting there.
+//
+// A scan applies many changes, and its intermediate states dangle in ways its result does not: a
+// caller deleted later in the same batch is still alive when an earlier removal is judged. The
+// warnings table is cleaned against the final graph (CleanupOrphanedWarnings, ResolveReferrerWarnings,
+// settleSignatureWarnings), but the list built on the way was returned as it was built -- so a
+// caller that no longer exists was reported to the agent while the table had already dropped it.
+// A stored warning is reported only if it survived into the table; a transient, which is never
+// stored, only if the caller it names still exists. Duplicates by id collapse to the stored copy.
+func standingWarnings(topo *domain.Topology, raised []domain.TopologyWarning) []domain.TopologyWarning {
+	seen := make(map[string]bool, len(raised))
+	out := make([]domain.TopologyWarning, 0, len(raised))
+	for _, w := range raised {
+		if seen[w.ID] {
+			continue
+		}
+		if w.Transient {
+			if _, alive := topo.Resources[w.SourceID]; !alive {
+				continue
+			}
+			seen[w.ID] = true
+			out = append(out, w)
+			continue
+		}
+		stored, ok := topo.Warnings[w.ID]
+		if !ok {
+			continue
+		}
+		seen[w.ID] = true
+		out = append(out, stored)
+	}
+	return out
 }

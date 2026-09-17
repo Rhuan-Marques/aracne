@@ -156,7 +156,7 @@ func TestClearReferrerWarningsForFile(t *testing.T) {
 		Kind: domain.WarnSignatureChanged, TargetID: "x",
 	}
 
-	ClearReferrerWarningsForFile(topo, "/proj/a.go")
+	ClearReferrerWarningsForFile(topo, "/proj/a.go", nil)
 
 	if _, still := topo.Warnings["pkg.InFile@node_removed@pkg.Gone"]; still {
 		t.Error("a node_removed warning for the re-parsed file should be cleared")
@@ -172,7 +172,7 @@ func TestClearReferrerWarningsForFile(t *testing.T) {
 func TestClearReferrerWarningsForFile_EmptyPathIsANoOp(t *testing.T) {
 	topo := topoWith(res("pkg.A", "function", "", nil))
 	topo.Warnings["w"] = domain.TopologyWarning{ID: "w", SourceID: "pkg.A", Kind: domain.WarnNodeRemoved, TargetID: "x"}
-	ClearReferrerWarningsForFile(topo, "")
+	ClearReferrerWarningsForFile(topo, "", nil)
 	if len(topo.Warnings) != 1 {
 		t.Fatal("an empty path must not clear anything")
 	}
@@ -448,5 +448,52 @@ func TestRemoveFileResources_FileNodeIsNeverSparedByTheOwnershipTest(t *testing.
 
 	if len(topo.Resources) != 0 {
 		t.Errorf("whole-file removal left %d resource(s): %v", len(topo.Resources), topo.Resources)
+	}
+}
+
+// TestRemoveFileResources_ContainmentIsNotADependency: removing a file out of a package that KEEPS
+// other files used to warn once per member the package had listed ("verify pkg which references it
+// via has_function"). A package, a file or a type listing what it holds is not broken when a
+// member leaves; the code that calls or extends it is.
+func TestRemoveFileResources_ContainmentIsNotADependency(t *testing.T) {
+	topo := topoWith(
+		res("pkg", "package", "", map[string][]string{
+			"has_file":     {"pkg/moved.go", "pkg/stays.go"},
+			"has_function": {"pkg.Moved", "pkg.Stays"},
+			"has_struct":   {"pkg.Base"},
+		}),
+		res("pkg/moved.go", "file", "pkg/moved.go", map[string][]string{
+			"has_function": {"pkg.Moved", "pkg.(Holder).Method"},
+			"has_struct":   {"pkg.Base"},
+		}),
+		res("pkg.Moved", "function", "pkg/moved.go", nil),
+		res("pkg.(Holder).Method", "method", "pkg/moved.go", nil),
+		res("pkg.Base", "struct", "pkg/moved.go", nil),
+		res("pkg/stays.go", "file", "pkg/stays.go", map[string][]string{"has_function": {"pkg.Stays"}}),
+		// A type in the surviving file whose method lived in the moved one.
+		res("pkg.Holder", "struct", "pkg/stays.go", map[string][]string{"methods": {"pkg.(Holder).Method"}}),
+		// The real dependencies, which must still warn.
+		res("pkg.Stays", "function", "pkg/stays.go", map[string][]string{"calls": {"pkg.Moved"}}),
+		res("pkg.Derived", "struct", "pkg/stays.go", map[string][]string{"inherits": {"pkg.Base"}}),
+	)
+
+	warnings := RemoveFileResources(topo, "pkg/moved.go")
+
+	got := map[string]bool{}
+	for _, w := range warnings {
+		got[w.SourceID+" -> "+w.TargetID] = true
+	}
+	for _, want := range []string{"pkg.Stays -> pkg.Moved", "pkg.Derived -> pkg.Base"} {
+		if !got[want] {
+			t.Errorf("a real dependency lost its warning: %s (got %v)", want, got)
+		}
+	}
+	for _, w := range warnings {
+		if w.SourceID == "pkg" || w.SourceID == "pkg.Holder" {
+			t.Errorf("containment produced a warning: %s", w.Message)
+		}
+	}
+	if len(warnings) != 2 {
+		t.Errorf("want exactly the 2 dependency warnings, got %d: %v", len(warnings), got)
 	}
 }

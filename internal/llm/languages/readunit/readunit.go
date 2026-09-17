@@ -63,6 +63,14 @@ type Unit struct {
 	Context func(b *strings.Builder, st *renderstate.State)
 	// Incoming feeds the single "# USED BY:" section when read.context_filter turns it on.
 	Incoming []domain.ResourceRef
+	// Annotations are inline notes the caller asked for on specific lines of Body.
+	//
+	// APPLIED AT RENDER TIME, in writeGroup, deliberately NOT baked into Body. Body's exact
+	// text is load-bearing in four places -- dropRepeatedSource's Contains test, bodyBytes'
+	// over-serve denominator, renderstate.MarkRendered, and the abridger -- and every one of
+	// them wants the source as the file has it. Decorating it on the way out keeps all four
+	// seeing the bytes they have always seen.
+	Annotations []Annotation
 	// Covers lists resources this unit renders in full beyond ID itself. A file read covers
 	// every declaration inside it -- that is what keeps a file's own functions out of the
 	// context section.

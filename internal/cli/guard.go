@@ -77,7 +77,8 @@ func runPostToolCommand(tool, command string, output io.Writer) {
 		}
 		_, exemptPiped := loadGuardConfig(dbPath)
 		if driftCheckApplies(name, implicatedKeys(name, input, exemptPiped), input) {
-			if msg := driftCheck(dbPath, name); msg != "" {
+			// The message is this report alone, so nothing else shares its budget.
+			if msg := driftCheck(dbPath, name, 0); msg != "" {
 				logGuardDecision(guardNudged, name, command)
 				answer["message"] = msg
 			}
@@ -279,7 +280,7 @@ func runClaudeGuardHook(input io.Reader, output io.Writer) {
 			// Edit/Write as well as after a shell write, and the warning telemetry recorded
 			// every batch as "Bash" -- which reports zero for the native path, the one that
 			// has no other signal. See logGuardWarnings.
-			if msg := driftCheck(dbPath, event.ToolName); msg != "" {
+			if msg := driftCheck(dbPath, event.ToolName, joinedLen(parts)); msg != "" {
 				parts = append(parts, msg)
 			}
 		}
@@ -288,6 +289,17 @@ func runClaudeGuardHook(input io.Reader, output io.Writer) {
 			emitPostToolWarning(output, strings.Join(parts, "\n\n"))
 		}
 	}
+}
+
+// joinedLen is how many bytes parts already occupy in the message strings.Join(parts, "\n\n")
+// will build, INCLUDING the separator the next part will be joined with -- the reserve a report
+// appended after them has to fit around.
+func joinedLen(parts []string) int {
+	n := 0
+	for _, p := range parts {
+		n += len(p) + len("\n\n")
+	}
+	return n
 }
 
 // nudgeKeys narrows the implicated keys to the ones a nudge still has something to say about.

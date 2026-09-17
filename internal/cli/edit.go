@@ -65,7 +65,9 @@ func RunEdit() {
 		os.Exit(1)
 	}
 	fmt.Println(out)
-	if msg := driftWarningReport(manager.DbPath(), unreportedWarnings(manager.DbPath())); msg != "" {
+	// The model reads the edit's own result in the same tool output, so it is reserved: the
+	// result, its newline, the blank line below, and the newline Println ends the report with.
+	if msg := driftWarningReport(manager.DbPath(), unreportedWarnings(manager.DbPath()), len(out)+3); msg != "" {
 		fmt.Println()
 		fmt.Println(msg)
 	}

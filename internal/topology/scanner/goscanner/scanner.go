@@ -3,6 +3,7 @@ package goscanner
 import (
 	"bytes"
 	"fmt"
+	"go/ast"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -774,7 +775,7 @@ func (s *GoScanner) applyFileUpdate(gt *golang.GolangTopology, pr *ParseResult, 
 							SourceID: string(fid),
 							Kind:     domain.WarnSignatureChanged,
 							TargetID: callerID,
-							Message:  fmt.Sprintf("function %s changed input/output format, verify caller %s", oldFunc.Name, callerID),
+							Message:  domain.SignatureChangedMessage(oldFunc.Name, callerID),
 						}
 						gt.Warnings[warnID] = warning
 						warnings = append(warnings, warning)
@@ -867,6 +868,13 @@ func (s *GoScanner) applyFileUpdate(gt *golang.GolangTopology, pr *ParseResult, 
 	for sid, oldStruct := range removedStructs {
 		structUsers := passes.getCallers(gt, string(sid), string(golang.ConnUsesStruct))
 		for _, sourceID := range structUsers {
+			// A user in this same file was re-parsed by this very update, so the OLD edge says what
+			// it used to reference, not what it references now. Judge it on the new version: gone,
+			// or no longer naming the removed node, is not broken -- a const moved to another
+			// package along with its only use used to leave a warning nothing could clear.
+			if _, isOld := oldFunctions[golang.FunctionID(sourceID)]; isOld && !newFunctionNames(pr, sourceID, oldStruct.Name, true) {
+				continue
+			}
 			if sourceFn, ok := gt.Functions[golang.FunctionID(sourceID)]; ok {
 				sourceFn.Connections[golang.ConnUsesStruct] = removeString(sourceFn.Connections[golang.ConnUsesStruct], string(sid))
 				gt.Functions[golang.FunctionID(sourceID)] = sourceFn
@@ -887,6 +895,13 @@ func (s *GoScanner) applyFileUpdate(gt *golang.GolangTopology, pr *ParseResult, 
 	for nid, oldNT := range removedNamedTypes {
 		ntUsers := passes.getCallers(gt, string(nid), string(golang.ConnUsesNamedType))
 		for _, sourceID := range ntUsers {
+			// A user in this same file was re-parsed by this very update, so the OLD edge says what
+			// it used to reference, not what it references now. Judge it on the new version: gone,
+			// or no longer naming the removed node, is not broken -- a const moved to another
+			// package along with its only use used to leave a warning nothing could clear.
+			if _, isOld := oldFunctions[golang.FunctionID(sourceID)]; isOld && !newFunctionNames(pr, sourceID, oldNT.Name, true) {
+				continue
+			}
 			if sourceFn, ok := gt.Functions[golang.FunctionID(sourceID)]; ok {
 				sourceFn.Connections[golang.ConnUsesNamedType] = removeString(sourceFn.Connections[golang.ConnUsesNamedType], string(nid))
 				gt.Functions[golang.FunctionID(sourceID)] = sourceFn
@@ -911,6 +926,13 @@ func (s *GoScanner) applyFileUpdate(gt *golang.GolangTopology, pr *ParseResult, 
 	for vid, oldVar := range removedExtVars {
 		varUsers := passes.getCallers(gt, string(vid), string(golang.ConnUsesExtVar))
 		for _, sourceID := range varUsers {
+			// A user in this same file was re-parsed by this very update, so the OLD edge says what
+			// it used to reference, not what it references now. Judge it on the new version: gone,
+			// or no longer naming the removed node, is not broken -- a const moved to another
+			// package along with its only use used to leave a warning nothing could clear.
+			if _, isOld := oldFunctions[golang.FunctionID(sourceID)]; isOld && !newFunctionNames(pr, sourceID, oldVar.Name, false) {
+				continue
+			}
 			if sourceFn, ok := gt.Functions[golang.FunctionID(sourceID)]; ok {
 				sourceFn.Connections[golang.ConnUsesExtVar] = removeString(sourceFn.Connections[golang.ConnUsesExtVar], string(vid))
 				gt.Functions[golang.FunctionID(sourceID)] = sourceFn
@@ -1028,6 +1050,15 @@ func (s *GoScanner) applyFileUpdate(gt *golang.GolangTopology, pr *ParseResult, 
 			}
 			f.Connections = uniqueConns(f.Connections)
 			gt.Functions[f.ID] = f
+		}
+	}
+	// The clear above is for warnings judged against a function's OLD body. A node_removed this
+	// update raised on a same-file user was judged against its NEW one (newFunctionNames), so it
+	// goes back in: the partial path reports from gt.Warnings, not from the returned list, and lost
+	// it -- a user still naming a removed const was warned on one route and not the other.
+	for _, w := range warnings {
+		if w.Kind == domain.WarnNodeRemoved {
+			gt.Warnings[w.ID] = w
 		}
 	}
 
@@ -1874,4 +1905,73 @@ func castNamedTypeIDs(ids []golang.NamedTypeID) []string {
 		result = append(result, string(id))
 	}
 	return result
+}
+
+// newFunctionNames reports whether the re-parsed version of function id still names a
+// package-level identifier: as a bare identifier in its body (a selector's field or method name
+// is not one), or, for a type, in its signature. False when the function no longer exists.
+//
+// Syntactic on purpose. Only an UNQUALIFIED name can refer to the removed node of this file's own
+// package, and the resolver deliberately raises nothing for an unresolved bare identifier -- it
+// may be a local -- so without this a user that still references the node would never be warned,
+// and one that stopped would stay warned.
+func newFunctionNames(pr *ParseResult, id, name string, inSignature bool) bool {
+	for _, fi := range pr.Functions {
+		if string(fi.Function.ID) != id {
+			continue
+		}
+		if inSignature {
+			for _, defs := range [][]golang.VariableDefinition{fi.Function.Input, fi.Function.Output} {
+				for _, d := range defs {
+					if typingNames(d.Typing, name) {
+						return true
+					}
+				}
+			}
+		}
+		if fi.Body == nil {
+			return false
+		}
+		found := false
+		selectors := map[*ast.Ident]bool{}
+		ast.Inspect(fi.Body, func(n ast.Node) bool {
+			if found {
+				return false
+			}
+			switch x := n.(type) {
+			case *ast.SelectorExpr:
+				selectors[x.Sel] = true
+			case *ast.Ident:
+				if x.Name == name && !selectors[x] {
+					found = true
+				}
+			}
+			return true
+		})
+		return found
+	}
+	return false
+}
+
+// typingNames reports whether a rendered type ("[]*Rect", "map[string]Rect") mentions name as a
+// whole, unqualified identifier.
+func typingNames(typing, name string) bool {
+	for i := strings.Index(typing, name); i >= 0; {
+		end := i + len(name)
+		before := i == 0 || !isGoIdentByte(typing[i-1]) && typing[i-1] != '.'
+		after := end == len(typing) || !isGoIdentByte(typing[end])
+		if before && after {
+			return true
+		}
+		next := strings.Index(typing[i+1:], name)
+		if next < 0 {
+			break
+		}
+		i += next + 1
+	}
+	return false
+}
+
+func isGoIdentByte(b byte) bool {
+	return b == '_' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9'
 }
