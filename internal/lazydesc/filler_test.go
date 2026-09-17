@@ -81,12 +81,28 @@ func project(t *testing.T, topo *domain.Topology) *topology.TopologyManager {
 	return mgr
 }
 
+// lazyConfig is the INLINE configuration: generation happens inside the fill, which is what
+// these tests drive directly. The background path is a different shape -- claim, spawn, watch --
+// and is covered in filler_background_test.go with a fake spawn, because a real one would launch
+// an `arac` that a test binary does not have.
 func lazyConfig(on bool) *helper.Config {
 	cfg := helper.DefaultConfig()
 	cfg.Descriptions.Lazy.Enabled = &on
+	background := false
+	cfg.Descriptions.Lazy.Background = &background
 	// The exemplar block reads the topology; it is exercised in its own package and only
 	// adds noise here.
 	cfg.Descriptions.StyleExemplars = 0
+	return cfg
+}
+
+// lazyBackgroundConfig is lazyConfig with the detached path on, and the waits shortened so a
+// test does not sit through the production 45 seconds.
+func lazyBackgroundConfig(waitSeconds int) *helper.Config {
+	cfg := lazyConfig(true)
+	background := true
+	cfg.Descriptions.Lazy.Background = &background
+	cfg.Descriptions.Lazy.TimeoutSeconds = &waitSeconds
 	return cfg
 }
 

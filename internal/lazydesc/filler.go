@@ -2,6 +2,7 @@ package lazydesc
 
 import (
 	"context"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +23,7 @@ import (
 type Filler struct {
 	mgr     *topology.TopologyManager
 	cfg     *helper.Config
+	harness string
 	lazyCfg helper.ResolvedLazyDescriptions
 
 	// mu guards attempted, and nothing else.
@@ -61,9 +63,18 @@ func New(mgr *topology.TopologyManager, cfg *helper.Config, harness string) *Fil
 	if mgr == nil || cfg == nil || !cfg.LazyDescriptionsEnabled() {
 		return nil
 	}
+	// A description worker, and everything a description worker started, never fills. Without
+	// this the CLI provider closes a loop that spends real money: worker -> `claude -p` -> that
+	// project's hooks -> `arac cmd` -> a lazy fill -> another worker -> `claude -p` -> ... Each
+	// link is behaving correctly; the chain is not. See descriptionWorkerEnv for why the guard
+	// is inherited rather than passed.
+	if WorkerProcess() {
+		return nil
+	}
 	return &Filler{
 		mgr:       mgr,
 		cfg:       cfg,
+		harness:   harness,
 		lazyCfg:   cfg.EffectiveLazyDescriptions(harness),
 		attempted: map[string]bool{},
 	}
@@ -127,13 +138,104 @@ func (f *Filler) FillForNodes(topo *domain.Topology, ids []string) bool {
 // assembling a candidate list it is about to throw away.
 func (f *Filler) Enabled() bool { return f != nil }
 
-// fill runs a plan to completion, or to its deadline.
+// fill hands a plan to a background worker and waits for as much of it as the read can afford.
+//
+// THE PARTITION IS THE WHOLE THING, and it is per resource, not per read. Every target is put
+// through one compare-and-swap, and the answers split three ways:
+//
+//   - WON -- nobody live held it. It goes to a worker this fill spawns.
+//   - LOST to a live claim -- somebody is already generating it. It is watched, not re-started.
+//   - LOST to a cooling-down failure -- nobody is generating it and nobody should be, yet.
+//
+// A read that plans forty resources, three of which another worker already has, spawns one
+// worker for the other thirty-seven and waits on all forty. Doing one OR the other is what makes
+// this feature either wasteful or useless: start everything and two workers describe one resource
+// and both bills are real; stand down because something was taken and resources nobody is
+// working on are abandoned.
+//
+// Then it waits, up to timeout_seconds, and returns whether anything landed. What has not landed
+// by then is rendered as undescribed -- and keeps being generated. That is the difference from
+// the inline fill this replaces, which killed the provider call on its deadline and threw away
+// every token already spent on it.
 func (f *Filler) fill(topo *domain.Topology, targets []Target) bool {
 	if len(targets) == 0 {
 		return false
 	}
-	// Resolved before the claim: with no provider nothing is claimed, so the next process --
-	// or the next read after a key appears in the environment -- still gets a clean first try.
+	if !f.lazyCfg.Background {
+		return f.fillInline(topo, targets)
+	}
+	// Resolved before anything is claimed: with no provider there is nothing to spawn, and a
+	// claim taken on behalf of a worker that will never exist has to be cleaned up again. The
+	// next process -- or the next read after a key appears in the environment -- still gets a
+	// clean first try.
+	if f.generator() == nil {
+		return false
+	}
+	pending := f.claim(targets)
+	if len(pending) == 0 {
+		return false
+	}
+
+	jobID := NewJobID()
+	now := time.Now()
+	lease := now.Add(time.Duration(f.lazyCfg.WorkerTimeoutSeconds)*time.Second + helper.DescriptionJobLeaseSlack)
+
+	claims := make([]helper.DescriptionJobTarget, 0, len(pending))
+	for _, t := range pending {
+		claims = append(claims, helper.DescriptionJobTarget{ID: t.ID, Fingerprint: t.Fingerprint})
+	}
+	won, watch, err := helper.ClaimDescriptionTargets(f.mgr.DbPath(), jobID, os.Getpid(),
+		claims, now, lease, f.lazyCfg.MaxWorkers)
+	if err != nil {
+		f.release(pending)
+		return false
+	}
+
+	// Nothing was won, so there is no worker to start -- but there may still be live work worth
+	// waiting for, which is exactly the case where a second read renders a description the first
+	// read paid for.
+	if len(won) > 0 {
+		if err := spawnWorker(f.mgr.DbPath(), jobID, f.harness); err != nil {
+			// The claims were taken for a worker that does not exist. Releasing them is what
+			// stops every later read watching a job that will never report; if the release
+			// fails too, the claims were born unstarted and the next fill collects them.
+			_ = helper.ReleaseDescriptionJob(f.mgr.DbPath(), jobID)
+			f.release(pending)
+			return false
+		}
+	}
+	// The in-process set is not the authority here -- the claim table is -- and holding ids this
+	// fill did not win would stop a LATER fill in this same process from watching them.
+	f.release(unclaimed(pending, won))
+
+	landed := f.waitForDescriptions(append(append([]string{}, won...), watch...),
+		time.Duration(f.lazyCfg.TimeoutSeconds)*time.Second)
+	return landed
+}
+
+// unclaimed is the targets this fill planned but does not own.
+func unclaimed(pending []Target, won []string) []Target {
+	owned := make(map[string]bool, len(won))
+	for _, id := range won {
+		owned[id] = true
+	}
+	var out []Target
+	for _, t := range pending {
+		if !owned[t.ID] {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// fillInline is the previous behaviour, kept behind `descriptions.lazy.background: false`.
+//
+// It generates inside the read and abandons whatever has not finished when the deadline passes,
+// which costs the tokens already spent on the batch in flight. That is the trade it always made.
+// It stays reachable because spawning is not always possible or wanted: a locked-down CI image, a
+// sandbox that forbids it, and the benchmark harness, which deliberately refuses to leave a
+// process running between runs.
+func (f *Filler) fillInline(topo *domain.Topology, targets []Target) bool {
 	if f.generator() == nil {
 		return false
 	}

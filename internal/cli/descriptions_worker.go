@@ -47,15 +47,6 @@ import (
 // costs at most the one batch in flight.
 
 const (
-	// descriptionWorkerEnv marks this process, and every process it starts, as description
-	// machinery. lazydesc.New refuses to build a filler when it is set.
-	//
-	// It has to be inherited to do its job. The CLI provider is usually `claude -p`, and a
-	// project with aracne hooks installed turns that into: worker -> claude -> hook -> arac cmd
-	// -> lazy fill -> another worker -> claude -> ... An environment variable is the one thing
-	// that reaches the whole subtree without any of them having to know about each other.
-	descriptionWorkerEnv = "ARACNE_LAZYDESC_WORKER"
-
 	// descriptionWorkerWatchdogGrace is how long past the context deadline the watchdog waits
 	// before ending the process itself.
 	descriptionWorkerWatchdogGrace = 30 * time.Second
@@ -70,12 +61,6 @@ const (
 	// already had one bloat incident (maxStoredErrors, db.go).
 	descriptionWorkerLogMax = 1 << 20
 )
-
-// DescriptionWorkerActive reports whether this process is description machinery -- a worker, or
-// anything a worker started. See descriptionWorkerEnv.
-func DescriptionWorkerActive() bool {
-	return strings.TrimSpace(os.Getenv(descriptionWorkerEnv)) != ""
-}
 
 // RunDescriptionsWorker is the entry point for the hidden verb.
 func RunDescriptionsWorker(args []string) {
