@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 
@@ -147,6 +148,37 @@ type pyFileResult struct {
 	Variables []pyVar           `json:"variables"`
 }
 
+// pythonParseTimeout bounds ONE interpreter run over one file.
+//
+// It is a guard against a pathological parse, not a performance budget. A healthy interpreter
+// answers in well under a second, so the bound only ever decides anything when the machine
+// itself is slow -- and a tripped bound is SILENT: the file lands in Topology.Errors and its
+// classes and functions are simply absent from the graph. That is how a Windows CI runner
+// that came up about three times slower than usual (every package in the suite took ~3x its
+// usual wall time on that run) turned a ~10s parse into a 30s timeout and reported it as
+// `resource "shapes.Circle" not found in topology` -- a sentence about the graph for a fact
+// about interpreter startup.
+//
+// ONLY WINDOWS GETS THE LONGER BOUND, because the cost being bounded is interpreter STARTUP
+// and that is where startup is expensive: no fork, a 25KB `-c` script on the command line,
+// and an on-access scanner in the path. The tax is measurable rather than folklore -- on one
+// commit, internal/llm/languages/universaltools, which is this scanner driven once per
+// subtest, ran in 2.6s on Linux and 42.5s on Windows, and 115.5s on the slow runner. Nothing
+// on Linux or macOS has been seen anywhere near 30s, so they keep the original 30s exactly
+// and nothing about their behaviour moves. ARACNE_PYTHON_PARSE_TIMEOUT overrides whichever
+// default applies, as any time.ParseDuration string, on every platform.
+func pythonParseTimeout() time.Duration {
+	if raw := strings.TrimSpace(os.Getenv("ARACNE_PYTHON_PARSE_TIMEOUT")); raw != "" {
+		if d, err := time.ParseDuration(raw); err == nil && d > 0 {
+			return d
+		}
+	}
+	if runtime.GOOS == "windows" {
+		return 3 * time.Minute
+	}
+	return 30 * time.Second
+}
+
 // Parses a Python file by executing a script via python3/python interpreter and deserializes the resulting JSON AST.
 func parsePythonFile(filePath string) (*pyFileResult, error) {
 	absPath, err := filepath.Abs(filePath)
@@ -164,9 +196,10 @@ func parsePythonFile(filePath string) (*pyFileResult, error) {
 	// sentence about PATH for a file with a SyntaxError, pointing at the wrong fix and
 	// discarding the stderr from python3 that named the file, the line and the error.
 	pythonExes := []string{"python3", "python"}
+	timeout := pythonParseTimeout()
 	var cmdErr error
 	for _, exe := range pythonExes {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		cmd := exec.CommandContext(ctx, exe, pythonParseArgs(absPath, dir)...)
 		// A neutral working directory. -I already keeps the cwd off sys.path; this also
 		// keeps anything the interpreter resolves relative to cwd out of the project.
@@ -189,8 +222,8 @@ func parsePythonFile(filePath string) (*pyFileResult, error) {
 		}
 		if timedOut {
 			// The interpreter ran; it just did not finish. Nothing is gained by asking a
-			// second one to take the same 30 seconds.
-			return nil, fmt.Errorf("%s parse timed out after 30s for %s", exe, absPath)
+			// second one to take the same amount of time over the same file.
+			return nil, fmt.Errorf("%s parse timed out after %s for %s", exe, timeout, absPath)
 		}
 		if isExeNotFound(runErr) {
 			// This NAME is not on PATH. Keep the error in case no name is, and try the next.
