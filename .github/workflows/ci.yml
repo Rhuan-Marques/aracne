@@ -50,13 +50,25 @@ jobs:
           go vet ./...
           go vet -tags minimal ./...
 
+      # -timeout is spelled out because the default is 10 MINUTES PER PACKAGE, and on
+      # Windows one package already spends most of it. Same commit, run #38: this suite
+      # is 93s on Linux and 91s on macOS, and 570s here, with internal/topology alone at
+      # 443s against 67s on Linux. That is a 6.6x platform tax, not a slow test -- and it
+      # leaves ~2.5 minutes of margin. A runner that comes up slower than usual eats it:
+      # run #39 took ~3x its usual wall time on every package in the suite, internal/
+      # topology crossed 600s, and the binary died with a panic naming whichever test was
+      # running at the 10-minute mark rather than anything that was actually wrong.
+      #
+      # Windows alone gets the longer budget. Linux and macOS keep the 10m default, where
+      # a 90-second suite has nothing to gain from a higher ceiling and a genuine hang
+      # should still fail fast.
       - name: Test
-        run: go test ./...
+        run: go test -timeout ${{ runner.os == 'Windows' && '40m' || '10m' }} ./...
 
       # The Basic build is a shipped artifact, so it needs its own run: a default
       # `go test ./...` never compiles under this tag set.
       - name: Test (Basic)
-        run: go test -tags minimal ./...
+        run: go test -tags minimal -timeout ${{ runner.os == 'Windows' && '40m' || '10m' }} ./...
     env:
       CGO_ENABLED: '1'
 
