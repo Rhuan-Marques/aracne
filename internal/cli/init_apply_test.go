@@ -221,10 +221,10 @@ func TestApplyManualLeavesTheExecutorModelInherited(t *testing.T) {
 	}
 }
 
-// And back again. Manual is a choice, not a trapdoor: a later run that names a describer has to
-// re-enable the fill, or question five would go on promising "lazy generation is on either way"
-// over a switch this same wizard wrote false.
-func TestApplyANamedDescriberTurnsLazyBackOn(t *testing.T) {
+// And back again. Manual is a choice, not a trapdoor: a later run that answers Lazily has to
+// re-enable the fill, or the row that promised descriptions "as you read" would be written over
+// a switch this same wizard left false.
+func TestApplyLazilyTurnsLazyBackOn(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		answers initAnswers
@@ -244,7 +244,7 @@ func TestApplyANamedDescriberTurnsLazyBackOn(t *testing.T) {
 		a.apply(cfg)
 
 		if !cfg.LazyDescriptionsEnabled() {
-			t.Errorf("%s: the fill stayed off after a describer was named", tc.name)
+			t.Errorf("%s: the fill stayed off after Lazily named a describer", tc.name)
 		}
 		if err := cfg.Validate(); err != nil {
 			t.Errorf("%s: invalid config: %v", tc.name, err)
@@ -255,6 +255,89 @@ func TestApplyANamedDescriberTurnsLazyBackOn(t *testing.T) {
 // Turning the switch off must not disturb the tuning knobs around it: `lazy` is one key with
 // two shapes, and a project that tuned it keeps the object rather than being flattened to a
 // bare boolean it never wrote.
+// "Now" is the other answer that turns the fill off, and it does it for the opposite reason to
+// Manual: there is a describer, and it is about to describe everything. A read that still
+// stopped to fill one in would pay a planner and a deadline for a description already in the
+// database.
+func TestApplyNowTurnsLazyOff(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		answers initAnswers
+	}{
+		{"api", initAnswers{Provider: helper.ProviderNameAnthropic, APIKeyEnv: "ANTHROPIC_API_KEY"}},
+		{"cli", initAnswers{Provider: helper.ProviderNameCLI, CLICommand: "claude -p"}},
+	} {
+		cfg := helper.DefaultConfig()
+		a := tc.answers
+		a.Mode = helper.ModeCLI
+		a.Verbosity = helper.ContractVerbosityLow
+		a.DescribeNow = true
+		a.apply(cfg)
+
+		if cfg.LazyDescriptionsEnabled() {
+			t.Errorf("%s: Now must turn the lazy fill off", tc.name)
+		}
+		// And it is only the fill: the describer this run just configured is what the
+		// sweep runs with, so clearing it would leave Now with nothing to sweep.
+		if cfg.Descriptions.Provider != tc.answers.Provider {
+			t.Errorf("%s: provider = %q, want the one the run named", tc.name,
+				cfg.Descriptions.Provider)
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("%s: invalid config: %v", tc.name, err)
+		}
+	}
+}
+
+// The two halves of question three's second and third rows, against the same config: a run that
+// swept once is not stuck with a cold read path forever, and a run that read lazily is not stuck
+// paying for a fill after it sweeps.
+func TestApplyTheSweepAnswerOwnsLazyInBothDirections(t *testing.T) {
+	cfg := helper.DefaultConfig()
+	base := initAnswers{
+		Mode:      helper.ModeCLI,
+		Verbosity: helper.ContractVerbosityLow,
+		Provider:  helper.ProviderNameAnthropic,
+		APIKeyEnv: "ANTHROPIC_API_KEY",
+	}
+
+	now := base
+	now.DescribeNow = true
+	now.apply(cfg)
+	if cfg.LazyDescriptionsEnabled() {
+		t.Fatal("Now left the fill on")
+	}
+
+	base.apply(cfg)
+	if !cfg.LazyDescriptionsEnabled() {
+		t.Error("a later Lazily did not turn the fill back on")
+	}
+}
+
+// Turning the switch off through the sweep answer disturbs the tuning knobs no more than Manual
+// does: `lazy` is one key with two shapes, and a project that tuned it keeps the object.
+func TestApplyNowKeepsTheLazyTuning(t *testing.T) {
+	cfg := helper.DefaultConfig()
+	maxNodes := 8
+	cfg.Descriptions.Lazy.MaxNodes = &maxNodes
+
+	initAnswers{
+		Mode:        helper.ModeCLI,
+		Verbosity:   helper.ContractVerbosityLow,
+		Provider:    helper.ProviderNameAnthropic,
+		APIKeyEnv:   "ANTHROPIC_API_KEY",
+		DescribeNow: true,
+	}.apply(cfg)
+
+	resolved := cfg.Descriptions.Lazy.Resolve()
+	if resolved.Enabled {
+		t.Error("the switch did not go off")
+	}
+	if resolved.MaxNodes != maxNodes {
+		t.Errorf("max_nodes = %d, want the configured %d", resolved.MaxNodes, maxNodes)
+	}
+}
+
 func TestApplyManualKeepsTheLazyTuning(t *testing.T) {
 	cfg := helper.DefaultConfig()
 	maxNodes := 8

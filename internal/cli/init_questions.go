@@ -32,7 +32,7 @@ type initAnswers struct {
 	// APIKeyEnv is set on the API branch, CLICommand on the CLI branch. Never both.
 	APIKeyEnv  string
 	CLICommand string
-	// Manual is the third answer to question three, and it is the absence of the other
+	// Manual is the first answer to question three, and it is the absence of the other
 	// three: no provider, no key variable, no command, no model. It is a separate bool
 	// rather than a third Provider value because there is no such provider -- a config that
 	// named one would be a describer aracne would then try to run.
@@ -51,9 +51,13 @@ type initAnswers struct {
 	// wizard owns the alternate screen while it asks, and anything written under it is
 	// erased when the screen comes down.
 	Notes []string
-	// DescribeNow is the one answer that is not a setting: it decides whether this run
-	// sweeps the repository, and nothing records it. Lazy generation is already on by
-	// default, so "lazily" is not a mode being chosen -- it is this sweep being dropped.
+	// DescribeNow is the second answer to question three, and it decides two things that
+	// are really one thing: whether this run sweeps the repository, and what
+	// `descriptions.lazy` is set to. A sweep describes everything there is to describe, so
+	// the read-path fill that would have converged on the same result has nothing left to
+	// do -- "Now" therefore turns it OFF (see apply) and "Lazily" leaves it on. The two are
+	// two ways of paying for the same descriptions, not a sweep bolted onto a switch that
+	// would run either way.
 	DescribeNow bool
 	// PreloadTools is question seven, and it is only MEANINGFUL when asksPreloadTools is
 	// true -- a plain bool rather than a *bool because the two answers that decide whether
@@ -63,9 +67,17 @@ type initAnswers struct {
 	PreloadTools bool
 }
 
-// describerManual is question three's third answer. It is not a provider name and must never
-// be written into `descriptions.provider` -- see initAnswers.Manual.
-const describerManual = "manual"
+// The three answers to question three, which is the one question about descriptions that every
+// run answers.
+//
+// "manual" is not a provider name and must never be written into `descriptions.provider` --
+// see initAnswers.Manual. The other two are a pair: they name the same descriptions paid for at
+// two different times, and which one was picked reaches the config as `descriptions.lazy`.
+const (
+	describerManual    = "manual"
+	describeWhenNow    = "now"
+	describeWhenLazily = "lazily"
+)
 
 // The harness answers. "both" is what a bare `arac init` used to do unconditionally, and it is
 // kept as a choice rather than as the default: writing an OpenCode tree into a repository that
@@ -123,14 +135,21 @@ func (a initAnswers) apply(cfg *helper.Config) {
 		cfg.Descriptions.APIKeyEnv = a.APIKeyEnv
 		cfg.Descriptions.CLIProviderCommand = ""
 	}
-	// The describer answer owns `descriptions.lazy`, in BOTH directions, and it is written
-	// explicitly rather than left to the default on the non-manual branches. Manual has to
-	// turn it off: the fill would otherwise run on every cold read with nothing configured
-	// to run. And the other two have to turn it back on, or picking Manual once would be a
-	// one-way door -- a later run that names a key would leave the switch this wizard wrote
-	// lying false, while question five told the user to their face that "lazy generation is
-	// on either way".
-	lazy := !a.Manual
+	// `descriptions.lazy` is question three, all three of its answers, written explicitly
+	// rather than left to the default on any branch.
+	//
+	// Manual turns it off because there is nothing to fill with: the fill would otherwise
+	// run on every cold read with no provider, no key and no command behind it. "Now" turns
+	// it off for the opposite reason -- the sweep this run is about to do describes the
+	// whole repository, so a read that stopped to fill one in would be paying a planner and
+	// a deadline to write what is already there. "Lazily" is the answer that leaves it on,
+	// and the only one that does.
+	//
+	// EVERY DIRECTION, or any of the three would be a one-way door: a later run that answers
+	// Lazily has to turn the switch back on over whatever the previous run wrote, and a
+	// later Now or Manual has to turn it off over a true. The wizard's copy tells the user
+	// what each answer does to this key, so the key cannot be left saying something else.
+	lazy := !a.Manual && !a.DescribeNow
 	cfg.Descriptions.Lazy.Enabled = &lazy
 	setDescriptionsExecutorModel(cfg, a.Model)
 	// Left ALONE when the question did not apply, rather than written false. nil is
@@ -262,11 +281,11 @@ func commandWithModel(command, model string) string {
 // ---------------------------------------------------------------------------
 
 // totalInitSteps is the denominator of the "(n/7)" counter. It counts the questions a run can
-// ask, not the ones it does: the API and CLI branches ask a different fourth question, one of
-// them sometimes skips it, the Manual branch skips four AND five because it has no model to
-// name and no sweep to offer, and the seventh is asked only on the one combination it means
-// anything on -- but a counter that changed its denominator halfway through would read as the
-// wizard growing while you answer it.
+// ask, not the ones it does: the API and CLI branches ask a different fourth question, the CLI
+// one sometimes answers the fifth inside it, the Manual answer to question three skips four
+// AND five because it has no describer to configure and no model to name, and the seventh is
+// asked only on the one combination it means anything on -- but a counter that changed its
+// denominator halfway through would read as the wizard growing while you answer it.
 //
 // The conditional question is LAST for this reason. Anywhere else it would leave a visible
 // hole in the middle of the sequence on every run that skips it; at the end, a run that does
@@ -391,13 +410,98 @@ func modeQuestion() tui.Question {
 	}
 }
 
-func describerQuestion() tui.Question {
+// describeWhenQuestion is question three, and it is the only question about descriptions that
+// every run answers.
+//
+// IT USED TO BE TWO, AT OPPOSITE ENDS OF THE WIZARD. "Who writes your descriptions?" (an API
+// key / a CLI command / Manual) was asked here, and "Describe the repository now?" (now /
+// lazily) two questions later -- so the three things that can actually happen to a project's
+// descriptions were spread across two screens as a provider crossed with a schedule, and one
+// cell of that cross did not exist: Manual has no describer to sweep with, so the later
+// question had to be skipped after it, leaving a hole in the middle of the sequence on exactly
+// the runs that took the cheapest answer.
+//
+// Asking the OUTCOME first collapses that into three rows -- my harness will write them, write
+// them all now, write them as I read -- and demotes "with what" to a follow-up asked only of
+// the two answers that need one. It is also the order the user already thinks in: the money
+// and the wait are decided here, and which credential pays for them is a detail of carrying it
+// out.
+func describeWhenQuestion(defaultNow bool) tui.Question {
+	// Manual is never the offered default. It is the answer that spends nothing, which is
+	// also the answer that leaves a cold repository cold until the user remembers a slash
+	// command -- not somewhere to land by pressing Enter through the wizard.
+	def := 1
+	if !defaultNow {
+		def = 2
+	}
 	return tui.Question{
-		Title: "Who writes your descriptions?",
-		Step:  "3/" + strconv.Itoa(totalInitSteps),
+		Title:   "How should your descriptions be written?",
+		Step:    "3/" + strconv.Itoa(totalInitSteps),
+		Default: def,
 		Intro: []string{
 			"Aracne describes every function, struct and interface so a read can show you what " +
 				"its neighbours are without opening them. Something has to write those eventually.",
+			"This also sets `descriptions.lazy`: the read-path fill is on for one of the three.",
+		},
+		Options: []tui.Option{
+			{
+				Label:   "Manual",
+				Value:   describerManual,
+				Summary: "Nothing aracne runs does. Your harness writes them, on request.",
+				Detail: []string{
+					"No key, no model, no command, and nothing else to ask.",
+					"",
+					"`/descriptions-generate` in Claude Code or OpenCode fans that " +
+						"harness's own sub-agents out over everything still " +
+						"undescribed, on the subscription you already pay for.",
+					"",
+					"Lazy generation is off (`\"lazy\": false`): a cold read has nothing " +
+						"to describe with. Re-run `arac init` to change that.",
+				},
+			},
+			{
+				Label:   "Now",
+				Value:   describeWhenNow,
+				Summary: "One sweep, before this command returns.",
+				Detail: []string{
+					"The whole cost is paid up front, and aracne is as effective as it can " +
+						"be right away.",
+					"",
+					"Lazy generation is off (`\"lazy\": false`): the sweep leaves the read " +
+						"path nothing to write. Code added later is described by `arac " +
+						"descriptions generate`.",
+					"",
+					"Next: what to sweep with.",
+				},
+			},
+			{
+				Label:   "Lazily",
+				Value:   describeWhenLazily,
+				Summary: "Nothing is spent now. They arrive as you read.",
+				Detail: []string{
+					"Each read and search describes the handful of nodes it is about to " +
+						"show, so the repo warms up as you work in it -- cold reads are " +
+						"slower until it does.",
+					"",
+					"The one answer that leaves lazy generation on (`\"lazy\": true`). Sweep " +
+						"the rest any time: `arac descriptions generate`.",
+					"",
+					"Next: what the fill runs.",
+				},
+			},
+		},
+	}
+}
+
+// describerSourceQuestion is question four: what the answer to question three is carried out
+// with. It is asked of "Now" and of "Lazily" and of nothing else -- Manual declined to
+// configure a describer, and both of this question's rows are one.
+func describerSourceQuestion() tui.Question {
+	return tui.Question{
+		Title: "What should write them?",
+		Step:  "4/" + strconv.Itoa(totalInitSteps),
+		Intro: []string{
+			"Whichever you pick runs both entry points: the sweep and the fill on the read path.",
 		},
 		Options: []tui.Option{
 			{
@@ -407,6 +511,9 @@ func describerQuestion() tui.Question {
 				Detail: []string{
 					"Bills the key's balance, per token.",
 					"Fastest and safest if you have one lying around.",
+					"",
+					"You will be asked which wire format the endpoint speaks and which " +
+						"environment variable holds the key.",
 				},
 			},
 			{
@@ -425,22 +532,6 @@ func describerQuestion() tui.Question {
 						"a different price or draw from a separate pool of money.",
 				},
 			},
-			{
-				Label:   "Manual",
-				Value:   describerManual,
-				Summary: "Nothing does, until you ask your harness to.",
-				Detail: []string{
-					"No key, no command, no model. Aracne spends nothing itself.",
-					"",
-					"Your harness writes them: run `/descriptions-generate` in Claude Code " +
-						"or OpenCode and it fans its own sub-agents out over everything " +
-						"still undescribed, on the subscription you already pay for.",
-					"",
-					"Lazy generation is turned off to match (`\"lazy\": false`), so reads " +
-						"stay cold until you run it. Re-run `arac init` to hand the job " +
-						"back.",
-				},
-			},
 		},
 	}
 }
@@ -448,7 +539,7 @@ func describerQuestion() tui.Question {
 func apiFormatQuestion() tui.Question {
 	return tui.Question{
 		Title: "Which format does that API speak?",
-		Step:  "3/" + strconv.Itoa(totalInitSteps),
+		Step:  "4/" + strconv.Itoa(totalInitSteps),
 		Intro: []string{
 			"The wire format, not necessarily the company: for example, many different " +
 				"companies use APIs that follow the OpenAI format.",
@@ -483,7 +574,7 @@ func apiKeyEnvQuestion(provider string) tui.Question {
 	fallback := helper.DefaultAPIKeyEnv(provider)
 	return tui.Question{
 		Title: "Which environment variable holds the key?",
-		Step:  "3/" + strconv.Itoa(totalInitSteps),
+		Step:  "4/" + strconv.Itoa(totalInitSteps),
 		Intro: []string{
 			"Asked rather than fixed, because the format and the credential are separate " +
 				"facts: an OpenAI-format gateway bills its own key, and a project pointed " +
@@ -514,7 +605,7 @@ func apiKeyEnvQuestion(provider string) tui.Question {
 func cliCommandQuestion() tui.Question {
 	return tui.Question{
 		Title: "Which command should write them?",
-		Step:  "3/" + strconv.Itoa(totalInitSteps),
+		Step:  "4/" + strconv.Itoa(totalInitSteps),
 		Intro: []string{
 			"It is run once per batch, with the batch on its stdin and the descriptions " +
 				"read back off its stdout.",
@@ -571,7 +662,7 @@ func modelQuestion(provider string) tui.Question {
 
 	return tui.Question{
 		Title: "Which model writes them?",
-		Step:  "4/" + strconv.Itoa(totalInitSteps),
+		Step:  "5/" + strconv.Itoa(totalInitSteps),
 		Intro: []string{
 			"Descriptions are short and there are thousands of them, so this is the one " +
 				"place a cheap model is advised.",
@@ -595,53 +686,6 @@ func modelQuestion(provider string) tui.Question {
 		},
 		FreeformPrompt: "Other:",
 		EmptyError:     "Name a model, or pick the default above.",
-	}
-}
-
-func describeNowQuestion(defaultNow bool) tui.Question {
-	def := 1
-	if defaultNow {
-		def = 0
-	}
-	return tui.Question{
-		Title:   "Describe the repository now?",
-		Step:    "5/" + strconv.Itoa(totalInitSteps),
-		Default: def,
-		Intro: []string{
-			"Lazy generation is on either way -- answering Manual to question three is how " +
-				"you turn it off.",
-			"This decides whether to sweep now or let it build organically.",
-		},
-		Options: []tui.Option{
-			{
-				Label:   "Now",
-				Value:   "now",
-				Summary: "One sweep, before this command returns.",
-				Detail: []string{
-					"The whole cost is paid up front, and aracne is as effective as it can be " +
-						"right away.",
-					"",
-					"This is not the only way to sweep: `/descriptions-generate` in your " +
-						"harness describes them all in one go too, on the harness's own " +
-						"agents rather than the describer configured here. To do it that " +
-						"way, answer Lazily now and run it once aracne is set up.",
-				},
-			},
-			{
-				Label:   "Lazily",
-				Value:   "lazily",
-				Summary: "Nothing is spent now.",
-				Detail: []string{
-					"Each read and search describes the handful of nodes it is about to " +
-						"show, so the repo warms up as you work in it -- cold reads are " +
-						"slower until it does.",
-					"",
-					"You can sweep all the missing ones in one go later, any time: " +
-						"`/descriptions-generate` in your harness, or " +
-						"`arac descriptions generate` from the shell.",
-				},
-			},
-		},
 	}
 }
 

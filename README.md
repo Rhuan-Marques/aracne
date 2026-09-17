@@ -94,13 +94,14 @@ arac viz serve                          # the graph, in a browser (Full build)
 ```
 
 **Description generation** is the one part that needs a model, and nothing is assumed about
-which. `arac init` asks — an API key, a CLI you are already logged into, or nobody at all —
-and writes the answer into `.aracne/config.json`, so it is asked once:
+which. `arac init` asks *when* — all of them now, lazily as you read, or never — and then, for
+the first two, *what with*: an API key or a CLI you are already logged into. The answers go into
+`.aracne/config.json`, so they are asked once:
 
 ```jsonc
 // .aracne/config.json, after answering
-"descriptions": { "provider": "openai", "api_key_env": "OPENAI_API_KEY" }
-"descriptions": { "provider": "cli", "cli_provider_command": "claude -p" }
+"descriptions": { "provider": "openai", "api_key_env": "OPENAI_API_KEY", "lazy": true }
+"descriptions": { "provider": "cli", "cli_provider_command": "claude -p", "lazy": true }
 "descriptions": { "lazy": false }   // "Manual": your harness writes them, on request
 ```
 
@@ -108,9 +109,13 @@ The **Manual** answer configures no describer and turns the read-path fill off. 
 spent until you run `/descriptions-generate` in Claude Code or OpenCode, which describes the
 repository with that harness's own sub-agents — on the subscription you already pay for.
 
+**Now** sweeps the whole repository before the command returns, and turns the fill off as well:
+what is already described leaves a read nothing to fill in. **Lazily** spends nothing up front
+and is the answer that keeps the fill on — each read and search describes the handful of nodes
+it is about to show, so the repo warms up as you work in it.
+
 The CLI answer needs no API key at all — it spends the subscription behind a tool you already
-use. Descriptions are also generated lazily, as a read or a search is about to show a node, so
-a repo warms up as you work in it.
+use.
 
 Everything else — scanning, reading, grepping, the visualizer — needs no key.
 [configuration.md](docs/configuration.md#who-writes-the-descriptions) has the whole story.

@@ -157,7 +157,7 @@ written back in whichever you used:
 
 | field | default | meaning |
 |---|---|---|
-| `enabled` | `true` | The switch. `arac init` writes it from question three: `false` for **Manual**, `true` for a named API key or CLI command. |
+| `enabled` | `true` | The switch. `arac init` writes it from question three: `true` for **Lazily**, `false` for **Now** (the sweep leaves the fill nothing to write) and for **Manual** (nothing is configured to write with). |
 | `max_nodes` | `40` | Nodes one fill may describe. `≤ 0` means no cap. |
 | `timeout_seconds` | `45` | Bounds the whole fill, not one batch — and it sits on the read path, so it is the ceiling on how long a `cat` can hang. `≤ 0` disables the deadline. |
 | `batch_size` | `5` | Resources per completion. Non-positive keeps the default. |
@@ -243,7 +243,7 @@ section itself:
 
 | key | meaning |
 |---|---|
-| `provider` | `anthropic` \| `openai` \| `deepseek` \| `cli`. **Absent means nothing aracne runs writes them** — either unanswered, or answered `Manual`, which also sets `lazy: false`. `arac init` asks — see [the setup questions](#the-setup-questions). A typo, or `cli` with no command, is rejected by validation. |
+| `provider` | `anthropic` \| `openai` \| `deepseek` \| `cli`. **Absent means nothing aracne runs writes them** — either unanswered, or answered `Manual` at question three, which also sets `lazy: false`. `arac init` asks — see [the setup questions](#the-setup-questions). A typo, or `cli` with no command, is rejected by validation. |
 | `base_url` | A gateway or proxy for the API providers. Ignored by the CLI ones. |
 | `api_key_env` | The environment variable the API key is read from. Absent falls back to the provider's own name (`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY`). Ignored by `cli`. |
 | `cli_provider_command` | The command `provider: "cli"` runs. Required by it, ignored by everything else. |
@@ -274,48 +274,75 @@ full screen, with the arrow keys, one question per screen:
    ▄▀█ █▀█ ▄▀█ █▀▀ █▄░█ █▀▀
    █▀█ █▀▄ █▀█ █▄▄ █░▀█ ██▄
 
-  Who writes your descriptions?                                              3/7
+  How should your descriptions be written?                                   3/7
 
   Aracne describes every function, struct and interface so a read can show you
   what its neighbours are without opening them. Something has to write those
   eventually.
+  This also sets `descriptions.lazy`: the read-path fill is on for one of the
+  three.
 
-  > An API key     Call a provider's HTTP API.
-    A CLI command
-    Manual         Bills the key's balance, per token. Fastest, and the only
-                   option that parallelises properly.
+    Manual  One sweep, before this command returns.
+  > Now
+    Lazily  The whole cost is paid up front, and aracne is as effective as
+            it can be right away.
 
-                   You will be asked which wire format the endpoint speaks and
-                   which environment variable holds the key.
+            Lazy generation is off (`"lazy": false`): the sweep leaves the
+            read path nothing to write. Code added later is described by
+            `arac descriptions generate`.
+
+            Next: what to sweep with.
 
   ↑/↓ move   ⏎ select   esc cancel
 ```
 
-**An API key** asks which *wire format* the endpoint speaks (`anthropic` / `openai` /
-`deepseek` — the format, not necessarily the company), then which environment variable holds
-the key, offering that provider's usual name. **A CLI command** asks for the command, offering
-`claude -p`, with what a CLI run actually spends spelled out beside it. Every open question
-offers the default as the first row and `Other:` as the second, where you type; Enter on an
-empty `Other:` says so and keeps the question open.
+**Question three is the entire description policy**, and it has three rows because there are
+three things that can actually happen to a repository's descriptions. It used to be two
+questions two screens apart — who writes them (an API key / a CLI command / Manual) here, and
+whether to sweep now or lazily after the model question — which spread the same three outcomes
+over a provider crossed with a schedule, and one cell of that cross did not exist: Manual has
+no describer to sweep with, so the later question had to be skipped after it.
 
-**Manual** is the answer that configures no describer at all, and it is the only one that ends
-question three on its own — there is no format, no credential, no command and no model to
-collect. Your harness writes the descriptions instead: `/descriptions-generate`, the command
-`arac setup` installs into Claude Code and OpenCode either way, fans that harness's own
-sub-agents out over everything still undescribed, on the subscription you already pay for.
-It writes:
+- **Manual** configures no describer at all, and it is the only row that ends the description
+  questions on its own — there is no format, no credential, no command and no model to collect.
+  Your harness writes them instead: `/descriptions-generate`, the command `arac setup` installs
+  into Claude Code and OpenCode either way, fans that harness's own sub-agents out over
+  everything still undescribed, on the subscription you already pay for. It writes
+  `"descriptions": {"lazy": false}` and clears `provider`, `api_key_env` and
+  `cli_provider_command` — a leftover from a previous run is a describer this answer just
+  declined, and the sweep would happily bill it. **The lazy fill goes off** because there is
+  nothing left for a cold read to describe with.
+- **Now** sweeps the whole repository before `arac init` returns, with the describer question
+  four goes on to configure. It writes `"lazy": false` too, for the opposite reason: the sweep
+  leaves the fill nothing to write, so a read that stopped to describe a node would be paying a
+  planner and a deadline for a description already in the database. Code added later is picked
+  up by `arac descriptions generate`.
+- **Lazily** spends nothing now and writes `"lazy": true` — the one answer that leaves the fill
+  on. Each read and search describes the handful of nodes it is about to show, so the repo warms
+  up as you work in it and cold reads are slower until it does.
 
-```json
-"descriptions": {"lazy": false}
-```
+None of this is a trapdoor: every answer writes `descriptions.lazy` explicitly, in every
+direction, so re-running `arac init` and answering differently moves the switch back.
 
-and clears `provider`, `api_key_env` and `cli_provider_command` — a leftover from a previous
-run is a describer this answer just declined, and the sweep would happily bill it. **The lazy
-fill goes off** because there is nothing left for a cold read to describe with; reads and
-searches show what is described so far and never stop to write more. It is not a trapdoor:
-re-running `arac init` and naming a key or a command turns the fill back on.
+Enter means **Now** at 800 source files or fewer and **Lazily** above that, which is a
+wall-clock judgement rather than a cost one: a small repository is minutes and is better off
+fully described, while a large one becomes a long unattended job whose benefit all arrives at
+the end. It is a *file* count and not a resource count because the questions come before the
+scan; roughly ten describable resources per source file is what aracne's own corpora come out
+at. Either is available at either size, and **Manual is never the offered default** — it is the
+answer that leaves a cold repository cold until you remember a slash command, which is not
+somewhere to land by pressing Enter.
 
-Then the model, written to the `descriptions-generation-executor` agent (see
+**Question four asks what writes them**, of Now and of Lazily and of nothing else, and whichever
+you pick runs both entry points — the sweep and the read-path fill. **An API key** asks which
+*wire format* the endpoint speaks (`anthropic` / `openai` / `deepseek` — the format, not
+necessarily the company), then which environment variable holds the key, offering that
+provider's usual name. **A CLI command** asks for the command, offering `claude -p`, with what a
+CLI run actually spends spelled out beside it. Every open question offers the default as the
+first row and `Other:` as the second, where you type; Enter on an empty `Other:` says so and
+keeps the question open.
+
+Then question five, the model, written to the `descriptions-generation-executor` agent (see
 [below](#the-model-is-not-here)). It defaults to the chosen provider's cheap tier —
 `claude-haiku-4-5`, `gpt-5.4-mini`, `deepseek-v4-flash`. On the CLI branch it offers `haiku`
 instead — the same model, spelled the way a command line wants it, because that answer is
@@ -329,18 +356,6 @@ the CLI transport reads its model from the *command* and from nowhere else:
   aracne actually knows. `codex exec` and a hand-written script
   are left exactly as typed: guessing a flag onto someone else's program is how a wizard turns
   a working command into one that exits 2.
-
-Question five — describe the repository now, or lazily as you read — **saves nothing**, and is
-**not asked after Manual**: both of its answers are about a describer that answer declined, so
-`DescribeNow` stays false and the run skips straight to the contract length. Otherwise lazy
-generation is on either way (`descriptions.lazy`, which this wizard writes `true`); it only decides
-whether this run also sweeps before it finishes. Enter means **now** at 800 source files or
-fewer and **lazily** above that, which is a wall-clock judgement rather than a cost one: a
-small repository is minutes and is better off fully described, while a large one becomes a
-long unattended job whose benefit all arrives at the end. It is a *file* count and not a
-resource count because the questions come before the scan; roughly ten describable resources
-per source file is what aracne's own corpora come out at. Either answer is available at either
-size.
 
 Three things deliberately never reach these questions:
 
