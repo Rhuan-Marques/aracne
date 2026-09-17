@@ -80,6 +80,23 @@ func New(mgr *topology.TopologyManager, cfg *helper.Config, harness string) *Fil
 	}
 }
 
+// NewBounded is New with the read's wait replaced by a shorter one.
+//
+// For a caller that has its own, tighter budget -- the guard's read proxy has five seconds for
+// the whole answer, where a read has forty-five. It bounds only the WAIT: the worker it starts
+// runs to its own timeout either way, so a caller that can spare almost no time still leaves the
+// project warmer than it found it.
+func NewBounded(mgr *topology.TopologyManager, cfg *helper.Config, harness string, wait time.Duration) *Filler {
+	f := New(mgr, cfg, harness)
+	if f == nil {
+		return nil
+	}
+	if seconds := int(wait.Seconds()); seconds < f.lazyCfg.TimeoutSeconds {
+		f.lazyCfg.TimeoutSeconds = seconds
+	}
+	return f
+}
+
 // NewWithGenerator is New with the generator supplied, for tests and for callers that already
 // hold one.
 func NewWithGenerator(mgr *topology.TopologyManager, cfg *helper.Config, harness string, gen Generator) *Filler {

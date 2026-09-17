@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/Rhuan-Marques/aracne/internal/helper"
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
@@ -399,21 +398,35 @@ func TestGeneratedMCPEntriesRunTheResolvedBinary(t *testing.T) {
 
 // TestProxyReadDoesNotWaitOnDescriptions pins the timeout inversion.
 //
-// NewRead attaches a descriptions filler that is awaited inline for up to
-// descriptions.lazy.timeout_seconds -- 45s by default, far longer than proxyReadTimeout's 5s. On a
-// repository whose descriptions are not yet written (a fresh install, exactly when the filler
+// NewRead attaches a descriptions filler, and the filler used to be awaited INLINE for up to
+// descriptions.lazy.timeout_seconds -- 45s by default, far longer than proxyReadTimeout's 5s. On
+// a repository whose descriptions are not yet written (a fresh install, exactly when the filler
 // works hardest) the proxy reliably gave up and the model got a bare pointer instead of the
-// file: the two-turns-for-one-question failure the proxy exists to end.
+// file: the two-turns-for-one-question failure the proxy exists to end. The fix at the time was
+// to attach no filler here at all.
+//
+// Generation is detached now, so a fill costs a claim and a spawn and then only WAITS -- and the
+// proxy waits on its own budget rather than the read's. The invariant is therefore no longer
+// "attach nothing"; it is that whatever this path waits for cannot outlast the path itself. That
+// is what is pinned here, because getting it wrong reintroduces the original failure exactly.
 func TestProxyReadDoesNotWaitOnDescriptions(t *testing.T) {
-	if helper.DefaultLazyTimeoutSeconds*int(time.Second) < int(proxyReadTimeout) {
-		t.Skip("lazy fill can no longer outlast the proxy; the guard below is moot")
+	if proxyFillWait >= proxyReadTimeout {
+		t.Fatalf("a fill may wait %s inside a proxy budget of %s: the proxy would give up and "+
+			"the model would get a bare pointer instead of the file",
+			proxyFillWait, proxyReadTimeout)
 	}
 	src, err := os.ReadFile("guard_proxy.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(src), "WithFiller(nil)") {
-		t.Fatal("proxyRead must not attach a lazy filler it can outlive; a denial is not the " +
-			"place to pay for description generation")
+	body := string(src)
+	if strings.Contains(body, "WithFiller(nil)") {
+		return // attaching nothing is still a correct answer
+	}
+	// Anything else must be the BOUNDED constructor. A plain lazydesc.New here would take the
+	// read's 45s wait, which is the inversion this test exists to catch.
+	if !strings.Contains(body, "lazydesc.NewBounded(") || !strings.Contains(body, "proxyFillWait") {
+		t.Fatal("proxyRead must attach either no filler or one bounded by proxyFillWait; " +
+			"an unbounded filler here waits far longer than the proxy is allowed to")
 	}
 }

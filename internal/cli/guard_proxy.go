@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/lazydesc"
 	"github.com/Rhuan-Marques/aracne/internal/llm/languages/universaltools"
 	"github.com/Rhuan-Marques/aracne/internal/shellcmd"
 	"github.com/Rhuan-Marques/aracne/internal/topology"
@@ -15,6 +16,12 @@ const (
 	// proxyReadTimeout bounds the work a denial is allowed to do. A denial that hangs is far
 	// worse than a terse one: the agent is stalled behind the hook with nothing to show for it.
 	proxyReadTimeout = 5 * time.Second
+
+	// proxyFillWait is how much of proxyReadTimeout a lazy fill may spend WAITING. The rest is
+	// for loading the topology and cutting the answer, which is what the model is actually owed
+	// here; a description that does not arrive inside it is still generated, it just does not
+	// appear in this denial.
+	proxyFillWait = 3 * time.Second
 )
 
 // proxyRead answers a denied file read with the content it asked for, instead of a pointer to
@@ -78,17 +85,25 @@ func proxyRead(command, dbPath string) string {
 		}
 		cfg := helper.LoadConfig(helper.ConfigPath(dbPath))
 		budget := proxyBudget(cfg, target, info.Size())
-		// NO LAZY FILL ON THIS PATH. NewRead attaches a descriptions filler, which is awaited
-		// inline for up to descriptions.lazy.timeout_seconds (45s by default) -- far longer than
-		// proxyReadTimeout, so on a repository whose descriptions are not yet written (a fresh
-		// install, exactly when the filler is doing the most work) the proxy reliably gave up
-		// and the model got a bare pointer instead of the file: the two-turns-for-one-question
-		// failure this function exists to end, arriving intermittently. A denial is not the
-		// place to pay for description generation; the next ordinary read still fills them.
+		// A BOUNDED FILL ON THIS PATH, where there used to be none at all.
+		//
+		// The filler was switched off here because it generated INSIDE the read and was awaited
+		// for up to descriptions.lazy.timeout_seconds -- 45s by default, against this function's
+		// five -- so on a repository whose descriptions were not yet written (a fresh install,
+		// exactly when the filler has the most to do) the proxy reliably gave up and the model
+		// got a bare pointer instead of the file: the two-turns-for-one-question failure this
+		// function exists to end, arriving intermittently.
+		//
+		// Generation is detached now, so that reasoning no longer holds. Claiming and spawning
+		// take microseconds; only the WAIT is bounded, and it is bounded here by what is left of
+		// the proxy's own budget rather than by the read's. What does not arrive in time is
+		// rendered without, exactly as it was when the filler was off -- and unlike then, the
+		// work continues and the next ordinary read has it.
 		//
 		// The registry is passed so a file changed since it was indexed is re-parsed before
 		// the answer is cut from it, rather than answered from spans that no longer fit.
-		rd := universaltools.NewRead(mgr, cfg, false, NewScannerRegistry()).WithFiller(nil)
+		rd := universaltools.NewRead(mgr, cfg, false, NewScannerRegistry()).
+			WithFiller(lazydesc.NewBounded(mgr, cfg, "", proxyFillWait))
 		// read.kinds gates this surface like every other. The proxy is an ADDITION to a
 		// denial message, so a kind the project does not allow simply yields no proxy answer
 		// -- the denial still goes out, just without an aracne read attached to it.

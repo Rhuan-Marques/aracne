@@ -157,17 +157,38 @@ written back in whichever you used:
 | field | default | meaning |
 |---|---|---|
 | `enabled` | `true` | The switch. |
-| `max_nodes` | `40` | Nodes one fill may describe. `≤ 0` means no cap. |
-| `timeout_seconds` | `45` | Bounds the whole fill, not one batch — and it sits on the read path, so it is the ceiling on how long a `cat` can hang. `≤ 0` disables the deadline. |
-| `batch_size` | `5` | Resources per completion. Non-positive keeps the default. |
-| `parallel` | `4` | Batches in flight at once. Non-positive keeps the default. |
+| `background` | `true` | Generate in a detached worker process that outlives the read. `false` generates inside the read instead — see below. |
+| `max_nodes` | `40` | Nodes one fill may claim and wait on. `≤ 0` means no cap. |
+| `timeout_seconds` | `45` | How long the read **waits** before rendering without. `≤ 0` means do not wait at all; anything above `120` is capped. |
+| `worker_timeout_seconds` | `600` | Ceiling on one worker process. Non-positive keeps the default — this one cannot be disabled. |
+| `max_workers` | `4` | Concurrent worker processes for this project. Tracks the sweep's `--parallel`. |
+| `max_retries` | `3` | Attempts a worker makes per resource before recording it as failed. |
+| `max_agent_turns` | `0` | Hard turn cap for the API transport. `0` keeps the per-batch formula. |
+| `batch_size` | `5` | Resources per completion, inside the worker. Non-positive keeps the default. |
+| `parallel` | `4` | Batches in flight at once, inside the worker. Non-positive keeps the default. |
 
-Size `timeout_seconds` against the provider you actually named. A deadline shorter than the
-provider's floor is worse than no fill at all: nothing is ever written, and since a
-deadline-cut resource is not recorded as an attempt, every later read retries it and pays
-the full deadline again. `descriptions.provider: "cli"` spawning `claude -p` needs ~5s
-before its first token, so the CLI providers want a deadline in the tens of seconds, not
-the single digits an HTTP provider can live with.
+**`timeout_seconds` bounds the wait, not the work.** When it expires, the read renders the
+resources it still has no description for and returns; the worker keeps generating and its
+results land in the database for the next read that names them. Nothing is discarded and
+nothing is paid for twice, so a short value costs you only the chance of seeing a description
+in *this* answer. `≤ 0` therefore means "never wait", not "wait forever" — an unbounded wait on
+background work would be a `cat` that hangs until generation finishes.
+
+**A resource already being generated is never generated twice.** A read that names it finds
+the live claim and watches it instead of starting a second worker — while still starting one
+for everything else it planned.
+
+**Stopping and inspecting.** A worker has no terminal; `arac descriptions jobs` lists what is
+running and `arac descriptions jobs --stop all` asks them to stop. Failures are appended to
+`.aracne/descriptions.log`. Note that because a worker outlives its read, interrupting the read
+no longer stops the generation it started — `--stop` is how you do that.
+
+**`background: false`** restores the previous behaviour: generation runs inside the read and
+whatever has not finished when `timeout_seconds` expires is abandoned, losing the tokens already
+spent on it. It is the right answer only where spawning a process is impossible or unwanted — a
+locked-down CI image, a sandbox, or a benchmark that must not leave anything running between
+runs. With it off, size `timeout_seconds` against the provider you actually named: a deadline
+shorter than the provider's floor writes nothing and costs the full wait every read.
 
 With nothing configured to write with, the lazy fill is a silent no-op rather than an error.
 
@@ -429,9 +450,11 @@ any command that answers a prompt on stdout will do:
 - **The command must answer in one shot.** Its stdin carries the instructions and the batch;
   its stdout is parsed as `<resource id> :: <description>` lines, and anything else is
   ignored. A CLI that needs a flag to be non-interactive needs that flag here.
-- **Lazy fills are on the read path.** A cold repo with a CLI provider means a process launch
-  inside a read; `descriptions.lazy.timeout_seconds` bounds it and `parallel` decides how many
-  run at once. Sweeping once with `arac descriptions generate` first makes this a non-issue.
+- **Lazy fills run in the background.** A cold repo with a CLI provider means a process launch,
+  but in a detached worker rather than inside the read: `descriptions.lazy.timeout_seconds`
+  bounds how long the read waits for it, `worker_timeout_seconds` bounds the worker itself, and
+  `max_workers` bounds how many exist at once. Sweeping once with `arac descriptions generate`
+  first still makes the first reads warmer.
 
 **For one run, without touching the config**, `arac descriptions generate --cli` overrides
 whatever `descriptions.provider` says:
