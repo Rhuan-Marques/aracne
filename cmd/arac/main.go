@@ -76,7 +76,7 @@ func main() {
 		// A missing or unknown sub-verb is a typo, not a request for the banner. Same rule as
 		// the default arm below: it goes to stderr and exits non-zero.
 		if len(os.Args) < 3 {
-			fmt.Fprintln(os.Stderr, "Usage: arac descriptions <generate|clear|export|import> [flags]")
+			fmt.Fprintln(os.Stderr, "Usage: arac descriptions <generate|jobs|clear|export|import> [flags]")
 			os.Exit(1)
 		}
 		switch os.Args[2] {
@@ -88,9 +88,17 @@ func main() {
 			cli.RunDescriptionsExport(os.Args[3:])
 		case "import":
 			cli.RunDescriptionsImport(os.Args[3:])
+		case "jobs":
+			cli.RunDescriptionJobs(os.Args[3:])
+		case "worker":
+			// Hidden, like `arac guard`: nothing but aracne itself spawns a description
+			// worker, and a person who wants this work done by hand runs `generate`. It is
+			// dispatched rather than refused for the same reason the gated verbs are -- the
+			// debugging path must stay open.
+			cli.RunDescriptionsWorker(os.Args[3:])
 		default:
 			fmt.Fprintf(os.Stderr, "arac descriptions: unknown subcommand %q\n", os.Args[2])
-			fmt.Fprintln(os.Stderr, "Usage: arac descriptions <generate|clear|export|import> [flags]")
+			fmt.Fprintln(os.Stderr, "Usage: arac descriptions <generate|jobs|clear|export|import> [flags]")
 			os.Exit(1)
 		}
 	case "update-file":

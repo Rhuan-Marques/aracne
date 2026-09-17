@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -387,6 +388,11 @@ func sweepDescriptionRunner(manager *topology.TopologyManager, reg *scanner.Regi
 	return newDescriptionRunner(manager, reg, nil, descCfg)
 }
 
+// newDescriptionRunnerFn is newDescriptionRunner behind a variable, so a test can install a
+// deterministic runner without an API key or a provider binary on PATH. Production code never
+// assigns it -- the same contract lazydesc.GeneratorFactory carries, for the same reason.
+var newDescriptionRunnerFn = newDescriptionRunner
+
 // newDescriptionRunner builds the runner the configured provider implies, and the label the
 // run announces itself with.
 //
@@ -482,6 +488,17 @@ func (r *agentDescriptionRunner) Run(ctx context.Context, batch []descriptionRes
 	return a.RunSubAgentContext(ctx, prompts.DescriptionsGenerationExecutorPrompt(), input, r.toolMap)
 }
 
+// errNoUsableDescriptions is the provider ANSWERING and describing nothing.
+//
+// It is a sentinel rather than a string because the two readings of "this batch failed" have
+// opposite consequences, and only the runner can tell them apart. A transport that broke says
+// nothing about the resources and they must be retried; a model that declined every one of them
+// has given a verdict, and retrying buys the same refusal again. The sweep treats both as a
+// failed batch and re-lists, which is fine when a person is watching; a detached worker records
+// the verdict in the attempt ledger instead, so a resource nothing can describe stops being
+// re-planned by every read that names it.
+var errNoUsableDescriptions = errors.New("no usable descriptions in the reply")
+
 // cliDescriptionRunner is the CLI-provider runner: one completion per batch, parsed and
 // written here.
 //
@@ -530,7 +547,7 @@ func (r *cliDescriptionRunner) Run(ctx context.Context, batch []descriptionResou
 		written = append(written, fmt.Sprintf("%s :: %s", res.ID, desc))
 	}
 	if len(written) == 0 {
-		return "", fmt.Errorf("no usable descriptions in the reply")
+		return "", errNoUsableDescriptions
 	}
 	return strings.Join(written, "\n"), nil
 }
@@ -868,6 +885,10 @@ func RunClearDescriptions(args []string) {
 		// of what it has already tried has to go with it -- otherwise the record turns
 		// "regenerate this" into "never try this again". See helper.ClearDescriptionAttempts.
 		_ = helper.ClearDescriptionAttempts(ProjectDBPath(DefaultDBRelative))
+		// And every claim, for the same reason: a stale claim left by a worker that is no
+		// longer running would turn "regenerate this" into "watch a job that will never
+		// report".
+		_ = helper.ClearDescriptionJobs(ProjectDBPath(DefaultDBRelative))
 		scope := "all kinds"
 		if len(targets) > 0 {
 			scope = helper.FormatDescribeTargets(targets)
@@ -886,6 +907,7 @@ func RunClearDescriptions(args []string) {
 	// See the --oversized branch above: the attempt record must not outlive the descriptions
 	// it was recorded against.
 	_ = helper.ClearDescriptionAttempts(ProjectDBPath(DefaultDBRelative))
+	_ = helper.ClearDescriptionJobs(ProjectDBPath(DefaultDBRelative))
 
 	if len(targets) > 0 {
 		fmt.Printf("Cleared %d description(s) for targets: %s\n", count, helper.FormatDescribeTargets(targets))

@@ -132,6 +132,7 @@ Usage:
   arac descriptions clear [flags]    Clear stored topology descriptions (--oversized: only over-budget ones)
   arac descriptions export [flags]   Back up descriptions to an ID-independent JSONL sidecar
   arac descriptions import [flags]   Restore descriptions from a sidecar after a re-scan
+  arac descriptions jobs [--stop <id|all>]  Show background description workers, or ask them to stop
   arac read [--kind <kind>] [--full] <resource-id>...  Read one or more resources by ID; --kind forces exact kind (function, method, struct, named_type, interface, variable, file, package, dependency); --full returns whole file bodies under read.file_mode "skeleton"
   arac resource list [query] [--kind <kind>]... [--no-description]  List resources, optionally filtered by query, kind, or missing description
   arac grep [flags] <pattern> [path]  Search node names, node descriptions and file contents (ranked in that order)

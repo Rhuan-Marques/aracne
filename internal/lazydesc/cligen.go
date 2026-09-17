@@ -91,6 +91,17 @@ func (g *cliGenerator) Describe(ctx context.Context, batch Batch) (map[string]st
 		prompts.LazyDescriptionsInput(resources, batch.Exemplars)
 
 	cmd := exec.CommandContext(ctx, g.argv[0], g.argv[1:]...)
+	// The command leads its own process group, and cancelling kills that GROUP rather than just
+	// the process.
+	//
+	// CommandContext on its own kills the child and nothing else, which is the wrong shape for
+	// this particular child: the usual CLI provider is `claude -p`, which starts subprocesses of
+	// its own -- its hooks, its own tool calls. Killing only the top of that tree leaves the
+	// rest running, and spending, with nothing left that knows they exist. That is survivable
+	// when a person is watching the run; it is a leak when the caller is a detached description
+	// worker that has just been cut short by its own watchdog.
+	setProcessGroup(cmd)
+	cmd.Cancel = func() error { return killProcessTree(cmd.Process) }
 	cmd.Stdin = strings.NewReader(input)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb

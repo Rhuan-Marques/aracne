@@ -135,6 +135,11 @@ func (m *TopologyManager) fullScanLocked(root string, reg *scanner.Registry) err
 	// keyed on fingerprints the rebuild leaves unchanged, so it went on suppressing exactly the
 	// fills that would describe them again. Best-effort, like the ledger itself.
 	_ = helper.ClearDescriptionAttempts(m.dbPath)
+	// Stale claims only. A worker generating RIGHT NOW settles its own rows, and its writes
+	// either land or fail harmlessly on an id the rebuild removed; dropping its claim here would
+	// licence a second worker on a resource already being described, which costs real tokens to
+	// discover.
+	_ = helper.ClearStaleDescriptionJobs(m.dbPath, time.Now())
 	helper.SyncManifest(topo, m.dbPath, stamps)
 	m.recordProjectManifests(root, fileIDs(topo))
 	return nil
