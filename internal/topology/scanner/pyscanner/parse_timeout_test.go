@@ -12,7 +12,7 @@ import (
 // if that raise ever leaks onto the other two it would mean a hung parse there is held for
 // minutes instead of seconds, which is a regression and not a fix.
 func TestParseTimeoutIsUnchangedOffWindows(t *testing.T) {
-	t.Setenv("ARACNE_PYTHON_PARSE_TIMEOUT", "")
+	t.Setenv(parseTimeoutEnv, "")
 	got := pythonParseTimeout()
 	want := 30 * time.Second
 	if runtime.GOOS == "windows" {
@@ -40,7 +40,7 @@ func TestParseTimeoutOverride(t *testing.T) {
 		{"negative falls back", "-5s", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("ARACNE_PYTHON_PARSE_TIMEOUT", tc.env)
+			t.Setenv(parseTimeoutEnv, tc.env)
 			want := tc.want
 			if want == 0 {
 				want = 30 * time.Second
@@ -49,7 +49,7 @@ func TestParseTimeoutOverride(t *testing.T) {
 				}
 			}
 			if got := pythonParseTimeout(); got != want {
-				t.Errorf("ARACNE_PYTHON_PARSE_TIMEOUT=%q gave %s, want %s", tc.env, got, want)
+				t.Errorf("%s=%q gave %s, want %s", parseTimeoutEnv, tc.env, got, want)
 			}
 		})
 	}

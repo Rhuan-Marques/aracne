@@ -148,6 +148,9 @@ type pyFileResult struct {
 	Variables []pyVar           `json:"variables"`
 }
 
+// parseTimeoutEnv overrides pythonParseTimeout with any time.ParseDuration string.
+const parseTimeoutEnv = "ARACNE_PYTHON_PARSE_TIMEOUT"
+
 // pythonParseTimeout bounds ONE interpreter run over one file.
 //
 // It is a guard against a pathological parse, not a performance budget. A healthy interpreter
@@ -168,7 +171,7 @@ type pyFileResult struct {
 // and nothing about their behaviour moves. ARACNE_PYTHON_PARSE_TIMEOUT overrides whichever
 // default applies, as any time.ParseDuration string, on every platform.
 func pythonParseTimeout() time.Duration {
-	if raw := strings.TrimSpace(os.Getenv("ARACNE_PYTHON_PARSE_TIMEOUT")); raw != "" {
+	if raw := strings.TrimSpace(os.Getenv(parseTimeoutEnv)); raw != "" {
 		if d, err := time.ParseDuration(raw); err == nil && d > 0 {
 			return d
 		}
