@@ -109,6 +109,12 @@ func lazyEnv(t *testing.T, dir string, on bool) (*topology.TopologyManager, *hel
 	cfg := helper.EnsureConfig(helper.ConfigPath(dbPath))
 	cfg.Descriptions.Lazy.Enabled = &on
 	cfg.Descriptions.StyleExemplars = 0
+	// INLINE. These tests inject an in-process generator, which is a thing only the inline fill
+	// has -- the background path hands the work to a separate process, which cannot see a fake
+	// installed in this one. The detached path has its own end-to-end coverage, with a real
+	// binary and a scripted provider, in lazy_background_test.go.
+	background := false
+	cfg.Descriptions.Lazy.Background = &background
 	return mgr, cfg
 }
 

@@ -56,7 +56,8 @@ internal/
                     Per-language managers + mapper/connections/resources/visibility (graph builders)
   helper/         Storage + plumbing: sqlite/db, manifest, incremental & partial writes, config, edit, normalize
   lazydesc/       The read-path description fill: plans the nodes a response will name,
-                  generates the missing ones, waits for them to land, re-renders. See §8.
+                  claims them, hands them to a detached worker, waits for what it can
+                  afford, re-renders. See §8.
   progress/       One in-place progress bar, shared by `arac scan` and `descriptions generate`
   llm/
     provider.go     Provider interface (Chat / StreamChat) + message/tool types
@@ -304,6 +305,23 @@ in-repo skills:
   extension — which put Go `//` comments into a Python file in this very repository and
   left it unparseable. `descriptions export`/`import` carry descriptions across a rescan
   instead, without touching a byte of source.
+- **Lazy descriptions** (`internal/lazydesc`, `descriptions.lazy`) — the same work, on
+  demand, for the parts of the graph anyone actually reads. A read plans the neighbours it
+  is about to name, and every one of them goes through a compare-and-swap against the
+  `description_jobs` table. What it **wins** it hands to a detached `arac descriptions
+  worker`; what a live worker already **holds** it watches instead of describing twice; and
+  it waits on both until `timeout_seconds`, then renders whatever landed. The worker
+  outlives the read, so a deadline costs latency rather than tokens — which is the whole
+  difference from the inline fill this replaced, where an expired deadline killed the
+  provider call mid-answer and the next read paid for it again.
+
+  A worker is bounded four ways, because nothing is watching it: a context deadline, a
+  watchdog that ends the process if the graceful path does not return, a lease in the claim
+  row that expires whatever the process does, and a heartbeat that doubles as an ownership
+  check — cancelled, superseded, cleared by a rebuild, or database deleted all arrive as
+  "you own nothing", and all of them mean stop. `arac descriptions jobs` shows what is
+  running and `--stop` asks it to quit; a worker's stdio is `/dev/null` by construction, so
+  the table and `.aracne/descriptions.log` are the only things it can speak through.
 - **Bug pipeline** — **off by default**, behind `features.bug_management`: a
   hunter/judge/solver fan-out over `KnownBug` nodes. With it off, `arac setup` writes none
   of its agents or commands, the `bug_*` tools are not servable, and the `arac bug` usage
