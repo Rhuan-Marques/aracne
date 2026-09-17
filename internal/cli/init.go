@@ -145,10 +145,18 @@ func finishInit(reg *scanner.Registry, cfg *helper.Config, answers initAnswers, 
 
 	if answers.DescribeNow && scanErr != nil {
 		fmt.Fprint(os.Stderr, "\nSkipping the description sweep: there is no graph to describe. "+
-			"Run `arac descriptions generate` after a successful `arac scan`.\n")
+			"Run `arac descriptions generate`\nafter a successful `arac scan` -- answering Now "+
+			"turned lazy generation off, so no read will\nwrite them for you.\n")
 	} else if answers.DescribeNow {
 		fmt.Println()
 		sweepDescriptions(manager, reg, cfg)
+		// Said after the sweep rather than instead of it: the answer bought a described
+		// repository, and the thing worth knowing afterwards is what happens to the code
+		// that is not in it yet.
+		fmt.Fprint(os.Stderr, "\nLazy generation is off: the sweep describes everything there "+
+			"is to describe, so reads do\nnot stop to write more. Run `arac descriptions "+
+			"generate` again after adding code, or re-run\n`arac init` and answer Lazily to "+
+			"have reads fill it in as you go.\n")
 	} else if answers.Manual {
 		// NOT the lazy-fill message. Manual turned that fill off, so "each read will
 		// describe what it is about to show" would be the one thing this configuration
@@ -227,25 +235,8 @@ func runInitQuestions(s *tui.Session, cfg *helper.Config, sourceFiles int) (init
 	}
 	a.Mode = chosenMode
 
-	if err := askDescriber(s, &a); err != nil {
+	if err := askDescriptions(s, &a, sourceFiles); err != nil {
 		return a, err
-	}
-
-	// Question five's default is a wall-clock judgement, not a cost one: below the cap a
-	// sweep is minutes and leaves the repo fully described, which is the better place to be;
-	// above it the sweep is a long unattended job whose benefit all arrives at the end, while
-	// the lazy fill delivers the same descriptions in the order the work touches them.
-	//
-	// Not asked at all after Manual. Both of its answers are about a describer that answer
-	// declined to configure: "Now" would be a sweep with nothing to sweep with, and "Lazily"
-	// names a fill Manual has just switched off. The question would be a choice between two
-	// things that do not happen.
-	if !a.Manual {
-		_, when, err := tui.Select(s, describeNowQuestion(sourceFiles <= describeEverythingFileCap))
-		if err != nil {
-			return a, err
-		}
-		a.DescribeNow = when == "now"
 	}
 
 	verbosity := verbosityQuestion()
@@ -275,23 +266,42 @@ func runInitQuestions(s *tui.Session, cfg *helper.Config, sourceFiles int) (init
 	return a, nil
 }
 
-// askDescriber is question three and question four: who writes the descriptions, and with what.
+// askDescriptions is questions three, four and five: how the descriptions get written, what
+// writes them, and with which model.
 //
-// They are one function because the second depends on the first in a way that is not a plain
-// sequence -- the CLI branch can answer the model question inside the command answer, and then
-// question four is not asked at all, and the Manual branch never reaches it.
-func askDescriber(s *tui.Session, a *initAnswers) error {
-	_, kind, err := tui.Select(s, describerQuestion())
+// They are one function because the later ones depend on the earlier in a way that is not a
+// plain sequence. Manual ends the whole group on its own -- "with what" and "which model" are
+// questions about a describer that answer has just declined. And on the CLI branch the command
+// can answer the model question inside itself, in which case question five is not asked either.
+//
+// THE SCHEDULE IS ASKED FIRST, before anything about a provider, because it is the question
+// the user has an opinion about. "Write them all now", "write them as I read" and "my harness
+// will write them" are the three outcomes; which key or command pays for the first two is a
+// detail of carrying them out, and it is not even a question for the third.
+func askDescriptions(s *tui.Session, a *initAnswers, sourceFiles int) error {
+	// The offered default is a wall-clock judgement, not a cost one: below the cap a sweep
+	// is minutes and leaves the repo fully described, which is the better place to be; above
+	// it the sweep is a long unattended job whose benefit all arrives at the end, while the
+	// lazy fill delivers the same descriptions in the order the work touches them.
+	_, when, err := tui.Select(s, describeWhenQuestion(sourceFiles <= describeEverythingFileCap))
 	if err != nil {
 		return err
 	}
 
-	if kind == describerManual {
-		// The only answer that ends question three on its own: there is no format to pick,
-		// no credential to name and no model to send, because nothing aracne runs will be
+	if when == describerManual {
+		// The only answer that ends the group on its own: there is no format to pick, no
+		// credential to name and no model to send, because nothing aracne runs will be
 		// writing these. apply turns the lazy fill off to match.
 		a.Manual = true
 		return nil
+	}
+	// The other two differ only in when the same descriptions are paid for, so everything
+	// below this line is asked of both. apply reads this back as `descriptions.lazy`.
+	a.DescribeNow = when == describeWhenNow
+
+	_, kind, err := tui.Select(s, describerSourceQuestion())
+	if err != nil {
+		return err
 	}
 
 	if kind == helper.ProviderNameCLI {
@@ -379,8 +389,8 @@ func indexOfValue(q tui.Question, v string) int {
 	return 0
 }
 
-// describeEverythingFileCap is the source-file count at which question five's offered default
-// flips from "now" to "lazily".
+// describeEverythingFileCap is the source-file count at which question three's offered default
+// flips from "Now" to "Lazily".
 //
 // It is a file count and not a resource count because the scan has not run yet: the questions
 // come first, by design, and the walk that counts files is the only size signal available

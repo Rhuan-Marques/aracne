@@ -15,6 +15,7 @@ import (
 const (
 	enter = "\r"
 	down  = "\x1b[B"
+	up    = "\x1b[A"
 	esc   = "\x1b"
 )
 
@@ -38,7 +39,7 @@ func mustAsk(t *testing.T, keys string) initAnswers {
 // Enter through the whole flow is the path most first runs take, so it is the one whose
 // answers have to be right without anybody having chosen them.
 func TestTheDefaultRunIsClaudeCodeCliAnthropic(t *testing.T) {
-	// harness, mode, describer, format, key variable, model, now/lazily, verbosity.
+	// harness, mode, now/lazily/manual, api-or-cli, format, key variable, model, verbosity.
 	a := mustAsk(t, strings.Repeat(enter, 8))
 
 	if a.Harness != harnessClaudeCode {
@@ -130,7 +131,7 @@ func TestAPIBranchDefaultsFollowTheFormat(t *testing.T) {
 		{down, helper.ProviderNameOpenAI, "OPENAI_API_KEY", "gpt-5.4-mini"},
 		{down + down, helper.ProviderNameDeepSeek, "DEEPSEEK_API_KEY", "deepseek-v4-flash"},
 	} {
-		a := mustAsk(t, enter+enter+enter+tc.moves+enter+enter+enter+enter+enter)
+		a := mustAsk(t, enter+enter+enter+enter+tc.moves+enter+enter+enter+enter)
 		if a.Provider != tc.provider || a.APIKeyEnv != tc.env || a.Model != tc.model {
 			t.Errorf("format %q gave (%q, %q, %q), want (%q, %q, %q)",
 				tc.moves, a.Provider, a.APIKeyEnv, a.Model, tc.provider, tc.env, tc.model)
@@ -140,10 +141,10 @@ func TestAPIBranchDefaultsFollowTheFormat(t *testing.T) {
 
 // "Other:" is the second row of every open question, and what is typed there is the answer.
 func TestTypedAnswersWin(t *testing.T) {
-	a := mustAsk(t, enter+enter+enter+enter+
+	a := mustAsk(t, enter+enter+enter+enter+enter+
 		down+"MY_GATEWAY_KEY"+enter+
 		down+"gpt-5.4"+enter+
-		enter+enter)
+		enter)
 
 	if a.APIKeyEnv != "MY_GATEWAY_KEY" {
 		t.Errorf("api_key_env = %q, want the typed value", a.APIKeyEnv)
@@ -156,7 +157,7 @@ func TestTypedAnswersWin(t *testing.T) {
 // The CLI branch, with no model in the command: the model is asked for AND appended to the
 // command, because the CLI transport reads its model from the command and from nowhere else.
 func TestCLIBranchAppendsTheModelToTheClaudeCLI(t *testing.T) {
-	a := mustAsk(t, enter+enter+down+enter+enter+enter+enter+enter)
+	a := mustAsk(t, enter+enter+enter+down+enter+enter+enter+enter)
 
 	if a.Provider != helper.ProviderNameCLI {
 		t.Fatalf("provider = %q, want cli", a.Provider)
@@ -174,15 +175,15 @@ func TestCLIBranchAppendsTheModelToTheClaudeCLI(t *testing.T) {
 	}
 }
 
-// A command that already names a model has answered question four. Asking again would collect
+// A command that already names a model has answered question five. Asking again would collect
 // a second model and write it to a key the CLI transport never reads.
 func TestACommandNamingAModelSkipsTheModelQuestion(t *testing.T) {
-	// After the command, only "now/lazily" and "verbosity" are left -- two Enters. A third
-	// would be consumed by a model question that should not be there, and the run would end
-	// having answered one question too few.
-	a := mustAsk(t, enter+enter+down+enter+
+	// After the command, only "verbosity" is left -- one Enter. A second would be consumed
+	// by a model question that should not be there, and the run would end having answered
+	// one question too few.
+	a := mustAsk(t, enter+enter+enter+down+enter+
 		down+"claude -p --model sonnet"+enter+
-		enter+enter)
+		enter)
 
 	if a.Model != "sonnet" {
 		t.Errorf("model = %q, want the one already in the command", a.Model)
@@ -206,9 +207,10 @@ func TestEscapeCancelsAtEveryQuestion(t *testing.T) {
 	}
 }
 
-// The offered default for the sweep flips with the size of the repository: small enough to
-// describe in one sitting defaults to doing it, large enough to be an unattended job defaults
-// to warming up as it is read. Either answer is available at either size.
+// The offered default for question three flips with the size of the repository: small enough
+// to describe in one sitting defaults to doing it, large enough to be an unattended job
+// defaults to warming up as it is read. Either answer is available at either size -- and
+// Manual, the row above both, is never the one under the cursor.
 func TestTheSweepDefaultFollowsTheRepositorySize(t *testing.T) {
 	for _, tc := range []struct {
 		files int
@@ -230,13 +232,23 @@ func TestTheSweepDefaultFollowsTheRepositorySize(t *testing.T) {
 }
 
 func TestTheSweepAnswerCanBeOverridden(t *testing.T) {
-	// Six defaults, then "lazily", then verbosity.
-	a, err := ask(t, helper.DefaultConfig(), 10, strings.Repeat(enter, 6)+down+enter+enter)
+	// Harness, mode, then one row down from "Now" to "Lazily", then the rest of the
+	// describer questions and verbosity.
+	a, err := ask(t, helper.DefaultConfig(), 10, enter+enter+down+enter+strings.Repeat(enter, 5))
 	if err != nil {
 		t.Fatalf("runInitQuestions: %v", err)
 	}
 	if a.DescribeNow {
 		t.Error("a small repository must still be allowed to answer lazily")
+	}
+	if a.Manual {
+		t.Error("Lazily is not Manual -- a describer is still being configured")
+	}
+	// The describer questions are asked of "Lazily" exactly as they are of "Now": the two
+	// answers differ in when the descriptions are paid for, not in what writes them.
+	if a.Provider != helper.ProviderNameAnthropic || a.APIKeyEnv != "ANTHROPIC_API_KEY" {
+		t.Errorf("Lazily collected (%q, %q), want the API branch's defaults",
+			a.Provider, a.APIKeyEnv)
 	}
 }
 
@@ -255,16 +267,16 @@ func TestAnUnsetKeyVariableIsNoted(t *testing.T) {
 	}
 }
 
-// The Manual answer to question three: nobody writes the descriptions, so there is nothing
-// left to ask. The format, the key variable, the command and the model are all about a
-// describer that has just been declined -- and so is the sweep question, whose two answers are
-// "run the describer now" and "run it on the read path".
+// The Manual answer to question three: nobody aracne runs writes the descriptions, so there is
+// nothing left to ask. What writes them, the wire format, the key variable, the command and the
+// model are all about a describer that has just been declined.
 //
-// The keys prove the skip rather than only asserting on the result: harness, mode, Manual, and
-// then ONE selection that has to land on verbosity. A run that still asked question five would
-// spend `down+enter` answering "lazily" there and reach verbosity with the reader empty.
+// The keys prove the skip rather than only asserting on the result: harness, mode, Manual (the
+// first row, so `enter` after moving the cursor up twice from the size default), and then ONE
+// selection that has to land on verbosity. A run that still asked question four would spend
+// `down+enter` there and reach verbosity with the reader empty.
 func TestManualAsksNothingElseAboutTheDescriber(t *testing.T) {
-	a := mustAsk(t, enter+enter+down+down+enter+down+enter)
+	a := mustAsk(t, enter+enter+up+enter+down+enter)
 
 	if !a.Manual {
 		t.Fatal("the third row of question three must record Manual")
@@ -285,13 +297,21 @@ func TestManualAsksNothingElseAboutTheDescriber(t *testing.T) {
 	}
 }
 
-// Manual skips question five whatever the repository's size -- the sweep default is a
-// wall-clock judgement about a describer this answer does not have.
-func TestManualSkipsTheSweepQuestionAtEverySize(t *testing.T) {
+// Manual is reachable at every repository size, and skips the describer questions at both --
+// the size only decides which of the other two rows the cursor opens on.
+func TestManualSkipsTheDescriberQuestionsAtEverySize(t *testing.T) {
 	for _, files := range []int{10, describeEverythingFileCap + 1} {
-		a, err := ask(t, helper.DefaultConfig(), files, enter+enter+down+down+enter+enter)
+		keys := enter + enter + up + enter + enter
+		if files > describeEverythingFileCap {
+			// The cursor opens on "Lazily", one row further down.
+			keys = enter + enter + up + up + enter + enter
+		}
+		a, err := ask(t, helper.DefaultConfig(), files, keys)
 		if err != nil {
 			t.Fatalf("%d files: runInitQuestions: %v", files, err)
+		}
+		if !a.Manual {
+			t.Errorf("%d files: the first row of question three must record Manual", files)
 		}
 		if a.DescribeNow || a.Verbosity != helper.ContractVerbosityLow {
 			t.Errorf("%d files: describe_now=%v verbosity=%q, want false/low",
@@ -304,7 +324,8 @@ func TestManualSkipsTheSweepQuestionAtEverySize(t *testing.T) {
 // to do with who writes descriptions. This is the one run where questions four AND five are
 // both skipped and a later one is still asked, so it is where an off-by-one in the flow shows.
 func TestManualStillReachesThePreloadQuestion(t *testing.T) {
-	a := mustAsk(t, enter+down+enter+down+down+enter+enter+down+enter)
+	// Claude Code, mcp, Manual, verbosity, then the second row of question seven.
+	a := mustAsk(t, enter+down+enter+up+enter+enter+down+enter)
 
 	if !a.Manual || a.Mode != helper.ModeMCP {
 		t.Fatalf("setup wrong: manual=%v mode=%q", a.Manual, a.Mode)
@@ -321,7 +342,7 @@ func TestManualStillReachesThePreloadQuestion(t *testing.T) {
 // describer is already covered above; what is new here is the question that follows Manual --
 // on this branch verbosity comes straight after it, with nothing in between.
 func TestEscapeCancelsAfterManual(t *testing.T) {
-	keys := enter + enter + down + down + enter + esc
+	keys := enter + enter + up + enter + esc
 	if _, err := ask(t, helper.DefaultConfig(), 10, keys); !errors.Is(err, tui.ErrCancelled) {
 		t.Errorf("escape at question six after Manual: err = %v, want ErrCancelled", err)
 	}
