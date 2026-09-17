@@ -26,8 +26,8 @@ import (
 
 const (
 	defaultDescriptionBatchSize  = helper.DefaultDescriptionBatchSize
-	defaultDescriptionParallel   = 4
-	defaultDescriptionMaxRetries = 3
+	defaultDescriptionParallel   = helper.DefaultDescriptionParallel
+	defaultDescriptionMaxRetries = helper.DefaultDescriptionMaxRetries
 )
 
 // Represents a topology resource with its ID, name, and kind for description operations.

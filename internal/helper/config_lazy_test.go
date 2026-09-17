@@ -56,6 +56,10 @@ func TestLazyDescriptionsObjectForm(t *testing.T) {
 	want := ResolvedLazyDescriptions{
 		Enabled: true, MaxNodes: 3, TimeoutSeconds: 9, BatchSize: 2, Parallel: 1,
 		Provider: "anthropic",
+		// Untouched by this config, so they carry their defaults: a project tuning the read
+		// side has said nothing about how the background worker is bounded.
+		Background: DefaultLazyBackground, WorkerTimeoutSeconds: DefaultLazyWorkerTimeoutSeconds,
+		MaxWorkers: DefaultLazyMaxWorkers, MaxRetries: DefaultDescriptionMaxRetries,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("resolved = %+v, want %+v", got, want)
@@ -376,5 +380,54 @@ func TestSaveConfigNeverLeavesATruncatedFile(t *testing.T) {
 	}
 	if len(loaded.Scan.Ignore) != 1 || loaded.Scan.Ignore[0] != "generated/**" {
 		t.Fatalf("scan.ignore = %v, want [generated/**]", loaded.Scan.Ignore)
+	}
+}
+
+// The two bounds a background fill cannot be talked out of.
+//
+// `timeout_seconds` bounds a WAIT, so a project may set it to anything including zero, but an
+// unbounded one would be a `cat` that hangs until a worker finishes. `worker_timeout_seconds`
+// bounds a detached PROCESS, so zero must not be readable as "no limit" the way the read-side
+// keys are -- a config typo is not a good enough reason to create something that runs forever.
+func TestBackgroundBoundsCannotBeDisabled(t *testing.T) {
+	var cfg Config
+	raw := `{"descriptions":{"lazy":{"timeout_seconds":36000,"worker_timeout_seconds":0,` +
+		`"max_workers":0,"max_retries":0}}}`
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	got := cfg.EffectiveLazyDescriptions("claude_code")
+	if got.TimeoutSeconds != MaxLazyTimeoutSeconds {
+		t.Errorf("a runaway wait must be capped: got %d, want %d",
+			got.TimeoutSeconds, MaxLazyTimeoutSeconds)
+	}
+	if got.WorkerTimeoutSeconds != DefaultLazyWorkerTimeoutSeconds {
+		t.Errorf("worker_timeout_seconds 0 must fall back to the default, not mean unbounded: got %d",
+			got.WorkerTimeoutSeconds)
+	}
+	if got.MaxWorkers != DefaultLazyMaxWorkers || got.MaxRetries != DefaultDescriptionMaxRetries {
+		t.Errorf("non-positive caps must fall back: workers=%d retries=%d",
+			got.MaxWorkers, got.MaxRetries)
+	}
+}
+
+// A worker that stops before the read waiting on it does is strictly worse than no worker.
+func TestWorkerOutlivesTheReadThatWaitsForIt(t *testing.T) {
+	var cfg Config
+	raw := `{"descriptions":{"lazy":{"timeout_seconds":90,"worker_timeout_seconds":10}}}`
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got := cfg.EffectiveLazyDescriptions("claude_code"); got.WorkerTimeoutSeconds < got.TimeoutSeconds {
+		t.Errorf("worker (%ds) must outlive the wait (%ds)", got.WorkerTimeoutSeconds, got.TimeoutSeconds)
+	}
+}
+
+// The cap on background workers must track the sweep's parallelism rather than restating it,
+// so raising one raises both.
+func TestWorkerCapTracksTheSweepParallelism(t *testing.T) {
+	if DefaultLazyMaxWorkers != DefaultDescriptionParallel {
+		t.Fatalf("the worker cap (%d) must be the sweep's parallelism (%d)",
+			DefaultLazyMaxWorkers, DefaultDescriptionParallel)
 	}
 }

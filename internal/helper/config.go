@@ -48,6 +48,17 @@ const (
 
 const DefaultDescriptionBatchSize = 5
 
+// DefaultDescriptionParallel is how many description batches run at once, and
+// DefaultDescriptionMaxRetries how many times one resource is re-attempted before a run gives up
+// on it. They live here rather than in internal/cli because the LAZY side needs them too: a
+// detached description worker runs under the sweep's limits by construction, and the cap on how
+// many such workers a project may have at once is this same number. Restating either as a
+// literal somewhere else is how the two halves drift into describing at different rates.
+const (
+	DefaultDescriptionParallel   = 4
+	DefaultDescriptionMaxRetries = 3
+)
+
 // InheritsModel is the sentinel a sub-agent uses to copy the main agent's model.
 const InheritsModel = "<inherits>"
 

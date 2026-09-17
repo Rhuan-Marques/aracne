@@ -17,32 +17,54 @@ import (
 const (
 	// DefaultLazyMaxNodes caps how many nodes one lazy fill may describe.
 	DefaultLazyMaxNodes = 40
-	// DefaultLazyTimeoutSeconds bounds the whole fill, not one batch.
+	// DefaultLazyTimeoutSeconds is how long a READ WAITS, and nothing more.
 	//
-	// This deadline sits on the READ path and nowhere else: the filler is awaited inline by
-	// `read`, `grep` and every intercepted shell command, so it is the ceiling on how long a
-	// `cat` can hang. That is why it is not the two minutes it started at -- the fill is a
-	// side effect of the answer rather than the answer itself.
+	// It used to bound the whole fill, because the fill ran inline: when it expired, the
+	// provider call was killed and every token spent on the batch in flight was thrown away.
+	// That made the deadline a floor rather than a preference -- anything shorter than the
+	// slowest provider landed nothing, and the read paid the full wait to render exactly what
+	// it would have rendered with the feature off.
 	//
-	// BUT IT CANNOT BE SINGLE DIGITS, which is what it was. A deadline shorter than the
-	// provider's floor does not trade completeness for latency; it buys neither. The fill is
-	// cut off every time, nothing is ever written, and the read pays the FULL deadline to
-	// render exactly what it would have rendered with the feature off. Worse, a deadline-cut
-	// target is deliberately not recorded as an attempt (see lazydesc.Filler.fill), so it is
-	// retried -- and re-timed-out -- by every subsequent read, forever. Measured against
-	// `descriptions.provider: "cli"` with `claude -p`: ~5s of process start-up before a token
-	// is generated, and ~29s to describe two resources. At 8s that configuration could not
-	// land a single description, and reads cost 8s each to prove it.
+	// That is no longer true. Generation happens in a detached worker that outlives the read
+	// (see lazydesc.Filler.fill and `arac descriptions worker`), so this deadline ends the
+	// WAIT, never the work. Whatever has not landed by then is rendered as undescribed and
+	// arrives in the database a moment later, for the next read that names it. Nothing is
+	// discarded and nothing is paid for twice.
 	//
-	// So the floor is the slowest provider a project can reasonably name, not the fastest.
-	// What still does not land in time is simply not described, and the next read that names
-	// the same node picks it up. The whole-repo sweep is a different job with its own
-	// patience; it does not come through here.
+	// 45 stays as the default because a first read on a cold repository is the one most likely
+	// to be able to show what it started, and waiting costs nothing but latency now. Lower it
+	// freely; the only thing a short value gives up is seeing a description in THIS answer.
+	//
+	// Two bounds it does have. `<= 0` means DO NOT WAIT, not "wait forever" -- an unbounded
+	// wait on background work is a `cat` that hangs until a worker finishes, which is the one
+	// outcome this whole design exists to avoid. And any configured value is capped at
+	// MaxLazyTimeoutSeconds, so a stray 36000 cannot hang every intercepted read in a project.
 	DefaultLazyTimeoutSeconds = 45
 	// DefaultLazyBatchSize is how many resources one completion describes.
 	DefaultLazyBatchSize = DefaultDescriptionBatchSize
 	// DefaultLazyParallel is how many batches run at once.
 	DefaultLazyParallel = 4
+	// MaxLazyTimeoutSeconds caps how long a read may wait, however the project spells it.
+	MaxLazyTimeoutSeconds = 120
+
+	// DefaultLazyBackground puts generation in a detached worker process. Off restores the
+	// inline fill, which is the right answer only where spawning is impossible or unwanted --
+	// a locked-down CI image, a sandbox, the benchmark harness, which deliberately refuses to
+	// leave a process behind between runs.
+	DefaultLazyBackground = true
+	// DefaultLazyWorkerTimeoutSeconds is the ceiling on ONE worker process.
+	//
+	// It is generous because a worker is not on anybody's critical path: ten minutes of
+	// background generation costs latency to nobody, where the same ten minutes inline would
+	// have been ten minutes of a hanging `cat`. It is not unbounded because a detached process
+	// nothing is waiting for is exactly the thing that must never be able to run forever.
+	DefaultLazyWorkerTimeoutSeconds = 600
+	// DefaultLazyMaxWorkers is how many description workers one project may have at once.
+	//
+	// The sweep's parallelism, by reference rather than by value: a worker runs the sweep's
+	// machinery under the sweep's limits, so "how much description work may be in flight" has
+	// one answer, and raising it raises both.
+	DefaultLazyMaxWorkers = DefaultDescriptionParallel
 )
 
 // LazyDescriptions is `descriptions.lazy`: generate a missing description at the moment
@@ -65,6 +87,23 @@ type LazyDescriptions struct {
 	BatchSize *int `json:"batch_size,omitempty"`
 	// Parallel is how many batches are in flight at once.
 	Parallel *int `json:"parallel,omitempty"`
+	// Background generates in a detached worker process instead of inside the read. Absent
+	// means the default, which is ON. See DefaultLazyBackground.
+	Background *bool `json:"background,omitempty"`
+	// WorkerTimeoutSeconds bounds one worker process end to end.
+	//
+	// Unlike TimeoutSeconds, `<= 0` here is NOT "no limit": it falls back to the default. An
+	// unbounded detached process is the one thing this design must never be able to create, and
+	// a config typo is not a good enough reason to create one.
+	WorkerTimeoutSeconds *int `json:"worker_timeout_seconds,omitempty"`
+	// MaxWorkers caps concurrent worker processes for this project.
+	MaxWorkers *int `json:"max_workers,omitempty"`
+	// MaxRetries is how many times a worker re-attempts one resource before recording it as
+	// failed. Straight from the sweep; see DefaultDescriptionMaxRetries.
+	MaxRetries *int `json:"max_retries,omitempty"`
+	// MaxAgentTurns caps the agent transport's iterations. Absent, or <= 0, keeps the sweep's
+	// own len(batch)*4+10 formula, which scales with how much there is to describe.
+	MaxAgentTurns *int `json:"max_agent_turns,omitempty"`
 	// Provider and BaseURL are the OLD spelling of settings that now live on the
 	// descriptions section itself, because the sweep needs them too (see
 	// DescriptionsSection). They are still read, and still mean exactly what they meant, so
@@ -125,8 +164,9 @@ func (l LazyDescriptions) MarshalJSON() ([]byte, error) {
 // tuned reports whether any knob beyond the switch carries a value.
 func (l LazyDescriptions) tuned() bool {
 	return l.MaxNodes != nil || l.TimeoutSeconds != nil || l.BatchSize != nil ||
-		l.Parallel != nil || strings.TrimSpace(l.Provider) != "" ||
-		strings.TrimSpace(l.BaseURL) != ""
+		l.Parallel != nil || l.Background != nil || l.WorkerTimeoutSeconds != nil ||
+		l.MaxWorkers != nil || l.MaxRetries != nil || l.MaxAgentTurns != nil ||
+		strings.TrimSpace(l.Provider) != "" || strings.TrimSpace(l.BaseURL) != ""
 }
 
 // ResolvedLazyDescriptions is LazyDescriptions with every default applied, so the fill path
@@ -137,9 +177,15 @@ type ResolvedLazyDescriptions struct {
 	TimeoutSeconds int
 	BatchSize      int
 	Parallel       int
-	Model          string
-	Provider       string
-	BaseURL        string
+	Background     bool
+	// WorkerTimeoutSeconds is always positive: see LazyDescriptions.WorkerTimeoutSeconds.
+	WorkerTimeoutSeconds int
+	MaxWorkers           int
+	MaxRetries           int
+	MaxAgentTurns        int
+	Model                string
+	Provider             string
+	BaseURL              string
 	// APIKeyEnv is the environment variable the API key is read from, or "" to use the
 	// provider's own default name. Empty for "cli", which authenticates itself.
 	APIKeyEnv string
@@ -158,6 +204,11 @@ func (l LazyDescriptions) Resolve() ResolvedLazyDescriptions {
 		Parallel:       DefaultLazyParallel,
 		Provider:       strings.ToLower(strings.TrimSpace(l.Provider)),
 		BaseURL:        strings.TrimSpace(l.BaseURL),
+
+		Background:           boolOr(l.Background, DefaultLazyBackground),
+		WorkerTimeoutSeconds: DefaultLazyWorkerTimeoutSeconds,
+		MaxWorkers:           DefaultLazyMaxWorkers,
+		MaxRetries:           DefaultDescriptionMaxRetries,
 	}
 	// MaxNodes and TimeoutSeconds take a non-positive value as "no limit", so they are
 	// copied whenever the key is present at all. BatchSize and Parallel have no such
@@ -174,6 +225,29 @@ func (l LazyDescriptions) Resolve() ResolvedLazyDescriptions {
 	}
 	if l.Parallel != nil && *l.Parallel > 0 {
 		out.Parallel = *l.Parallel
+	}
+	// A non-positive worker timeout or worker cap keeps the default rather than meaning "no
+	// limit". Both bound a process nothing is waiting for, and "unbounded" is not a thing a
+	// project should be able to ask for by typing a zero.
+	if l.WorkerTimeoutSeconds != nil && *l.WorkerTimeoutSeconds > 0 {
+		out.WorkerTimeoutSeconds = *l.WorkerTimeoutSeconds
+	}
+	if l.MaxWorkers != nil && *l.MaxWorkers > 0 {
+		out.MaxWorkers = *l.MaxWorkers
+	}
+	if l.MaxRetries != nil && *l.MaxRetries > 0 {
+		out.MaxRetries = *l.MaxRetries
+	}
+	if l.MaxAgentTurns != nil && *l.MaxAgentTurns > 0 {
+		out.MaxAgentTurns = *l.MaxAgentTurns
+	}
+	if out.TimeoutSeconds > MaxLazyTimeoutSeconds {
+		out.TimeoutSeconds = MaxLazyTimeoutSeconds
+	}
+	// A worker that stops before the read waiting on it does is strictly worse than no worker:
+	// the read would time out on work that had already been abandoned.
+	if out.WorkerTimeoutSeconds < out.TimeoutSeconds {
+		out.WorkerTimeoutSeconds = out.TimeoutSeconds
 	}
 	return out
 }
