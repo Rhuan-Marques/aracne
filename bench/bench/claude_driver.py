@@ -32,6 +32,39 @@ complete, stop.
 """
 
 
+# SWE-Atlas navigation variant (bench/bench/atlas_prompt.py). No hidden tests are run -- telling the
+# agent its work "will be validated by a separate, hidden test suite" would be false, and it points
+# the agent at tests it cannot see. Test files stay off limits so a patch stays a source change.
+ATLAS_PROMPT_TEMPLATE = """You are an experienced software engineer resolving a real GitHub \
+issue in the repository in your current working directory.
+
+Issue / pull-request description:
+---
+{problem}
+---
+
+Make the minimal source-code changes needed to resolve this issue, working directly in \
+the files of this repository. Do not modify, add, or delete any test files. When you are \
+confident the change is complete, stop.
+"""
+
+
+# The same variant with the task's tests in scope (bench/bench/atlas_tests.py). Tests are not
+# mentioned at all: neither forbidden nor requested. A competent engineer keeps the tests working
+# after a refactor without being told to, and saying so would point the agent at them.
+ATLAS_TESTS_PROMPT_TEMPLATE = """You are an experienced software engineer resolving a real GitHub \
+issue in the repository in your current working directory.
+
+Issue / pull-request description:
+---
+{problem}
+---
+
+Make the minimal changes needed to resolve this issue, working directly in the files of this \
+repository. When you are confident the change is complete, stop.
+"""
+
+
 @dataclass
 class RunResult:
     result_text: str = ""

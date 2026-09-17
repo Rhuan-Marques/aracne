@@ -1,0 +1,28 @@
+# Navigation variant with the tasks' TESTS IN SCOPE: the agent updates the tests its refactor breaks
+# instead of being forbidden to touch them; gold = gold.patch + test_patch.diff; the rubric judge is
+# told tests were in scope. Only the hand-checked tasks in bench/bench/atlas_tests.py -- exactly the
+# atlas-warnreads5 sample. Both arms, since the prompt differs from every earlier run.
+sample_id: atlas-warnreads5
+languages: [go]
+
+seeds: 1
+arms: [baseline, aracne]
+atlas_tests_in_scope: true
+
+run_harness: claude_code
+model: opus
+effort: medium
+max_turns: 100
+timeout_s: 3600
+run_parallel: 3
+
+isolate_operator_config: true
+deny_answer_key: true
+allow_cold: true
+
+arm_builtin_tools:
+  baseline: [Bash, Glob]
+  aracne:   [Bash, Glob]
+
+arm_aracne_config:
+  aracne: lazy-aracneread-warnreads

@@ -146,11 +146,11 @@ def prepare(task: dict, force: bool = False) -> dict:
         out["status"] = "extract failed"
         return out
 
-    # Both harness integrations, so an arm can select either without re-running init.
+    # Both harness integrations, so an arm can select either without re-running setup.
     for flag in ("--claude", "--opencode"):
-        r = run([ARAC, "init", flag, "-y"], cwd=str(wt), timeout=300)
+        r = run([ARAC, "setup", flag, "-y"], cwd=str(wt), timeout=300)
         if r.returncode != 0:
-            out["status"] = f"init failed: {(r.stderr or r.stdout)[-160:]}"
+            out["status"] = f"setup failed: {(r.stderr or r.stdout)[-160:]}"
             return out
     r = run([ARAC, "scan", "--all"], cwd=str(wt), timeout=3600)
     if r.returncode != 0:

@@ -125,6 +125,32 @@ def _arms_table(arms: dict, delta: dict | None) -> str:
         _delta_pct_td(delta.get("wall_pct") if delta else None, True))
     add("Timeouts", lambda st: f"<td>{_timeout_cell(st)}</td>",
         _delta_timeout_td(delta))
+    # SWE-Atlas localization + rubric rows: only when some arm has them.
+    for field, label, kind in (
+            ("loc_file_recall", "Gold-file recall", "rate"),
+            ("loc_file_precision", "File precision", "rate"),
+            ("loc_decl_recall", "Gold-declaration recall", "rate"),
+            ("loc_decl_precision", "Declaration precision", "rate"),
+            ("rubric_agg_score", "Rubric score (agg)", "rate"),
+            ("nav_turns_to_first_gold_touch", "API calls to find a gold file", "count"),
+            ("nav_tokens_to_first_gold_touch", "Tokens to find a gold file", "tokens"),
+            ("nav_turns_to_first_gold_edit", "API calls to first gold edit", "count"),
+            ("nav_tokens_to_first_gold_edit", "Tokens to first gold edit", "tokens")):
+        if not any(arms[a].get(f"mean_{field}") is not None for a in arm_names):
+            continue
+        def cell(st, field=field, kind=kind):
+            v = st.get(f"mean_{field}")
+            if v is None:
+                return "<td class='muted'>&ndash;</td>"
+            txt = f"{v * 100:.1f}%" if kind == "rate" else (_k(v) if kind == "tokens" else _num(round(v, 1)))
+            return f"<td>{txt} <span class='muted'>(n={st.get(f'n_{field}')})</span></td>"
+        if kind == "rate":
+            dv = delta.get(f"{field}_abs") if delta else None
+            dtd = ("<td class='delta neutral'>&ndash;</td>" if dv is None else
+                   f"<td class='delta {'good' if dv > 0 else 'bad' if dv < 0 else 'neutral'}'>{dv * 100:+.1f} pts</td>")
+        else:
+            dtd = _delta_pct_td(delta.get(f"{field}_pct") if delta else None, True)
+        add(label, cell, dtd)
     add("Runs (graded)", lambda st: f"<td class='muted'>{st.get('n_runs')} ({st.get('n_graded')})</td>",
         "<td class='delta neutral'>&ndash;</td>")
 
@@ -313,6 +339,8 @@ def _chips(meta: dict) -> str:
         # Shown because >1 means wall-clock was measured under contention.
         ("parallel", meta.get("run_parallel") if (meta.get("run_parallel") or 1) > 1 else None),
         ("time", meta.get("timestamp")),
+        ("benchmark", meta.get("benchmark_variant")),
+        ("grading", meta.get("grading")),
     ]
     return "".join(f"<span class='chip'><b>{_esc(k)}</b> {_esc(v)}</span>"
                    for k, v in fields if v not in (None, ""))

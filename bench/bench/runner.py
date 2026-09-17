@@ -21,7 +21,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from . import agents, arms, fixtures, locks, netshim, outcome, toolstats
+from . import agents, arms, atlas_tests, fixtures, locks, netshim, outcome, toolstats
 from .gitutil import run_git
 from .sources import Task
 
@@ -149,7 +149,8 @@ def _run_cell(task: Task, arm: str, seed: int, cfg: dict, out_dir: Path,
         with arms.background_scanner(arm, workdir, cfg) as scanning:
             row["bg_scanner"] = scanning
             rr = agents.run_agent(
-                cfg["run_harness"], agents.task_prompt(task.problem_statement),
+                cfg["run_harness"], agents.task_prompt(task.problem_statement, task.source,
+                                                      atlas_tests.in_scope(task.key, cfg)),
                 workdir, cfg["model"], cfg["max_turns"], cfg["timeout_s"],
                 stream=True, effort=cfg.get("effort"),
                 isolate_operator_config=bool(cfg.get("isolate_operator_config")),

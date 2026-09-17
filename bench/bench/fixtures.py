@@ -184,16 +184,26 @@ def sync_agent_contract(worktree, arac_bin: str = "arac") -> bool:
     native read ships a contract telling the model to call a tool that is not in its list --
     the single most effective way to get zero adoption.
 
-    `arac init --claude` writes integration files only (no scan, no topology write), and it
-    reinstalls the guard hook, so it is safe and cheap to re-run per cell. Best-effort:
-    returns False if it could not run, leaving the frozen contract in place.
+    `arac setup --claude` writes integration files only (no scan, no topology write), and it
+    reinstalls the guard hook, so it is safe and cheap to re-run per cell.
+
+    FAILS LOUDLY. This was best-effort, returning False and leaving the frozen contract in place
+    -- and when `arac init` lost its `--claude` flag to `arac setup` (07aee2b, 2026-09-06), every
+    aracne cell after it ran the contract frozen at prepare time while the arm config claimed
+    otherwise. An arm
+    whose contract is not the one its config renders is not the arm being measured, so the run
+    must stop rather than record it.
     """
     try:
-        subprocess.run([arac_bin, "init", "--claude", "-y"], cwd=str(worktree),
+        subprocess.run([arac_bin, "setup", "--claude", "-y"], cwd=str(worktree),
                        check=True, capture_output=True, text=True, timeout=120)
-        return True
-    except (subprocess.SubprocessError, OSError):
-        return False
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            f"`{arac_bin} setup --claude -y` failed in {worktree} (exit {exc.returncode}): "
+            f"{(exc.stderr or exc.stdout or '').strip()[-300:]}") from exc
+    except (subprocess.SubprocessError, OSError) as exc:
+        raise RuntimeError(f"`{arac_bin} setup --claude -y` could not run in {worktree}: {exc}") from exc
+    return True
 
 
 # --------------------------------------------------------------------------- #
@@ -305,7 +315,7 @@ def scaffold(task, cfg: dict, fixtures_root) -> dict:
 
     Idempotent: if the worktree's topology DB already exists and force_prepare is off,
     the existing fixture is reported as-is (re-applying the kind scope). Otherwise the repo
-    is cloned at base_commit, `arac init` injects BOTH the --claude and --opencode
+    is cloned at base_commit, `arac setup` injects BOTH the --claude and --opencode
     integrations, `arac scan --all` builds the structure-only topology (preserving any
     descriptions already present, and remapping them across an id-scheme change), and the description
     kind scope is written. Descriptions are NOT generated here (that's `generate`).
@@ -322,7 +332,7 @@ def scaffold(task, cfg: dict, fixtures_root) -> dict:
         clone_at(task, cache, wt, task.base_commit)
 
     # A reused fixture may still be carrying the last run's agent edits. Everything below —
-    # `arac init`, the scan, the description kind scope, and the coverage count this returns —
+    # `arac setup`, the scan, the description kind scope, and the coverage count this returns —
     # reads the worktree, so put it back on base_commit first.
     if not fresh:
         ensure_base_commit(task, cfg, wt, "scaffold")
@@ -333,7 +343,7 @@ def scaffold(task, cfg: dict, fixtures_root) -> dict:
     if fresh or not (wt / ".mcp.json").exists() or not (wt / ".opencode" / "opencode.json").exists():
         for harness_flag in ("--claude", "--opencode"):
             subprocess.run(
-                [arac_bin, "init", harness_flag, "-y"],
+                [arac_bin, "setup", harness_flag, "-y"],
                 cwd=str(wt), check=True, capture_output=True, text=True,
             )
 

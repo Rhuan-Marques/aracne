@@ -14,6 +14,7 @@ import json
 import os
 import re
 from pathlib import Path
+from bench.atlas_prompt import strip_and_neutralize
 
 ATLAS = Path(os.environ.get(
     "ARACNE_SWE_ATLAS_DIR",
@@ -43,6 +44,11 @@ def read_task(path: Path) -> dict:
         m = re.search(r"^FROM\s+(\S+)", dockerfile.read_text(), re.M)
         image = m.group(1) if m else ""
     instruction = (path / "instruction.md").read_text() if (path / "instruction.md").exists() else ""
+    # The appended interface specification hands the agent the navigation answer; never ship it.
+    # See bench/atlas_prompt.py.
+    # File references are replaced at LOAD, from the stored rewrites (sources.read_manifest), so
+    # the manifest keeps the deterministic text those rewrites are keyed to.
+    instruction = strip_and_neutralize(instruction)
     toml = (path / "task.toml").read_text() if (path / "task.toml").exists() else ""
     diff = ""
     gold = path / "solution" / "gold.patch"

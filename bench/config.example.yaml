@@ -9,7 +9,7 @@
 # PREPARE-ONCE / RUN-MANY, five phases (subcommands of run_benchmark.py). Both generation
 # AND the A/B run can use Claude Code or OpenCode, with any model:
 #   1) sample   -> oversampled candidate manifest (bench/samples/<id>.candidates.jsonl)
-#   2) prepare  -> clone + `arac init --claude --opencode` + scan each candidate (token-free),
+#   2) prepare  -> clone + `arac setup --claude --opencode` + scan each candidate (token-free),
 #                  DROP repos with too many describable nodes, write the FINAL manifest
 #   3) generate -> batch-fill descriptions into EVERY fixture via the chosen backend
 #                  (default claude_code/haiku, on Max; or opencode/<provider/model>, off Max).

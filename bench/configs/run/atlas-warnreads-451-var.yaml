@@ -1,0 +1,26 @@
+# Token-economy probe for features.warning_reads with the 10 KB byte budget. No grading, no analysis.
+# BOTH arms measured in the same run (same Claude Code, same day) -- no imported baseline.
+# Sample: k6-10d4b451 only, 3 seeds per arm -- the variance check for the task that drove the bytes-2 gap.
+sample_id: atlas-warnreads-451
+languages: [go]
+
+seeds: 3
+arms: [baseline, aracne]
+
+run_harness: claude_code
+model: opus
+effort: medium
+max_turns: 100
+timeout_s: 3600
+run_parallel: 3
+
+isolate_operator_config: true
+deny_answer_key: true
+allow_cold: true
+
+arm_builtin_tools:
+  baseline: [Bash, Glob]
+  aracne:   [Bash, Glob]
+
+arm_aracne_config:
+  aracne: lazy-aracneread-warnreads

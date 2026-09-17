@@ -347,52 +347,92 @@ def _grade_batch(source: str, arm: str, tag: str, items: list[tuple],
 
 def _grade_atlas(items: list[tuple], arm: str, cfg: dict, out_dir: Path,
                  tag: str) -> dict[str, bool]:
-    """Grade SWE-Atlas refactoring tasks, one container per run.
+    """Grade SWE-Atlas refactoring tasks, one run at a time.
 
-    Unlike the two SWE-bench harnesses this does NOT batch: an Atlas task is scored by its own
-    per-task verifier inside its own per-task image, and there is no cross-instance harness to
-    amortize. Each run gets a container, the patch applied, `bash /tests/test.sh`, and the
-    reward the verifier writes.
+    THREE MODES (`atlas_grading`, and `--cheap-grade` on top of any of them):
 
-    Two things the SWE-bench paths do not need:
+      - "rubric" (default) -- the navigation variant. LOCALIZATION (deterministic, see
+        bench/localization.py) plus the task's own LLM rubric judge run on the host with no
+        hidden tests (atlas_rubric.py). success = every must-have rubric item passes. The hidden
+        tests are dropped because the variant withholds the interface specification they
+        depend on; see bench/atlas_prompt.py.
+      - "verifier" -- the benchmark as published: the task's own container runs `test.sh`
+        (tests AND rubric) and success = its reward. Localization is still recorded.
+      - cheap_grade -- localization only. No model, no container, no tokens; success stays
+        unknown, so the solve rate is simply not reported for the run.
 
-      - A JUDGE. Half of an Atlas reward is a rubric graded by an LLM, and the verifier expects
-        an OpenAI-shaped endpoint. atlas_judge serves one backed by `claude --print`, so the
-        judging cost lands on the same subscription as the agent and no extra key is required.
-        One server for the whole batch; the container reaches it via host.docker.internal.
-      - A PASS BAR that is not just "tests pass". reward is 1.0 only when the tests reward is
-        1.0 AND every must-have rubric item passes, which is what makes these gradeable at all:
-        a refactor that keeps the tests green while ignoring the instruction is not a solve.
+    Localization is computed for every row in every mode: it is free, and it is the number that
+    no naming choice can move.
     """
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import atlas_grade
-    import atlas_judge
+    from . import atlas_tests, fixtures, localization
 
-    httpd = atlas_judge.serve(0, "0.0.0.0")
-    judge_url = f"http://host.docker.internal:{httpd.server_address[1]}/v1"
+    mode = "localization" if cfg.get("cheap_grade") else cfg.get("atlas_grading", "rubric")
     outdir = out_dir / "atlas" / (f"{arm}__{tag}" if tag else arm)
     outdir.mkdir(parents=True, exist_ok=True)
+    fixtures_root = Path(cfg.get("fixtures_dir") or "")
     resolved: dict[str, bool] = {}
+
+    httpd = judge_url = None
+    if mode == "verifier":
+        import atlas_grade
+        import atlas_judge
+        httpd = atlas_judge.serve(0, "0.0.0.0")
+        judge_url = f"http://host.docker.internal:{httpd.server_address[1]}/v1"
+    elif mode == "rubric":
+        import atlas_rubric
     try:
         for row, task, _arm, patch in items:
             rec = dict(task.raw)
             rec["key"] = task.key
-            timeout_s = int(rec.get("timeout_sec") or 7200)
-            print(f"[grade] atlas/{arm}: {task.key} ...")
-            res = atlas_grade.grade(rec, patch, judge_url, timeout_s=timeout_s,
-                                    log=lambda m: print(f"        {m}"))
-            (outdir / f"{task.key}.json").write_text(json.dumps(res, indent=2))
-            # A reward the verifier never produced is unknown, not a failure -- the same rule
-            # the other sources follow when a harness leaves an instance unjudged.
-            if res.get("reward") is not None:
-                resolved[task.key] = float(res["reward"]) >= 1.0
-            else:
-                row["grade_error"] = res.get("error") or "no reward"
-            print(f"        {task.key}: reward={res.get('reward')} "
-                  f"tests={res.get('tests_reward')} must_have={res.get('must_have_pass')}"
-                  + (f" error={res['error']}" if res.get("error") else ""))
+            snap = fixtures.snapshot_path(fixtures_root, task) / ".aracne" / "topology.db"
+            tpath = Path(row["transcript_path"]) if row.get("transcript_path") else None
+            tests_in_scope = atlas_tests.in_scope(task.key, cfg)
+            loc = localization.score_row(rec, patch, snap, tpath, include_tests=tests_in_scope)
+            row.update(loc["row"])
+            row["grading"] = mode
+            row["tests_in_scope"] = tests_in_scope
+            result: dict = {"key": task.key, "arm": arm, "grading": mode,
+                            "localization": loc["detail"]}
+            print(f"[grade] atlas/{arm}: {task.key}  files R={loc['row']['loc_file_recall']} "
+                  f"P={loc['row']['loc_file_precision']}  decls R={loc['row']['loc_decl_recall']} "
+                  f"P={loc['row']['loc_decl_precision']}")
+
+            if mode == "rubric":
+                res = atlas_rubric.grade(rec["task_dir"], patch,
+                                         naming_lenient=cfg.get("atlas_naming_lenient", True),
+                                         tests_in_scope=tests_in_scope,
+                                         drop_rubrics=atlas_tests.dropped_rubrics(task.key)
+                                         if tests_in_scope else (),
+                                         log=lambda m: print(f"        {m}"))
+                result["rubric"] = res
+                row["rubric_agg_score"] = res.get("agg_score")
+                row["rubric_must_have_pass"] = res.get("must_have_pass")
+                if res.get("must_have_pass") is not None:
+                    resolved[task.key] = bool(res["must_have_pass"])
+                else:
+                    row["grade_error"] = res.get("error") or "no rubric verdict"
+                print(f"        rubric: must_have={res.get('must_have_pass')} "
+                      f"agg={res.get('agg_score')} ({res.get('n_judge_calls')} judge calls)"
+                      + (f" error={res['error']}" if res.get("error") else ""))
+            elif mode == "verifier":
+                timeout_s = int(rec.get("timeout_sec") or 7200)
+                res = atlas_grade.grade(rec, patch, judge_url, timeout_s=timeout_s,
+                                        log=lambda m: print(f"        {m}"))
+                result["verifier"] = res
+                # A reward the verifier never produced is unknown, not a failure -- the same
+                # rule the other sources follow when a harness leaves an instance unjudged.
+                if res.get("reward") is not None:
+                    resolved[task.key] = float(res["reward"]) >= 1.0
+                else:
+                    row["grade_error"] = res.get("error") or "no reward"
+                print(f"        {task.key}: reward={res.get('reward')} "
+                      f"tests={res.get('tests_reward')} must_have={res.get('must_have_pass')}"
+                      + (f" error={res['error']}" if res.get("error") else ""))
+            (outdir / f"{task.key}.json").write_text(json.dumps(result, indent=2))
     finally:
-        httpd.shutdown()
+        if httpd is not None:
+            httpd.shutdown()
     return resolved
 
 

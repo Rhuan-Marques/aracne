@@ -1,0 +1,25 @@
+# nav-variant-6's setup (both arms, file-free prompts, tests out of scope, 10 KB warning reads) on Sonnet.
+
+sample_id: atlas-warnreads5
+languages: [go]
+
+seeds: 1
+arms: [baseline, aracne]
+
+run_harness: claude_code
+model: sonnet
+effort: medium
+max_turns: 100
+timeout_s: 3600
+run_parallel: 3
+
+isolate_operator_config: true
+deny_answer_key: true
+allow_cold: true
+
+arm_builtin_tools:
+  baseline: [Bash, Glob]
+  aracne:   [Bash, Glob]
+
+arm_aracne_config:
+  aracne: lazy-aracneread-warnreads

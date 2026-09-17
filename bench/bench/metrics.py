@@ -87,7 +87,27 @@ def _arm_stats(rows: list[dict]) -> dict:
         "mean_cost_usd": round(_mean([r["cost_usd"] for r in metric]), 4),
         "mean_scan_s": round(_mean([r["scan_time_s"] for r in metric]), 1),
         **_tool_stats(tooled),
+        **_localization_stats(metric),
     }
+
+
+# Localization (SWE-Atlas, bench/localization.py) and the host rubric judge. Each mean is over the
+# rows that carry the field, and its denominator is reported: a task aracne cannot index has no
+# declaration score, and averaging it in as a zero would be a claim the scorer never made.
+LOC_FIELDS = ("loc_file_recall", "loc_file_precision", "loc_file_f1", "loc_decl_recall",
+              "loc_decl_precision", "loc_decl_f1", "rubric_agg_score",
+              "nav_turns_to_first_gold_touch", "nav_tokens_to_first_gold_touch",
+              "nav_turns_to_first_gold_edit", "nav_tokens_to_first_gold_edit",
+              "nav_gold_files_named_before_edit")
+
+
+def _localization_stats(rows: list[dict]) -> dict:
+    out: dict = {}
+    for field in LOC_FIELDS:
+        vals = [r[field] for r in rows if isinstance(r.get(field), (int, float))]
+        out[f"mean_{field}"] = round(_mean(vals), 4) if vals else None
+        out[f"n_{field}"] = len(vals)
+    return out
 
 
 def _tool_stats(tooled: list[dict]) -> dict:
@@ -127,6 +147,15 @@ def _delta(a: dict | None, b: dict | None) -> dict | None:
     }
     if a["success_rate"] is not None and b["success_rate"] is not None:
         d["success_rate_abs"] = round(a["success_rate"] - b["success_rate"], 3)
+    # Localization scores are rates already, so the delta is absolute (points), not a percent.
+    for field in LOC_FIELDS:
+        av, bv = a.get(f"mean_{field}"), b.get(f"mean_{field}")
+        if av is None or bv is None:
+            continue
+        if field.startswith("nav_turns") or field.startswith("nav_tokens"):
+            d[f"{field}_pct"] = _pct_delta(av, bv)
+        else:
+            d[f"{field}_abs"] = round(av - bv, 4)
     return d
 
 

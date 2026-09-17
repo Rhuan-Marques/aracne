@@ -1,0 +1,39 @@
+{
+  "mode": "cli",
+  "read": {
+    "context_filter": "normal"
+  },
+  "descriptions": {
+    "provider": "cli",
+    "cli_provider_command": "claude --print --model haiku --max-turns 1",
+    "lazy": {
+      "enabled": true,
+      "max_nodes": 40,
+      "timeout_seconds": 180,
+      "batch_size": 12,
+      "parallel": 2
+    }
+  },
+  "mcp_tools": [],
+  "blocked_tools": [],
+  "llm": {
+    "<any>": {
+      "main_agent": {
+        "plugins": [
+          "edit-update-db-plugin"
+        ]
+      }
+    },
+    "claude_code": {
+      "main_agent": {
+        "plugins": [
+          "edit-update-db-plugin"
+        ]
+      }
+    }
+  },
+  "features": {
+    "warning_reads": true,
+    "warning_read_max_bytes": 10000
+  }
+}

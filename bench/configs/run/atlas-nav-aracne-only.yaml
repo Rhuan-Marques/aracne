@@ -1,0 +1,27 @@
+# Token-economy probe for features.warning_reads with the 10 KB byte budget. No grading, no analysis.
+# Aracne arm only; baseline imported from nav-variant-3 (same prompts, same day).
+# Sample: the 5 atlas12 tasks whose aracne arm fired topology warnings in atlas12-read-1.
+sample_id: atlas-warnreads5
+languages: [go]
+
+seeds: 1
+arms: [aracne]
+baseline_from: nav-variant-3
+
+run_harness: claude_code
+model: opus
+effort: medium
+max_turns: 100
+timeout_s: 3600
+run_parallel: 3
+
+isolate_operator_config: true
+deny_answer_key: true
+allow_cold: true
+
+arm_builtin_tools:
+  baseline: [Bash, Glob]
+  aracne:   [Bash, Glob]
+
+arm_aracne_config:
+  aracne: lazy-aracneread-warnreads
