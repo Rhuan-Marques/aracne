@@ -35,10 +35,22 @@ const (
 	// to be able to show what it started, and waiting costs nothing but latency now. Lower it
 	// freely; the only thing a short value gives up is seeing a description in THIS answer.
 	//
-	// Two bounds it does have. `<= 0` means DO NOT WAIT, not "wait forever" -- an unbounded
-	// wait on background work is a `cat` that hangs until a worker finishes, which is the one
-	// outcome this whole design exists to avoid. And any configured value is capped at
-	// MaxLazyTimeoutSeconds, so a stray 36000 cannot hang every intercepted read in a project.
+	// THREE READINGS, and the sign is what picks between them:
+	//
+	//   > 0  wait this long, capped at MaxLazyTimeoutSeconds so a stray 36000 cannot hang every
+	//        intercepted read in a project;
+	//     0  do not wait at all -- claim, start the work, render now, collect it next time;
+	//   < 0  wait until the work is finished.
+	//
+	// Zero is the safe reading of "no limit" because zero is what a typo produces, and what a
+	// half-written config leaves behind. Waiting forever has to be ASKED for, in a way nobody
+	// types by accident, which is what the negative is.
+	//
+	// And "forever" is shorter than it sounds. The wait ends when every resource it is watching
+	// has landed, settled or lost its worker, and a worker cannot outlive worker_timeout_seconds
+	// plus its watchdog -- with the lease in the claim row expiring after that whatever the
+	// process does. So a negative value waits for the work, not for eternity; the ceiling is
+	// worker_timeout_seconds, which is a number the same config sets.
 	DefaultLazyTimeoutSeconds = 45
 	// DefaultLazyBatchSize is how many resources one completion describes.
 	DefaultLazyBatchSize = DefaultDescriptionBatchSize
@@ -81,7 +93,9 @@ type LazyDescriptions struct {
 	// MaxNodes caps the nodes one fill describes. Absent uses DefaultLazyMaxNodes; <= 0 is
 	// read as "no cap", for a project that would rather pay once than converge over reads.
 	MaxNodes *int `json:"max_nodes,omitempty"`
-	// TimeoutSeconds bounds one fill end to end. <= 0 disables the deadline.
+	// TimeoutSeconds is how long a read waits for the descriptions it started. Positive waits
+	// that long, zero does not wait at all, and negative waits until the work is done. See
+	// DefaultLazyTimeoutSeconds.
 	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
 	// BatchSize is how many resources go into one completion.
 	BatchSize *int `json:"batch_size,omitempty"`
@@ -210,8 +224,9 @@ func (l LazyDescriptions) Resolve() ResolvedLazyDescriptions {
 		MaxWorkers:           DefaultLazyMaxWorkers,
 		MaxRetries:           DefaultDescriptionMaxRetries,
 	}
-	// MaxNodes and TimeoutSeconds take a non-positive value as "no limit", so they are
-	// copied whenever the key is present at all. BatchSize and Parallel have no such
+	// MaxNodes takes a non-positive value as "no limit", and TimeoutSeconds gives the two
+	// signs of non-positive different meanings (0 do not wait, negative wait it out), so both
+	// are copied whenever the key is present at all. BatchSize and Parallel have no such
 	// reading -- a batch of zero describes nothing -- so a non-positive value there keeps
 	// the default rather than disabling the feature by arithmetic.
 	if l.MaxNodes != nil {
@@ -241,12 +256,16 @@ func (l LazyDescriptions) Resolve() ResolvedLazyDescriptions {
 	if l.MaxAgentTurns != nil && *l.MaxAgentTurns > 0 {
 		out.MaxAgentTurns = *l.MaxAgentTurns
 	}
+	// Only a POSITIVE wait is capped. A negative one is the project asking to wait the work out,
+	// and clamping that to two minutes would answer a question nobody asked -- it is already
+	// bounded by the worker's own ceiling, which is the honest bound for "until it is done".
 	if out.TimeoutSeconds > MaxLazyTimeoutSeconds {
 		out.TimeoutSeconds = MaxLazyTimeoutSeconds
 	}
 	// A worker that stops before the read waiting on it does is strictly worse than no worker:
-	// the read would time out on work that had already been abandoned.
-	if out.WorkerTimeoutSeconds < out.TimeoutSeconds {
+	// the read would time out on work that had already been abandoned. (A negative wait is
+	// already bounded BY the worker, so there is nothing to reconcile.)
+	if out.TimeoutSeconds > 0 && out.WorkerTimeoutSeconds < out.TimeoutSeconds {
 		out.WorkerTimeoutSeconds = out.TimeoutSeconds
 	}
 	return out

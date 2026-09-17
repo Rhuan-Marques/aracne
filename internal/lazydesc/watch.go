@@ -19,7 +19,22 @@ import (
 // So it is a plain loop on the calling goroutine, polling one small query, and every iteration
 // either shrinks the set it is waiting for or moves the clock toward a deadline it cannot pass.
 // There is nothing to leak and nothing to abandon.
+//
+// A wait of "until it is done" (a negative timeout_seconds) has no deadline to move toward, and
+// terminates on the other half instead: the set shrinks as resources land, settle or lose their
+// worker, and every claim is guaranteed to reach one of those -- a worker cannot outlive its own
+// timeout and watchdog, and its lease expires after that whatever the process does.
 const descriptionPollInterval = 300 * time.Millisecond
+
+// maxWatchPollFailures ends a wait whose polls keep failing.
+//
+// A failed poll is deliberately read as "no news", so one transient SQLITE_BUSY does not end a
+// wait that is about to succeed. But a poll that ALWAYS fails -- the database deleted, its
+// permissions changed, the disk gone -- reports "no news" forever, and under a wait-until-done
+// there is no deadline underneath to catch that. Twenty consecutive failures is six seconds of
+// being told nothing, which is long enough to rule out a busy database and short enough that a
+// broken one cannot hold a read open.
+const maxWatchPollFailures = 20
 
 // watchOutcome is what one poll concluded about one resource.
 type watchOutcome int
@@ -36,14 +51,21 @@ const (
 // The return is the caller's existing "the database changed, re-read and re-render" signal, so
 // no call site of FillForRead has to learn about any of this.
 func (f *Filler) waitForDescriptions(ids []string, timeout time.Duration) bool {
-	if len(ids) == 0 || timeout <= 0 {
-		// timeout <= 0 is DO NOT WAIT, not "wait forever". The old inline reading of a
-		// non-positive timeout was "no deadline", which was survivable only because the work
-		// was inline and finite; against a background worker it would be a `cat` that hangs
-		// until generation finishes. The work still happens -- the caller has already claimed
-		// and spawned -- it just lands for a later read.
+	if len(ids) == 0 {
 		return false
 	}
+	if timeout == 0 {
+		// DO NOT WAIT. Zero is the reading a typo and a half-written config produce, so it gets
+		// the harmless meaning: the work has already been claimed and started, it simply lands
+		// for a later read instead of this one.
+		return false
+	}
+	// A NEGATIVE wait is the project asking to see the work through, and it has to be asked for
+	// in a way nobody types by accident. It is not unbounded: the loop ends when every resource
+	// has landed, settled or lost its worker, and a worker cannot outlive its own timeout and
+	// watchdog -- with the lease in its claim row expiring after that whatever the process does.
+	// So this waits for the WORK, with worker_timeout_seconds as the real ceiling.
+	untilDone := timeout < 0
 
 	waiting := make(map[string]bool, len(ids))
 	for _, id := range ids {
@@ -51,18 +73,26 @@ func (f *Filler) waitForDescriptions(ids []string, timeout time.Duration) bool {
 	}
 	deadline := time.Now().Add(timeout)
 	landed := false
+	pollFailures := 0
 
 	for len(waiting) > 0 {
 		now := time.Now()
-		if !now.Before(deadline) {
+		if !untilDone && !now.Before(deadline) {
 			return landed
 		}
 
 		status, err := helper.ReadDescriptionJobStatus(f.mgr.DbPath(), keysOf(waiting))
 		if err != nil {
 			// A transient SQLITE_BUSY must not end the wait: the worker is still out there and
-			// the next poll is 300ms away. The deadline is what ends this loop, always.
+			// the next poll is 300ms away. A database that keeps failing is a different thing,
+			// and under a wait-until-done it is the one way this loop could spin forever.
+			pollFailures++
+			if pollFailures >= maxWatchPollFailures {
+				return landed
+			}
 			status = nil
+		} else {
+			pollFailures = 0
 		}
 		for id := range waiting {
 			switch outcome, desc := classifyWatch(status, id, now); outcome {
@@ -80,11 +110,13 @@ func (f *Filler) waitForDescriptions(ids []string, timeout time.Duration) bool {
 		}
 
 		sleep := descriptionPollInterval
-		if remaining := time.Until(deadline); remaining < sleep {
-			sleep = remaining
-		}
-		if sleep <= 0 {
-			break
+		if !untilDone {
+			if remaining := time.Until(deadline); remaining < sleep {
+				sleep = remaining
+			}
+			if sleep <= 0 {
+				break
+			}
 		}
 		time.Sleep(sleep)
 	}

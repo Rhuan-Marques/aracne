@@ -3,6 +3,8 @@ package lazydesc
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"testing"
@@ -323,5 +325,132 @@ func TestBackgroundFillRespectsTheWorkerCap(t *testing.T) {
 
 	if spawn.count() != 0 {
 		t.Fatalf("at the cap no worker may start, got %d", spawn.count())
+	}
+}
+
+// THE THREE READINGS OF timeout_seconds, which the sign picks between.
+//
+// Negative is the one a project has to ask for deliberately, and it is what this test is really
+// about: a read that waits the work out rather than rendering without it. Zero -- the value a
+// typo produces -- keeps the harmless meaning.
+func TestNegativeTimeoutWaitsForTheWorkToFinish(t *testing.T) {
+	mgr := project(t, fixture())
+	spawn := &recordingSpawn{}
+	withSpawn(t, spawn)
+
+	// The "worker" takes well over any sane bounded wait, then describes everything it holds.
+	go func() {
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			jobs, err := helper.ListDescriptionJobs(mgr.DbPath())
+			if err == nil && len(jobs) > 0 {
+				time.Sleep(1500 * time.Millisecond)
+				for _, j := range jobs {
+					_ = mgr.UpdateDescription(j.ResourceID, fixture().Resources[j.ResourceID].Kind,
+						"described eventually")
+					_ = helper.SettleDescriptionJobTargets(mgr.DbPath(), j.JobID, []string{j.ResourceID})
+				}
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}()
+
+	f := NewWithGenerator(mgr, lazyBackgroundConfig(-1), "", &fakeGenerator{})
+	topo, _ := mgr.ReadAll()
+
+	start := time.Now()
+	changed := f.FillForRead(topo, []string{"seed"})
+	elapsed := time.Since(start)
+
+	if !changed {
+		t.Fatal("a negative timeout must wait for the work, not render without it")
+	}
+	if elapsed < time.Second {
+		t.Fatalf("the read returned in %s: it did not actually wait for the worker", elapsed)
+	}
+	if elapsed > 30*time.Second {
+		t.Fatalf("waiting it out took %s: the loop is not ending when the work settles", elapsed)
+	}
+}
+
+// A wait-until-done still ends when the worker dies, because "done" includes "nobody is
+// generating this any more". Without that, one crashed worker would hang every read that named
+// its resources.
+func TestNegativeTimeoutStillEndsWhenTheWorkerDies(t *testing.T) {
+	mgr := project(t, fixture())
+	withSpawn(t, &recordingSpawn{})
+
+	topo, _ := mgr.ReadAll()
+	stale := time.Now().Add(-time.Hour)
+	var held []helper.DescriptionJobTarget
+	for _, id := range []string{"callee", "Thing"} {
+		held = append(held, helper.DescriptionJobTarget{
+			ID: id, Fingerprint: helper.DescriptionAttemptFingerprint(topo.Resources[id]),
+		})
+	}
+	if _, _, err := helper.ClaimDescriptionTargets(mgr.DbPath(), "dead-job", 999, held,
+		stale, stale.Add(time.Minute), 0); err != nil {
+		t.Fatal(err)
+	}
+
+	f := NewWithGenerator(mgr, lazyBackgroundConfig(-1), "", &fakeGenerator{})
+	start := time.Now()
+	f.FillForRead(topo, []string{"seed"})
+	if elapsed := time.Since(start); elapsed > 20*time.Second {
+		t.Fatalf("a wait-until-done hung for %s on a worker that was never coming back", elapsed)
+	}
+}
+
+// And it ends when the database itself stops answering, which is the one way an unbounded wait
+// could otherwise spin forever: every poll fails, every poll is read as "no news", and the set it
+// is waiting on never shrinks. A bounded wait has its deadline underneath it; this one does not,
+// so the floor has to be explicit.
+func TestNegativeTimeoutGivesUpOnAnUnreadableDatabase(t *testing.T) {
+	mgr := project(t, fixture())
+	withSpawn(t, &recordingSpawn{})
+	topo, _ := mgr.ReadAll()
+
+	// A LIVE claim, freshly heartbeated: nothing about staleness can end this wait, so if it
+	// returns it can only be because the failing polls did.
+	now := time.Now()
+	var held []helper.DescriptionJobTarget
+	for _, id := range []string{"callee", "Thing"} {
+		held = append(held, helper.DescriptionJobTarget{
+			ID: id, Fingerprint: helper.DescriptionAttemptFingerprint(topo.Resources[id]),
+		})
+	}
+	if _, _, err := helper.ClaimDescriptionTargets(mgr.DbPath(), "job-x", 999, held,
+		now, now.Add(time.Hour), 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := helper.HeartbeatDescriptionJob(mgr.DbPath(), "job-x", now); err != nil {
+		t.Fatal(err)
+	}
+
+	// Take the database's whole directory away, so sqlite cannot even recreate the file and
+	// every poll from here on is an error rather than an empty answer.
+	if err := os.RemoveAll(filepath.Dir(mgr.DbPath())); err != nil {
+		t.Fatal(err)
+	}
+
+	f := NewWithGenerator(mgr, lazyBackgroundConfig(-1), "", &fakeGenerator{})
+	done := make(chan time.Duration, 1)
+	go func() {
+		start := time.Now()
+		f.waitForDescriptions([]string{"callee", "Thing"}, -1)
+		done <- time.Since(start)
+	}()
+
+	select {
+	case elapsed := <-done:
+		// maxWatchPollFailures polls at descriptionPollInterval, well under the 20s staleness
+		// rule -- so a pass here really is the poll floor and not liveness in disguise.
+		if elapsed > helper.DescriptionJobStaleAfter {
+			t.Fatalf("the wait took %s, which is the staleness rule rather than the poll floor",
+				elapsed)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("a wait-until-done never returned: an unbounded wait must still have a floor")
 	}
 }

@@ -431,3 +431,40 @@ func TestWorkerCapTracksTheSweepParallelism(t *testing.T) {
 			DefaultLazyMaxWorkers, DefaultDescriptionParallel)
 	}
 }
+
+// The sign of timeout_seconds picks between three behaviours, and only the positive one is
+// capped: clamping a negative would answer a question nobody asked, since "wait until it is
+// done" is already bounded by the worker's own ceiling.
+func TestTimeoutSignSurvivesResolution(t *testing.T) {
+	for _, tc := range []struct {
+		raw  string
+		want int
+	}{
+		{`{"descriptions":{"lazy":{"timeout_seconds":30}}}`, 30},
+		{`{"descriptions":{"lazy":{"timeout_seconds":0}}}`, 0},
+		{`{"descriptions":{"lazy":{"timeout_seconds":-1}}}`, -1},
+		{`{"descriptions":{"lazy":{"timeout_seconds":-900}}}`, -900},
+		{`{"descriptions":{"lazy":{"timeout_seconds":36000}}}`, MaxLazyTimeoutSeconds},
+	} {
+		var cfg Config
+		if err := json.Unmarshal([]byte(tc.raw), &cfg); err != nil {
+			t.Fatalf("%s: %v", tc.raw, err)
+		}
+		if got := cfg.EffectiveLazyDescriptions("claude_code").TimeoutSeconds; got != tc.want {
+			t.Errorf("%s: timeout resolved to %d, want %d", tc.raw, got, tc.want)
+		}
+	}
+}
+
+// A negative wait must not drag the worker's own ceiling with it.
+func TestNegativeWaitLeavesTheWorkerCeilingAlone(t *testing.T) {
+	var cfg Config
+	raw := `{"descriptions":{"lazy":{"timeout_seconds":-1}}}`
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.EffectiveLazyDescriptions("claude_code"); got.WorkerTimeoutSeconds != DefaultLazyWorkerTimeoutSeconds {
+		t.Errorf("worker ceiling = %d, want the default %d",
+			got.WorkerTimeoutSeconds, DefaultLazyWorkerTimeoutSeconds)
+	}
+}

@@ -159,7 +159,7 @@ written back in whichever you used:
 | `enabled` | `true` | The switch. |
 | `background` | `true` | Generate in a detached worker process that outlives the read. `false` generates inside the read instead — see below. |
 | `max_nodes` | `40` | Nodes one fill may claim and wait on. `≤ 0` means no cap. |
-| `timeout_seconds` | `45` | How long the read **waits** before rendering without. `≤ 0` means do not wait at all; anything above `120` is capped. |
+| `timeout_seconds` | `45` | How long the read **waits** before rendering without. `0` does not wait at all, a **negative** value waits until the work is finished, and a positive one is capped at `120`. |
 | `worker_timeout_seconds` | `600` | Ceiling on one worker process. Non-positive keeps the default — this one cannot be disabled. |
 | `max_workers` | `4` | Concurrent worker processes for this project. Tracks the sweep's `--parallel`. |
 | `max_retries` | `3` | Attempts a worker makes per resource before recording it as failed. |
@@ -171,8 +171,24 @@ written back in whichever you used:
 resources it still has no description for and returns; the worker keeps generating and its
 results land in the database for the next read that names them. Nothing is discarded and
 nothing is paid for twice, so a short value costs you only the chance of seeing a description
-in *this* answer. `≤ 0` therefore means "never wait", not "wait forever" — an unbounded wait on
-background work would be a `cat` that hangs until generation finishes.
+in *this* answer.
+
+The **sign** picks between three behaviours:
+
+| value | behaviour |
+|---|---|
+| `> 0` | Wait that long, then render whatever landed. Capped at 120s. |
+| `0` | Don't wait at all. Claim, start the work, render now, collect it on a later read. |
+| `< 0` | Wait until the work is finished. |
+
+Zero gets the harmless reading because zero is what a typo and a half-written config produce;
+waiting it out has to be asked for in a way nobody types by accident. And `-1` is not
+*forever* — the wait ends when every resource has landed, settled, or lost its worker, and a
+worker cannot outlive `worker_timeout_seconds` plus its watchdog, with the lease on its claim
+expiring after that whatever the process does. So the real ceiling on `-1` is
+`worker_timeout_seconds`, which the same config sets. Use it when a complete answer matters
+more than a fast one — a scripted run, a one-off audit — and leave it alone for interactive
+work, where it is a `cat` that can sit for minutes on a cold repository.
 
 **A resource already being generated is never generated twice.** A read that names it finds
 the live claim and watches it instead of starting a second worker — while still starting one
