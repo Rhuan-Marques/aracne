@@ -220,8 +220,11 @@ func writeGroup(b *strings.Builder, st *renderstate.State, g fileGroup) {
 			b.WriteString("\n")
 		}
 		wrote = true
+		// The RAW body goes to the ledger, the annotated one to the page. MarkRendered keys
+		// on the exact cut, so recording a decorated copy would stop a later context entry
+		// recognizing the declaration it already showed.
 		st.MarkRendered(u.Body)
-		b.WriteString(strings.TrimRight(u.Body, "\n"))
+		b.WriteString(strings.TrimRight(Annotate(u.Body, u.Annotations), "\n"))
 		b.WriteString("\n")
 	}
 	b.WriteString("```\n\n")

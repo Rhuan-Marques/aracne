@@ -84,7 +84,7 @@ func TestWRN02_CliEditDoesNotLeaveItsWarningsForTheGuardToRepeat(t *testing.T) {
 
 	// Reported ONCE is not the same as reported never: the edit itself must still say what it
 	// broke.
-	if !strings.Contains(printed, "signature_changed") || !strings.Contains(printed, "example.com/m.main") {
+	if !strings.Contains(printed, "signature_changed") || !strings.Contains(printed, "main.go") {
 		t.Fatalf("`arac edit` did not report the caller it broke:\n%s", printed)
 	}
 
@@ -94,7 +94,7 @@ func TestWRN02_CliEditDoesNotLeaveItsWarningsForTheGuardToRepeat(t *testing.T) {
 	}
 	// ...and `arac edit` has already shown it, so the guard's drift check must have nothing
 	// new to say about this edit -- on its own call or on any later command.
-	if msg := driftCheck(dbPath, "Bash"); msg != "" {
+	if msg := driftCheck(dbPath, "Bash", 0); msg != "" {
 		t.Fatalf("the guard repeated a warning `arac edit` had already printed:\n%s", msg)
 	}
 }
@@ -112,7 +112,7 @@ func TestWRN02_CliWriteDoesNotLeaveItsWarningsForTheGuardToRepeat(t *testing.T) 
 	if _, list, ok := currentWarningIDs(dbPath); !ok || len(list) == 0 {
 		t.Fatal("the breaking write raised no warning at all")
 	}
-	if msg := driftCheck(dbPath, "Bash"); msg != "" {
+	if msg := driftCheck(dbPath, "Bash", 0); msg != "" {
 		t.Fatalf("the guard repeated a warning `arac write` had already printed:\n%s", msg)
 	}
 }
@@ -124,7 +124,7 @@ func TestWRN02_ALaterWarningIsStillReported(t *testing.T) {
 	dbPath := filepath.Join(dir, ".aracne", "topology.db")
 
 	runCLIWithStdin(t, dir, `{"file_path":"lib/lib.go","old_string":"a, b int","new_string":"a, b, c int"}`, RunEdit)
-	if msg := driftCheck(dbPath, "Bash"); msg != "" {
+	if msg := driftCheck(dbPath, "Bash", 0); msg != "" {
 		t.Fatalf("precondition: the edit's own warning was repeated:\n%s", msg)
 	}
 
@@ -137,14 +137,14 @@ func TestWRN02_ALaterWarningIsStillReported(t *testing.T) {
 		[]byte("package main\n\nimport \"example.com/m/lib\"\n\nfunc main() { println(lib.Add(1, 2, 3) + lib.Mul(2, 3)) }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	driftCheck(dbPath, "Bash")
+	driftCheck(dbPath, "Bash", 0)
 
 	// Now break Mul outside any aracne command, the way a native edit or a git checkout does.
 	if err := os.WriteFile(filepath.Join(dir, "lib", "other.go"),
 		[]byte("package lib\n\nfunc Mul(a, b, c int) int { return a * b * c }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	msg := driftCheck(dbPath, "Bash")
+	msg := driftCheck(dbPath, "Bash", 0)
 	if !strings.Contains(msg, "Mul") {
 		t.Fatalf("a break made after the edit was not reported:\n%s", msg)
 	}

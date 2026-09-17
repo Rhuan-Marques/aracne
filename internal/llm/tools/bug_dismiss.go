@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/Rhuan-Marques/aracne/internal/llm/toolapi"
 	"github.com/Rhuan-Marques/aracne/internal/topology"
 )
 
@@ -28,8 +29,8 @@ func (b *BugDismiss) Description() string {
 }
 
 // Returns the required bug_id parameter definition for the bug_dismiss tool.
-func (b *BugDismiss) Parameters() []Parameter {
-	return []Parameter{
+func (b *BugDismiss) Parameters() []toolapi.Parameter {
+	return []toolapi.Parameter{
 		{Name: "bug_id", Type: "string", Description: "The bug ID to dismiss", Required: true},
 	}
 }

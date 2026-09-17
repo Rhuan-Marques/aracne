@@ -1,6 +1,10 @@
 package helper
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"hash"
+	"sort"
 	"strings"
 
 	"github.com/Rhuan-Marques/aracne/internal/topology/contract"
@@ -31,25 +35,32 @@ import (
 // caller last parsed by an older build), a callee or caller missing from the graph, and an
 // Unknown verdict (JavaScript, or an argument whose type could not be read). Those are
 // exactly the cases the Baseline rule still covers.
-func ReconcileSignatureWarnings(topo *domain.Topology) int {
+func ReconcileSignatureWarnings(topo *domain.Topology) (int, []domain.TopologyWarning) {
 	if topo == nil || len(topo.Warnings) == 0 {
-		return 0
+		return 0, nil
 	}
 	env := contract.Env{Lookup: func(id string) (domain.Resource, bool) {
 		res, ok := topo.Resources[id]
 		return res, ok
 	}}
 	withdrawn := 0
+	var transients []domain.TopologyWarning
 	for id, w := range topo.Warnings {
-		// callerEdited is false: on this path an edited caller has already been answered by
-		// ClearReferrerWarningsForFile, before this update raised anything.
-		if !signatureWarningSatisfied(topo, env, w, false) {
+		// callerEdited is false: an edited caller has already been answered, and reported, by
+		// ClearReferrerWarningsForFile. What reaches this loop is either a caller nobody edited
+		// or one beside a callee that moved in this update, which that clear leaves here.
+		ok, why := signatureWarningSatisfied(topo, env, w, false)
+		if !ok {
 			continue
+		}
+		if why != "" {
+			transients = append(transients, TransientFrom(w, topo.Resources))
 		}
 		delete(topo.Warnings, id)
 		withdrawn++
 	}
-	return withdrawn
+	domain.SortWarnings(transients)
+	return withdrawn, transients
 }
 
 // signatureWarningSatisfied reports whether every recorded call from this warning's caller
@@ -60,13 +71,13 @@ func ReconcileSignatureWarnings(topo *domain.Topology) int {
 // judge: it is the same permissive rule ClearReferrerWarningsForFile applies to an edited
 // caller on the full path, and without it a caller fixed through the partial path kept its
 // warning until the callee was reverted.
-func signatureWarningSatisfied(topo *domain.Topology, env contract.Env, w domain.TopologyWarning, callerEdited bool) bool {
+func signatureWarningSatisfied(topo *domain.Topology, env contract.Env, w domain.TopologyWarning, callerEdited bool) (satisfied bool, unverifiedWhy string) {
 	if w.Kind != domain.WarnSignatureChanged || w.TargetID == "" {
-		return false
+		return false, ""
 	}
 	callee, ok := topo.Resources[w.SourceID]
 	if !ok {
-		return false // CleanupOrphanedWarnings owns the vanished-callee case
+		return false, "" // CleanupOrphanedWarnings owns the vanished-callee case
 	}
 	// A call site records what the caller PASSES and nothing about what it does with the
 	// result, so arguments that still fit are no evidence about a changed return type:
@@ -74,26 +85,133 @@ func signatureWarningSatisfied(topo *domain.Topology, env contract.Env, w domain
 	// The baseline is the only thing that sees that change, so while it stands the warning
 	// does too. Putting the return type back discharges it through the baseline rule.
 	if !callerEdited && outputChangedSinceBaseline(w, callee) {
-		return false
+		return false, ""
 	}
 	caller, ok := topo.Resources[w.TargetID]
 	if !ok {
-		return false
+		return false, ""
 	}
 	matcher := contract.For(callee.Language)
 	if matcher == nil {
-		return false // a language with no rules must not start withdrawing warnings
+		return false, "" // a language with no rules must not start withdrawing warnings
 	}
 	sites := contract.CallSitesOf(caller, w.SourceID)
 	if len(sites) == 0 {
-		return false
+		return false, ""
 	}
+	// The baseline names the shape the caller was written against, so the matcher can skip
+	// the positions that did not move. Judging those would manufacture doubt about arguments
+	// this edit never touched.
+	env.OldParams = BaselineInput(w.Baseline)
+	why := ""
 	for _, site := range sites {
-		if v, _ := matcher.Match(env, callee, site); v != contract.Match {
-			return false
+		switch v, w := matcher.Match(env, callee, site); v {
+		case contract.Match:
+			// keep looking; every site has to fit
+		case contract.Unverified:
+			// A changed position whose argument the scanner never typed. Not a break and
+			// not a clean bill of health -- the stored warning goes and a transient takes
+			// its place, so the agent hears about it exactly once, at the edit.
+			if why == "" {
+				why = w
+			}
+		default:
+			return false, ""
 		}
 	}
-	return true
+	return true, why
+}
+
+// calleeName is the short name a reader recognises, falling back to the id when the callee
+// is not in the set this path loaded.
+func calleeName(resources map[string]domain.Resource, id string) string {
+	if res, ok := resources[id]; ok && res.Name != "" {
+		return res.Name
+	}
+	return id
+}
+
+// TransientFrom turns a withdrawn warning into the unverified report that replaces it.
+//
+// Same endpoints and same id as the warning it stands in for, so a surface that dedupes by id
+// still does -- but Transient, so nothing writes it down, and carrying the other sentence.
+//
+// The matcher's own explanation ("s is now []byte and this call's argument could not be read")
+// is deliberately NOT appended. It restates what the reader is already looking at -- the line
+// is annotated in place and the new signature is in the same report -- and this report is
+// emitted on the agent's critical path after every edit, where a second clause costs more
+// than it tells.
+//
+// resources is whatever set the calling path loaded; it names the callee for the message and
+// fingerprints both endpoints into State (see TransientState).
+func TransientFrom(w domain.TopologyWarning, resources map[string]domain.Resource) domain.TopologyWarning {
+	w.Message = domain.SignatureUnverifiedMessage(calleeName(resources, w.SourceID), w.TargetID)
+	w.Transient = true
+	w.State = TransientState(w, resources)
+	return w
+}
+
+// TransientState fingerprints the situation a transient describes, in two halves joined by
+// "." -- the callee's signature now, and what the caller does now: its recorded calls to that
+// callee and its normalised body.
+//
+// WHY A TRANSIENT NEEDS ONE. A transient is reported once, and "once" has to survive the same
+// finding being raised again. It is raised whenever a scan re-judges the pair, and a scan re-
+// judges the pair whenever the files move -- including when they move and come straight back:
+// `git stash && go test ...; git stash pop` reverted every edited file and restored it, the
+// next scan saw every signature change again, and the agent was re-sent the whole batch of
+// reports it had already read. The id alone cannot tell that apart from a genuinely new
+// question, because the id is only the two endpoints. The state can.
+//
+// The halves are separate so the ledger can follow the agent's own edits to a caller; see
+// RefreshTransientCallers. The body hash is the normalised one, so a comment or a blank line in
+// the caller is not a new question.
+func TransientState(w domain.TopologyWarning, resources map[string]domain.Resource) string {
+	return transientCalleeState(w, resources) + "." + transientCallerState(w, resources)
+}
+
+// transientCalleeState is the callee half of TransientState: the callee's signature now.
+//
+// NOT the baseline. The baseline is the signature the warning was raised against, and that
+// depends on the path the code took to get here, not on where it is: `int` reached from
+// `[]byte` and `int` reached from a revert to `string` are one callee and one question, and
+// keying on the baseline reported the second as new.
+func transientCalleeState(w domain.TopologyWarning, resources map[string]domain.Resource) string {
+	h := sha256.New()
+	if callee, ok := resources[w.SourceID]; ok {
+		writeStatePart(h, SignatureBaseline(callee))
+	} else {
+		writeStatePart(h, "\x00missing")
+	}
+	return hex.EncodeToString(h.Sum(nil)[:12])
+}
+
+// transientCallerState is the caller half: its normalised body and its recorded calls to the
+// callee.
+func transientCallerState(w domain.TopologyWarning, resources map[string]domain.Resource) string {
+	h := sha256.New()
+	caller, ok := resources[w.TargetID]
+	if !ok {
+		writeStatePart(h, "\x00missing")
+		return hex.EncodeToString(h.Sum(nil)[:12])
+	}
+	writeStatePart(h, caller.NormHash)
+	var calls []string
+	for _, rec := range caller.Connections[contract.CallSitesConn] {
+		if site, ok := contract.DecodeCallSite(rec); ok && site.CalleeID == w.SourceID {
+			calls = append(calls, rec)
+		}
+	}
+	sort.Strings(calls)
+	for _, rec := range calls {
+		writeStatePart(h, rec)
+	}
+	return hex.EncodeToString(h.Sum(nil)[:12])
+}
+
+func writeStatePart(h hash.Hash, s string) {
+	h.Write([]byte(s))
+	h.Write([]byte{0})
 }
 
 // ReconcileSignatureWarningsScoped is the partial fast path's counterpart to
@@ -105,9 +223,9 @@ func signatureWarningSatisfied(topo *domain.Topology, env contract.Env, w domain
 // it looks: the fast path is the ordinary single-file edit, so it is where an agent's fix
 // actually lands, and a rule that only runs on the slow path is a rule the agent almost
 // never sees.
-func ReconcileSignatureWarningsScoped(dbPath string, warnings map[string]domain.TopologyWarning, working []domain.Resource) int {
+func ReconcileSignatureWarningsScoped(dbPath string, warnings map[string]domain.TopologyWarning, working []domain.Resource) (int, []domain.TopologyWarning) {
 	if len(warnings) == 0 {
-		return 0
+		return 0, nil
 	}
 	resources := make(map[string]domain.Resource, len(working))
 	for _, r := range working {
@@ -127,7 +245,7 @@ func ReconcileSignatureWarningsScoped(dbPath string, warnings map[string]domain.
 	if len(missing) > 0 {
 		fetched, err := ReadResourcesByIDs(dbPath, missing)
 		if err != nil {
-			return 0 // cannot answer; leave every warning standing
+			return 0, nil // cannot answer; leave every warning standing
 		}
 		for id, r := range fetched {
 			if _, have := resources[id]; !have {
@@ -188,6 +306,7 @@ func ReconcileSignatureWarningsScoped(dbPath string, warnings map[string]domain.
 		return res, ok
 	}}
 	withdrawn := 0
+	var transients []domain.TopologyWarning
 	for id, w := range warnings {
 		if previousKnown && w.Kind == domain.WarnSignatureChanged && w.TargetID != "" {
 			prev, existed := priorCaller(w.TargetID)
@@ -198,13 +317,18 @@ func ReconcileSignatureWarningsScoped(dbPath string, warnings map[string]domain.
 			}
 		}
 		callerEdited := reparsed[w.TargetID] && !calleeMoved(w.SourceID)
-		if !signatureWarningSatisfied(topo, env, w, callerEdited) {
+		ok, why := signatureWarningSatisfied(topo, env, w, callerEdited)
+		if !ok {
 			continue
+		}
+		if why != "" {
+			transients = append(transients, TransientFrom(w, resources))
 		}
 		delete(warnings, id)
 		withdrawn++
 	}
-	return withdrawn
+	domain.SortWarnings(transients)
+	return withdrawn, transients
 }
 
 // RetireStaleSignatureCallers is the full-graph form of the caller rules in
@@ -307,7 +431,11 @@ func CallerStillFits(topo *domain.Topology, callerID, calleeID string) (fits boo
 		switch v, _ := matcher.Match(env, callee, site); v {
 		case contract.Mismatch:
 			return false, true
-		case contract.Unknown:
+		// Unverified joins Unknown deliberately: this reports to the CALLER-SIDE clear,
+		// whose rule is "hold the warning only on a demonstrable mismatch". An unreadable
+		// argument is not one. The clear raises the transient for it itself, through
+		// signatureWarningSatisfied, so the report carries the baseline this answer lacks.
+		case contract.Unknown, contract.Unverified:
 			return false, false
 		}
 	}

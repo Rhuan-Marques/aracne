@@ -26,8 +26,11 @@ func (m rustMatcher) Match(env Env, callee domain.Resource, site CallSite) (Verd
 			return Mismatch, arityMessage(callee.Name, a, site.N)
 		}
 	}
-	if v, why := matchTypes(env, params, site, rustTypeOpaque, rustAccepts); v == Mismatch {
+	switch v, why := matchTypes(env, params, site, rustTypeOpaque, rustAccepts); v {
+	case Mismatch:
 		return Mismatch, why
+	case Unverified:
+		return Unverified, why
 	}
 	return Match, ""
 }

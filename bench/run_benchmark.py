@@ -6,7 +6,7 @@ reused across every run. Both description generation AND the A/B run can use Cla
 (haiku) or OpenCode (off the Max plan), with any model:
 
   sample    oversample a candidate manifest -> bench/samples/<id>.candidates.jsonl
-  prepare   clone + `arac init --claude --opencode` + scan each candidate (token-free),
+  prepare   clone + `arac setup --claude --opencode` + scan each candidate (token-free),
             DROP repos with too many describable nodes, write the final manifest.
   generate  fill descriptions into every fixture via the chosen backend (default
             claude_code/haiku; or opencode/<provider/model>). Resumable; scoped by kind.
@@ -138,6 +138,15 @@ DEFAULTS = {
     # patch that does nothing keeps the suite green and scores 1.0. Use it as a regression
     # signal ("the arm broke nothing"), never as a solve rate.
     "atlas_tests_only": False,
+    # SWE-Atlas grading. "rubric": localization + the task's own rubric judge, no hidden tests
+    # (the navigation variant -- see bench/atlas_prompt.py). "verifier": the published verifier
+    # in the task container (tests AND rubric). cheap_grade: localization only, no model calls.
+    "atlas_grading": "rubric",
+    "atlas_naming_lenient": True,
+    # SWE-Atlas: the agent updates the tests its change affects, and the gold includes the task's
+    # test patch. Applies only to the hand-checked tasks in bench/bench/atlas_tests.py.
+    "atlas_tests_in_scope": False,
+    "cheap_grade": False,
     "resume": False,
     "continue_run": None,        # continue a prior run by id/name (re-run its errored + unfinished steps)
     "run_name": None,            # unique id for this run; None -> random; also names results/<id>
@@ -364,6 +373,9 @@ def parse_args(argv=None) -> argparse.Namespace:
     sp.add_argument("--atlas-tests-only", action="store_true", dest="atlas_tests_only",
                     help="SWE-Atlas: re-score on the deterministic tests_reward alone, "
                          "without starting the rubric judge (see `run --atlas-tests-only`)")
+    sp.add_argument("--cheap-grade", action="store_true", dest="cheap_grade",
+                    help="SWE-Atlas: grade with the deterministic localization scoring only -- no "
+                         "rubric judge, no container, no tokens spent. The solve rate stays unknown")
     sp.add_argument("--analysis", action="store_true", dest="want_analysis",
                     help="regenerate the LLM prose analysis after re-scoring")
     sp.add_argument("--config", default=None)
@@ -422,6 +434,9 @@ def parse_args(argv=None) -> argparse.Namespace:
                     help="SWE-Atlas: score on the verifier's deterministic tests_reward and "
                          "never start the rubric judge. Weaker bar -- a no-op patch keeps the "
                          "suite green -- so read it as a regression signal, not a solve rate")
+    sp.add_argument("--cheap-grade", action="store_true", dest="cheap_grade",
+                    help="SWE-Atlas: grade with the deterministic localization scoring only -- no "
+                         "rubric judge, no container, no tokens spent. The solve rate stays unknown")
     sp.add_argument("--no-analysis", action="store_true", dest="no_analysis",
                     help="skip the end-of-run LLM results analysis")
     sp.add_argument("--dry-run", action="store_true", dest="dry_run",
@@ -608,7 +623,7 @@ def _load_snapshot_cfg(out_dir: Path, live: dict) -> tuple[dict, dict]:
     cfg["config_path"] = str(used_yaml) if used_yaml.exists() else None
     # Operational toggles belong to the INVOCATION, not the experiment: a snapshot taken
     # before the harness wedged must not force grading on every later --continue.
-    for k in ("dry_run", "no_analysis", "retry_timeouts", "no_grade", "keep_workdir"):
+    for k in ("dry_run", "no_analysis", "retry_timeouts", "no_grade", "keep_workdir", "cheap_grade"):
         if live.get(k):
             cfg[k] = live[k]
     # Grading caps and the concurrency level are operational, not part of the experiment:
@@ -640,6 +655,28 @@ def _keep_on_continue(row: dict, retry_timeouts: bool) -> bool:
     if not row.get("num_turns") and not (row.get("input_tokens") or row.get("cache_tokens")):
         return False
     return True
+
+
+def _collect_for_localization(all_rows: list[dict], tasks: list) -> list[tuple]:
+    """(row, task, arm, patch) for every SWE-Atlas row whose agent produced a result -- graded or
+    not, patch or not. An empty patch is a real localization result (it found nothing); only an
+    agent that never finished (error, or cut off by its own budget) has nothing to score."""
+    by_key = {t.key: t for t in tasks}
+    out: list[tuple] = []
+    for r in all_rows:
+        task = by_key.get(r.get("instance_id"))
+        if not task or not str(task.source).startswith("swe_atlas") or r.get("error"):
+            continue
+        if r.get("timeout_stage") in outcome.AGENT_STAGES:
+            continue
+        patch = ""
+        if r.get("patch_path"):
+            try:
+                patch = Path(r["patch_path"]).read_text(encoding="utf-8")
+            except OSError:
+                patch = ""
+        out.append((r, task, r["arm"], patch))
+    return out
 
 
 def _collect_to_regrade(all_rows: list[dict], tasks: list) -> list[tuple]:
@@ -1347,6 +1384,37 @@ def _check_fixture_configs(tasks, fixtures_root: Path, cfg: dict) -> None:
     raise SystemExit(msg)
 
 
+def atlas_variant_label(tasks: list) -> str | None:
+    """The disclosed name of a run's SWE-Atlas variant, or None when it has no SWE-Atlas task."""
+    if not any(str(getattr(t, "source", "")).startswith("swe_atlas") for t in tasks):
+        return None
+    return ("SWE-Atlas Refactoring, navigation variant: interface specification removed; the 'tests "
+            "already updated' claim removed (untrue in this workspace); every file and directory name "
+            "rewritten out of the prompt, symbols kept (bench/configs/atlas/rf_prompts_no_paths.jsonl); "
+            "see bench/bench/atlas_prompt.py")
+
+
+def tests_scope_label(cfg: dict, tasks: list) -> str:
+    from bench import atlas_tests
+    keys = sorted(t.key for t in tasks if atlas_tests.in_scope(t.key, cfg))
+    return (f"; tests IN SCOPE for {len(keys)} task(s) ({', '.join(keys)}): the agent updates affected tests, "
+            "gold = gold.patch + test_patch.diff, judge told tests were in scope (bench/bench/atlas_tests.py)"
+            ) if keys else ""
+
+
+def grading_label(cfg: dict, tasks: list) -> str | None:
+    if cfg.get("no_grade"):
+        return "not graded"
+    if not any(str(getattr(t, "source", "")).startswith("swe_atlas") for t in tasks):
+        return None
+    if cfg.get("cheap_grade"):
+        return "localization only (deterministic, no model calls)"
+    if cfg.get("atlas_grading") == "verifier":
+        return "published verifier (hidden tests + rubric judge) + localization"
+    return ("localization + task rubric judge on host, no hidden tests"
+            + (", naming-lenient judge prompt" if cfg.get("atlas_naming_lenient", True) else ""))
+
+
 def cmd_run(cfg: dict) -> int:
     # --continue replays a prior run's saved config snapshot, then re-runs only its errored /
     # not-yet-run steps. It must rebuild cfg before the matrix is built, so handle it first.
@@ -1446,6 +1514,10 @@ def cmd_run(cfg: dict) -> int:
         meta = {
             "run_name": run_id,
             "sample_id": cfg["sample_id"],
+            # Named on every artifact, so no number from this run can be quoted as the published
+            # benchmark's. See bench/atlas_prompt.py and bench/localization.py for the why.
+            "benchmark_variant": (atlas_variant_label(tasks) or "") + tests_scope_label(cfg, tasks) or None,
+            "grading": grading_label(cfg, tasks),
             "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
             "status": "running",
             "run_harness": cfg["run_harness"],
@@ -1530,6 +1602,14 @@ def cmd_run(cfg: dict) -> int:
         grade.grade_all(to_grade, cfg, out_dir)
     elif cfg["no_grade"]:
         print("\nSkipping grading (--no-grade); success left unknown.")
+    if not cfg["no_grade"]:
+        # A run that produced NO patch never reaches grading, but it has a localization result:
+        # it found none of the code. Leaving it unscored would drop exactly the worst runs from
+        # the recall means.
+        unscored = [x for x in _collect_for_localization(all_rows, tasks)
+                    if x[0].get("loc_file_recall") is None and not x[0].get("has_patch")]
+        if unscored:
+            grade.grade_all(unscored, {**cfg, "cheap_grade": True}, out_dir)
 
     # Persist success + outcome together. Rows carried over from a runs.jsonl written before
     # `outcome` existed get stamped here too, so every row on disk carries its verdict.
@@ -1586,13 +1666,38 @@ def cmd_regrade(cfg: dict) -> int:
         meta = json.loads((out_dir / "run_meta.json").read_text(encoding="utf-8"))
         snap = meta.get("config") or {}
         for key in ("samples", "languages", "seeds", "sample_seed", "arms", "run_harness",
-                    "model", "effort", "max_turns", "sample_id", "sources"):
+                    "model", "effort", "max_turns", "sample_id", "sources",
+                    # What the agents were asked decides what the gold is; a regrade must not
+                    # take it from today's flags.
+                    "atlas_tests_in_scope"):
             if key in snap:
                 cfg[key] = snap[key]
 
     all_rows = [outcome.stamp(json.loads(line))
                 for line in runs_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     tasks = sources.read_manifest(manifest)
+    if (out_dir / "run_meta.json").exists():
+        # The VARIANT is what the agents were given, which only the run itself knows: a
+        # re-grade applies today's loader to the manifest, and a run from before the interface
+        # was stripped must not be relabelled as if its agents never saw it.
+        if "benchmark_variant" not in meta and atlas_variant_label(tasks):
+            meta["benchmark_variant"] = ("SWE-Atlas Refactoring AS PUBLISHED: this run predates the "
+                                         "navigation variant, so its agents received the interface "
+                                         "specification")
+        meta["grading"] = grading_label(cfg, tasks)
+        (out_dir / "run_meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    if cfg.get("cheap_grade"):
+        # Localization never touches a verdict, so it runs over every row with an agent result,
+        # graded or not -- that is how a run graded before localization existed gets it.
+        pending = _collect_for_localization(all_rows, tasks)
+        if pending:
+            print(f"Localization-only grading of {len(pending)} run(s) (--cheap-grade; no tokens) ...")
+            grade.grade_all(pending, cfg, out_dir)
+        for r in all_rows:
+            outcome.stamp(r)
+        _rewrite(runs_path, all_rows)
+        cfg["rescore_run"] = str(out_dir)
+        return cmd_rescore(cfg)
     pending = _collect_to_regrade(all_rows, tasks)
     if not pending:
         print("Nothing to re-grade: every patched run already has a verdict.")

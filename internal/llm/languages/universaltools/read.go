@@ -18,7 +18,7 @@ import (
 	"github.com/Rhuan-Marques/aracne/internal/llm/languages/readunit"
 	"github.com/Rhuan-Marques/aracne/internal/llm/languages/renderstate"
 	"github.com/Rhuan-Marques/aracne/internal/llm/languages/rusttools"
-	"github.com/Rhuan-Marques/aracne/internal/llm/tools"
+	"github.com/Rhuan-Marques/aracne/internal/llm/toolapi"
 	"github.com/Rhuan-Marques/aracne/internal/toolspec"
 	"github.com/Rhuan-Marques/aracne/internal/topology"
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
@@ -139,12 +139,12 @@ func (r *Read) Description() string {
 
 // Parameters is a single list. There is deliberately no start_line/end_line: walking a file in
 // ranges was the most expensive habit benchmarking found, costing a turn per window.
-func (r *Read) Parameters() []tools.Parameter {
+func (r *Read) Parameters() []toolapi.Parameter {
 	desc := "Resource IDs to read (functions, methods, structs/classes, interfaces). Duplicates are ignored."
 	if r.readsFiles() {
 		desc = "Resource IDs or file paths to read. Prefer resource IDs over file paths. Duplicates are ignored."
 	}
-	params := []tools.Parameter{
+	params := []toolapi.Parameter{
 		{Name: "ids", Type: "array", Items: "string", Description: desc, Required: true},
 	}
 	// Only worth advertising when something is abridged; otherwise it is a no-op knob and every
@@ -167,7 +167,7 @@ func (r *Read) Parameters() []tools.Parameter {
 			d = "Return a symbol over the line cap in full instead of abridged. " +
 				"Use when you need exact text to edit."
 		}
-		params = append(params, tools.Parameter{Name: "full", Type: "boolean", Required: false, Description: d})
+		params = append(params, toolapi.Parameter{Name: "full", Type: "boolean", Required: false, Description: d})
 	}
 	return params
 }
@@ -210,6 +210,23 @@ type ReadIDsOptions struct {
 	ForcedKind domain.ResourceKind
 	// ForceFullFile returns whole file bodies verbatim even under read.file_mode "skeleton".
 	ForceFullFile bool
+	// Annotations marks individual lines of the result with an inline note, keyed by the
+	// resource id whose body holds the line.
+	//
+	// The read tool has no opinion about the wording; it places what it is given. warnread
+	// uses it to put a topology warning ON the line that caused it, instead of listing the
+	// warning above the code and leaving the reader to match them up by symbol name. An
+	// annotated body is also abridged differently -- see abridgeSymbolBody.
+	Annotations map[string][]readunit.Annotation
+	// SignatureOnly renders these resources (by canonical id) as their signature and an elision
+	// marker, with no CONTEXT of their own -- see signatureOnlyBody. A resource that is also
+	// annotated is shown normally: a marked line has to be visible.
+	//
+	// warnread uses it for the CALLEE of a signature warning. What the caller has to be checked
+	// against is the callee's signature, and the callee is almost always the code the agent just
+	// wrote -- its body is already in context, and repeating it spent the report's byte budget
+	// on the one thing the reader did not need.
+	SignatureOnly map[string]bool
 }
 
 // Run is the tool entry point: parse the id list, then hand off to ReadIDs.
@@ -346,6 +363,12 @@ func (r *Read) ReadIDs(rawIDs []string, opt ReadIDsOptions) (string, error) {
 	if opt.ForceFullFile {
 		maxSymbolLines = 0
 	}
+	// How much of an annotated body survives the cap around each marked line. Irrelevant when
+	// nothing is abridged, which is why it follows ForceFullFile down to zero with it.
+	annotationWindow := cfg.EffectiveAnnotationWindow()
+	if opt.ForceFullFile {
+		annotationWindow = 0
+	}
 
 	build := func(topo *domain.Topology, topoErr error, st *renderstate.State) ([]readunit.Unit, []string) {
 		var units []readunit.Unit
@@ -366,7 +389,16 @@ func (r *Read) ReadIDs(rawIDs []string, opt ReadIDsOptions) (string, error) {
 			default:
 				resolved[u.ID] = true
 				u.Label = displayPath(topo, u.Path)
-				u.Body = abridgeSymbolBody(u, maxSymbolLines)
+				u.Annotations = opt.Annotations[u.ID]
+				if opt.SignatureOnly[u.ID] && len(u.Annotations) == 0 && u.Kind != domain.ResourceFile {
+					if body, ok := signatureOnlyBody(u); ok {
+						u.Body = body
+						// Its neighbours describe the body that is not shown.
+						u.Context = nil
+					}
+				} else {
+					u.Body = abridgeSymbolBody(u, maxSymbolLines, u.Annotations, annotationWindow)
+				}
 				if contextOff && u.Kind != domain.ResourcePackage && u.Kind != domain.ResourceDependency {
 					u.Context = nil
 				}
@@ -374,6 +406,7 @@ func (r *Read) ReadIDs(rawIDs []string, opt ReadIDsOptions) (string, error) {
 			}
 		}
 		dropRepeatedSource(topo, units)
+		rehomeAnnotations(units)
 		return units, problems
 	}
 
@@ -516,6 +549,36 @@ func dropRepeatedSource(topo *domain.Topology, units []readunit.Unit) {
 				break
 			}
 		}
+	}
+}
+
+// rehomeAnnotations moves an annotation off a unit dropRepeatedSource just emptied and onto
+// whichever surviving unit of the same file actually prints the line.
+//
+// The two collide more often than it looks, and precisely on the case this feature exists for:
+// warnread reads the fix site AND the thing it has to match, and for a Python
+// interface_conflict that pair is a class and one of its own methods. The member's body is
+// emptied because the class already carries it verbatim -- so the line the annotation names is
+// on screen, just under a different unit, and without this the note is silently dropped from a
+// report whose entire point is that note.
+func rehomeAnnotations(units []readunit.Unit) {
+	for i := range units {
+		if len(units[i].Annotations) == 0 || strings.TrimSpace(units[i].Body) != "" {
+			continue
+		}
+		for _, a := range units[i].Annotations {
+			for j := range units {
+				if i == j || units[j].Path != units[i].Path || strings.TrimSpace(units[j].Body) == "" {
+					continue
+				}
+				if readunit.AnchorIndex(strings.Split(units[j].Body, "\n"), a) < 0 {
+					continue
+				}
+				units[j].Annotations = append(units[j].Annotations, a)
+				break
+			}
+		}
+		units[i].Annotations = nil
 	}
 }
 
@@ -754,6 +817,16 @@ func (r *Read) reindex(path string) error {
 //
 // The check is topology.StaleFiles: one stat per path against the file manifest. A nil
 // registry cannot re-parse anything, so it reports false and the read proceeds as before.
+// Freshen re-indexes any of these files whose recorded spans no longer match what is on disk,
+// and reports whether anything changed.
+//
+// Exported for one caller with a real need: warnread cuts a warning's source itself, to find
+// the line the warning points at, and it does that BEFORE ReadIDs runs its own freshness pass.
+// Right after an edit -- which is exactly when a warning report is produced -- the spans it
+// would cut from are the stale ones, so the anchor would be searched for in whatever lines now
+// sit at the old offsets.
+func (r *Read) Freshen(paths []string) bool { return r.freshen(paths) }
+
 func (r *Read) freshen(paths []string) bool {
 	if r.reg == nil || len(paths) == 0 {
 		return false

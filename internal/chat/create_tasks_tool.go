@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/Rhuan-Marques/aracne/internal/llm/tools"
+	"github.com/Rhuan-Marques/aracne/internal/llm/toolapi"
 )
 
 // Tool that creates sub-tasks for the agent to execute in parallel.
@@ -19,8 +19,8 @@ func (c *CreateTasksTool) Description() string {
 }
 
 // Returns parameter schema for explorer sub-agent task creation
-func (c *CreateTasksTool) Parameters() []tools.Parameter {
-	return []tools.Parameter{
+func (c *CreateTasksTool) Parameters() []toolapi.Parameter {
+	return []toolapi.Parameter{
 		{Name: "worker_count", Type: "number", Description: "Maximum number of sub-agent workers to run concurrently", Required: false},
 		{Name: "tasks", Type: "array", Description: "Explorer tasks to run. Each item has agent_kind=explorer, prompt, and need_result", Required: true},
 	}

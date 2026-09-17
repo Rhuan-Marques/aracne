@@ -212,5 +212,16 @@ func unreportedWarningsLocked(dbPath string) []domain.TopologyWarning {
 		}
 	}
 	writeReportedWarnings(dbPath, ids)
-	return fresh
+	// AND THE QUEUED TRANSIENTS, which no table can hold.
+	//
+	// An Unverified signature verdict withdraws its stored row and emits a transient in its
+	// place, so the diff above is structurally blind to it: retype a parameter and every
+	// caller passing a local was judged, withdrawn, and never mentioned. Those reports are
+	// queued as they are raised and drained HERE, at the report -- not by whichever scan
+	// happened to raise them. See helper.QueueTransients for why that distinction is the
+	// whole mechanism.
+	//
+	// Draining is destructive, which is why it belongs on this function and not beside it:
+	// every caller of unreportedWarnings is about to show the agent what it returns.
+	return append(fresh, helper.DrainTransients(dbPath)...)
 }

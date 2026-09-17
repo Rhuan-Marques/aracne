@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/llm/toolapi"
 	"github.com/Rhuan-Marques/aracne/internal/topology"
 	"github.com/Rhuan-Marques/aracne/internal/topology/scanner"
 )
@@ -37,8 +38,8 @@ func (w *Write) Description() string {
 }
 
 // Returns required parameters: file_path (string) and content (string)
-func (w *Write) Parameters() []Parameter {
-	return []Parameter{
+func (w *Write) Parameters() []toolapi.Parameter {
+	return []toolapi.Parameter{
 		{Name: "file_path", Type: "string", Description: "The absolute path to the file to write", Required: true},
 		{Name: "content", Type: "string", Description: "The content to write to the file", Required: true},
 	}

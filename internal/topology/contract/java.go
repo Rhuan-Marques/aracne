@@ -35,8 +35,16 @@ func (m javaMatcher) Match(env Env, callee domain.Resource, site CallSite) (Verd
 		}
 		return Mismatch, arityMessage(callee.Name, a, site.N)
 	}
-	if v, why := matchTypes(env, params, site, javaTypeOpaque, javaAccepts); v == Mismatch && !site.Dyn {
+	// Dyn suppresses BOTH adverse verdicts, for the one reason: the edge is a guess about
+	// which overload is even called, so neither a mismatch against it nor an unreadable
+	// argument to it says anything about the code. Java connects every same-named overload
+	// when no arity fits, so reporting per-overload doubt here would be doubt about calls
+	// the caller never made.
+	switch v, why := matchTypes(env, params, site, javaTypeOpaque, javaAccepts); {
+	case v == Mismatch && !site.Dyn:
 		return Mismatch, why
+	case v == Unverified && !site.Dyn:
+		return Unverified, why
 	}
 	return Match, ""
 }

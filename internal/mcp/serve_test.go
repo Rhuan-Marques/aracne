@@ -7,14 +7,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Rhuan-Marques/aracne/internal/llm/tools"
+	"github.com/Rhuan-Marques/aracne/internal/llm/toolapi"
 )
 
 type namedTool struct{ name string }
 
 func (n namedTool) Name() string                        { return n.name }
 func (n namedTool) Description() string                 { return "tool " + n.name }
-func (n namedTool) Parameters() []tools.Parameter       { return nil }
+func (n namedTool) Parameters() []toolapi.Parameter     { return nil }
 func (n namedTool) Run(json.RawMessage) (string, error) { return "ran " + n.name, nil }
 
 // runLines feeds newline-separated messages through the stdio loop and returns the replies,
@@ -53,7 +53,7 @@ func errorCode(t *testing.T, raw json.RawMessage) (string, int) {
 // the loop and the server exited under the harness. The line is now answered and skipped, and
 // the next request is served.
 func TestOversizedLineDoesNotKillTheServer(t *testing.T) {
-	srv := NewServer(tools.NewRegistry())
+	srv := NewServer(toolapi.NewRegistry())
 	huge := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"x","arguments":{"s":"` +
 		strings.Repeat("x", maxMessageBytes) + `"}}}`
 	replies := runLines(t, srv, huge, `{"jsonrpc":"2.0","id":2,"method":"ping"}`)
@@ -72,7 +72,7 @@ func TestOversizedLineDoesNotKillTheServer(t *testing.T) {
 // Request object is -32600, not a parse error; an unknown tool is a bad PARAMETER to a method
 // that exists (-32602, as the MCP spec gives it), not a missing method.
 func TestErrorCodesFollowTheSpec(t *testing.T) {
-	reg := tools.NewRegistry()
+	reg := toolapi.NewRegistry()
 	reg.Register(namedTool{"known"})
 	srv := NewServer(reg)
 	cases := []struct {
@@ -105,7 +105,7 @@ func TestErrorCodesFollowTheSpec(t *testing.T) {
 // What must keep working exactly as it did for the two harnesses: notifications get no reply,
 // requests are answered with their own id, and a known tool runs.
 func TestHarnessTrafficIsUnchanged(t *testing.T) {
-	reg := tools.NewRegistry()
+	reg := toolapi.NewRegistry()
 	reg.Register(namedTool{"known"})
 	srv := NewServer(reg)
 	replies := runLines(t, srv,
@@ -132,7 +132,7 @@ func TestHarnessTrafficIsUnchanged(t *testing.T) {
 // A batch is a JSON array of requests; it used to come back as a single parse error. Each
 // request gets its reply, notifications none, all in one array.
 func TestBatchIsAnsweredAsABatch(t *testing.T) {
-	srv := NewServer(tools.NewRegistry())
+	srv := NewServer(toolapi.NewRegistry())
 	replies := runLines(t, srv,
 		`[{"jsonrpc":"2.0","id":1,"method":"ping"},{"jsonrpc":"2.0","method":"notifications/x"},{"jsonrpc":"2.0","id":2,"method":"nope"}]`)
 	if len(replies) != 1 {
@@ -157,7 +157,7 @@ func TestBatchIsAnsweredAsABatch(t *testing.T) {
 // The registry is a map, so tools/list came back in a different order from call to call -- and
 // a client sends that list at the head of every request, so the order is a cache key.
 func TestToolsListIsSortedAndStable(t *testing.T) {
-	reg := tools.NewRegistry()
+	reg := toolapi.NewRegistry()
 	for _, n := range []string{"warnings_list", "read", "bug_list", "update_description", "bug_report"} {
 		reg.Register(namedTool{n})
 	}

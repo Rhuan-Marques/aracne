@@ -49,6 +49,10 @@ def run_agent(harness: str, prompt: str, cwd, model: str, max_turns: int, timeou
     raise ValueError(f"unknown harness {harness!r}; expected one of {HARNESSES}")
 
 
-def task_prompt(problem: str) -> str:
-    """The task-solving prompt for the A/B run (shared across harnesses)."""
+def task_prompt(problem: str, source: str = "", tests_in_scope: bool = False) -> str:
+    """The task-solving prompt for the A/B run (shared across harnesses). `tests_in_scope`: the agent
+    updates the tests its change affects (bench/bench/atlas_tests.py)."""
+    if str(source).startswith("swe_atlas"):
+        template = claude_driver.ATLAS_TESTS_PROMPT_TEMPLATE if tests_in_scope else claude_driver.ATLAS_PROMPT_TEMPLATE
+        return template.format(problem=problem)
     return claude_driver.PROMPT_TEMPLATE.format(problem=problem)

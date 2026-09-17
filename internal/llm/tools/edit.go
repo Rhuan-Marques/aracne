@@ -9,12 +9,13 @@ import (
 	"strings"
 
 	"github.com/Rhuan-Marques/aracne/internal/helper"
+	"github.com/Rhuan-Marques/aracne/internal/llm/toolapi"
 	"github.com/Rhuan-Marques/aracne/internal/topology"
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 	"github.com/Rhuan-Marques/aracne/internal/topology/scanner"
 )
 
-// Tool implementation for the "edit" command. Wraps a TopologyManager and scanner Registry to perform file edits and auto-update the topology database in response.
+// toolapi.Tool implementation for the "edit" command. Wraps a TopologyManager and scanner toolapi.Registry to perform file edits and auto-update the topology database in response.
 type Edit struct {
 	mgr *topology.TopologyManager
 	reg *scanner.Registry
@@ -50,8 +51,8 @@ func (e *Edit) Description() string {
 // instead. That loses the old schema-level guarantee that an omitted new_string could not
 // silently delete code -- JSON Schema `required` cannot reach into an array of objects -- so
 // parseEdits enforces presence directly, for both call forms. See editOp.NewString.
-func (e *Edit) Parameters() []Parameter {
-	return []Parameter{
+func (e *Edit) Parameters() []toolapi.Parameter {
+	return []toolapi.Parameter{
 		{Name: "edits", Type: "array", Items: "object", Required: false,
 			Description: "A list of {file_path, old_string, new_string, replace_all} to apply in order. " +
 				"May span several files. Preferred over the single-edit form: one call, one topology " +

@@ -631,11 +631,17 @@ func RemoveFileResources(topo *domain.Topology, fileID string) []domain.Topology
 	toRemove := FileRemovalSet(topo, fileID)
 	emptied := emptiedPackages(topo, fileID)
 
-	// Whole-file removal counts every edge kind as a reference, and skips no
-	// referrer: nothing in this update was re-parsed from source. Except a package going
-	// with the file: its has_* edges only say it held what is being removed.
+	// Whole-file removal counts every edge kind that is a DEPENDENCY -- calls, uses_*, and the
+	// inherits/implements edges an allow-list of body references would miss -- and skips no
+	// referrer: nothing in this update was re-parsed from source.
+	//
+	// Containment is not a dependency. A package or file listing what it holds, a type listing its
+	// methods: none of them is broken when a member leaves, and the scanners rebuild those lists
+	// anyway. This used to be excepted only for a package the removal EMPTIED, so moving files out
+	// of a package that kept others warned once per member it had held. See ContainmentConnTypes.
 	warnings := ScanReferrers(topo, ReferrerScan{Removed: toRemove, Origin: fileID,
-		SkipSource: func(id string) bool { return emptied[id] }})
+		SkipConnTypes: ContainmentConnTypes,
+		SkipSource:    func(id string) bool { return emptied[id] }})
 
 	// Only dependencies the removed resources imported can have lost their last importer.
 	orphanDeps := map[string]bool{}

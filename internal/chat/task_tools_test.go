@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/Rhuan-Marques/aracne/internal/llm"
-	"github.com/Rhuan-Marques/aracne/internal/llm/tools"
+	"github.com/Rhuan-Marques/aracne/internal/llm/toolapi"
 )
 
 type testTool struct {
@@ -16,7 +16,7 @@ type testTool struct {
 
 func (t *testTool) Name() string                          { return t.name }
 func (t *testTool) Description() string                   { return "test tool " + t.name }
-func (t *testTool) Parameters() []tools.Parameter         { return nil }
+func (t *testTool) Parameters() []toolapi.Parameter       { return nil }
 func (t *testTool) Run(_ json.RawMessage) (string, error) { return "result:" + t.name, nil }
 
 type errTool struct {
@@ -25,7 +25,7 @@ type errTool struct {
 
 func (t *errTool) Name() string                          { return t.name }
 func (t *errTool) Description() string                   { return "error tool" }
-func (t *errTool) Parameters() []tools.Parameter         { return nil }
+func (t *errTool) Parameters() []toolapi.Parameter       { return nil }
 func (t *errTool) Run(_ json.RawMessage) (string, error) { return "", errRun }
 
 var errRun = &testToolError{"tool failed"}
@@ -208,7 +208,7 @@ func TestTaskGroupToolResultPresent(t *testing.T) {
 }
 
 func TestSortedTools(t *testing.T) {
-	toolMap := map[string]tools.Tool{
+	toolMap := map[string]toolapi.Tool{
 		"z_tool": &testTool{"z_tool"},
 		"a_tool": &testTool{"a_tool"},
 		"m_tool": &testTool{"m_tool"},
@@ -230,7 +230,7 @@ func TestSortedTools(t *testing.T) {
 }
 
 func TestRunAllowedTaskTool(t *testing.T) {
-	toolMap := map[string]tools.Tool{
+	toolMap := map[string]toolapi.Tool{
 		"good": &testTool{"good"},
 		"bad":  &errTool{"bad"},
 	}
@@ -267,7 +267,7 @@ func TestRunAllowedTaskTool(t *testing.T) {
 }
 
 func TestToolMap(t *testing.T) {
-	reg := tools.NewRegistry()
+	reg := toolapi.NewRegistry()
 	reg.Register(&testTool{"a"})
 	reg.Register(&testTool{"b"})
 

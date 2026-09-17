@@ -9,16 +9,16 @@ import (
 	"os"
 
 	"github.com/Rhuan-Marques/aracne/internal/buildinfo"
-	"github.com/Rhuan-Marques/aracne/internal/llm/tools"
+	"github.com/Rhuan-Marques/aracne/internal/llm/toolapi"
 )
 
 // MCP JSON-RPC server that listens on stdin/stdout and dispatches requests to the registered tool handlers.
 type Server struct {
-	registry *tools.Registry
+	registry *toolapi.Registry
 }
 
 // Creates a new MCP Server instance with the given tool registry, used to handle JSON-RPC requests over stdio.
-func NewServer(registry *tools.Registry) *Server {
+func NewServer(registry *toolapi.Registry) *Server {
 	return &Server{registry: registry}
 }
 

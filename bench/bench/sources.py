@@ -25,6 +25,7 @@ import random
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from .atlas_prompt import sanitize
 
 # aracne language -> source key
 LANG_SOURCE = {
@@ -295,5 +296,15 @@ def read_manifest(path: Path) -> list[Task]:
         if not line.strip():
             continue
         rec = json.loads(line)
+        # SWE-Atlas instructions end with an interface specification -- every declaration the
+        # reference solution adds or re-signs, with its file. Stripped HERE, at load, so every
+        # manifest already on disk is covered, not only ones sampled after the change. See
+        # bench/atlas_prompt.py for why the block must never reach the agent.
+        if str(rec.get("source", "")).startswith("swe_atlas"):
+            rec["problem_statement"], changes = sanitize(rec.get("problem_statement", ""), rec.get("key"))
+            raw = rec.setdefault("raw", {})
+            raw["prompt_interface_removed_chars"] = changes["interface_removed_chars"]
+            raw["prompt_test_claim_removed"] = changes["test_claim_removed"]
+            raw["prompt_paths_removed"] = changes["paths_removed"]
         tasks.append(Task(**rec))
     return tasks

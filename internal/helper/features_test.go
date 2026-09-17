@@ -3,6 +3,7 @@ package helper
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
@@ -175,5 +176,156 @@ func TestFeaturesOnlyChatAndAgentSurviveEnsureConfig(t *testing.T) {
 				t.Fatal("the on-disk file lost the feature after EnsureConfig")
 			}
 		})
+	}
+}
+
+// TestFeaturesOnlyWarningReadsSurvivesEnsureConfig runs the migration edge for the new flag:
+// turning a feature on by hand is the single edit a user makes to this file, and a config whose
+// only non-zero field is `features` must not be judged legacy and replaced with defaults.
+func TestFeaturesOnlyWarningReadsSurvivesEnsureConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"features":{"warning_reads":true}}`), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if !LoadConfig(path).WarningReadsEnabled() {
+		t.Fatal("a features-only config must load with the feature on")
+	}
+	if !EnsureConfig(path).WarningReadsEnabled() {
+		t.Fatal("EnsureConfig overwrote a hand-enabled feature with defaults")
+	}
+	if !LoadConfig(path).WarningReadsEnabled() {
+		t.Fatal("the on-disk file lost the feature after EnsureConfig")
+	}
+}
+
+// TestEffectiveWarningReadMaxBytes pins the three states. ABSENT IS NOT ZERO: an untouched config
+// means DefaultWarningReadMaxBytes, and only a value a project actually wrote -- 0 or lower --
+// means no limit at all.
+func TestEffectiveWarningReadMaxBytes(t *testing.T) {
+	if got := DefaultConfig().EffectiveWarningReadMaxBytes(); got != DefaultWarningReadMaxBytes {
+		t.Errorf("an absent warning_read_max_bytes = %d, want %d", got, DefaultWarningReadMaxBytes)
+	}
+	for _, tc := range []struct {
+		name string
+		json string
+		want int
+	}{
+		{"absent", `{"features":{"warning_reads":true}}`, DefaultWarningReadMaxBytes},
+		{"explicit", `{"features":{"warning_reads":true,"warning_read_max_bytes":3}}`, 3},
+		{"zero is unlimited", `{"features":{"warning_reads":true,"warning_read_max_bytes":0}}`, 0},
+		{"negative is unlimited", `{"features":{"warning_reads":true,"warning_read_max_bytes":-1}}`, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(path, []byte(tc.json), 0o644); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			if got := LoadConfig(path).EffectiveWarningReadMaxBytes(); got != tc.want {
+				t.Errorf("EffectiveWarningReadMaxBytes() = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestWarningReadMaxBytesRoundTrips checks the pointer survives save/load -- an explicit 0 must
+// come back as an explicit 0 and not as the default.
+func TestWarningReadMaxBytesRoundTrips(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfg := DefaultConfig()
+	on := true
+	cfg.Features.WarningReads = &on
+	zero := 0
+	cfg.Features.WarningReadMaxBytes = &zero
+	if err := SaveConfig(cfg, path); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+	loaded := LoadConfig(path)
+	if !loaded.WarningReadsEnabled() {
+		t.Fatal("features.warning_reads did not round-trip")
+	}
+	if got := loaded.EffectiveWarningReadMaxBytes(); got != 0 {
+		t.Fatalf("an explicit 0 came back as %d -- the default was substituted for it", got)
+	}
+}
+
+// TestValidateRejectsAnUnknownFeatureKey is the "silent failure" guard for the one section the
+// documentation asks users to hand-edit.
+//
+// Every feature is a bool defaulting to off, so a misspelled key is indistinguishable from a
+// key that is working and set to false: encoding/json drops it without a word and the feature
+// simply never turns on. Measured on a real session -- `"warnings_reads": true`, plural, was
+// written and the feature's absence was then reported as a bug in the feature.
+func TestValidateRejectsAnUnknownFeatureKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"features":{"warnings_reads":true}}`), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	err := LoadConfig(path).Validate()
+	if err == nil {
+		t.Fatal("a misspelled feature key validated clean")
+	}
+	// By name, and with the alternatives: the whole point is that the user can see the typo.
+	if !strings.Contains(err.Error(), `"warnings_reads"`) {
+		t.Errorf("the error does not name the offending key: %v", err)
+	}
+	if !strings.Contains(err.Error(), "warning_reads") {
+		t.Errorf("the error does not name the key that was meant: %v", err)
+	}
+}
+
+// The check must not fire on the keys the section really has, on an absent features block, or
+// on a config built in code -- Validate runs on the way into setup, init, serve and chat.
+func TestValidateAcceptsTheRealFeatureKeys(t *testing.T) {
+	for _, body := range []string{
+		`{"features":{"warning_reads":true,"warning_read_max_bytes":3,"bug_management":true,"chat":true,"agent":true}}`,
+		`{"features":{}}`,
+		`{"read":{"max_file_size":1024}}`,
+	} {
+		path := filepath.Join(t.TempDir(), "config.json")
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		if err := LoadConfig(path).Validate(); err != nil {
+			t.Errorf("%s: %v", body, err)
+		}
+	}
+	if err := DefaultConfig().Validate(); err != nil {
+		t.Errorf("a config built in code must validate: %v", err)
+	}
+}
+
+// TestWarningReadsDefaultOn: an untouched config has the reads on, and only an explicit false
+// turns them off -- through a save and load as much as in memory.
+func TestWarningReadsDefaultOn(t *testing.T) {
+	if !DefaultConfig().WarningReadsEnabled() {
+		t.Fatal("DefaultConfig() has features.warning_reads off")
+	}
+	dir := t.TempDir()
+	for name, tc := range map[string]struct {
+		body string
+		want bool
+	}{
+		"no features key":        {`{}`, true},
+		"features without reads": {`{"features":{}}`, true},
+		"explicit true":          {`{"features":{"warning_reads":true}}`, true},
+		"explicit false":         {`{"features":{"warning_reads":false}}`, false},
+	} {
+		path := filepath.Join(dir, strings.ReplaceAll(name, " ", "_")+".json")
+		if err := os.WriteFile(path, []byte(tc.body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if got := LoadConfig(path).WarningReadsEnabled(); got != tc.want {
+			t.Errorf("%s: WarningReadsEnabled() = %v, want %v", name, got, tc.want)
+		}
+	}
+	off := false
+	cfg := DefaultConfig()
+	cfg.Features.WarningReads = &off
+	path := filepath.Join(dir, "roundtrip.json")
+	if err := SaveConfig(cfg, path); err != nil {
+		t.Fatal(err)
+	}
+	if LoadConfig(path).WarningReadsEnabled() {
+		t.Error("an explicit false did not survive save and load")
 	}
 }

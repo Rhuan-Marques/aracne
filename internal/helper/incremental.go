@@ -143,6 +143,9 @@ func WriteScopedResources(dbPath string, upserts []domain.Resource, deletes []st
 		}
 		defer warnStmt.Close()
 		for id, w := range warnings {
+			if w.Transient {
+				continue // never stored; see domain.TopologyWarning.Transient
+			}
 			if _, err := warnStmt.Exec(id, w.SourceID, string(w.Kind), w.TargetID, w.Message, w.Baseline); err != nil {
 				return err
 			}
@@ -245,6 +248,9 @@ func WriteIncremental(dbPath string, topo *domain.Topology, upserts []domain.Res
 		}
 		defer warnStmt.Close()
 		for id, w := range topo.Warnings {
+			if w.Transient {
+				continue // never stored; see domain.TopologyWarning.Transient
+			}
 			if _, err := warnStmt.Exec(id, w.SourceID, string(w.Kind), w.TargetID, w.Message, w.Baseline); err != nil {
 				return err
 			}

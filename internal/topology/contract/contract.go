@@ -40,6 +40,17 @@ const (
 	Unknown Verdict = iota
 	Match
 	Mismatch
+	// Unverified means the rules were applied and a position that MATTERS -- one whose
+	// declared type moved -- could not be judged, because the call site never recorded
+	// what it passes there. Distinct from Unknown, which says the language or the call
+	// declines wholesale: JavaScript answers Unknown for every call by design, and Java
+	// answers it for a heuristically-resolved overload edge. Folding this into either of
+	// those would change both.
+	//
+	// It is reported to the agent and never stored. A stored warning claims a certainty
+	// this verdict is defined by not having, and it would have no discharge event: the
+	// argument whose type could not be read this time cannot be read next time either.
+	Unverified
 )
 
 func (v Verdict) String() string {
@@ -48,6 +59,8 @@ func (v Verdict) String() string {
 		return "match"
 	case Mismatch:
 		return "mismatch"
+	case Unverified:
+		return "unverified"
 	}
 	return "unknown"
 }
@@ -99,6 +112,16 @@ type Env struct {
 	// outside the graph, means "cannot say" -- which every matcher must treat as a reason
 	// to decline judgement rather than a reason to warn.
 	Lookup func(typeID string) (domain.Resource, bool)
+
+	// OldParams is the callee's parameter list as the CALLER was written against, or nil
+	// to judge every position.
+	//
+	// Only a position whose declared type moved can have broken a caller, and judging the
+	// others manufactures doubt about code nothing touched: a three-parameter callee whose
+	// first parameter changed would otherwise report Unverified for an unreadable argument
+	// in the third. The conformance axis passes nil -- it compares two declarations and has
+	// no "before".
+	OldParams []Param
 }
 
 func (e Env) lookup(typeID string) (domain.Resource, bool) {
@@ -178,6 +201,11 @@ func For(language string) Matcher { return registry[language] }
 func Params(res domain.Resource) []Param {
 	return decodeParams(res.Properties["input"])
 }
+
+// DecodeParams reads a parameter list out of an already-unmarshalled value, for a caller
+// holding the property without the resource around it -- a signature baseline, which stores
+// the input segment as the same JSON the property does. Same tolerance as Params.
+func DecodeParams(v any) []Param { return decodeParams(v) }
 
 // paramWire mirrors VariableDefinition plus the markers scanners add. Field names are
 // matched case-insensitively by encoding/json, so "Typing" and "typing" both land.

@@ -54,6 +54,36 @@ def strip_fences(text: str) -> str:
     return t
 
 
+class JudgeError(RuntimeError):
+    def __init__(self, status: int, message: str):
+        super().__init__(message)
+        self.status = status
+
+
+def complete(model: str, messages: list[dict], wants_json: bool) -> str:
+    """One chat completion through the Claude CLI. Shared by the HTTP shim (for the in-container
+    verifier) and by atlas_rubric (which calls the official rubric code on the host, no HTTP)."""
+    system = "\n\n".join(m.get("content") or "" for m in messages if m.get("role") == "system")
+    user = "\n\n".join(m.get("content") or "" for m in messages if m.get("role") != "system")
+    if wants_json:
+        # The OpenAI flag has no CLI equivalent, so the requirement is stated in the
+        # prompt. Without it the reply arrives wrapped in prose and the judge's parser
+        # scores the rubric zero for a reason that has nothing to do with the code.
+        system = (system + "\n\nRespond with a single valid JSON object and nothing else. "
+                           "No prose, no markdown fences.").strip()
+    cmd = [CLAUDE_BIN, "--print", "--model", to_cli_model(model)]
+    if system:
+        cmd += ["--append-system-prompt", system]
+    try:
+        proc = subprocess.run(cmd, input=user, capture_output=True, text=True, timeout=900)
+    except subprocess.TimeoutExpired:
+        raise JudgeError(504, "claude cli timed out")
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()[:300]
+        raise JudgeError(502, f"claude cli failed: {detail}")
+    return strip_fences(proc.stdout or "")
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     calls = 0
@@ -84,32 +114,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send(400, {"error": {"message": f"bad request: {e}"}})
             return
 
-        system = "\n\n".join(m.get("content") or "" for m in req.get("messages", [])
-                             if m.get("role") == "system")
-        user = "\n\n".join(m.get("content") or "" for m in req.get("messages", [])
-                           if m.get("role") != "system")
-        wants_json = (req.get("response_format") or {}).get("type") == "json_object"
-        if wants_json:
-            # The OpenAI flag has no CLI equivalent, so the requirement is stated in the
-            # prompt. Without it the reply arrives wrapped in prose and the judge's parser
-            # scores the rubric zero for a reason that has nothing to do with the code.
-            system = (system + "\n\nRespond with a single valid JSON object and nothing else. "
-                               "No prose, no markdown fences.").strip()
-
-        cmd = [CLAUDE_BIN, "--print", "--model", to_cli_model(req.get("model", ""))]
-        if system:
-            cmd += ["--append-system-prompt", system]
         try:
-            proc = subprocess.run(cmd, input=user, capture_output=True, text=True, timeout=900)
-        except subprocess.TimeoutExpired:
-            self._send(504, {"error": {"message": "claude cli timed out"}})
+            content = complete(req.get("model", ""), req.get("messages", []),
+                               (req.get("response_format") or {}).get("type") == "json_object")
+        except JudgeError as e:
+            self._send(e.status, {"error": {"message": str(e)}})
             return
-        if proc.returncode != 0:
-            detail = (proc.stderr or proc.stdout or "").strip()[:300]
-            self._send(502, {"error": {"message": f"claude cli failed: {detail}"}})
-            return
-
-        content = strip_fences(proc.stdout or "")
         with Handler.lock:
             Handler.calls += 1
             n_calls = Handler.calls

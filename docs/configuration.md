@@ -94,6 +94,7 @@ run.
 | `file_mode` | `skeleton`, except `full` in `mcp` | What a whole-*file* read returns. `skeleton` is each top-level declaration's signature with large bodies elided. |
 | `skeleton_threshold` | `12` (lines) | How long a declaration may be before `skeleton` elides its body. |
 | `max_symbol_lines` | `160` (lines) | Caps a *symbol* body the same way. `0` means no cap; absence and an explicit `0` are distinguishable. |
+| `annotation_window` | `6` (lines) | How much context an abridged body keeps on **each side** of a line a caller asked to annotate — a radius, not a total. Warning reports annotate the warned line: a warning inside a long function shows that band of the body. `0` keeps the signature alone. |
 | `pipe_passthrough` | `true` | Exempt read/grep commands consuming piped stdin (`cmd \| tail`) from the guard — they operate on command output, which aracne cannot serve. |
 
 **`kinds` gates every read entrance, in every mode**: the MCP `read` tool, `arac read`, an
@@ -201,18 +202,21 @@ The main agent's default set is `read` + `warnings_list`
 
 ### `features`
 
-Optional surfaces that are not part of the default product. An **absent section means every
-feature is off**, which is what an existing project's config decodes to — so adding a feature
-here never turns something on for an existing user.
+Optional surfaces and behaviours. An absent key takes the default below: `bug_management`,
+`chat` and `agent` are off unless set to `true`, and `warning_reads` is on unless set to
+`false`.
 
-| key | default | turns on |
+| key | default | controls |
 |---|---|---|
 | `bug_management` | `false` | The bug pipeline: `arac setup` writes the hunter/judge/solver agents and their commands, the `bug_*` tools become servable, the `arac bug` usage block prints, and viz exposes `/api/bugs`. `arac bug` stays dispatchable either way. |
 | `chat` | `false` | The viz Chat tab: the `/api/chat`, `/api/chat/` and `/api/context-graph` routes, and the Chat nav item. |
 | `agent` | `false` | `arac agent`, the self-contained REPL. This gates the *command*, not `internal/llm/agent` — `descriptions generate` runs its executors through the same package. |
+| `warning_reads` | `true` | Whether a warning report is the **warned code, annotated in place**: each warning written on the line that caused it (`… <- [use_missing_node] pkg.Gone does not exist`), with the counterpart it has to match — the re-signatured callee, shown as its signature, or the interface an implementer no longer satisfies. One batched read covers the whole report, so a shared callee, import block or context entry appears once. It also backs `arac warnings list --read` and the `read` parameter of the `warnings_list` tool, which show the next page the same way. **Set to `false`**, every warning report is a plain summary that lists each warning's kind and the ids it names, `arac warnings list --read` prints a message saying the feature is off, and the `warnings_list` tool has no `read` parameter. |
+| `warning_read_max_bytes` | `10000` | How many **bytes** one warning report may take — the whole message the model receives: headline, annotated reads, their `# CONTEXT:`, the uncovered tail, the continuation note, and whatever the surface prints with it (`arac edit`'s own result, a nudge the hook joins it with). The report expands the **longest prefix** of the sorted warnings that fits. A plain-summary report is cut to the same budget. `0` or lower means **no limit**. Warnings left out are counted in a note (`... 3 warnings left. Use \`arac warnings list --read\` to continue fixing.`) naming the surface this project has; fixing the shown ones removes them, so the next call shows the next page. |
 
-> A new flag needs adding to `validConfig` as well as to the struct. See the comment there for
-> the silent failure that omission causes.
+> A new flag needs nothing but the struct field: `featuresSchemaKeys` reads this section's key
+> set off `FeaturesSection`'s own json tags, so the misspelling check cannot fall behind a
+> field added later. See the comment there for the silent failure it exists to catch.
 
 ### `paths`
 

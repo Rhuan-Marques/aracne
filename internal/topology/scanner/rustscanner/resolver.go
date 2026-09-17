@@ -875,12 +875,16 @@ func analyzeFunctionBody(body *rustBody, pr *ParseResult, gt *rust.RustTopology,
 				}
 			} else if imp, ok := pr.ImportMap[c.PathType]; ok && !imp.Internal {
 				add(rust.ConnUsesDep, imp.Dep)
+			} else if missing := sc.missingInModule(c.PathSegs, c.PathName); missing != "" {
+				add(rust.ConnectionKind(domain.MissingRefsConn), missing)
 			}
 		case c.Func != "":
 			if fid := sc.freeFnID(c.Func); fid != "" {
 				add(rust.ConnCalls, fid)
 			} else if imp, ok := pr.ImportMap[c.Func]; ok && !imp.Internal {
 				add(rust.ConnUsesDep, imp.Dep)
+			} else if missing := sc.missingBinding(c.Func); missing != "" {
+				add(rust.ConnectionKind(domain.MissingRefsConn), missing)
 			}
 		}
 	}

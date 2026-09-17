@@ -160,6 +160,16 @@ type ReadSection struct {
 	// largest single tool result across two benchmark runs -- because `into_config` is one
 	// enormous function. 0 or negative disables the cap.
 	MaxSymbolLines *int `json:"max_symbol_lines,omitempty"`
+	// AnnotationWindow is how many lines of context an abridged body keeps ON EACH SIDE of a
+	// line the caller asked to annotate. It is a radius, not a total.
+	//
+	// It exists because MaxSymbolLines and an annotation want opposite things: the cap says
+	// "the signature is enough", the annotation says "this specific line must be on screen".
+	// Without a window a topology warning landing 300 lines into a long function would be
+	// reported by showing a signature the warned line is not in -- which is the one thing the
+	// report must not do. 0 or negative keeps the signature alone, the behaviour that predates
+	// annotations and a legitimate choice for a project that wants the tightest report.
+	AnnotationWindow *int `json:"annotation_window,omitempty"`
 }
 
 // Configuration for the live/incremental scanner (`arac scanner run`).
@@ -378,7 +388,41 @@ type FeaturesSection struct {
 	// This gates the COMMAND, not internal/llm/agent -- `arac descriptions generate` runs
 	// its executors through the same package and is a shipping 1.0 feature.
 	Agent bool `json:"agent"`
+
+	// WarningReads attaches the FULL read of the code a topology warning names to the
+	// warning report itself, instead of the one line naming the two ids.
+	//
+	// The report an edit comes back with then carries the code to fix: every warned call site
+	// annotated on its line, in one batched `arac read` of the callers and the callee, so the
+	// model can go straight to the edit. WarningReadMaxBytes caps how much of it one report
+	// carries.
+	//
+	// ON unless set: absent (nil) means on, and only an explicit false turns it off, which
+	// reports the plain one-line summary instead. WarningReadsEnabled() is the only reader.
+	WarningReads *bool `json:"warning_reads,omitempty"`
+
+	// WarningReadMaxBytes caps how many BYTES one warning report may occupy -- the whole
+	// message the model receives, reads, CONTEXT, notes and whatever the surface prints around
+	// it. The expansion shows the longest prefix of the ordered warnings that fits and names
+	// the rest in a note; `arac warnings list --read` pages through them.
+	//
+	// THREE STATES, and 0 is not the default. Absent (nil) means
+	// DefaultWarningReadMaxBytes; a value of 0 or lower means NO limit, which is a deliberate
+	// choice a project makes and not what an untouched config should silently mean.
+	// EffectiveWarningReadMaxBytes() is the only reader.
+	WarningReadMaxBytes *int `json:"warning_read_max_bytes,omitempty"`
 }
+
+// DefaultWarningReadMaxBytes is the byte budget of one warning report when
+// features.warning_read_max_bytes is absent.
+//
+// 10,000, because that is where Claude Code stops injecting hook context: anything longer is
+// saved to a file and replaced by a 2 KB preview, and on a measured benchmark run the model never
+// opened the file -- a 14-warning report arrived with 2 of its annotations visible. The limit is
+// in characters; a byte is never fewer than a character, so a report within this many bytes is
+// within the limit whatever it contains. It was a count of five warnings, which bounded nothing:
+// one warning in a 300-line method is not the same size as one in a one-liner.
+const DefaultWarningReadMaxBytes = 10000
 
 // The four modes of Config.Mode.
 //
@@ -515,6 +559,57 @@ type Config struct {
 	// spelled is what the file said for the three enum keys normalizeConfig coerces, captured
 	// before it coerced them. Nil on a config built in code rather than loaded. See Validate.
 	spelled *spelledEnums
+
+	// unknownFeatures is the keys the `features` object carried that FeaturesSection has no
+	// field for, captured at decode time because nothing downstream can see them: an unknown
+	// JSON key is dropped by Unmarshal without a word.
+	//
+	// WHY THIS ONE SECTION. Turning a feature on is the single edit the documentation asks a
+	// user to make to this file by hand, and every feature is a bool that defaults to off --
+	// so a misspelled key is indistinguishable from a key that is working and set to false.
+	// Measured on a real session: `"warnings_reads": true` (plural) was written, silently
+	// dropped, and the feature's absence was reported as a bug in the feature. See Validate.
+	unknownFeatures []string
+}
+
+// featuresSchemaKeys is the key set FeaturesSection actually declares, read off its own tags so
+// it cannot fall behind a field added later -- the same reflection configSchemaKeys uses.
+var featuresSchemaKeys = func() map[string]bool {
+	out := map[string]bool{}
+	t := reflect.TypeOf(FeaturesSection{})
+	for i := 0; i < t.NumField(); i++ {
+		if name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ","); name != "" && name != "-" {
+			out[name] = true
+		}
+	}
+	return out
+}()
+
+// unknownFeatureKeys returns the keys under `features` that FeaturesSection does not declare.
+func unknownFeatureKeys(raw []byte) []string {
+	var doc struct {
+		Features map[string]json.RawMessage `json:"features"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil
+	}
+	var unknown []string
+	for key := range doc.Features {
+		if !featuresSchemaKeys[key] {
+			unknown = append(unknown, key)
+		}
+	}
+	sort.Strings(unknown)
+	return unknown
+}
+
+// quoteAll renders a key list for an error message.
+func quoteAll(xs []string) []string {
+	out := make([]string, len(xs))
+	for i, x := range xs {
+		out[i] = fmt.Sprintf("%q", x)
+	}
+	return out
 }
 
 // spelledEnums pairs each coerced enum with the value it was coerced FROM and TO. The "to" half
@@ -663,6 +758,27 @@ func (c *Config) EffectiveSkeletonThreshold() int {
 	return *c.Read.SkeletonThreshold
 }
 
+// DefaultAnnotationWindow is the radius an annotated over-cap body keeps around each marked
+// line.
+//
+// Six: a signature, thirteen lines and two markers per warning, so a handful of warnings is
+// roughly eighty lines -- well inside features.warning_read_max_bytes, which a post-edit report
+// has to fit. Six above is enough to see the enclosing statement, six below enough to see
+// what the line feeds.
+const DefaultAnnotationWindow = 6
+
+// EffectiveAnnotationWindow resolves read.annotation_window. Absent is
+// DefaultAnnotationWindow; a configured 0 or negative means no window at all.
+func (c *Config) EffectiveAnnotationWindow() int {
+	if c.Read.AnnotationWindow == nil {
+		return DefaultAnnotationWindow
+	}
+	if *c.Read.AnnotationWindow <= 0 {
+		return 0
+	}
+	return *c.Read.AnnotationWindow
+}
+
 // EffectiveMaxSymbolLines resolves read.max_symbol_lines. A configured 0 or negative disables
 // the cap, which is why absence and zero must stay distinguishable.
 func (c *Config) EffectiveMaxSymbolLines() int {
@@ -809,6 +925,19 @@ func (c *Config) spelledValues() (mode, verbosity, contextFilter string) {
 func (c *Config) Validate() error {
 	if err := ValidateReadKinds(c.Read.Kinds); err != nil {
 		return fmt.Errorf("read.kinds: %w", err)
+	}
+	// Reported by NAME, with the nearest real key, because the alternative is what actually
+	// happens: the flag is dropped, the feature stays off, and the user reads that as the
+	// feature being broken.
+	if len(c.unknownFeatures) > 0 {
+		known := make([]string, 0, len(featuresSchemaKeys))
+		for k := range featuresSchemaKeys {
+			known = append(known, k)
+		}
+		sort.Strings(known)
+		return fmt.Errorf("features: unknown key(s) %s -- a key this section does not declare is "+
+			"dropped silently and its feature stays off (valid: %s)",
+			strings.Join(quoteAll(c.unknownFeatures), ", "), strings.Join(known, ", "))
 	}
 	mode, verbosity, contextFilter := c.spelledValues()
 	switch strings.ToLower(strings.TrimSpace(mode)) {
@@ -1502,6 +1631,24 @@ func (c *Config) ChatEnabled() bool { return c.Features.Chat }
 // AgentEnabled reports whether `arac agent` is turned on for this project.
 func (c *Config) AgentEnabled() bool { return c.Features.Agent }
 
+// WarningReadsEnabled reports whether a topology warning is reported with the full read of
+// the code it names attached.
+func (c *Config) WarningReadsEnabled() bool {
+	return c.Features.WarningReads == nil || *c.Features.WarningReads
+}
+
+// EffectiveWarningReadMaxBytes resolves features.warning_read_max_bytes. It returns 0 for "no
+// limit".
+func (c *Config) EffectiveWarningReadMaxBytes() int {
+	if c.Features.WarningReadMaxBytes == nil {
+		return DefaultWarningReadMaxBytes
+	}
+	if n := *c.Features.WarningReadMaxBytes; n > 0 {
+		return n
+	}
+	return 0
+}
+
 // Applies defaults to config fields for scan modes, file limits, visibility filters, descriptions, optimization rules, and LLM agents.
 func normalizeConfig(c *Config) {
 	// The spellings are kept BEFORE anything is coerced. Every Validate() caller loads through
@@ -1625,6 +1772,7 @@ func LoadConfigRead(path string) (cfg *Config, ok bool, readErr error) {
 	if err := json.Unmarshal(data, &loaded); err != nil {
 		return DefaultConfig(), false, nil
 	}
+	loaded.unknownFeatures = unknownFeatureKeys(data)
 	normalizeConfig(&loaded)
 	return &loaded, true, nil
 }

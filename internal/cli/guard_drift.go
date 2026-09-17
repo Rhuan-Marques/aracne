@@ -26,9 +26,10 @@ const guardScanTimeout = 20 * time.Second
 // report -- the channel the contract says has no substitute.
 //
 // driftCheck now shares ONE budget across its two stages (see driftCheckBudget), so the two
-// paths cost at most guardScanTimeout plus the small checks around them. This leaves margin
-// over that rather than tracking it exactly: the number is a ceiling on a pathological run, not
-// a target.
+// paths cost at most guardScanTimeout plus the small checks around them -- and, where
+// features.warning_reads is on, warningReadBudget on top of it, for a post-tool worst case of
+// 20 + 10. This leaves margin over that rather than tracking it exactly: the number is a
+// ceiling on a pathological run, not a target.
 const GuardHookTimeoutSeconds = 45
 
 // driftCheckBudget is the wall clock the whole post-tool drift check may spend, SHARED by the
@@ -136,9 +137,14 @@ func preToolScan(dbPath string, cfg *helper.Config) {
 //
 // It is deliberately cheap to skip and safe to fail: an unreadable topology, a scan error or a
 // timeout all return nothing, exactly like the rest of this hook.
-func driftCheck(dbPath, toolName string) string {
+//
+// reserve is what the hook has already put in the same additionalContext -- see
+// warnread.Options.Reserve.
+func driftCheck(dbPath, toolName string, reserve int) string {
 	// The scan still runs: it is what makes the topology describe the file the command just
-	// wrote. Its RETURN value is deliberately ignored.
+	// wrote. Its RETURN value is deliberately ignored -- the stored warnings come from the
+	// table and the transients from the queue the scan itself filled. See
+	// helper.QueueTransients.
 	//
 	// ROOTED AT THE PROJECT, NOT AT THE PROCESS'S WORKING DIRECTORY. This passed a literal
 	// "." while RunPreToolScan, doing the same job on the way in, reads the stored topo.Root.
@@ -179,7 +185,7 @@ func driftCheck(dbPath, toolName string) string {
 	// Recorded here because nothing downstream can see it: hook output reaches the model as
 	// additionalContext, which the transcript does not carry. See logGuardWarnings.
 	logGuardWarnings(toolName, fresh)
-	return formatDriftWarnings(fresh)
+	return driftWarningReport(dbPath, fresh, reserve)
 }
 
 // indexHasDrifted reports whether any file on disk differs from what the manifest recorded.
@@ -231,10 +237,14 @@ func formatDriftWarnings(warnings []domain.TopologyWarning) string {
 	// an `ls` that had written nothing, sending the model looking for a shell write that never
 	// happened. What the model can act on is the warning; the sentence above it only has to
 	// not be false.
-	b.WriteString("Topology re-synced.\n")
-	b.WriteString("Topology warnings (functions that may need manual review):\n")
+	b.WriteString("Warnings found. Check these functions:\n")
 	for _, w := range warnings {
-		fmt.Fprintf(&b, "  - [%s] %s (source: %s, target: %s)\n", w.Kind, w.Message, w.SourceID, w.TargetID)
+		// The endpoints used to be repeated in parentheses after every line. They are already
+		// IN the message -- it names the callee and the caller -- so the suffix restated both
+		// ids in full on a line that had just said them, doubling the length of a report
+		// emitted after every edit. A transient is marked in the tag instead, where it cannot
+		// be lost to truncation.
+		fmt.Fprintf(&b, " - [%s] %s\n", domain.WarningLabel(w), w.Message)
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/Rhuan-Marques/aracne/internal/lazydesc"
 	"github.com/Rhuan-Marques/aracne/internal/llm"
 	"github.com/Rhuan-Marques/aracne/internal/llm/agent"
+	"github.com/Rhuan-Marques/aracne/internal/llm/toolapi"
 	"github.com/Rhuan-Marques/aracne/internal/llm/tools"
 	"github.com/Rhuan-Marques/aracne/internal/progress"
 	"github.com/Rhuan-Marques/aracne/internal/prompts"
@@ -453,13 +454,13 @@ func unresolvedProviderError(descCfg helper.ResolvedLazyDescriptions) error {
 type agentDescriptionRunner struct {
 	provider  llm.Provider
 	manager   *topology.TopologyManager
-	toolMap   map[string]tools.Tool
+	toolMap   map[string]toolapi.Tool
 	cfg       *helper.Config
 	languages []string
 }
 
 func (r *agentDescriptionRunner) Run(batch []descriptionResource, topo *domain.Topology, exemplarLimit int) (string, error) {
-	a := agent.New(r.provider, tools.NewRegistry(), r.cfg, r.languages)
+	a := agent.New(r.provider, toolapi.NewRegistry(), r.cfg, r.languages)
 	a.SetMaxIterations(len(batch)*4 + 10)
 	input := descriptionExecutorInput(batch, makeResourceReader(r.manager), batchExemplars(batch, topo, exemplarLimit))
 	return a.RunSubAgent(prompts.DescriptionsGenerationExecutorPrompt(), input, r.toolMap)
@@ -739,8 +740,8 @@ func makeResourceReader(mgr *topology.TopologyManager) func(string) string {
 }
 
 // Converts tool registry list into a name-indexed map for lookup.
-func registryToolMap(registry *tools.Registry) map[string]tools.Tool {
-	result := make(map[string]tools.Tool)
+func registryToolMap(registry *toolapi.Registry) map[string]toolapi.Tool {
+	result := make(map[string]toolapi.Tool)
 	for _, tool := range registry.List() {
 		result[tool.Name()] = tool
 	}

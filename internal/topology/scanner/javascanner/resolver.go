@@ -851,7 +851,13 @@ func analyzeFunctionBody(gt *java.JavaTopology, ctx *javaCtx, pr *ParseResult, b
 			}
 		}
 		if sid != "" {
-			addCalls(matchInHierarchy(gt, ctx, sid, c.Method, c.ArgCount), c.ArgCount, nil)
+			ids := matchInHierarchy(gt, ctx, sid, c.Method, c.ArgCount)
+			addCalls(ids, c.ArgCount, nil)
+			if len(ids) == 0 && closedHierarchy(gt, sid) && !objectMethods[c.Method] {
+				// `new A().fun2()` where A and everything it extends are project classes
+				// and none of them declares fun2. See domain.MissingRefsConn.
+				add(java.ConnectionKind(domain.MissingRefsConn), sid+"."+c.Method+"(")
+			}
 		} else if c.Object != "" {
 			// An unresolved receiver says nothing about which method is meant; only an
 			// external type it names contributes its dependency.
@@ -1148,4 +1154,33 @@ func containsJavaRec(recs []string, rec string) bool {
 		}
 	}
 	return false
+}
+
+// objectMethods are the methods every Java class has from java.lang.Object, which no project type
+// declares and every receiver can call.
+var objectMethods = map[string]bool{
+	"toString": true, "equals": true, "hashCode": true, "getClass": true, "clone": true,
+	"finalize": true, "notify": true, "notifyAll": true, "wait": true,
+}
+
+// closedHierarchy reports whether every method a receiver of type sid can have is declared in this
+// project: sid is a plain class, and it and every class it extends name only supertypes that
+// resolved to project classes. Anything else -- an interface, an enum or record (compiler-generated
+// members), a supertype from the JDK or a dependency, an interface in the chain whose own
+// supertypes this model does not keep -- may supply a method this scan cannot see, so a call that
+// finds nothing is not evidence of a missing one.
+func closedHierarchy(gt *java.JavaTopology, sid string) bool {
+	for t := sid; t != ""; t = superclassOf(gt, t) {
+		c, ok := gt.Classes[t]
+		if !ok || c.IsEnum || c.IsRecord || c.IsAnonymous {
+			return false
+		}
+		if len(c.Bases) > len(c.Inherits()) {
+			return false
+		}
+		if len(c.Interfaces) > 0 {
+			return false
+		}
+	}
+	return true
 }

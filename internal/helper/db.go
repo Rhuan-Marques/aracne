@@ -102,6 +102,9 @@ func WriteDb(topo *domain.Topology, path string) error {
 		}
 
 		for id, w := range topo.Warnings {
+			if w.Transient {
+				continue // never stored; see domain.TopologyWarning.Transient
+			}
 			if _, err := warnStmt.Exec(id, w.SourceID, string(w.Kind), w.TargetID, w.Message, w.Baseline); err != nil {
 				return err
 			}

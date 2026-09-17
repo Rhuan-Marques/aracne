@@ -11,6 +11,7 @@ import (
 	"github.com/Rhuan-Marques/aracne/internal/llm/languages/pythontools"
 	"github.com/Rhuan-Marques/aracne/internal/llm/languages/rusttools"
 	"github.com/Rhuan-Marques/aracne/internal/llm/languages/universaltools"
+	"github.com/Rhuan-Marques/aracne/internal/llm/toolapi"
 	"github.com/Rhuan-Marques/aracne/internal/llm/tools"
 	"github.com/Rhuan-Marques/aracne/internal/toolspec"
 	"github.com/Rhuan-Marques/aracne/internal/topology"
@@ -47,11 +48,11 @@ type toolDeps struct {
 // single source of truth for which tools can be registered: allMCPToolNames and
 // BuildToolRegistry both derive from it, and a test asserts its key set matches
 // the toolspec catalog so config names, validation, and registration can't drift.
-var mcpToolConstructors = map[string]func(toolDeps) tools.Tool{
+var mcpToolConstructors = map[string]func(toolDeps) toolapi.Tool{
 	// One constructor for the whole read family. The registered tool's NAME is decided at
 	// build time from the agent's blocked_tools, so the catalog key "read" and the runtime
 	// name can differ -- see BuildToolRegistry.
-	"read": func(d toolDeps) tools.Tool {
+	"read": func(d toolDeps) toolapi.Tool {
 		return universaltools.NewRead(d.manager, d.cfg, d.nativeReadAvailable, d.scannerReg).
 			WithFiller(d.lazy)
 	},
@@ -60,12 +61,12 @@ var mcpToolConstructors = map[string]func(toolDeps) tools.Tool{
 	// mutation goes through the native edit -- which the `arac update-file` hook re-syncs the
 	// topology after -- or through `arac edit` / `arac write`. Keeping unreachable
 	// constructors around let the catalog advertise tools no mode could ever register.
-	"warnings_list":            func(d toolDeps) tools.Tool { return tools.NewWarningsList(d.manager) },
-	"bug_report":               func(d toolDeps) tools.Tool { return tools.NewBugReport(d.manager) },
-	"bug_list":                 func(d toolDeps) tools.Tool { return tools.NewBugList(d.manager) },
-	"bug_acknowledge":          func(d toolDeps) tools.Tool { return tools.NewBugAcknowledge(d.manager) },
-	"bug_dismiss":              func(d toolDeps) tools.Tool { return tools.NewBugDismiss(d.manager) },
-	"bug_delete":               func(d toolDeps) tools.Tool { return tools.NewBugDelete(d.manager) },
+	"warnings_list":            func(d toolDeps) toolapi.Tool { return tools.NewWarningsList(d.manager, d.cfg, d.scannerReg) },
+	"bug_report":               func(d toolDeps) toolapi.Tool { return tools.NewBugReport(d.manager) },
+	"bug_list":                 func(d toolDeps) toolapi.Tool { return tools.NewBugList(d.manager) },
+	"bug_acknowledge":          func(d toolDeps) toolapi.Tool { return tools.NewBugAcknowledge(d.manager) },
+	"bug_dismiss":              func(d toolDeps) toolapi.Tool { return tools.NewBugDismiss(d.manager) },
+	"bug_delete":               func(d toolDeps) toolapi.Tool { return tools.NewBugDelete(d.manager) },
 	"update_description":       buildUpdateDescriptionTool,
 	"node_list_no_description": buildNodeListNoDescriptionTool,
 }
@@ -73,7 +74,7 @@ var mcpToolConstructors = map[string]func(toolDeps) tools.Tool{
 // buildUpdateDescriptionTool and buildNodeListNoDescriptionTool are the only
 // language-dispatched constructors: the language maintenance tools differ per
 // topology language.
-func buildUpdateDescriptionTool(d toolDeps) tools.Tool {
+func buildUpdateDescriptionTool(d toolDeps) toolapi.Tool {
 	switch d.lang {
 	case "python":
 		return pythontools.NewUpdateDescriptionTool(python.NewPythonManager(d.manager))
@@ -89,7 +90,7 @@ func buildUpdateDescriptionTool(d toolDeps) tools.Tool {
 }
 
 // Builds a language-specific tool for generating node lists without descriptions.
-func buildNodeListNoDescriptionTool(d toolDeps) tools.Tool {
+func buildNodeListNoDescriptionTool(d toolDeps) toolapi.Tool {
 	switch d.lang {
 	case "python":
 		return pythontools.NewNodeListNoDescription(python.NewPythonManager(d.manager), d.targets).SetBatchSize(d.batchSize).SetVisibility(d.filter, d.includeNotVisible)
@@ -165,8 +166,8 @@ func effectiveMCPToolSet(cfg *helper.Config, harness, agentName string) map[stri
 
 // BuildToolRegistry builds the MCP tool registry for an agent by registering
 // exactly the tools listed in its effective mcp_tools.
-func BuildToolRegistry(manager *topology.TopologyManager, scannerReg *scanner.Registry, cfg *helper.Config, harness, agentName string) *tools.Registry {
-	registry := tools.NewRegistry()
+func BuildToolRegistry(manager *topology.TopologyManager, scannerReg *scanner.Registry, cfg *helper.Config, harness, agentName string) *toolapi.Registry {
+	registry := toolapi.NewRegistry()
 	allowed := effectiveMCPToolSet(cfg, harness, agentName)
 	deps := toolDeps{
 		manager:             manager,

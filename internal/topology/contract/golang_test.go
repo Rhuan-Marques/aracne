@@ -316,3 +316,131 @@ func TestSameGoTypeTextToleratesOlderRenderings(t *testing.T) {
 		}
 	}
 }
+
+// TestTypeChangeIsJudgedAgainstTheShapeTheCallerWasWrittenAgainst pins the three answers a
+// changed parameter type can produce, and the one case that must produce none of them.
+//
+// This is the rule that used to not exist. Every judging matcher collapsed "I compared
+// nothing" into Match, so retyping a parameter withdrew the warning for every caller whose
+// argument the scanner could not name -- over half of them in a real Go repository. The
+// verdicts below are the difference between a channel that goes quiet on the most common
+// breaking edit in a typed language and one that does not.
+func TestTypeChangeIsJudgedAgainstTheShapeTheCallerWasWrittenAgainst(t *testing.T) {
+	cases := []struct {
+		name string
+		old  []Param // what the caller was written against
+		now  []Param // what it faces after the edit
+		site CallSite
+		want Verdict
+	}{{
+		// The headline widening case. `any` takes everything the old type did and more, so
+		// no caller can have broken and none should hear about it -- whatever it passes.
+		name: "widening to any warns nobody",
+		old:  []Param{p("s", "string")},
+		now:  []Param{p("s", "any")},
+		site: arity(1),
+		want: Match,
+	}, {
+		name: "widening to any warns nobody even with a readable argument",
+		old:  []Param{p("s", "string")},
+		now:  []Param{p("s", "any")},
+		site: args(UntypedInt),
+		want: Match,
+	}, {
+		// Narrowing from `any`: the callers were legitimately passing anything, so each one
+		// has to be judged on what it actually passes.
+		name: "narrowing from any accepts an argument that fits",
+		old:  []Param{p("v", "any")},
+		now:  []Param{p("v", "string")},
+		site: args(UntypedString),
+		want: Match,
+	}, {
+		name: "narrowing from any rejects an argument that does not",
+		old:  []Param{p("v", "any")},
+		now:  []Param{p("v", "string")},
+		site: args(UntypedInt),
+		want: Mismatch,
+	}, {
+		// The case this whole change exists for: the call site never recorded what it
+		// passes, so the question cannot be answered -- and answering it "fine" is what
+		// used to happen.
+		name: "narrowing from any cannot judge an unreadable argument",
+		old:  []Param{p("v", "any")},
+		now:  []Param{p("v", "string")},
+		site: args("?"),
+		want: Unverified,
+	}, {
+		name: "a retype cannot judge an unreadable argument either",
+		old:  []Param{p("s", "string")},
+		now:  []Param{p("s", "[]byte")},
+		site: args("?"),
+		want: Unverified,
+	}, {
+		name: "a call site that recorded no types at all is still unverified",
+		old:  []Param{p("s", "string")},
+		now:  []Param{p("s", "[]byte")},
+		site: arity(1),
+		want: Unverified,
+	}, {
+		// Precision, and the reason the baseline is consulted at all: doubt about the
+		// position that moved must not spread to the ones that did not.
+		name: "an unreadable argument at an UNCHANGED position is not doubt",
+		old:  []Param{p("a", "string"), p("b", "int")},
+		now:  []Param{p("a", "string"), p("b", "int64")},
+		site: args("?", UntypedInt),
+		want: Match,
+	}, {
+		name: "and the changed position still decides when it is the unreadable one",
+		old:  []Param{p("a", "string"), p("b", "int")},
+		now:  []Param{p("a", "string"), p("b", "int64")},
+		site: args(UntypedString, "?"),
+		want: Unverified,
+	}, {
+		// An interface parameter accepts implementers whose type text never equals it, so
+		// it is declined rather than doubted -- the same rule that makes `any` silent.
+		name: "narrowing to an interface is declined, not doubted",
+		old:  []Param{p("v", "any")},
+		now:  []Param{{Name: "v", Typing: "io.Writer", TypingID: "io.Writer"}},
+		site: args("?"),
+		want: Match,
+	}, {
+		// A real break still outranks an unreadable neighbour.
+		name: "a demonstrable mismatch outranks an unreadable position",
+		old:  []Param{p("a", "string"), p("b", "string")},
+		now:  []Param{p("a", "int"), p("b", "int")},
+		site: args("?", UntypedString),
+		want: Mismatch,
+	}}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			callee := fn("F", c.now...)
+			env := Env{OldParams: c.old, Lookup: func(id string) (domain.Resource, bool) {
+				if id == "io.Writer" {
+					return domain.Resource{ID: id, Kind: domain.ResourceInterface}, true
+				}
+				return domain.Resource{}, false
+			}}
+			got, why := match(t, env, callee, c.site)
+			if got != c.want {
+				t.Fatalf("got %v (%s), want %v", got, why, c.want)
+			}
+			// An adverse verdict the reader cannot act on is not worth reporting.
+			if (got == Mismatch || got == Unverified) && why == "" {
+				t.Fatalf("verdict %v carries no explanation", got)
+			}
+		})
+	}
+}
+
+// TestNoBaselineKeepsTheOlderBehaviour pins the evidence rule: doubt is only reported about a
+// position something can show moved. A warning raised before baselines existed, or carried
+// across a rescan without one, must judge exactly as it did before.
+func TestNoBaselineKeepsTheOlderBehaviour(t *testing.T) {
+	callee := fn("F", p("s", "string"))
+	for _, site := range []CallSite{arity(1), args("?")} {
+		if got, _ := match(t, Env{}, callee, site); got != Match {
+			t.Fatalf("no baseline: got %v, want match", got)
+		}
+	}
+}

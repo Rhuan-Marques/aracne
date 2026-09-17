@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/Rhuan-Marques/aracne/internal/llm/toolapi"
 	"github.com/Rhuan-Marques/aracne/internal/topology"
 )
 
@@ -28,8 +29,8 @@ func (b *BugAcknowledge) Description() string {
 }
 
 // Returns the parameter schema for acknowledging a bug: bug_id (required string).
-func (b *BugAcknowledge) Parameters() []Parameter {
-	return []Parameter{
+func (b *BugAcknowledge) Parameters() []toolapi.Parameter {
+	return []toolapi.Parameter{
 		{Name: "bug_id", Type: "string", Description: "The bug ID to acknowledge", Required: true},
 	}
 }

@@ -4,7 +4,7 @@ Two arms, identical in every way except the toolset the agent is given:
 
   - baseline : vanilla Claude Code with native Read/Grep/Edit/Bash. No aracne files. Each
                run gets an ephemeral clone of the repo at its base commit.
-  - aracne   : the WARM canonical worktree of a prepared fixture — `arac init --claude`
+  - aracne   : the WARM canonical worktree of a prepared fixture — `arac setup --claude`
                injected the CLAUDE.md contract, .mcp.json (which makes Claude Code spawn
                `arac serve`), and the guard hook, and `arac scan` + the user's own
                /descriptions-generate filled the topology DB. The worktree is reset and

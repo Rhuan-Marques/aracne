@@ -39,7 +39,7 @@ wholesale by the overlay; nested objects are merged.
 - `mode` — **the arm's product**: which tools exist, which shell commands aracne answers, and
   what vocabulary the contract teaches. One of `mcp`, `cli`, `intercept_id`,
   `intercept_line_ranges`; see "The four modes" below. It takes effect through
-  `fixtures.sync_agent_contract`, which re-runs `arac init --claude -y` after the overlay is
+  `fixtures.sync_agent_contract`, which re-runs `arac setup --claude -y` after the overlay is
   applied: that is what writes (or removes) `.mcp.json` and regenerates CLAUDE.md for the mode.
   Without that step an overlay could set the mode and still ship another mode's contract.
 

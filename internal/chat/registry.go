@@ -8,6 +8,7 @@ import (
 	"github.com/Rhuan-Marques/aracne/internal/llm/languages/pythontools"
 	"github.com/Rhuan-Marques/aracne/internal/llm/languages/rusttools"
 	"github.com/Rhuan-Marques/aracne/internal/llm/languages/universaltools"
+	"github.com/Rhuan-Marques/aracne/internal/llm/toolapi"
 	"github.com/Rhuan-Marques/aracne/internal/llm/tools"
 	"github.com/Rhuan-Marques/aracne/internal/topology"
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
@@ -46,15 +47,15 @@ func NewScannerRegistry() *scanner.Registry {
 }
 
 // Constructs a filtered tool registry for the main chat agent with config-based tool access control.
-func BuildToolRegistry(manager *topology.TopologyManager, scannerReg *scanner.Registry, cfg *helper.Config, workspace string) *tools.Registry {
-	registry := tools.NewRegistry()
+func BuildToolRegistry(manager *topology.TopologyManager, scannerReg *scanner.Registry, cfg *helper.Config, workspace string) *toolapi.Registry {
+	registry := toolapi.NewRegistry()
 	allowed := chatMainAgentToolSet(cfg)
 	// No pre-tool scan here. scan.pre_tool is a GUARD setting: it belongs to the surfaces
 	// where an outside harness runs the tools and nothing else keeps the graph current. The
 	// chat owns its own loop -- its bash tool re-scans after every command and its
 	// edit/write tools sync the file they touched -- so a scan on the way IN would re-walk
 	// the project for a change the loop has already applied.
-	add := func(t tools.Tool) {
+	add := func(t toolapi.Tool) {
 		if allowed == nil || allowed[t.Name()] {
 			registry.Register(t)
 		}
@@ -68,7 +69,7 @@ func BuildToolRegistry(manager *topology.TopologyManager, scannerReg *scanner.Re
 	add(tools.NewGrep(manager))
 	add(tools.NewEdit(manager, scannerReg))
 	add(tools.NewWrite(manager, scannerReg))
-	add(tools.NewWarningsList(manager))
+	add(tools.NewWarningsList(manager, cfg, scannerReg))
 	add(tools.NewBugReport(manager))
 	add(tools.NewBugList(manager))
 	add(tools.NewBugAcknowledge(manager))
@@ -102,11 +103,11 @@ func configDescribeTargets(cfg *helper.Config) []domain.ResourceKind {
 }
 
 // Constructs a full tool registry for agent threads with topology, scanning, and language-specific tools.
-func BuildAgentToolRegistry(manager *topology.TopologyManager, scannerReg *scanner.Registry, cfg *helper.Config, workspace string) *tools.Registry {
-	registry := tools.NewRegistry()
+func BuildAgentToolRegistry(manager *topology.TopologyManager, scannerReg *scanner.Registry, cfg *helper.Config, workspace string) *toolapi.Registry {
+	registry := toolapi.NewRegistry()
 	// See BuildToolRegistry: the chat loop keeps itself fresh, so scan.pre_tool does not
 	// apply to it.
-	add := func(t tools.Tool) {
+	add := func(t toolapi.Tool) {
 		registry.Register(t)
 	}
 	add(&tools.Ls{})
@@ -116,7 +117,7 @@ func BuildAgentToolRegistry(manager *topology.TopologyManager, scannerReg *scann
 	add(tools.NewGrep(manager))
 	add(tools.NewEdit(manager, scannerReg))
 	add(tools.NewWrite(manager, scannerReg))
-	add(tools.NewWarningsList(manager))
+	add(tools.NewWarningsList(manager, cfg, scannerReg))
 	add(tools.NewBugReport(manager))
 	add(tools.NewBugList(manager))
 	add(tools.NewBugAcknowledge(manager))
@@ -128,8 +129,8 @@ func BuildAgentToolRegistry(manager *topology.TopologyManager, scannerReg *scann
 }
 
 // Registers language-specific maintenance tools (description updates and node listing) in the tool registry.
-func registerLanguageMaintenanceTools(registry *tools.Registry, allowed map[string]bool, manager *topology.TopologyManager, lang string, targets []domain.ResourceKind, descriptionBatchSize int) {
-	add := func(t tools.Tool) {
+func registerLanguageMaintenanceTools(registry *toolapi.Registry, allowed map[string]bool, manager *topology.TopologyManager, lang string, targets []domain.ResourceKind, descriptionBatchSize int) {
+	add := func(t toolapi.Tool) {
 		if allowed == nil || allowed[t.Name()] {
 			registry.Register(t)
 		}
@@ -177,8 +178,8 @@ func configDescriptionBatchSize(cfg *helper.Config) int {
 }
 
 // Filters registry tools by allowlist and returns them as a map keyed by tool name.
-func toolMap(registry *tools.Registry, allowed map[string]bool) map[string]tools.Tool {
-	result := make(map[string]tools.Tool)
+func toolMap(registry *toolapi.Registry, allowed map[string]bool) map[string]toolapi.Tool {
+	result := make(map[string]toolapi.Tool)
 	for _, tool := range registry.List() {
 		if allowed == nil || allowed[tool.Name()] {
 			result[tool.Name()] = tool

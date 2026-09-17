@@ -3,12 +3,14 @@ package tools
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/Rhuan-Marques/aracne/internal/llm/toolapi"
 )
 
 func TestNewRegistry(t *testing.T) {
-	r := NewRegistry()
+	r := toolapi.NewRegistry()
 	if r == nil {
-		t.Fatal("NewRegistry returned nil")
+		t.Fatal("toolapi.NewRegistry returned nil")
 	}
 	if len(r.List()) != 0 {
 		t.Errorf("expected empty registry")
@@ -16,7 +18,7 @@ func TestNewRegistry(t *testing.T) {
 }
 
 func TestRegisterAndGet(t *testing.T) {
-	r := NewRegistry()
+	r := toolapi.NewRegistry()
 	tool := &Ls{}
 	r.Register(tool)
 
@@ -30,7 +32,7 @@ func TestRegisterAndGet(t *testing.T) {
 }
 
 func TestGetNonexistent(t *testing.T) {
-	r := NewRegistry()
+	r := toolapi.NewRegistry()
 	_, ok := r.Get("nonexistent")
 	if ok {
 		t.Error("expected false for nonexistent tool")
@@ -38,7 +40,7 @@ func TestGetNonexistent(t *testing.T) {
 }
 
 func TestListTools(t *testing.T) {
-	r := NewRegistry()
+	r := toolapi.NewRegistry()
 	r.Register(&Ls{})
 	r.Register(&WarningsList{})
 
@@ -49,7 +51,7 @@ func TestListTools(t *testing.T) {
 }
 
 func TestToolInterface(t *testing.T) {
-	var tool Tool = &Ls{}
+	var tool toolapi.Tool = &Ls{}
 	if tool.Name() != "ls" {
 		t.Errorf("unexpected name: %q", tool.Name())
 	}
@@ -59,7 +61,7 @@ func TestToolInterface(t *testing.T) {
 }
 
 func TestLsToolInterface(t *testing.T) {
-	var tool Tool = &Ls{}
+	var tool toolapi.Tool = &Ls{}
 	if tool.Name() != "ls" {
 		t.Errorf("unexpected name: %q", tool.Name())
 	}
@@ -144,7 +146,7 @@ func TestLsRunNonexistentPath(t *testing.T) {
 }
 
 func TestParameter(t *testing.T) {
-	p := Parameter{
+	p := toolapi.Parameter{
 		Name:        "test",
 		Type:        "string",
 		Description: "a test parameter",

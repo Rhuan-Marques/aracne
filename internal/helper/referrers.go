@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Rhuan-Marques/aracne/internal/topology/contract"
 	"github.com/Rhuan-Marques/aracne/internal/topology/domain"
 )
 
@@ -27,6 +28,30 @@ var ReferenceConnTypes = map[string]bool{
 	"uses_extvar":     true,
 }
 
+// ContainmentConnTypes are the edges that only say WHERE something is declared: a package or
+// file listing what it holds, a type listing its methods and constructor. They are bookkeeping
+// the scanners rebuild on every pass, not dependencies -- a package is not written in terms of
+// its members, and nothing breaks when one of them leaves.
+//
+// Losing one is never a warning. Measured on SWE-Atlas k6-10d4b447: `git mv` of three files into
+// a subpackage stranded 135 edges from surviving code, and 112 were the old package's own
+// has_function/has_struct/has_named_type/has_extvar entries. Each became "verify
+// go.k6.io/k6/output/cloud which references it via has_function" -- 81 warnings in a 10 KB report
+// that sat in the agent's context for the rest of the session. The 23 real ones (output.go still
+// calling what moved) were in there too, harder to find.
+var ContainmentConnTypes = map[string]bool{
+	"has_file":             true,
+	"has_function":         true,
+	"has_struct":           true,
+	"has_class":            true,
+	"has_interface":        true,
+	"has_named_type":       true,
+	"has_extvar":           true,
+	"has_abstract_methods": true,
+	"methods":              true,
+	"constructor":          true,
+}
+
 // ReferrerScan parameterizes ScanReferrers.
 type ReferrerScan struct {
 	// Removed is the set of resource ids that existed before this update and
@@ -38,6 +63,10 @@ type ReferrerScan struct {
 	// ConnTypes limits which edge kinds count as a reference. nil means every
 	// edge kind, which is what whole-file removal wants.
 	ConnTypes map[string]bool
+	// SkipConnTypes excludes edge kinds from ConnTypes (or from every kind, when ConnTypes is
+	// nil). Whole-file removal uses it for ContainmentConnTypes: it has to keep inheritance and
+	// implementation edges, which an allow-list of body references would drop.
+	SkipConnTypes map[string]bool
 	// SkipSource suppresses warnings for referrers the caller has already
 	// handled — normally the resources of the file that was just re-parsed,
 	// since those were re-resolved from source in this same update. nil means
@@ -79,6 +108,9 @@ func ScanReferrers(topo *domain.Topology, opt ReferrerScan) []domain.TopologyWar
 		stripped := false
 		for connType, targets := range res.Connections {
 			if opt.ConnTypes != nil && !opt.ConnTypes[connType] {
+				continue
+			}
+			if opt.SkipConnTypes[connType] {
 				continue
 			}
 			var kept []string
@@ -162,14 +194,24 @@ func ReferenceConnType(language string, kind domain.ResourceKind) string {
 //
 // This is goscanner's clearReanalyzedFunctionWarnings generalized from one
 // function to one file, and from Go to every language.
-func ClearReferrerWarningsForFile(topo *domain.Topology, path string) {
+//
+// before is the graph as it stood before this update, and it returns the transient reports
+// that replace the signature warnings it withdrew unverified. Both exist for the same reason:
+// this rule has to agree with the partial path's, which judges the same edited callers in
+// ReconcileSignatureWarningsScoped, or the answer depends on which route re-indexed the edit.
+func ClearReferrerWarningsForFile(topo *domain.Topology, path string, before map[string]domain.Resource) []domain.TopologyWarning {
 	if path == "" {
-		return
+		return nil
 	}
 	inFile := func(id string) bool {
 		res, ok := topo.Resources[id]
 		return ok && res.Location.Path == path
 	}
+	env := contract.Env{Lookup: func(id string) (domain.Resource, bool) {
+		res, ok := topo.Resources[id]
+		return res, ok
+	}}
+	var transients []domain.TopologyWarning
 	for id, w := range topo.Warnings {
 		switch w.Kind {
 		case domain.WarnNodeRemoved:
@@ -180,18 +222,53 @@ func ClearReferrerWarningsForFile(topo *domain.Topology, path string) {
 			if !inFile(w.TargetID) {
 				continue
 			}
+			// A CALLER BESIDE A CALLEE THAT JUST MOVED WAS NOT EDITED -- its file was
+			// re-parsed because the callee lives there. Judging it here treated every same-file
+			// caller as one the agent had just fixed: arguments that fit deleted a warning only
+			// the baseline can judge (a return-type change, which no call site records), and an
+			// argument nobody could type deleted it silently. On UpdateFile, which merges the
+			// warnings it raises before this runs, that was every same-file caller of every
+			// signature change. It is left to the reconciler, exactly as the partial path
+			// leaves it (callerEdited there is false for the same case).
+			if calleeMovedSince(before, topo, w.SourceID) {
+				continue
+			}
 			// "The caller's file was re-parsed" cannot tell a fix from a comment: adding a
 			// blank line to the caller discharged the warning exactly as well as correcting
 			// the call. Where the recorded calls can be checked, check them, and keep the
-			// warning when they still do not fit. Where they cannot -- JavaScript, an
-			// argument whose type could not be read, a caller last parsed by an older build
-			// -- fall back to the permissive rule rather than hold a warning on no evidence.
+			// warning when they still do not fit.
 			if fits, known := CallerStillFits(topo, w.TargetID, w.SourceID); known && !fits {
 				continue
+			}
+			// Where they cannot, the permissive rule still withdraws it rather than hold a
+			// warning on no evidence -- but an argument that could not be READ is a question
+			// for the agent, not a fix, and deleting it said nothing at all. The reconciler's
+			// own judgement decides, baseline and all, so the report is the one the partial
+			// path gives the same caller.
+			if ok, why := signatureWarningSatisfied(topo, env, w, true); ok && why != "" {
+				transients = append(transients, TransientFrom(w, topo.Resources))
 			}
 			delete(topo.Warnings, id)
 		}
 	}
+	domain.SortWarnings(transients)
+	return transients
+}
+
+// calleeMovedSince reports whether calleeID's signature differs from the one it had in before.
+// A callee absent from before is new in this update, which moves it by definition. Without a
+// before graph nothing can be said, and the answer is false: the caller-side rule then applies
+// as it always did.
+func calleeMovedSince(before map[string]domain.Resource, topo *domain.Topology, calleeID string) bool {
+	if before == nil {
+		return false
+	}
+	now, ok := topo.Resources[calleeID]
+	if !ok {
+		return false
+	}
+	prev, existed := before[calleeID]
+	return !existed || SignatureBaseline(prev) != SignatureBaseline(now)
 }
 
 // ExpandSignatureWarnings rewrites every self-attributed signature_changed
@@ -277,7 +354,7 @@ func ExpandSignatureWarnings(topo *domain.Topology, ws []domain.TopologyWarning)
 				SourceID: w.SourceID,
 				Kind:     domain.WarnSignatureChanged,
 				TargetID: callerID,
-				Message:  fmt.Sprintf("%s changed signature, verify caller %s", name, callerID),
+				Message:  domain.SignatureChangedMessage(name, callerID),
 			})
 		}
 	}
@@ -409,6 +486,38 @@ func baselineOutput(baseline string) (string, bool) {
 		return "", false
 	}
 	return rest[:end], true
+}
+
+// BaselineInput extracts the INPUT segment of a SignatureBaseline and decodes it into the
+// parameter list the caller was written against.
+//
+// The input is the first segment after the name, so unlike baselineOutput it needs no walk
+// past an earlier value -- but it is read as a JSON value for the same reason: a parameter
+// type can contain the '|' the segments are joined with.
+//
+// Returns nil when there is no baseline to read, which the matcher treats as "judge every
+// position". That is the honest reading of "we do not know what it used to look like", and
+// it errs toward reporting more doubt rather than less.
+func BaselineInput(baseline string) []contract.Param {
+	i := strings.IndexByte(baseline, '|')
+	if i < 0 {
+		return nil
+	}
+	rest := baseline[i+1:]
+	if rest == "" || strings.HasPrefix(rest, "|") {
+		// A callee that took no parameters. Distinct from "no baseline": every position of
+		// the new signature is new, and unchangedAt already answers false past the end.
+		return []contract.Param{}
+	}
+	end, ok := jsonValueEnd(rest)
+	if !ok {
+		return nil
+	}
+	var raw any
+	if err := json.Unmarshal([]byte(rest[:end]), &raw); err != nil {
+		return nil
+	}
+	return contract.DecodeParams(raw)
 }
 
 // jsonValueEnd reports where the first JSON value in s ends.

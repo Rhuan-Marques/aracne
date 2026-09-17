@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/Rhuan-Marques/aracne/internal/llm"
-	"github.com/Rhuan-Marques/aracne/internal/llm/tools"
+	"github.com/Rhuan-Marques/aracne/internal/llm/toolapi"
 )
 
 type blockingTool struct {
@@ -17,9 +17,9 @@ type blockingTool struct {
 	release chan struct{}
 }
 
-func (t *blockingTool) Name() string                  { return "blocking_tool" }
-func (t *blockingTool) Description() string           { return "blocks until released" }
-func (t *blockingTool) Parameters() []tools.Parameter { return nil }
+func (t *blockingTool) Name() string                    { return "blocking_tool" }
+func (t *blockingTool) Description() string             { return "blocks until released" }
+func (t *blockingTool) Parameters() []toolapi.Parameter { return nil }
 func (t *blockingTool) Run(args json.RawMessage) (string, error) {
 	close(t.started)
 	<-t.release

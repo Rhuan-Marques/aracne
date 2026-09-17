@@ -30,7 +30,8 @@ func RunWrite() {
 		os.Exit(1)
 	}
 	fmt.Println(result)
-	if msg := formatDriftWarnings(unreportedWarnings(manager.DbPath())); msg != "" {
+	// Reserved like RunEdit's: the result, its newline, the blank line and the closing newline.
+	if msg := driftWarningReport(manager.DbPath(), unreportedWarnings(manager.DbPath()), len(result)+3); msg != "" {
 		fmt.Println()
 		fmt.Println(msg)
 	}

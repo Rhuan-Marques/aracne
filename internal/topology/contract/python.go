@@ -71,8 +71,11 @@ func (m pythonMatcher) Match(env Env, callee domain.Resource, site CallSite) (Ve
 			", which this call does not pass"
 	}
 
-	if v, why := matchTypes(env, params, site, pythonTypeOpaque, pythonAccepts); v == Mismatch {
+	switch v, why := matchTypes(env, params, site, pythonTypeOpaque, pythonAccepts); v {
+	case Mismatch:
 		return Mismatch, why
+	case Unverified:
+		return Unverified, why
 	}
 	return Match, ""
 }

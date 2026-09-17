@@ -6,7 +6,7 @@ import (
 
 	"github.com/Rhuan-Marques/aracne/internal/helper"
 	"github.com/Rhuan-Marques/aracne/internal/llm"
-	"github.com/Rhuan-Marques/aracne/internal/llm/tools"
+	"github.com/Rhuan-Marques/aracne/internal/llm/toolapi"
 	"github.com/Rhuan-Marques/aracne/internal/prompts"
 )
 
@@ -26,8 +26,8 @@ type mockTool struct{}
 
 func (m *mockTool) Name() string        { return "mock_tool" }
 func (m *mockTool) Description() string { return "A mock tool" }
-func (m *mockTool) Parameters() []tools.Parameter {
-	return []tools.Parameter{
+func (m *mockTool) Parameters() []toolapi.Parameter {
+	return []toolapi.Parameter{
 		{Name: "input", Type: "string", Description: "input", Required: true},
 	}
 }
@@ -63,7 +63,7 @@ func TestBuildPromptFollowsContractVerbosity(t *testing.T) {
 }
 
 func TestToToolDefinitions(t *testing.T) {
-	registry := tools.NewRegistry()
+	registry := toolapi.NewRegistry()
 	registry.Register(&mockTool{})
 
 	defs := toToolDefinitions(registry.List())
@@ -82,7 +82,7 @@ func TestToToolDefinitions(t *testing.T) {
 }
 
 func TestToToolDefinitionsEmpty(t *testing.T) {
-	defs := toToolDefinitions([]tools.Tool{})
+	defs := toToolDefinitions([]toolapi.Tool{})
 	if len(defs) != 0 {
 		t.Errorf("expected 0 definitions, got %d", len(defs))
 	}
@@ -90,7 +90,7 @@ func TestToToolDefinitionsEmpty(t *testing.T) {
 
 func TestNew(t *testing.T) {
 	provider := &mockProvider{}
-	registry := tools.NewRegistry()
+	registry := toolapi.NewRegistry()
 	agent := New(provider, registry, helper.DefaultConfig(), []string{"go"})
 
 	if agent == nil {
@@ -103,7 +103,7 @@ func TestNew(t *testing.T) {
 
 func TestSetMaxIterations(t *testing.T) {
 	provider := &mockProvider{}
-	registry := tools.NewRegistry()
+	registry := toolapi.NewRegistry()
 	agent := New(provider, registry, helper.DefaultConfig(), []string{"go"})
 
 	agent.SetMaxIterations(10)

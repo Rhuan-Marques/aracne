@@ -61,7 +61,7 @@ func TestDriftCheckScansTheProjectRootFromASubdirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	driftCheck(dbPath, "Bash")
+	driftCheck(dbPath, "Bash", 0)
 
 	topo, err := helper.ReadDb(dbPath)
 	if err != nil {
