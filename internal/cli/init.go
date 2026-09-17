@@ -149,6 +149,15 @@ func finishInit(reg *scanner.Registry, cfg *helper.Config, answers initAnswers, 
 	} else if answers.DescribeNow {
 		fmt.Println()
 		sweepDescriptions(manager, reg, cfg)
+	} else if answers.Manual {
+		// NOT the lazy-fill message. Manual turned that fill off, so "each read will
+		// describe what it is about to show" would be the one thing this configuration
+		// guarantees does not happen -- and the command that does happen is the one the
+		// answer was chosen for.
+		fmt.Fprint(os.Stderr, "\nNothing is configured to write descriptions, and lazy generation "+
+			"is off. Run\n`/descriptions-generate` in your harness to describe the repository "+
+			"with its own agents.\nRe-run `arac init` to name an API key or a CLI command "+
+			"instead.\n")
 	} else {
 		fmt.Fprint(os.Stderr, "\nLeaving descriptions to the read path: each read and search will "+
 			"describe what it is\nabout to show. Run `arac descriptions generate` any time to "+
@@ -174,6 +183,7 @@ They render from .aracne/config.json, whose five setup keys are:
   "contract_verbosity"   low | high
   "descriptions"         {"provider": "anthropic", "api_key_env": "ANTHROPIC_API_KEY"}
                          {"provider": "cli", "cli_provider_command": "claude -p"}
+                         {"lazy": false}   no describer; /descriptions-generate writes them
   "llm": {"<any>": {"agents": {"descriptions-generation-executor": {"model": "..."}}}}
   "preload_mcp_tools"    true | false   (Claude Code + mode "mcp" only; omit to leave
                          ENABLE_TOOL_SEARCH alone)
@@ -225,11 +235,18 @@ func runInitQuestions(s *tui.Session, cfg *helper.Config, sourceFiles int) (init
 	// sweep is minutes and leaves the repo fully described, which is the better place to be;
 	// above it the sweep is a long unattended job whose benefit all arrives at the end, while
 	// the lazy fill delivers the same descriptions in the order the work touches them.
-	_, when, err := tui.Select(s, describeNowQuestion(sourceFiles <= describeEverythingFileCap))
-	if err != nil {
-		return a, err
+	//
+	// Not asked at all after Manual. Both of its answers are about a describer that answer
+	// declined to configure: "Now" would be a sweep with nothing to sweep with, and "Lazily"
+	// names a fill Manual has just switched off. The question would be a choice between two
+	// things that do not happen.
+	if !a.Manual {
+		_, when, err := tui.Select(s, describeNowQuestion(sourceFiles <= describeEverythingFileCap))
+		if err != nil {
+			return a, err
+		}
+		a.DescribeNow = when == "now"
 	}
-	a.DescribeNow = when == "now"
 
 	verbosity := verbosityQuestion()
 	verbosity.Default = indexOfValue(verbosity, cfg.EffectiveContractVerbosity())
@@ -262,11 +279,19 @@ func runInitQuestions(s *tui.Session, cfg *helper.Config, sourceFiles int) (init
 //
 // They are one function because the second depends on the first in a way that is not a plain
 // sequence -- the CLI branch can answer the model question inside the command answer, and then
-// question four is not asked at all.
+// question four is not asked at all, and the Manual branch never reaches it.
 func askDescriber(s *tui.Session, a *initAnswers) error {
 	_, kind, err := tui.Select(s, describerQuestion())
 	if err != nil {
 		return err
+	}
+
+	if kind == describerManual {
+		// The only answer that ends question three on its own: there is no format to pick,
+		// no credential to name and no model to send, because nothing aracne runs will be
+		// writing these. apply turns the lazy fill off to match.
+		a.Manual = true
+		return nil
 	}
 
 	if kind == helper.ProviderNameCLI {

@@ -94,14 +94,19 @@ arac viz serve                          # the graph, in a browser (Full build)
 ```
 
 **Description generation** is the one part that needs a model, and nothing is assumed about
-which. `arac init` asks — an API key or a CLI you are already logged into, and which model —
+which. `arac init` asks — an API key, a CLI you are already logged into, or nobody at all —
 and writes the answer into `.aracne/config.json`, so it is asked once:
 
 ```jsonc
 // .aracne/config.json, after answering
 "descriptions": { "provider": "openai", "api_key_env": "OPENAI_API_KEY" }
 "descriptions": { "provider": "cli", "cli_provider_command": "claude -p" }
+"descriptions": { "lazy": false }   // "Manual": your harness writes them, on request
 ```
+
+The **Manual** answer configures no describer and turns the read-path fill off. Nothing is
+spent until you run `/descriptions-generate` in Claude Code or OpenCode, which describes the
+repository with that harness's own sub-agents — on the subscription you already pay for.
 
 The CLI answer needs no API key at all — it spends the subscription behind a tool you already
 use. Descriptions are also generated lazily, as a read or a search is about to show a node, so

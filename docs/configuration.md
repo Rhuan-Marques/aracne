@@ -157,7 +157,7 @@ written back in whichever you used:
 
 | field | default | meaning |
 |---|---|---|
-| `enabled` | `true` | The switch. |
+| `enabled` | `true` | The switch. `arac init` writes it from question three: `false` for **Manual**, `true` for a named API key or CLI command. |
 | `max_nodes` | `40` | Nodes one fill may describe. `≤ 0` means no cap. |
 | `timeout_seconds` | `45` | Bounds the whole fill, not one batch — and it sits on the read path, so it is the ceiling on how long a `cat` can hang. `≤ 0` disables the deadline. |
 | `batch_size` | `5` | Resources per completion. Non-positive keeps the default. |
@@ -243,7 +243,7 @@ section itself:
 
 | key | meaning |
 |---|---|
-| `provider` | `anthropic` \| `openai` \| `deepseek` \| `cli`. **Absent means unanswered**, and `arac init` asks — see [the setup questions](#the-setup-questions). A typo, or `cli` with no command, is rejected by validation. |
+| `provider` | `anthropic` \| `openai` \| `deepseek` \| `cli`. **Absent means nothing aracne runs writes them** — either unanswered, or answered `Manual`, which also sets `lazy: false`. `arac init` asks — see [the setup questions](#the-setup-questions). A typo, or `cli` with no command, is rejected by validation. |
 | `base_url` | A gateway or proxy for the API providers. Ignored by the CLI ones. |
 | `api_key_env` | The environment variable the API key is read from. Absent falls back to the provider's own name (`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY`). Ignored by `cli`. |
 | `cli_provider_command` | The command `provider: "cli"` runs. Required by it, ignored by everything else. |
@@ -276,13 +276,13 @@ full screen, with the arrow keys, one question per screen:
 
   Who writes your descriptions?                                              3/7
 
-  Aracne describes every function, type and file so a read can show you what its
-  neighbours are without opening them. Something has to write those, and it
-  costs money either way -- so it is asked rather than assumed.
+  Aracne describes every function, struct and interface so a read can show you
+  what its neighbours are without opening them. Something has to write those
+  eventually.
 
   > An API key     Call a provider's HTTP API.
     A CLI command
-                   Bills the key's balance, per token. Fastest, and the only
+    Manual         Bills the key's balance, per token. Fastest, and the only
                    option that parallelises properly.
 
                    You will be asked which wire format the endpoint speaks and
@@ -297,6 +297,23 @@ the key, offering that provider's usual name. **A CLI command** asks for the com
 `claude -p`, with what a CLI run actually spends spelled out beside it. Every open question
 offers the default as the first row and `Other:` as the second, where you type; Enter on an
 empty `Other:` says so and keeps the question open.
+
+**Manual** is the answer that configures no describer at all, and it is the only one that ends
+question three on its own — there is no format, no credential, no command and no model to
+collect. Your harness writes the descriptions instead: `/descriptions-generate`, the command
+`arac setup` installs into Claude Code and OpenCode either way, fans that harness's own
+sub-agents out over everything still undescribed, on the subscription you already pay for.
+It writes:
+
+```json
+"descriptions": {"lazy": false}
+```
+
+and clears `provider`, `api_key_env` and `cli_provider_command` — a leftover from a previous
+run is a describer this answer just declined, and the sweep would happily bill it. **The lazy
+fill goes off** because there is nothing left for a cold read to describe with; reads and
+searches show what is described so far and never stop to write more. It is not a trapdoor:
+re-running `arac init` and naming a key or a command turns the fill back on.
 
 Then the model, written to the `descriptions-generation-executor` agent (see
 [below](#the-model-is-not-here)). It defaults to the chosen provider's cheap tier —
@@ -313,8 +330,10 @@ the CLI transport reads its model from the *command* and from nowhere else:
   are left exactly as typed: guessing a flag onto someone else's program is how a wizard turns
   a working command into one that exits 2.
 
-Question five — describe the repository now, or lazily as you read — **saves nothing**. Lazy
-generation is on either way (`descriptions.lazy`, default `true`); the question only decides
+Question five — describe the repository now, or lazily as you read — **saves nothing**, and is
+**not asked after Manual**: both of its answers are about a describer that answer declined, so
+`DescribeNow` stays false and the run skips straight to the contract length. Otherwise lazy
+generation is on either way (`descriptions.lazy`, which this wizard writes `true`); it only decides
 whether this run also sweeps before it finishes. Enter means **now** at 800 source files or
 fewer and **lazily** above that, which is a wall-clock judgement rather than a cost one: a
 small repository is minutes and is better off fully described, while a large one becomes a
@@ -344,6 +363,8 @@ Three things deliberately never reach these questions:
 
   (providers: anthropic, openai, deepseek, cli)
   ```
+  A project that answered **Manual** lands here too, by design: it has no describer, and the
+  command that writes its descriptions is `/descriptions-generate` in the harness, not this one.
 - **`--cli`.** The flag *is* the answer for that run, and it still works on a project that has
   answered nothing.
 

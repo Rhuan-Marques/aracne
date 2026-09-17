@@ -254,3 +254,75 @@ func TestAnUnsetKeyVariableIsNoted(t *testing.T) {
 		t.Errorf("a key that IS set should draw no note, got %v", a.Notes)
 	}
 }
+
+// The Manual answer to question three: nobody writes the descriptions, so there is nothing
+// left to ask. The format, the key variable, the command and the model are all about a
+// describer that has just been declined -- and so is the sweep question, whose two answers are
+// "run the describer now" and "run it on the read path".
+//
+// The keys prove the skip rather than only asserting on the result: harness, mode, Manual, and
+// then ONE selection that has to land on verbosity. A run that still asked question five would
+// spend `down+enter` answering "lazily" there and reach verbosity with the reader empty.
+func TestManualAsksNothingElseAboutTheDescriber(t *testing.T) {
+	a := mustAsk(t, enter+enter+down+down+enter+down+enter)
+
+	if !a.Manual {
+		t.Fatal("the third row of question three must record Manual")
+	}
+	if a.Verbosity != helper.ContractVerbosityHigh {
+		t.Fatalf("contract_verbosity = %q, want high -- the last keys did not reach question six",
+			a.Verbosity)
+	}
+	if a.Provider != "" || a.APIKeyEnv != "" || a.CLICommand != "" || a.Model != "" {
+		t.Errorf("Manual collected a describer anyway: provider=%q key=%q command=%q model=%q",
+			a.Provider, a.APIKeyEnv, a.CLICommand, a.Model)
+	}
+	if a.DescribeNow {
+		t.Error("Manual must not sweep: there is nothing configured to sweep with")
+	}
+	if len(a.Notes) != 0 {
+		t.Errorf("Manual names no environment variable, so nothing can be missing: %v", a.Notes)
+	}
+}
+
+// Manual skips question five whatever the repository's size -- the sweep default is a
+// wall-clock judgement about a describer this answer does not have.
+func TestManualSkipsTheSweepQuestionAtEverySize(t *testing.T) {
+	for _, files := range []int{10, describeEverythingFileCap + 1} {
+		a, err := ask(t, helper.DefaultConfig(), files, enter+enter+down+down+enter+enter)
+		if err != nil {
+			t.Fatalf("%d files: runInitQuestions: %v", files, err)
+		}
+		if a.DescribeNow || a.Verbosity != helper.ContractVerbosityLow {
+			t.Errorf("%d files: describe_now=%v verbosity=%q, want false/low",
+				files, a.DescribeNow, a.Verbosity)
+		}
+	}
+}
+
+// Question seven still applies after Manual: it is about MCP tool schemas, which have nothing
+// to do with who writes descriptions. This is the one run where questions four AND five are
+// both skipped and a later one is still asked, so it is where an off-by-one in the flow shows.
+func TestManualStillReachesThePreloadQuestion(t *testing.T) {
+	a := mustAsk(t, enter+down+enter+down+down+enter+enter+down+enter)
+
+	if !a.Manual || a.Mode != helper.ModeMCP {
+		t.Fatalf("setup wrong: manual=%v mode=%q", a.Manual, a.Mode)
+	}
+	if !a.asksPreloadTools() {
+		t.Fatal("claude_code + mcp must still ask question seven")
+	}
+	if a.PreloadTools {
+		t.Error("the second row of question seven is 'leave the search on'")
+	}
+}
+
+// Escape is still a cancel on the branch with the fewest questions. Everything before the
+// describer is already covered above; what is new here is the question that follows Manual --
+// on this branch verbosity comes straight after it, with nothing in between.
+func TestEscapeCancelsAfterManual(t *testing.T) {
+	keys := enter + enter + down + down + enter + esc
+	if _, err := ask(t, helper.DefaultConfig(), 10, keys); !errors.Is(err, tui.ErrCancelled) {
+		t.Errorf("escape at question six after Manual: err = %v, want ErrCancelled", err)
+	}
+}

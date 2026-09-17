@@ -32,6 +32,16 @@ type initAnswers struct {
 	// APIKeyEnv is set on the API branch, CLICommand on the CLI branch. Never both.
 	APIKeyEnv  string
 	CLICommand string
+	// Manual is the third answer to question three, and it is the absence of the other
+	// three: no provider, no key variable, no command, no model. It is a separate bool
+	// rather than a third Provider value because there is no such provider -- a config that
+	// named one would be a describer aracne would then try to run.
+	//
+	// It is the one describer answer that reaches further than the descriptions section: it
+	// turns the lazy fill OFF (see apply), because a read that has nothing to describe with
+	// should not try on every cold node. What writes them instead is
+	// `/descriptions-generate` in the harness, on the harness's own subscription.
+	Manual bool
 	// Model is what the descriptions-generation-executor describes with.
 	Model string
 	// Verbosity is helper.ContractVerbosityLow or High.
@@ -52,6 +62,10 @@ type initAnswers struct {
 	// with them.
 	PreloadTools bool
 }
+
+// describerManual is question three's third answer. It is not a provider name and must never
+// be written into `descriptions.provider` -- see initAnswers.Manual.
+const describerManual = "manual"
 
 // The harness answers. "both" is what a bare `arac init` used to do unconditionally, and it is
 // kept as a choice rather than as the default: writing an OpenCode tree into a repository that
@@ -90,17 +104,34 @@ func (a initAnswers) asksPreloadTools() bool {
 func (a initAnswers) apply(cfg *helper.Config) {
 	cfg.Mode = a.Mode
 	cfg.ContractVerbosity = a.Verbosity
-	cfg.Descriptions.Provider = a.Provider
-	// Exactly one of these, and the other cleared: a config carrying both a key variable and
+	// Exactly one of these, and the others cleared: a config carrying both a key variable and
 	// a command says two different things about who writes its descriptions, and the reader
-	// who finds it has no way to tell which one the wizard meant.
-	if a.Provider == helper.ProviderNameCLI {
+	// who finds it has no way to tell which one the wizard meant. Manual says none of them,
+	// so it clears all three -- a leftover provider from a previous run is a describer the
+	// answer just declined, and `arac descriptions generate` would happily bill it.
+	switch {
+	case a.Manual:
+		cfg.Descriptions.Provider = ""
+		cfg.Descriptions.APIKeyEnv = ""
+		cfg.Descriptions.CLIProviderCommand = ""
+	case a.Provider == helper.ProviderNameCLI:
+		cfg.Descriptions.Provider = a.Provider
 		cfg.Descriptions.CLIProviderCommand = a.CLICommand
 		cfg.Descriptions.APIKeyEnv = ""
-	} else {
+	default:
+		cfg.Descriptions.Provider = a.Provider
 		cfg.Descriptions.APIKeyEnv = a.APIKeyEnv
 		cfg.Descriptions.CLIProviderCommand = ""
 	}
+	// The describer answer owns `descriptions.lazy`, in BOTH directions, and it is written
+	// explicitly rather than left to the default on the non-manual branches. Manual has to
+	// turn it off: the fill would otherwise run on every cold read with nothing configured
+	// to run. And the other two have to turn it back on, or picking Manual once would be a
+	// one-way door -- a later run that names a key would leave the switch this wizard wrote
+	// lying false, while question five told the user to their face that "lazy generation is
+	// on either way".
+	lazy := !a.Manual
+	cfg.Descriptions.Lazy.Enabled = &lazy
 	setDescriptionsExecutorModel(cfg, a.Model)
 	// Left ALONE when the question did not apply, rather than written false. nil is
 	// "aracne does not manage ENABLE_TOOL_SEARCH" and false is "aracne manages it, and
@@ -232,9 +263,10 @@ func commandWithModel(command, model string) string {
 
 // totalInitSteps is the denominator of the "(n/7)" counter. It counts the questions a run can
 // ask, not the ones it does: the API and CLI branches ask a different fourth question, one of
-// them sometimes skips the fifth, and the seventh is asked only on the one combination it
-// means anything on -- but a counter that changed its denominator halfway through would read
-// as the wizard growing while you answer it.
+// them sometimes skips it, the Manual branch skips four AND five because it has no model to
+// name and no sweep to offer, and the seventh is asked only on the one combination it means
+// anything on -- but a counter that changed its denominator halfway through would read as the
+// wizard growing while you answer it.
 //
 // The conditional question is LAST for this reason. Anywhere else it would leave a visible
 // hole in the middle of the sequence on every run that skips it; at the end, a run that does
@@ -391,6 +423,22 @@ func describerQuestion() tui.Question {
 					"Note: check with your subscription plan provider before trusting this. Some " +
 						"providers consider interactions like these to be exploits, and might apply " +
 						"a different price or draw from a separate pool of money.",
+				},
+			},
+			{
+				Label:   "Manual",
+				Value:   describerManual,
+				Summary: "Nothing does, until you ask your harness to.",
+				Detail: []string{
+					"No key, no command, no model. Aracne spends nothing itself.",
+					"",
+					"Your harness writes them: run `/descriptions-generate` in Claude Code " +
+						"or OpenCode and it fans its own sub-agents out over everything " +
+						"still undescribed, on the subscription you already pay for.",
+					"",
+					"Lazy generation is turned off to match (`\"lazy\": false`), so reads " +
+						"stay cold until you run it. Re-run `arac init` to hand the job " +
+						"back.",
 				},
 			},
 		},
@@ -560,7 +608,8 @@ func describeNowQuestion(defaultNow bool) tui.Question {
 		Step:    "5/" + strconv.Itoa(totalInitSteps),
 		Default: def,
 		Intro: []string{
-			"Lazy generation is on either way (you can turn it off in the config file).",
+			"Lazy generation is on either way -- answering Manual to question three is how " +
+				"you turn it off.",
 			"This decides whether to sweep now or let it build organically.",
 		},
 		Options: []tui.Option{

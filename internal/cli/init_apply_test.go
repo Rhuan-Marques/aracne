@@ -174,3 +174,99 @@ func TestDefaultModelFollowsTheProvider(t *testing.T) {
 		}
 	}
 }
+
+// Manual is the answer that writes NOTHING about a describer -- and one thing that is not about
+// the describer section at all: the lazy fill goes off, because a fill with no provider, no key
+// and no command is an attempt on every cold read that cannot succeed.
+func TestApplyManualClearsEveryDescriberAndDisablesLazy(t *testing.T) {
+	cfg := helper.DefaultConfig()
+	// A configured project re-running init and changing its mind: all three of these are the
+	// previous answer, and none of them survives.
+	cfg.Descriptions.Provider = helper.ProviderNameAnthropic
+	cfg.Descriptions.APIKeyEnv = "ANTHROPIC_API_KEY"
+	cfg.Descriptions.CLIProviderCommand = "claude -p"
+
+	initAnswers{
+		Harness:   harnessClaudeCode,
+		Mode:      helper.ModeCLI,
+		Manual:    true,
+		Verbosity: helper.ContractVerbosityLow,
+	}.apply(cfg)
+
+	if cfg.Descriptions.Provider != "" || cfg.Descriptions.APIKeyEnv != "" ||
+		cfg.Descriptions.CLIProviderCommand != "" {
+		t.Errorf("Manual left a describer behind: provider=%q key=%q command=%q",
+			cfg.Descriptions.Provider, cfg.Descriptions.APIKeyEnv,
+			cfg.Descriptions.CLIProviderCommand)
+	}
+	if cfg.LazyDescriptionsEnabled() {
+		t.Error("Manual must turn the lazy fill off")
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("the wizard produced an invalid config: %v", err)
+	}
+}
+
+// Manual names no model, so the executor agent keeps the placeholder DefaultConfig gave it and
+// describes with whatever the harness is running. Writing a model here would pin the harness's
+// sub-agent to a vendor id the wizard never asked about.
+func TestApplyManualLeavesTheExecutorModelInherited(t *testing.T) {
+	cfg := helper.DefaultConfig()
+	before := cfg.EffectiveAgent("claude_code", helper.DescriptionsExecutorAgent).Model
+
+	initAnswers{Mode: helper.ModeCLI, Manual: true, Verbosity: helper.ContractVerbosityLow}.apply(cfg)
+
+	if got := cfg.EffectiveAgent("claude_code", helper.DescriptionsExecutorAgent).Model; got != before {
+		t.Errorf("executor model = %q, want it left at %q", got, before)
+	}
+}
+
+// And back again. Manual is a choice, not a trapdoor: a later run that names a describer has to
+// re-enable the fill, or question five would go on promising "lazy generation is on either way"
+// over a switch this same wizard wrote false.
+func TestApplyANamedDescriberTurnsLazyBackOn(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		answers initAnswers
+	}{
+		{"api", initAnswers{Provider: helper.ProviderNameAnthropic, APIKeyEnv: "ANTHROPIC_API_KEY"}},
+		{"cli", initAnswers{Provider: helper.ProviderNameCLI, CLICommand: "claude -p"}},
+	} {
+		cfg := helper.DefaultConfig()
+		initAnswers{Mode: helper.ModeCLI, Manual: true, Verbosity: helper.ContractVerbosityLow}.apply(cfg)
+		if cfg.LazyDescriptionsEnabled() {
+			t.Fatalf("%s: setup wrong -- Manual did not disable the fill", tc.name)
+		}
+
+		a := tc.answers
+		a.Mode = helper.ModeCLI
+		a.Verbosity = helper.ContractVerbosityLow
+		a.apply(cfg)
+
+		if !cfg.LazyDescriptionsEnabled() {
+			t.Errorf("%s: the fill stayed off after a describer was named", tc.name)
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("%s: invalid config: %v", tc.name, err)
+		}
+	}
+}
+
+// Turning the switch off must not disturb the tuning knobs around it: `lazy` is one key with
+// two shapes, and a project that tuned it keeps the object rather than being flattened to a
+// bare boolean it never wrote.
+func TestApplyManualKeepsTheLazyTuning(t *testing.T) {
+	cfg := helper.DefaultConfig()
+	maxNodes := 8
+	cfg.Descriptions.Lazy.MaxNodes = &maxNodes
+
+	initAnswers{Mode: helper.ModeCLI, Manual: true, Verbosity: helper.ContractVerbosityLow}.apply(cfg)
+
+	resolved := cfg.Descriptions.Lazy.Resolve()
+	if resolved.Enabled {
+		t.Error("the switch did not go off")
+	}
+	if resolved.MaxNodes != maxNodes {
+		t.Errorf("max_nodes = %d, want the configured %d", resolved.MaxNodes, maxNodes)
+	}
+}
