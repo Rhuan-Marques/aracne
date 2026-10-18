@@ -1,5 +1,5 @@
 # aracne benchmark harness dependencies.
-datasets>=2.18         # SWE-bench Lite (Python tasks)
+datasets>=5.0.1         # SWE-bench Lite (Python tasks)
 huggingface_hub>=0.20  # Multi-SWE-bench per-language jsonl download (Go/JS/TS/Rust)
 PyYAML>=6
 
