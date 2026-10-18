@@ -1,7 +1,7 @@
 # aracne benchmark harness dependencies.
 datasets>=2.18         # SWE-bench Lite (Python tasks)
 huggingface_hub>=0.20  # Multi-SWE-bench per-language jsonl download (Go/JS/TS/Rust)
-PyYAML>=6
+PyYAML>=6.0.3
 
 # Grading harnesses (optional, heavy, Docker required). Install only when you intend to
 # grade (i.e. not running with --no-grade):
